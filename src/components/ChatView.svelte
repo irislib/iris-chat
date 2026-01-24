@@ -162,6 +162,7 @@
   <!-- Input -->
   <div class="p-4 border-t border-surface-lighter">
     <div class="flex gap-2 items-end">
+      <!-- svelte-ignore a11y_autofocus -->
       <textarea
         bind:this={inputRef}
         bind:value={messageText}

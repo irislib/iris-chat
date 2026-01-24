@@ -380,7 +380,7 @@
             <!-- Active Subscriptions -->
             <div>
               <div class="flex items-center justify-between mb-2">
-                <label class="block text-sm text-gray-400">Active Subscriptions</label>
+                <span class="block text-sm text-gray-400">Active Subscriptions</span>
                 <button
                   class="text-xs text-primary hover:underline"
                   onclick={loadSubscriptions}

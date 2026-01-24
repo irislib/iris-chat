@@ -192,6 +192,7 @@
           <!-- Label row -->
           <div class="flex items-center justify-between">
             {#if editingLabel === invite.id}
+              <!-- svelte-ignore a11y_autofocus -->
               <input
                 type="text"
                 bind:value={editLabelValue}
