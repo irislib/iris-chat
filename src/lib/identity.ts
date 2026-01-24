@@ -110,9 +110,14 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     isNip07: false,
   })
 
-  // Save local profile rumor for display in UI and sending to peers
+  // Save local profile and publish to Nostr
   if (displayName) {
     saveLocalProfile(user.pubkey, displayName)
+
+    // Publish kind 0 profile event to relays
+    const ndkUser = ndkInstance.getUser({ pubkey: user.pubkey })
+    ndkUser.profile = { name: displayName, displayName: displayName }
+    ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
   }
 
   saveIdentity(privkeyHex)
@@ -135,6 +140,16 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     displayName,
     isNip07: true,
   })
+
+  // Save local profile and publish to Nostr if name provided
+  if (displayName) {
+    saveLocalProfile(user.pubkey, displayName)
+
+    // Publish kind 0 profile event to relays
+    const ndkUser = ndkInstance.getUser({ pubkey: user.pubkey })
+    ndkUser.profile = { name: displayName, displayName: displayName }
+    ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
+  }
 
   // Save marker to remember NIP-07 login
   saveIdentity('nip07')

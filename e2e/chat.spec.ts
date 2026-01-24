@@ -688,5 +688,49 @@ test.describe('iris chat', () => {
         await context2.close()
       }
     })
+
+    test('should display each others names in chat', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // User 1: Enter name "Alice" and login
+        await page1.goto('/')
+        await page1.getByPlaceholder('Name').fill('Alice')
+        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+
+        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+
+        // User 2: Enter name "Bob" and join
+        await page2.goto('/')
+        await page2.getByPlaceholder('Name').fill('Bob')
+        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        // Both in chat view
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message to establish connection
+        await page2.getByPlaceholder('Type a message...').fill('Hi!')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hi!' })).toBeVisible()
+
+        // User 1 should see "Bob" in chat header
+        await expect(page1.locator('header').getByText('Bob')).toBeVisible()
+
+        // User 2 should see "Alice" in chat header
+        await expect(page2.locator('header').getByText('Alice')).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
   })
 })
