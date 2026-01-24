@@ -13,21 +13,43 @@ function getEncryptor(): Encryptor | null {
   // Try local private key first
   const privkeyBytes = getPrivkeyBytes()
   if (privkeyBytes) {
+    console.log('[chat] Using local private key for encryption')
     return privkeyBytes
   }
 
   // For NIP-07, use the extension's nip44 encrypt/decrypt functions
+  // Note: Library expects (plaintext, pubkey) but NIP-07 uses (pubkey, plaintext)
   if (isNip07Login() && window.nostr?.nip44) {
+    console.log('[chat] Using NIP-07 nip44 for encryption')
     return {
       encrypt: async (plaintext: string, pubkey: string) => {
-        return window.nostr!.nip44!.encrypt(pubkey, plaintext)
+        console.log('[chat] NIP-07 encrypt called for pubkey:', pubkey.slice(0, 8))
+        try {
+          // NIP-07 nip44.encrypt takes (pubkey, plaintext)
+          const result = await window.nostr!.nip44!.encrypt(pubkey, plaintext)
+          console.log('[chat] NIP-07 encrypt success')
+          return result
+        } catch (e) {
+          console.error('[chat] NIP-07 encrypt error:', e)
+          throw e
+        }
       },
       decrypt: async (ciphertext: string, pubkey: string) => {
-        return window.nostr!.nip44!.decrypt(pubkey, ciphertext)
+        console.log('[chat] NIP-07 decrypt called for pubkey:', pubkey.slice(0, 8))
+        try {
+          // NIP-07 nip44.decrypt takes (pubkey, ciphertext)
+          const result = await window.nostr!.nip44!.decrypt(pubkey, ciphertext)
+          console.log('[chat] NIP-07 decrypt success')
+          return result
+        } catch (e) {
+          console.error('[chat] NIP-07 decrypt error:', e)
+          throw e
+        }
       }
     }
   }
 
+  console.log('[chat] No encryptor available, isNip07:', isNip07Login(), 'hasNip44:', !!window.nostr?.nip44)
   return null
 }
 import {
@@ -267,10 +289,12 @@ export async function updateInviteLabel(id: string, label: string): Promise<void
 
 // Load all invites from storage and start monitoring
 export async function loadAndMonitorInvites(): Promise<void> {
+  console.log('[chat] loadAndMonitorInvites called, initialized:', invitesInitialized)
   if (invitesInitialized) return
 
   try {
     const storedInvites = await getAllInvites()
+    console.log('[chat] Found', storedInvites.length, 'stored invites to monitor')
 
     for (const stored of storedInvites) {
       try {
@@ -278,8 +302,11 @@ export async function loadAndMonitorInvites(): Promise<void> {
         const inviteId = stored.id
         const inviteLabel = stored.label
 
+        console.log('[chat] Setting up listener for invite:', inviteId, inviteLabel)
+
         // Start listening for acceptance
         const unsubscribe = listenForInviteAcceptance(invite, async (chatSession) => {
+          console.log('[chat] Invite', inviteId, 'accepted, calling callback')
           // Track who used this invite
           await addInviteUsedByInDb(inviteId, chatSession.recipientPubkey)
 
@@ -360,11 +387,6 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
   const nostrSubscribe = createNostrSubscribe()
   const { session, event } = await invite.accept(nostrSubscribe, pubkey, encryptor)
 
-  // Publish the accept event using NDKEvent
-  const ndkInstance = get(ndk)
-  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-  await ndkPublishEvent.publish()
-
   const chatSession: ChatSession = {
     id: invite.inviter,
     recipientPubkey: invite.inviter,
@@ -375,14 +397,20 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
   // Subscribe to incoming messages
   subscribeToSession(chatSession)
 
-  // Add to chats store
+  // Add to chats store immediately so UI updates
   chats.update(c => {
     c.set(chatSession.id, chatSession)
     return c
   })
 
+  // Do the rest in the background to not block UI
+  // Publish the accept event using NDKEvent
+  const ndkInstance = get(ndk)
+  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
+  ndkPublishEvent.publish().catch(e => console.error('[chat] Failed to publish accept event:', e))
+
   // Save to IndexedDB
-  await saveSessionToStorage(chatSession)
+  saveSessionToStorage(chatSession).catch(e => console.error('[chat] Failed to save session:', e))
 
   // Update notification subscription for new session
   updateDMSubscription()
@@ -392,17 +420,23 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
 
 // Listen for invite acceptance and create session
 export function listenForInviteAcceptance(invite: Invite, onSession: (session: ChatSession) => void): () => void {
+  console.log('[chat] listenForInviteAcceptance called')
   const encryptor = getEncryptor()
   if (!encryptor) {
+    console.error('[chat] No encryptor available for invite listening')
     throw new Error('Not logged in or NIP-44 not available')
   }
 
   const nostrSubscribe = createNostrSubscribe()
 
+  console.log('[chat] Starting invite listener for ephemeral key:', invite.inviterEphemeralPublicKey)
   return invite.listen(encryptor, nostrSubscribe, (session, identity) => {
+    console.log('[chat] Invite accepted! Creating session for identity:', identity)
+
     // Check if we already have a session with this identity (e.g., loaded from storage)
     const existingChats = get(chats)
     if (existingChats.has(identity)) {
+      console.log('[chat] Session already exists for', identity, '- skipping')
       return  // Session already exists, don't overwrite
     }
 
