@@ -85,7 +85,20 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
         continue
       }
 
-      // Found matching session - try to decrypt using Session class
+      // Fast path: check if main app already decrypted and saved this message
+      const outerId = eventData.id
+      if (outerId) {
+        const storedMessage = await db.messages.get(outerId)
+        if (storedMessage && !storedMessage.isMine) {
+          return {
+            success: true,
+            content: storedMessage.content,
+            chatId: storedSession.recipientPubkey
+          }
+        }
+      }
+
+      // Slow path: try to decrypt using Session class
       const eventForSession: VerifiedEvent = {
         ...eventData as unknown as VerifiedEvent,
         tags: eventData.tags.filter(([key]) => key === 'header'),
@@ -98,7 +111,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       }, state)
 
       const innerEvent = await new Promise<Rumor | null>((resolve) => {
-        const timeout = setTimeout(() => resolve(null), 1500)
+        const timeout = setTimeout(() => resolve(null), 500)
         session.onEvent((rumor) => {
           clearTimeout(timeout)
           resolve(rumor)
@@ -117,21 +130,6 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           success: true,
           content: innerEvent.content,
           chatId: storedSession.recipientPubkey
-        }
-      }
-
-      // Decrypt failed - try to look up message by outer event ID
-      // Main app may have already decrypted and saved it (race condition)
-      const outerId = eventData.id
-      if (outerId) {
-        const storedMessage = await db.messages.get(outerId)
-        if (storedMessage && !storedMessage.isMine) {
-          console.log('[sw] found message in DB')
-          return {
-            success: true,
-            content: storedMessage.content,
-            chatId: storedSession.recipientPubkey
-          }
         }
       }
 
@@ -160,7 +158,7 @@ async function isChatOpen(chatId: string): Promise<boolean> {
       // Ask client if this chat is open
       const channel = new MessageChannel()
       const response = await new Promise<boolean>((resolve) => {
-        const timeout = setTimeout(() => resolve(false), 500)
+        const timeout = setTimeout(() => resolve(false), 100)
         channel.port1.onmessage = (e) => {
           clearTimeout(timeout)
           resolve(e.data?.isOpen === true)

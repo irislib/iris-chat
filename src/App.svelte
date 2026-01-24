@@ -10,6 +10,13 @@
   import type { ChatSession } from './lib/chat'
   import { get } from 'svelte/store'
 
+  // Send message to service worker
+  function postToServiceWorker(message: object) {
+    navigator.serviceWorker?.ready.then(reg => {
+      reg.active?.postMessage(message)
+    })
+  }
+
   // View routing
   type View = 'chat' | 'settings'
 
@@ -48,12 +55,19 @@
 
   onMount(async () => {
     // Prevent multiple tabs - encryption state can't sync between them
+    // Use sessionStorage to persist tab identity across hot reloads
+    let tabId = sessionStorage.getItem('iris-tab-id')
+    if (!tabId) {
+      tabId = Math.random().toString(36).slice(2)
+      sessionStorage.setItem('iris-tab-id', tabId)
+    }
     const channel = new BroadcastChannel('iris-chat-tab')
-    channel.postMessage('ping')
+    channel.postMessage({ type: 'ping', tabId })
     channel.onmessage = (e) => {
-      if (e.data === 'ping' && !duplicateTab) {
-        channel.postMessage('pong')
-      } else if (e.data === 'pong') {
+      if (e.data?.tabId === tabId) return // Ignore own messages
+      if (e.data?.type === 'ping' && !duplicateTab) {
+        channel.postMessage({ type: 'pong', tabId })
+      } else if (e.data?.type === 'pong') {
         duplicateTab = true
         initializing = false
       }
@@ -93,23 +107,20 @@
           currentView = 'chat'
           mobileView = 'main'
           // Clear any remaining notifications for this chat
-          navigator.serviceWorker?.controller?.postMessage({
-            type: 'CLEAR_NOTIFICATION',
-            chatId: chat.id
-          })
+          postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
         }
       }
     }
     navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage)
 
     // Handle IS_CHAT_OPEN queries from service worker (via MessageChannel)
-    const handleWindowMessage = (event: MessageEvent) => {
+    const handleIsOpenMessage = (event: MessageEvent) => {
       if (event.data?.type === 'IS_CHAT_OPEN' && event.ports[0]) {
         const isOpen = selectedChat?.id === event.data.chatId && document.visibilityState === 'visible'
         event.ports[0].postMessage({ isOpen })
       }
     }
-    window.addEventListener('message', handleWindowMessage)
+    navigator.serviceWorker?.addEventListener('message', handleIsOpenMessage)
 
     // Try to auto-login
     const isLoggedIn = await autoLogin()
@@ -129,8 +140,8 @@
 
     return () => {
       window.removeEventListener('popstate', handlePopState)
-      window.removeEventListener('message', handleWindowMessage)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
+      navigator.serviceWorker?.removeEventListener('message', handleIsOpenMessage)
     }
   })
 
@@ -148,10 +159,7 @@
     }
     mobileView = 'main'
     // Clear any notification for this chat
-    navigator.serviceWorker?.controller?.postMessage({
-      type: 'CLEAR_NOTIFICATION',
-      chatId: chat.id
-    })
+    postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
   }
 
   function handleChatJoined(event: CustomEvent<{ chat: ChatSession }>) {
@@ -162,10 +170,7 @@
     }
     mobileView = 'main'
     // Clear any notification for this chat
-    navigator.serviceWorker?.controller?.postMessage({
-      type: 'CLEAR_NOTIFICATION',
-      chatId: event.detail.chat.id
-    })
+    postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: event.detail.chat.id })
   }
 
   function handleNewChat() {
