@@ -1,0 +1,32 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+*.log
+
+# Test
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store

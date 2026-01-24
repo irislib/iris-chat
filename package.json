@@ -1,0 +1,43 @@
+{
+  "name": "iris-chat",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "packageManager": "pnpm@10.24.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@iconify-json/carbon": "^1.2.15",
+    "@playwright/test": "^1.57.0",
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@tsconfig/svelte": "^5.0.6",
+    "@types/node": "^24.10.1",
+    "@unocss/preset-icons": "^66.5.10",
+    "@unocss/preset-uno": "^66.5.10",
+    "@unocss/transformer-directives": "^66.5.10",
+    "jsdom": "^26.1.0",
+    "svelte": "^5.43.8",
+    "svelte-check": "^4.3.4",
+    "typescript": "~5.9.3",
+    "unocss": "^66.5.10",
+    "vite": "^7.2.4",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.0.1",
+    "@noble/secp256k1": "^3.0.0",
+    "@nostr-dev-kit/ndk": "^2.18.1",
+    "jsqr": "^1.4.0",
+    "minidenticons": "^4.2.1",
+    "nostr-double-ratchet": "^0.0.38",
+    "nostr-tools": "^2.19.3",
+    "qrcode": "^1.5.4"
+  }
+}
