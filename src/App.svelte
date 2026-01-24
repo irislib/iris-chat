@@ -6,7 +6,7 @@
   import SettingsView from './components/SettingsView.svelte'
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats } from './lib/chat'
+  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback } from './lib/chat'
   import type { ChatSession } from './lib/chat'
   import { get } from 'svelte/store'
 
@@ -135,6 +135,18 @@
     if (isLoggedIn) {
       // Load saved chats from IndexedDB
       await loadChatsFromStorage()
+
+      // Set callback for invite acceptance (works for both loaded and new invites)
+      setInviteAcceptedCallback((chatSession) => {
+        selectedChat = chatSession
+        currentChat.set(chatSession)
+        currentView = 'chat'
+        mobileView = 'main'
+      })
+
+      // Load and monitor saved invites
+      await loadAndMonitorInvites()
+
       loggedIn = true
 
       // If there's an invite in URL, show main view to handle it
@@ -172,6 +184,18 @@
   async function handleLogin() {
     // Load saved chats from IndexedDB
     await loadChatsFromStorage()
+
+    // Set callback for invite acceptance (works for both loaded and new invites)
+    setInviteAcceptedCallback((chatSession) => {
+      selectedChat = chatSession
+      currentChat.set(chatSession)
+      currentView = 'chat'
+      mobileView = 'main'
+    })
+
+    // Load and monitor saved invites
+    await loadAndMonitorInvites()
+
     loggedIn = true
   }
 

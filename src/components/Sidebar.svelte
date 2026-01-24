@@ -38,12 +38,15 @@
 <div class="h-full flex flex-col bg-surface border-r border-surface-lighter">
   <!-- Header -->
   <header class="h-16 px-4 flex items-center justify-between border-b border-surface-lighter flex-shrink-0">
-    <div class="flex items-center gap-2 select-none">
+    <button
+      class="flex items-center gap-2 select-none bg-transparent border-none p-0 cursor-pointer hover:opacity-80 transition-opacity"
+      onclick={onNewChat}
+    >
       <img src="/iris-logo.png" alt="Iris" class="w-8 h-8" draggable="false" />
       <h1 class="text-xl font-bold">
         <span class="text-primary">iris</span> chat
       </h1>
-    </div>
+    </button>
     <div class="relative">
       <button
         class="flex items-center gap-2 cursor-pointer bg-transparent border-none p-0"

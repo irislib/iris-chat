@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { precacheAndRoute } from 'workbox-precaching'
-import { Session, type Rumor, deserializeSessionState } from 'nostr-double-ratchet'
+import { Session, type Rumor, deserializeSessionState, MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet'
 import type { VerifiedEvent } from 'nostr-tools'
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
@@ -34,10 +34,18 @@ interface StoredMessage {
   isMine: boolean
 }
 
+interface StoredInvite {
+  id: string
+  inviteData: string
+  label?: string
+  createdAt: number
+}
+
 class IrisChatDB extends Dexie {
   sessions!: Table<StoredSession, string>
   messages!: Table<StoredMessage, string>
   profiles!: Table<StoredProfile, string>
+  invites!: Table<StoredInvite, string>
 
   constructor() {
     super('iris-chat')
@@ -45,6 +53,12 @@ class IrisChatDB extends Dexie {
       sessions: 'id',
       messages: 'id, sessionId',
       profiles: 'pubkey'
+    })
+    this.version(2).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id'
     })
   }
 }
@@ -183,28 +197,71 @@ self.addEventListener('push', (event) => {
         return
       }
 
-      const result = await decryptPushMessage(payload.event)
+      const eventKind = payload.event.kind
 
-      if (result.chatId) {
-        // Skip notification if this specific chat is already open
-        if (await isChatOpen(result.chatId)) {
-          return
+      // Handle invite response notifications
+      if (eventKind === INVITE_RESPONSE_KIND) {
+        console.log('[sw] received invite response notification')
+
+        // Try to find the invite label from the p-tag (recipient pubkey)
+        let inviteLabel: string | undefined
+        const pTag = payload.event.tags?.find((t: string[]) => t[0] === 'p')
+        if (pTag && pTag[1]) {
+          const recipientPubkey = pTag[1]
+          // Search invites for matching ephemeral pubkey
+          try {
+            const invites = await db.invites.toArray()
+            for (const invite of invites) {
+              // The invite data contains the ephemeral pubkey
+              if (invite.inviteData.includes(recipientPubkey) && invite.label) {
+                inviteLabel = invite.label
+                break
+              }
+            }
+          } catch (err) {
+            console.error('[sw] error fetching invites:', err)
+          }
         }
 
-        const senderName = await getDisplayName(result.chatId)
-        const body = result.success && result.content ? result.content : 'New message'
-        const tag = `dm-${result.chatId}`
-        console.log('[sw] showing notification with tag:', tag)
-        await self.registration.showNotification(senderName, {
+        const body = inviteLabel ? `New chat via ${inviteLabel}` : 'New chat via invite link'
+        await self.registration.showNotification('iris chat', {
           body,
           icon: '/iris-logo.png',
           badge: '/iris-logo.png',
-          tag,
-          data: { chatId: result.chatId }
+          tag: 'invite-response'
         })
-      } else {
-        await showFallbackNotification()
+        return
       }
+
+      // Handle regular message notifications
+      if (eventKind === MESSAGE_EVENT_KIND) {
+        const result = await decryptPushMessage(payload.event)
+
+        if (result.chatId) {
+          // Skip notification if this specific chat is already open
+          if (await isChatOpen(result.chatId)) {
+            return
+          }
+
+          const senderName = await getDisplayName(result.chatId)
+          const body = result.success && result.content ? result.content : 'New message'
+          const tag = `dm-${result.chatId}`
+          console.log('[sw] showing notification with tag:', tag)
+          await self.registration.showNotification(senderName, {
+            body,
+            icon: '/iris-logo.png',
+            badge: '/iris-logo.png',
+            tag,
+            data: { chatId: result.chatId }
+          })
+        } else {
+          await showFallbackNotification()
+        }
+        return
+      }
+
+      // Unknown event kind, show fallback
+      await showFallbackNotification()
     } catch (error) {
       console.error('[sw] push error:', error)
       await showFallbackNotification()

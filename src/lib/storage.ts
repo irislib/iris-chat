@@ -10,6 +10,8 @@ export interface StoredSession {
   recipientPubkey: string
   sessionState: string // JSON-serialized session state (hex encoded by nostr-double-ratchet)
   createdAt: number
+  inviteId?: string      // ID of the invite that started this chat
+  inviteLabel?: string   // Label of the invite that started this chat
 }
 
 export interface StoredMessage {
@@ -29,10 +31,19 @@ export interface StoredProfile {
   updatedAt: number
 }
 
+export interface StoredInvite {
+  id: string           // unique id
+  inviteData: string   // serialized Invite object
+  label?: string       // optional user label
+  createdAt: number
+  usedBy?: string[]    // pubkeys of users who accepted this invite
+}
+
 class IrisChatDB extends Dexie {
   sessions!: Table<StoredSession, string>
   messages!: Table<StoredMessage, string>
   profiles!: Table<StoredProfile, string>
+  invites!: Table<StoredInvite, string>
 
   constructor() {
     super('iris-chat')
@@ -40,6 +51,12 @@ class IrisChatDB extends Dexie {
       sessions: 'id',
       messages: 'id, sessionId',
       profiles: 'pubkey'
+    })
+    this.version(2).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id'
     })
   }
 }
@@ -85,11 +102,39 @@ export async function getProfileFromStorage(pubkey: string): Promise<StoredProfi
   return db.profiles.get(pubkey)
 }
 
+// Invite operations
+export async function saveInvite(invite: StoredInvite): Promise<void> {
+  await db.invites.put(invite)
+}
+
+export async function getAllInvites(): Promise<StoredInvite[]> {
+  return db.invites.toArray()
+}
+
+export async function deleteInvite(id: string): Promise<void> {
+  await db.invites.delete(id)
+}
+
+export async function updateInviteLabel(id: string, label: string): Promise<void> {
+  await db.invites.update(id, { label })
+}
+
+export async function addInviteUsedBy(id: string, pubkey: string): Promise<void> {
+  const invite = await db.invites.get(id)
+  if (invite) {
+    const usedBy = invite.usedBy || []
+    if (!usedBy.includes(pubkey)) {
+      await db.invites.update(id, { usedBy: [...usedBy, pubkey] })
+    }
+  }
+}
+
 // Clear all data (for logout)
 export async function clearAllData(): Promise<void> {
   await Promise.all([
     db.sessions.clear(),
     db.messages.clear(),
-    db.profiles.clear()
+    db.profiles.clear(),
+    db.invites.clear()
   ])
 }

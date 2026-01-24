@@ -1,5 +1,23 @@
 import { test, expect, type Page, type BrowserContext } from '@playwright/test'
 
+// Helper to get invite URL from CopyButton (has title attribute with full URL)
+async function getInviteUrl(page: Page): Promise<string> {
+  const copyButton = page.locator('button[title*="#"]').first()
+  await expect(copyButton).toBeVisible()
+  const url = await copyButton.getAttribute('title')
+  if (!url) throw new Error('Could not get invite URL')
+  return url
+}
+
+// Helper to setup a user and get their invite URL
+async function setupUserWithInvite(page: Page): Promise<string> {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Get Started' }).click()
+  await page.getByRole('button', { name: 'New Chat' }).click()
+  // Invite is auto-created, just get the URL
+  return getInviteUrl(page)
+}
+
 test.describe('iris chat', () => {
   test.describe('Chat input', () => {
     test('should focus input when opening or switching chat', async ({ browser }) => {
@@ -12,12 +30,8 @@ test.describe('iris chat', () => {
       const page3 = await context3.newPage()
 
       try {
-        // Setup: User 1 creates first chat
-        await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
-        await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl1 = await page1.locator('input[readonly]').inputValue()
+        // Setup: User 1 creates first chat (invite auto-created)
+        const inviteUrl1 = await setupUserWithInvite(page1)
 
         // User 2 joins first chat
         await page2.goto('/')
@@ -39,10 +53,11 @@ test.describe('iris chat', () => {
         // User 1 goes back to sidebar
         await page1.getByRole('button', { name: 'Back' }).click()
 
-        // Create second chat
+        // Create second invite
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl2 = await page1.locator('input[readonly]').inputValue()
+        await page1.getByRole('button', { name: 'Create New Invite' }).click()
+        // Get the second invite URL (newest one)
+        const inviteUrl2 = await getInviteUrl(page1)
 
         // User 3 joins second chat
         await page3.goto('/')
@@ -80,8 +95,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -132,8 +146,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -171,8 +184,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -238,15 +250,15 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Invite', () => {
-    test('should create invite and show link', async ({ page }) => {
+    test('should auto-create invite and show link', async ({ page }) => {
       await page.goto('/')
       await page.getByRole('button', { name: 'Get Started' }).click()
       await page.getByRole('button', { name: 'New Chat' }).click()
-      await page.getByRole('button', { name: 'Create Invite' }).click()
 
-      // Should show invite URL in input and waiting message
-      await expect(page.getByText('Waiting for someone to join')).toBeVisible()
-      await expect(page.locator('input[readonly]')).toBeVisible()
+      // Should auto-create invite with default label
+      await expect(page.getByText('Invite #1')).toBeVisible()
+      // Should show copy button with URL
+      await expect(page.locator('button[title*="#"]')).toBeVisible()
     })
 
     test('should copy invite link', async ({ page, context }) => {
@@ -255,10 +267,9 @@ test.describe('iris chat', () => {
       await page.goto('/')
       await page.getByRole('button', { name: 'Get Started' }).click()
       await page.getByRole('button', { name: 'New Chat' }).click()
-      await page.getByRole('button', { name: 'Create Invite' }).click()
 
-      // Click copy button (icon button)
-      await page.locator('button:has(.i-carbon-copy)').click()
+      // Click copy button (has the URL in title)
+      await page.locator('button[title*="#"]').click()
 
       // Should show checkmark after copy
       await expect(page.locator('button:has(.i-carbon-checkmark)')).toBeVisible()
@@ -283,8 +294,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -327,8 +337,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -385,8 +394,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -430,8 +438,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -476,8 +483,7 @@ test.describe('iris chat', () => {
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Get Started' }).click()
@@ -523,14 +529,8 @@ test.describe('iris chat', () => {
       const page2 = await context2.newPage()
 
       try {
-        // User 1: Login and create invite
-        await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
-        await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-
-        // Get the invite URL from the readonly input
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        // User 1: Login and create invite (auto-created)
+        const inviteUrl = await setupUserWithInvite(page1)
 
         // User 2: Navigate to invite URL first (will need to login)
         await page2.goto(inviteUrl)
@@ -572,14 +572,8 @@ test.describe('iris chat', () => {
       const page2 = await context2.newPage()
 
       try {
-        // User 1: Login and create invite
-        await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
-        await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-
-        // Get the invite URL from the readonly input
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        // User 1: Login and create invite (auto-created)
+        const inviteUrl = await setupUserWithInvite(page1)
 
         // User 2: Login and join via paste link
         await page2.goto('/')
@@ -622,14 +616,8 @@ test.describe('iris chat', () => {
       const page2 = await context2.newPage()
 
       try {
-        // User 1: Login and create invite
-        await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
-        await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-
-        // Get the invite URL from the readonly input
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        // User 1: Login and create invite (auto-created)
+        const inviteUrl = await setupUserWithInvite(page1)
 
         // User 2: Login and join via paste link
         await page2.goto('/')
@@ -649,10 +637,16 @@ test.describe('iris chat', () => {
         // User 1 sends message before reload
         await page1.getByPlaceholder('Type a message...').fill('Before reload')
         await page1.getByRole('button', { name: 'Send' }).click()
+        // Wait for User 1 to see their own message (ensures UI updated)
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Before reload' })).toBeVisible()
         await expect(page2.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Before reload' })).toBeVisible()
 
-        // User 1 goes back and reloads
+        // User 1 goes back
         await page1.getByRole('button', { name: 'Back' }).click()
+        // Verify sidebar shows the message preview before reload
+        await expect(page1.getByText('Before reload')).toBeVisible()
+        // Small delay to ensure IndexedDB async save completes
+        await page1.waitForTimeout(200)
 
         // Reload page 1
         await page1.reload()
@@ -702,9 +696,7 @@ test.describe('iris chat', () => {
         await page1.getByPlaceholder('Name').fill('Alice')
         await page1.getByRole('button', { name: 'Get Started' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create Invite' }).click()
-
-        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+        const inviteUrl = await getInviteUrl(page1)
 
         // User 2: Enter name "Bob" and join
         await page2.goto('/')

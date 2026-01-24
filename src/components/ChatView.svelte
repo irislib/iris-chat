@@ -130,6 +130,16 @@
     bind:this={messagesContainer}
     class="flex-1 overflow-y-auto p-4"
   >
+    <!-- Invite started system message -->
+    {#if chat.inviteId}
+      <div class="text-center py-2 mb-2">
+        <p class="text-sm text-gray-500">
+          <span class="text-primary"><Name pubkey={chat.recipientPubkey} /></span>
+          started the chat via invite link{#if chat.inviteLabel} <span class="text-gray-400">"{chat.inviteLabel}"</span>{/if}
+        </p>
+      </div>
+    {/if}
+
     {#if messages.length === 0}
       <div class="text-center py-8">
         <div class="i-carbon-locked text-4xl text-primary mx-auto mb-2"></div>

@@ -13,8 +13,14 @@ import {
   clearAllData,
   deleteSession as deleteSessionFromDb,
   deleteMessagesForSession,
+  saveInvite as saveInviteToDb,
+  getAllInvites,
+  deleteInvite as deleteInviteFromDb,
+  updateInviteLabel as updateInviteLabelInDb,
+  addInviteUsedBy as addInviteUsedByInDb,
   type StoredSession,
-  type StoredMessage
+  type StoredMessage,
+  type StoredInvite
 } from './storage'
 import { updateDMSubscription } from './notifications'
 
@@ -32,11 +38,24 @@ export interface ChatSession {
   session: Session
   messages: ChatMessage[]
   invite?: Invite
+  inviteId?: string      // ID of the invite that started this chat
+  inviteLabel?: string   // Label of the invite that started this chat
+}
+
+export interface ActiveInvite {
+  id: string
+  invite: Invite
+  label?: string
+  createdAt: number
+  usedBy?: string[]
+  unsubscribe: () => void
 }
 
 export const chats = writable<Map<string, ChatSession>>(new Map())
 export const currentChat = writable<ChatSession | null>(null)
+export const invites = writable<Map<string, ActiveInvite>>(new Map())
 let isInitialized = false
+let invitesInitialized = false
 
 // Create a nostr subscribe function using NDK
 function createNostrSubscribe() {
@@ -94,6 +113,214 @@ export function parseInviteFromUrl(url: string): Invite | null {
   }
 }
 
+// Serialize invite for storage
+export function serializeInvite(invite: Invite): string {
+  return invite.serialize()
+}
+
+// Deserialize invite from storage
+export function deserializeInvite(data: string): Invite {
+  return Invite.deserialize(data)
+}
+
+// Callback for when an invite is accepted
+let inviteAcceptedCallback: ((session: ChatSession) => void) | null = null
+
+// Set callback for invite acceptance (called from App.svelte)
+export function setInviteAcceptedCallback(callback: (session: ChatSession) => void): void {
+  inviteAcceptedCallback = callback
+}
+
+// Create a new invite and save to storage
+export async function createAndSaveInvite(label?: string): Promise<ActiveInvite> {
+  const pubkey = getPubkey()
+  if (!pubkey) throw new Error('Not logged in')
+
+  const invite = Invite.createNew(pubkey)
+  const id = crypto.randomUUID()
+
+  // Save to IndexedDB
+  const storedInvite: StoredInvite = {
+    id,
+    inviteData: serializeInvite(invite),
+    label,
+    createdAt: Date.now(),
+    usedBy: []
+  }
+  await saveInviteToDb(storedInvite)
+
+  // Start listening for acceptance
+  const currentLabel = label
+  const unsubscribe = listenForInviteAcceptance(invite, async (chatSession) => {
+    // Track who used this invite
+    await addInviteUsedByInDb(id, chatSession.recipientPubkey)
+
+    // Update invites store with the new usedBy
+    invites.update(i => {
+      const current = i.get(id)
+      if (current) {
+        const usedBy = current.usedBy || []
+        if (!usedBy.includes(chatSession.recipientPubkey)) {
+          i.set(id, { ...current, usedBy: [...usedBy, chatSession.recipientPubkey] })
+        }
+      }
+      return i
+    })
+
+    // Store invite info in chat session
+    chatSession.inviteId = id
+    chatSession.inviteLabel = currentLabel
+
+    // Update notification subscription
+    updateDMSubscription()
+
+    // Trigger navigation callback
+    if (inviteAcceptedCallback) {
+      inviteAcceptedCallback(chatSession)
+    }
+  })
+
+  const activeInvite: ActiveInvite = {
+    id,
+    invite,
+    label,
+    createdAt: storedInvite.createdAt,
+    usedBy: [],
+    unsubscribe
+  }
+
+  // Add to invites store
+  invites.update(i => {
+    i.set(id, activeInvite)
+    return i
+  })
+
+  // Update notification subscription to include this invite's ephemeral key
+  updateDMSubscription()
+
+  return activeInvite
+}
+
+// Delete a stored invite and stop listening
+export async function deleteStoredInvite(id: string): Promise<void> {
+  const currentInvites = get(invites)
+  const activeInvite = currentInvites.get(id)
+
+  if (activeInvite) {
+    // Stop listening
+    activeInvite.unsubscribe()
+  }
+
+  // Remove from store
+  invites.update(i => {
+    i.delete(id)
+    return i
+  })
+
+  // Delete from storage
+  await deleteInviteFromDb(id)
+
+  // Update notification subscription
+  updateDMSubscription()
+}
+
+// Update label on an invite
+export async function updateInviteLabel(id: string, label: string): Promise<void> {
+  await updateInviteLabelInDb(id, label)
+
+  // Update in store
+  invites.update(i => {
+    const activeInvite = i.get(id)
+    if (activeInvite) {
+      i.set(id, { ...activeInvite, label })
+    }
+    return i
+  })
+}
+
+// Load all invites from storage and start monitoring
+export async function loadAndMonitorInvites(): Promise<void> {
+  if (invitesInitialized) return
+
+  try {
+    const storedInvites = await getAllInvites()
+
+    for (const stored of storedInvites) {
+      try {
+        const invite = deserializeInvite(stored.inviteData)
+        const inviteId = stored.id
+        const inviteLabel = stored.label
+
+        // Start listening for acceptance
+        const unsubscribe = listenForInviteAcceptance(invite, async (chatSession) => {
+          // Track who used this invite
+          await addInviteUsedByInDb(inviteId, chatSession.recipientPubkey)
+
+          // Update invites store with the new usedBy
+          invites.update(i => {
+            const current = i.get(inviteId)
+            if (current) {
+              const usedBy = current.usedBy || []
+              if (!usedBy.includes(chatSession.recipientPubkey)) {
+                i.set(inviteId, { ...current, usedBy: [...usedBy, chatSession.recipientPubkey] })
+              }
+            }
+            return i
+          })
+
+          // Store invite info in chat session
+          chatSession.inviteId = inviteId
+          chatSession.inviteLabel = inviteLabel
+
+          // Update notification subscription
+          updateDMSubscription()
+
+          // Trigger navigation callback
+          if (inviteAcceptedCallback) {
+            inviteAcceptedCallback(chatSession)
+          }
+        })
+
+        const activeInvite: ActiveInvite = {
+          id: stored.id,
+          invite,
+          label: stored.label,
+          createdAt: stored.createdAt,
+          usedBy: stored.usedBy || [],
+          unsubscribe
+        }
+
+        // Add to invites store
+        invites.update(i => {
+          i.set(stored.id, activeInvite)
+          return i
+        })
+      } catch (e) {
+        console.error('Failed to restore invite:', stored.id, e)
+      }
+    }
+
+    invitesInitialized = true
+  } catch (e) {
+    console.error('Failed to load invites from storage:', e)
+  }
+}
+
+// Get all invite ephemeral pubkeys for notifications
+export function getInviteEphemeralPubkeys(): string[] {
+  const currentInvites = get(invites)
+  const pubkeys: string[] = []
+
+  for (const [, activeInvite] of currentInvites) {
+    // Get the ephemeral pubkey from the invite that responses will be sent to
+    if (activeInvite.invite.inviterEphemeralPublicKey) {
+      pubkeys.push(activeInvite.invite.inviterEphemeralPublicKey)
+    }
+  }
+
+  return pubkeys
+}
+
 // Accept an invite and create a session
 export async function acceptInvite(invite: Invite): Promise<ChatSession> {
   const pubkey = getPubkey()
@@ -146,6 +373,12 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
   const nostrSubscribe = createNostrSubscribe()
 
   return invite.listen(privkeyBytes, nostrSubscribe, (session, identity) => {
+    // Check if we already have a session with this identity (e.g., loaded from storage)
+    const existingChats = get(chats)
+    if (existingChats.has(identity)) {
+      return  // Session already exists, don't overwrite
+    }
+
     const chatSession: ChatSession = {
       id: identity,
       recipientPubkey: identity,
@@ -294,7 +527,12 @@ function handleIncomingReaction(chatSession: ChatSession, reaction: ReactionPayl
 
 // Send a message
 export function sendMessage(chatSession: ChatSession, text: string): void {
-  const { event, innerEvent } = chatSession.session.send(text)
+  const { event } = chatSession.session.send(text)
+
+  // Get current state from store (not the passed reference which may be stale)
+  const currentChats = get(chats)
+  const currentSession = currentChats.get(chatSession.id)
+  if (!currentSession) return
 
   // Add message optimistically - use outer event ID for service worker lookup
   const message: ChatMessage = {
@@ -304,22 +542,23 @@ export function sendMessage(chatSession: ChatSession, text: string): void {
     isMine: true,
   }
 
-  chatSession.messages = [...chatSession.messages, message]
+  const updatedMessages = [...currentSession.messages, message]
+  const updatedSession = { ...currentSession, messages: updatedMessages }
 
   // Update stores synchronously
   chats.update(c => {
-    c.set(chatSession.id, { ...chatSession })
+    c.set(chatSession.id, updatedSession)
     return c
   })
 
   const current = get(currentChat)
   if (current?.id === chatSession.id) {
-    currentChat.set({ ...chatSession })
+    currentChat.set(updatedSession)
   }
 
   // Save and publish in background - don't block UI
   saveMessageToStorage(chatSession.id, message)
-  saveSessionToStorage(chatSession)
+  saveSessionToStorage(updatedSession)
 
   // Update notification subscription (debounced) since keys may have rotated
   updateDMSubscription()
@@ -439,7 +678,9 @@ async function saveSessionToStorage(chatSession: ChatSession): Promise<void> {
       id: chatSession.id,
       recipientPubkey: chatSession.recipientPubkey,
       sessionState: serializeSessionState(chatSession.session.state),
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      inviteId: chatSession.inviteId,
+      inviteLabel: chatSession.inviteLabel
     }
     await saveSessionToDb(storedSession)
   } catch (e) {
@@ -500,7 +741,9 @@ export async function loadChatsFromStorage(): Promise<void> {
           id: stored.id,
           recipientPubkey: stored.recipientPubkey,
           session,
-          messages
+          messages,
+          inviteId: stored.inviteId,
+          inviteLabel: stored.inviteLabel
         }
 
         // Subscribe to incoming messages
@@ -525,10 +768,18 @@ export async function loadChatsFromStorage(): Promise<void> {
 // Clear all chat data (for logout)
 export async function clearChatData(): Promise<void> {
   try {
+    // Stop all invite listeners
+    const currentInvites = get(invites)
+    for (const [, activeInvite] of currentInvites) {
+      activeInvite.unsubscribe()
+    }
+
     await clearAllData()
     chats.set(new Map())
     currentChat.set(null)
+    invites.set(new Map())
     isInitialized = false
+    invitesInitialized = false
   } catch (e) {
     console.error('Failed to clear chat data:', e)
   }
