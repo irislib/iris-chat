@@ -5,51 +5,82 @@ import type { VerifiedEvent, Filter } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
 import type { EncryptFunction, DecryptFunction } from 'nostr-double-ratchet'
 
-// Type for encryptor/decryptor - either raw key bytes or encrypt/decrypt functions
-type Encryptor = Uint8Array | { encrypt: EncryptFunction; decrypt: DecryptFunction }
-
-// Get encryptor that works for both local key and NIP-07
-function getEncryptor(): Encryptor | null {
-  // Try local private key first
+// Get private key bytes OR null for NIP-07
+function getPrivkeyBytesOrNull(): Uint8Array | null {
   const privkeyBytes = getPrivkeyBytes()
+  if (privkeyBytes) {
+    return privkeyBytes
+  }
+  return null
+}
+
+// Get encrypt function for NIP-07 or null for local key
+function getNip07Encrypt(): EncryptFunction | null {
+  if (isNip07Login() && window.nostr?.nip44) {
+    return async (plaintext: string, pubkey: string) => {
+      console.log('[chat] NIP-07 encrypt called for pubkey:', pubkey.slice(0, 8))
+      try {
+        // NIP-07 nip44.encrypt takes (pubkey, plaintext)
+        const result = await window.nostr!.nip44!.encrypt(pubkey, plaintext)
+        console.log('[chat] NIP-07 encrypt success')
+        return result
+      } catch (e) {
+        console.error('[chat] NIP-07 encrypt error:', e)
+        throw e
+      }
+    }
+  }
+  return null
+}
+
+// Get decrypt function for NIP-07 or null for local key
+function getNip07Decrypt(): DecryptFunction | null {
+  if (isNip07Login() && window.nostr?.nip44) {
+    return async (ciphertext: string, pubkey: string) => {
+      console.log('[chat] NIP-07 decrypt called for pubkey:', pubkey.slice(0, 8))
+      try {
+        // NIP-07 nip44.decrypt takes (pubkey, ciphertext)
+        const result = await window.nostr!.nip44!.decrypt(pubkey, ciphertext)
+        console.log('[chat] NIP-07 decrypt success')
+        return result
+      } catch (e) {
+        console.error('[chat] NIP-07 decrypt error:', e)
+        throw e
+      }
+    }
+  }
+  return null
+}
+
+// Get encryptor (Uint8Array or EncryptFunction) for accept()
+function getEncryptor(): Uint8Array | EncryptFunction | null {
+  const privkeyBytes = getPrivkeyBytesOrNull()
   if (privkeyBytes) {
     console.log('[chat] Using local private key for encryption')
     return privkeyBytes
   }
-
-  // For NIP-07, use the extension's nip44 encrypt/decrypt functions
-  // Note: Library expects (plaintext, pubkey) but NIP-07 uses (pubkey, plaintext)
-  if (isNip07Login() && window.nostr?.nip44) {
+  const nip07Encrypt = getNip07Encrypt()
+  if (nip07Encrypt) {
     console.log('[chat] Using NIP-07 nip44 for encryption')
-    return {
-      encrypt: async (plaintext: string, pubkey: string) => {
-        console.log('[chat] NIP-07 encrypt called for pubkey:', pubkey.slice(0, 8))
-        try {
-          // NIP-07 nip44.encrypt takes (pubkey, plaintext)
-          const result = await window.nostr!.nip44!.encrypt(pubkey, plaintext)
-          console.log('[chat] NIP-07 encrypt success')
-          return result
-        } catch (e) {
-          console.error('[chat] NIP-07 encrypt error:', e)
-          throw e
-        }
-      },
-      decrypt: async (ciphertext: string, pubkey: string) => {
-        console.log('[chat] NIP-07 decrypt called for pubkey:', pubkey.slice(0, 8))
-        try {
-          // NIP-07 nip44.decrypt takes (pubkey, ciphertext)
-          const result = await window.nostr!.nip44!.decrypt(pubkey, ciphertext)
-          console.log('[chat] NIP-07 decrypt success')
-          return result
-        } catch (e) {
-          console.error('[chat] NIP-07 decrypt error:', e)
-          throw e
-        }
-      }
-    }
+    return nip07Encrypt
   }
-
   console.log('[chat] No encryptor available, isNip07:', isNip07Login(), 'hasNip44:', !!window.nostr?.nip44)
+  return null
+}
+
+// Get decryptor (Uint8Array or DecryptFunction) for listen()
+function getDecryptor(): Uint8Array | DecryptFunction | null {
+  const privkeyBytes = getPrivkeyBytesOrNull()
+  if (privkeyBytes) {
+    console.log('[chat] Using local private key for decryption')
+    return privkeyBytes
+  }
+  const nip07Decrypt = getNip07Decrypt()
+  if (nip07Decrypt) {
+    console.log('[chat] Using NIP-07 nip44 for decryption')
+    return nip07Decrypt
+  }
+  console.log('[chat] No decryptor available, isNip07:', isNip07Login(), 'hasNip44:', !!window.nostr?.nip44)
   return null
 }
 import {
@@ -111,17 +142,22 @@ function createNostrSubscribe() {
   const ndkInstance = get(ndk)
 
   return (filter: Filter, callback: (event: VerifiedEvent) => void) => {
+    console.log('[chat] createNostrSubscribe - filter:', JSON.stringify(filter))
     const seenIds = new Set<string>()
     const sub = ndkInstance.subscribe(filter, { closeOnEose: false })
 
     sub.on('event', (ndkEvent) => {
+      console.log('[chat] NDK received event:', ndkEvent.id, 'kind:', ndkEvent.kind, 'pubkey:', ndkEvent.pubkey?.slice(0, 8))
       const event = ndkEvent.rawEvent() as VerifiedEvent
       if (seenIds.has(event.id)) return
       seenIds.add(event.id)
+      console.log('[chat] Passing event to callback:', event.id)
       callback(event)
     })
 
+    console.log('[chat] Subscription created for filter')
     return () => {
+      console.log('[chat] Stopping subscription')
       sub.stop()
     }
   }
@@ -177,6 +213,7 @@ let inviteAcceptedCallback: ((session: ChatSession) => void) | null = null
 
 // Set callback for invite acceptance (called from App.svelte)
 export function setInviteAcceptedCallback(callback: (session: ChatSession) => void): void {
+  console.log('[chat] setInviteAcceptedCallback called')
   inviteAcceptedCallback = callback
 }
 
@@ -289,8 +326,18 @@ export async function updateInviteLabel(id: string, label: string): Promise<void
 
 // Load all invites from storage and start monitoring
 export async function loadAndMonitorInvites(): Promise<void> {
-  console.log('[chat] loadAndMonitorInvites called, initialized:', invitesInitialized)
-  if (invitesInitialized) return
+  console.log('[chat] loadAndMonitorInvites called, initialized:', invitesInitialized, 'isNip07:', isNip07Login())
+  if (invitesInitialized) {
+    console.log('[chat] Already initialized, skipping')
+    return
+  }
+
+  // Check decryptor availability early (for listen())
+  const decryptor = getDecryptor()
+  if (!decryptor) {
+    console.error('[chat] Cannot load invites - no decryptor available')
+    return
+  }
 
   try {
     const storedInvites = await getAllInvites()
@@ -335,6 +382,8 @@ export async function loadAndMonitorInvites(): Promise<void> {
           }
         })
 
+        console.log('[chat] Listener set up for invite:', inviteId)
+
         const activeInvite: ActiveInvite = {
           id: stored.id,
           invite,
@@ -350,10 +399,11 @@ export async function loadAndMonitorInvites(): Promise<void> {
           return i
         })
       } catch (e) {
-        console.error('Failed to restore invite:', stored.id, e)
+        console.error('[chat] Failed to restore invite:', stored.id, e)
       }
     }
 
+    console.log('[chat] All invites loaded and monitored')
     invitesInitialized = true
   } catch (e) {
     console.error('Failed to load invites from storage:', e)
@@ -421,17 +471,21 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
 // Listen for invite acceptance and create session
 export function listenForInviteAcceptance(invite: Invite, onSession: (session: ChatSession) => void): () => void {
   console.log('[chat] listenForInviteAcceptance called')
-  const encryptor = getEncryptor()
-  if (!encryptor) {
-    console.error('[chat] No encryptor available for invite listening')
+  const decryptor = getDecryptor()
+  if (!decryptor) {
+    console.error('[chat] No decryptor available for invite listening')
     throw new Error('Not logged in or NIP-44 not available')
   }
 
   const nostrSubscribe = createNostrSubscribe()
 
   console.log('[chat] Starting invite listener for ephemeral key:', invite.inviterEphemeralPublicKey)
-  return invite.listen(encryptor, nostrSubscribe, (session, identity) => {
-    console.log('[chat] Invite accepted! Creating session for identity:', identity)
+  console.log('[chat] Decryptor type:', typeof decryptor === 'function' ? 'DecryptFunction' : 'Uint8Array')
+  console.log('[chat] Invite has inviterEphemeralPublicKey:', !!invite.inviterEphemeralPublicKey)
+  console.log('[chat] Invite has inviterEphemeralPrivateKey:', !!invite.inviterEphemeralPrivateKey)
+
+  return invite.listen(decryptor, nostrSubscribe, (session, identity) => {
+    console.log('[chat] >>> INVITE CALLBACK FIRED! Session created for:', identity)
 
     // Check if we already have a session with this identity (e.g., loaded from storage)
     const existingChats = get(chats)
