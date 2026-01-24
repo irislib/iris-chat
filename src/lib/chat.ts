@@ -12,6 +12,8 @@ import {
   serializeSessionState,
   deserializeSessionState,
   clearAllData,
+  deleteSession as deleteSessionFromDb,
+  deleteMessagesForSession,
   type StoredSession,
   type StoredMessage
 } from './storage'
@@ -21,6 +23,7 @@ export interface ChatMessage {
   content: string
   timestamp: number
   isMine: boolean
+  reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
 }
 
 export interface ChatSession {
@@ -163,11 +166,43 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
   })
 }
 
+// Reaction message format
+interface ReactionPayload {
+  type: 'reaction'
+  messageId: string
+  emoji: string
+}
+
+function isReactionPayload(content: string): ReactionPayload | null {
+  try {
+    const parsed = JSON.parse(content)
+    if (parsed.type === 'reaction' && parsed.messageId && parsed.emoji) {
+      return parsed as ReactionPayload
+    }
+  } catch {
+    // Not JSON, regular message
+  }
+  return null
+}
+
 // Subscribe to incoming messages for a session
 function subscribeToSession(chatSession: ChatSession) {
   const myPubkey = getPubkey()
+  const sessionId = chatSession.id
 
   chatSession.session.onEvent((rumor: Rumor) => {
+    // Get current state from store (not the captured reference which may be stale)
+    const currentChats = get(chats)
+    const currentSession = currentChats.get(sessionId)
+    if (!currentSession) return
+
+    // Check if this is a reaction
+    const reactionPayload = isReactionPayload(rumor.content)
+    if (reactionPayload) {
+      handleIncomingReaction(currentSession, reactionPayload, rumor.pubkey)
+      return
+    }
+
     const message: ChatMessage = {
       id: rumor.id,
       content: rumor.content,
@@ -176,30 +211,78 @@ function subscribeToSession(chatSession: ChatSession) {
     }
 
     // Check if message already exists
-    if (chatSession.messages.some(m => m.id === message.id)) return
+    if (currentSession.messages.some(m => m.id === message.id)) return
 
-    chatSession.messages = [...chatSession.messages, message].sort((a, b) => a.timestamp - b.timestamp)
+    const updatedMessages = [...currentSession.messages, message].sort((a, b) => a.timestamp - b.timestamp)
+    const updatedSession = { ...currentSession, messages: updatedMessages }
 
     // Update store
     chats.update(c => {
-      c.set(chatSession.id, { ...chatSession })
+      c.set(sessionId, updatedSession)
       return c
     })
 
     // Update current chat if it's this one
     const current = get(currentChat)
-    if (current?.id === chatSession.id) {
-      currentChat.set({ ...chatSession })
+    if (current?.id === sessionId) {
+      currentChat.set(updatedSession)
     }
 
     // Save message and updated session state to IndexedDB
-    saveMessageToStorage(chatSession.id, message)
-    saveSessionToStorage(chatSession)
+    saveMessageToStorage(sessionId, message)
+    saveSessionToStorage(updatedSession)
   })
 }
 
+// Handle incoming reaction
+function handleIncomingReaction(chatSession: ChatSession, reaction: ReactionPayload, fromPubkey: string) {
+  const messageIndex = chatSession.messages.findIndex(m => m.id === reaction.messageId)
+  if (messageIndex === -1) return
+
+  const message = chatSession.messages[messageIndex]
+
+  // Create updated reactions - first remove user from any existing reactions
+  const reactions: Record<string, string[]> = {}
+  for (const [emoji, users] of Object.entries(message.reactions || {})) {
+    const filtered = users.filter(u => u !== fromPubkey)
+    if (filtered.length > 0) {
+      reactions[emoji] = filtered
+    }
+  }
+
+  // Add user to new reaction
+  if (!reactions[reaction.emoji]) {
+    reactions[reaction.emoji] = []
+  }
+  reactions[reaction.emoji] = [...reactions[reaction.emoji], fromPubkey]
+
+  // Create new message with reactions
+  const updatedMessage = { ...message, reactions }
+
+  // Create new messages array for reactivity
+  const updatedMessages = [...chatSession.messages]
+  updatedMessages[messageIndex] = updatedMessage
+  chatSession.messages = updatedMessages
+
+  // Update store
+  chats.update(c => {
+    c.set(chatSession.id, { ...chatSession, messages: updatedMessages })
+    return c
+  })
+
+  // Update current chat if it's this one
+  const current = get(currentChat)
+  if (current?.id === chatSession.id) {
+    currentChat.set({ ...chatSession, messages: updatedMessages })
+  }
+
+  // Save updated message to IndexedDB
+  saveMessageToStorage(chatSession.id, updatedMessage)
+  saveSessionToStorage(chatSession)
+}
+
 // Send a message
-export async function sendMessage(chatSession: ChatSession, text: string): Promise<void> {
+export function sendMessage(chatSession: ChatSession, text: string): void {
   const { event, innerEvent } = chatSession.session.send(text)
 
   // Add message optimistically
@@ -212,7 +295,7 @@ export async function sendMessage(chatSession: ChatSession, text: string): Promi
 
   chatSession.messages = [...chatSession.messages, message]
 
-  // Update stores
+  // Update stores synchronously
   chats.update(c => {
     c.set(chatSession.id, { ...chatSession })
     return c
@@ -223,11 +306,77 @@ export async function sendMessage(chatSession: ChatSession, text: string): Promi
     currentChat.set({ ...chatSession })
   }
 
-  // Save message and updated session state to IndexedDB
-  await saveMessageToStorage(chatSession.id, message)
-  await saveSessionToStorage(chatSession)
+  // Save and publish in background - don't block UI
+  saveMessageToStorage(chatSession.id, message)
+  saveSessionToStorage(chatSession)
 
-  // Publish the encrypted event using NDKEvent
+  const ndkInstance = get(ndk)
+  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
+  ndkPublishEvent.publish()
+}
+
+// Send a reaction to a message
+export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
+  const payload: ReactionPayload = {
+    type: 'reaction',
+    messageId,
+    emoji
+  }
+
+  const { event } = chatSession.session.send(JSON.stringify(payload))
+
+  // Get current state from store (not the passed reference which may be stale)
+  const currentChats = get(chats)
+  const currentSession = currentChats.get(chatSession.id)
+  if (!currentSession) return
+
+  // Add reaction optimistically
+  const messageIndex = currentSession.messages.findIndex(m => m.id === messageId)
+  let updatedMessage: ChatMessage | null = null
+
+  if (messageIndex !== -1) {
+    const message = currentSession.messages[messageIndex]
+    const myPubkey = getPubkey()
+
+    // Create updated reactions - first remove user from any existing reactions
+    const reactions: Record<string, string[]> = {}
+    for (const [existingEmoji, users] of Object.entries(message.reactions || {})) {
+      const filtered = users.filter(u => u !== myPubkey)
+      if (filtered.length > 0) {
+        reactions[existingEmoji] = filtered
+      }
+    }
+
+    // Add user to new reaction
+    if (!reactions[emoji]) {
+      reactions[emoji] = []
+    }
+    reactions[emoji] = [...reactions[emoji], myPubkey]
+
+    // Create new message with reactions
+    updatedMessage = { ...message, reactions }
+
+    // Create new messages array for reactivity
+    const updatedMessages = [...currentSession.messages]
+    updatedMessages[messageIndex] = updatedMessage
+
+    // Update stores
+    const updatedSession = { ...currentSession, messages: updatedMessages }
+    chats.update(c => {
+      c.set(chatSession.id, updatedSession)
+      return c
+    })
+
+    const current = get(currentChat)
+    if (current?.id === chatSession.id) {
+      currentChat.set(updatedSession)
+    }
+    // Save updated message to IndexedDB
+    await saveMessageToStorage(chatSession.id, updatedMessage)
+    await saveSessionToStorage(updatedSession)
+  }
+
+  // Publish the encrypted event
   const ndkInstance = get(ndk)
   const ndkPublishEvent = new NDKEvent(ndkInstance, event)
   await ndkPublishEvent.publish()
@@ -240,6 +389,31 @@ export function leaveChat(): void {
     current.session.close()
   }
   currentChat.set(null)
+  // Clear URL hash
+  history.replaceState(null, '', window.location.pathname)
+}
+
+// Delete a chat completely
+export function deleteChat(chatSession: ChatSession): void {
+  // Close the session
+  chatSession.session.close()
+
+  // Remove from store
+  chats.update(c => {
+    c.delete(chatSession.id)
+    return c
+  })
+
+  // Clear current chat if it's this one
+  const current = get(currentChat)
+  if (current?.id === chatSession.id) {
+    currentChat.set(null)
+  }
+
+  // Delete from storage in background
+  deleteSessionFromDb(chatSession.id)
+  deleteMessagesForSession(chatSession.id)
+
   // Clear URL hash
   history.replaceState(null, '', window.location.pathname)
 }
@@ -261,12 +435,18 @@ async function saveSessionToStorage(chatSession: ChatSession): Promise<void> {
 
 async function saveMessageToStorage(sessionId: string, message: ChatMessage): Promise<void> {
   try {
+    // Deep clone reactions to make it IndexedDB-safe
+    const reactions = message.reactions
+      ? JSON.parse(JSON.stringify(message.reactions))
+      : undefined
+
     const storedMessage: StoredMessage = {
       id: message.id,
       sessionId,
       content: message.content,
       timestamp: message.timestamp,
-      isMine: message.isMine
+      isMine: message.isMine,
+      reactions
     }
     await saveMessageToDb(storedMessage)
   } catch (e) {
@@ -298,7 +478,8 @@ export async function loadChatsFromStorage(): Promise<void> {
             id: m.id,
             content: m.content,
             timestamp: m.timestamp,
-            isMine: m.isMine
+            isMine: m.isMine,
+            reactions: m.reactions
           }))
           .sort((a, b) => a.timestamp - b.timestamp)
 

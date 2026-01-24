@@ -2,6 +2,72 @@ import { test, expect, type Page, type BrowserContext } from '@playwright/test'
 
 test.describe('iris chat', () => {
   test.describe('Chat input', () => {
+    test('should focus input when opening or switching chat', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+      const context3 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+      const page3 = await context3.newPage()
+
+      try {
+        // Setup: User 1 creates first chat
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+        const inviteUrl1 = await page1.locator('input[readonly]').inputValue()
+
+        // User 2 joins first chat
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl1)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Input should be focused when chat opens
+        const input = page1.getByPlaceholder('Type a message...')
+        await expect(input).toBeFocused()
+
+        // User 2 sends a message so chat has content
+        await page2.getByPlaceholder('Type a message...').fill('Hello')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello' })).toBeVisible()
+
+        // User 1 goes back to sidebar
+        await page1.getByRole('button', { name: 'Back' }).click()
+
+        // Create second chat
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+        const inviteUrl2 = await page1.locator('input[readonly]').inputValue()
+
+        // User 3 joins second chat
+        await page3.goto('/')
+        await page3.getByRole('button', { name: 'Get Started' }).click()
+        await page3.getByRole('button', { name: 'New Chat' }).click()
+        await page3.getByPlaceholder('Paste invite link').fill(inviteUrl2)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Input should be focused when second chat opens
+        await expect(page1.getByPlaceholder('Type a message...')).toBeFocused()
+
+        // Go back and click on first chat
+        await page1.getByRole('button', { name: 'Back' }).click()
+        await page1.locator('button').filter({ hasText: 'Hello' }).click()
+
+        // Input should be focused when switching to first chat
+        await expect(page1.getByPlaceholder('Type a message...')).toBeFocused()
+      } finally {
+        await context1.close()
+        await context2.close()
+        await context3.close()
+      }
+    })
+
     test('should persist own messages across reload', async ({ browser }) => {
       const context1 = await browser.newContext()
       const context2 = await browser.newContext()
@@ -201,6 +267,250 @@ test.describe('iris chat', () => {
       const clipboardText = await page.evaluate(() => navigator.clipboard.readText())
       expect(clipboardText).toContain('http')
       expect(clipboardText).toContain('#')
+    })
+  })
+
+  test.describe('Chat menu', () => {
+    test('should delete chat from header menu', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Send a message so chat has content
+        await page2.getByPlaceholder('Type a message...').fill('Hello')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello' })).toBeVisible()
+
+        // Click the menu button in header
+        await page1.getByRole('button', { name: 'Chat menu' }).click()
+
+        // Click delete option
+        await page1.getByRole('button', { name: 'Delete chat' }).click()
+
+        // Should go back to sidebar/home and chat should be gone
+        await expect(page1.getByRole('button', { name: 'New Chat' })).toBeVisible()
+        await expect(page1.getByText('Hello')).not.toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+  })
+
+  test.describe('Reactions', () => {
+    test('should persist reactions across reload', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message
+        await page2.getByPlaceholder('Type a message...').fill('React to this!')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
+
+        // User 1 adds a reaction
+        const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
+        await messageBubble.hover()
+        await page1.locator('button[aria-label="Add reaction"]').click()
+        await page1.getByRole('button', { name: '❤️' }).click()
+
+        // Reaction should appear
+        await expect(page1.locator('.reaction').filter({ hasText: '❤️' })).toBeVisible()
+
+        // User 1 goes back and reloads
+        await page1.getByRole('button', { name: 'Back' }).click()
+        await page1.reload()
+
+        // Open the chat again
+        await page1.locator('button').filter({ hasText: 'React to this!' }).click()
+
+        // Wait for chat to load
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
+
+        // Reaction should still be there
+        await expect(page1.locator('.reaction').filter({ hasText: '❤️' })).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should sync reaction to other user', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      page1.on('console', msg => console.log('PAGE1:', msg.text()))
+      page2.on('console', msg => console.log('PAGE2:', msg.text()))
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message
+        await page2.getByPlaceholder('Type a message...').fill('React to this!')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
+
+        // User 1 adds a reaction
+        const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
+        await messageBubble.hover()
+        await page1.locator('button[aria-label="Add reaction"]').click()
+        await page1.getByRole('button', { name: '❤️' }).click()
+
+        // Reaction should appear on User 1
+        await expect(page1.locator('.reaction').filter({ hasText: '❤️' })).toBeVisible()
+
+        // Reaction should sync to User 2
+        await expect(page2.locator('.reaction').filter({ hasText: '❤️' })).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should add reaction to message on click', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message
+        await page2.getByPlaceholder('Type a message...').fill('React to this!')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
+
+        // User 1 hovers over the message to reveal reaction button
+        const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
+        await messageBubble.hover()
+
+        // Click the reaction button
+        await page1.locator('button[aria-label="Add reaction"]').click()
+
+        // Click a reaction emoji (heart)
+        await page1.getByRole('button', { name: '❤️' }).click()
+
+        // Reaction should appear on User 1's screen
+        await expect(page1.locator('.reaction').filter({ hasText: '❤️' })).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should allow only one reaction per user (latest wins)', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create Invite' }).click()
+        const inviteUrl = await page1.locator('input[readonly]').inputValue()
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message
+        await page2.getByPlaceholder('Type a message...').fill('React to this!')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
+
+        // User 1 reacts with heart
+        const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
+        await messageBubble.hover()
+        await page1.locator('button[aria-label="Add reaction"]').click()
+        await page1.getByRole('button', { name: '❤️' }).click()
+        await expect(page1.locator('.reaction').filter({ hasText: '❤️' })).toBeVisible()
+
+        // User 1 reacts again with thumbs up (should replace heart)
+        await messageBubble.hover()
+        await page1.locator('button[aria-label="Add reaction"]').click()
+        await page1.getByRole('button', { name: '👍' }).click()
+
+        // Only thumbs up should be visible, heart should be gone
+        await expect(page1.locator('.reaction').filter({ hasText: '👍' })).toBeVisible()
+        await expect(page1.locator('.reaction').filter({ hasText: '❤️' })).not.toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
     })
   })
 
