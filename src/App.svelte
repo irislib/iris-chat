@@ -12,7 +12,9 @@
 
   // Send message to service worker
   function postToServiceWorker(message: object) {
+    console.log('[app] posting to service worker:', message)
     navigator.serviceWorker?.ready.then(reg => {
+      console.log('[app] service worker ready, active:', !!reg.active)
       reg.active?.postMessage(message)
     })
   }
@@ -98,16 +100,21 @@
 
     // Listen for notification clicks from service worker
     const handleServiceWorkerMessage = (event: MessageEvent) => {
+      console.log('[app] received service worker message:', event.data)
       if (event.data?.type === 'NOTIFICATION_CLICK' && event.data?.chatId) {
         const chatMap = get(chats)
+        console.log('[app] looking for chat:', event.data.chatId, 'in', Array.from(chatMap.keys()))
         const chat = chatMap.get(event.data.chatId)
         if (chat) {
+          console.log('[app] found chat, selecting it')
           selectedChat = chat
           currentChat.set(chat)
           currentView = 'chat'
           mobileView = 'main'
           // Clear any remaining notifications for this chat
           postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
+        } else {
+          console.log('[app] chat not found in map')
         }
       }
     }
@@ -133,6 +140,23 @@
       // If there's an invite in URL, show main view to handle it
       if (hashInvite) {
         mobileView = 'main'
+      }
+
+      // Check for chat hash from notification click (e.g., #chat-{pubkey})
+      const hash = window.location.hash
+      if (hash.startsWith('#chat-')) {
+        const chatId = hash.slice(6) // Remove '#chat-'
+        const chatMap = get(chats)
+        const chat = chatMap.get(chatId)
+        if (chat) {
+          selectedChat = chat
+          currentChat.set(chat)
+          mobileView = 'main'
+          // Clear the hash
+          history.replaceState(null, '', window.location.pathname)
+          // Clear any notifications for this chat
+          postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
+        }
       }
     }
 

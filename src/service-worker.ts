@@ -193,11 +193,13 @@ self.addEventListener('push', (event) => {
 
         const senderName = await getDisplayName(result.chatId)
         const body = result.success && result.content ? result.content : 'New message'
+        const tag = `dm-${result.chatId}`
+        console.log('[sw] showing notification with tag:', tag)
         await self.registration.showNotification(senderName, {
           body,
           icon: '/iris-logo.png',
           badge: '/iris-logo.png',
-          tag: `dm-${result.chatId}`,
+          tag,
           data: { chatId: result.chatId }
         })
       } else {
@@ -222,29 +224,41 @@ async function showFallbackNotification() {
 
 // Handle notification clicks
 self.addEventListener('notificationclick', (event) => {
-  event.notification.close()
+  const notification = event.notification
+  console.log('[sw] notification clicked, tag:', notification.tag, 'data:', notification.data)
 
   const handleClick = async () => {
-    const chatId = event.notification.data?.chatId
+    // Close notification inside waitUntil for browser compatibility
+    notification.close()
+    console.log('[sw] notification closed')
+
+    const chatId = notification.data?.chatId
+    console.log('[sw] handling click for chatId:', chatId)
 
     const windowClients = await self.clients.matchAll({
       type: 'window',
       includeUncontrolled: true
     })
+    console.log('[sw] found window clients:', windowClients.length)
 
     // Try to focus an existing window
     for (const client of windowClients) {
+      console.log('[sw] client url:', client.url, 'origin:', self.location.origin)
       if (client.url.includes(self.location.origin) && 'focus' in client) {
-        await client.focus()
-        if (chatId) {
-          client.postMessage({ type: 'NOTIFICATION_CLICK', chatId })
+        console.log('[sw] focusing client and sending NOTIFICATION_CLICK')
+        // Use the client returned by focus() for postMessage
+        const focusedClient = await client.focus()
+        if (chatId && focusedClient) {
+          focusedClient.postMessage({ type: 'NOTIFICATION_CLICK', chatId })
         }
         return
       }
     }
 
     // Open new window if no existing one
-    await self.clients.openWindow('/')
+    const url = chatId ? `/#chat-${chatId}` : '/'
+    console.log('[sw] no existing window, opening:', url)
+    await self.clients.openWindow(url)
   }
 
   event.waitUntil(handleClick())
@@ -258,10 +272,21 @@ self.addEventListener('activate', (event) => {
 // Listen for messages from client
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'CLEAR_NOTIFICATION' && event.data?.chatId) {
-    // Clear notifications for this chat
-    self.registration.getNotifications({ tag: `dm-${event.data.chatId}` })
+    const tag = `dm-${event.data.chatId}`
+    console.log('[sw] clearing notifications with tag:', tag)
+    // Clear notifications for this chat - try both with tag and without
+    self.registration.getNotifications({ tag })
       .then(notifications => {
+        console.log('[sw] found notifications with tag:', notifications.length)
         notifications.forEach(n => n.close())
+      })
+    // Also try without tag filter as fallback
+    self.registration.getNotifications()
+      .then(notifications => {
+        console.log('[sw] all notifications:', notifications.length, notifications.map(n => n.tag))
+        notifications
+          .filter(n => n.tag === tag)
+          .forEach(n => n.close())
       })
   }
 })
