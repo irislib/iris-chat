@@ -37,6 +37,7 @@
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@nostr-dev-kit/ndk": "^2.18.1",
+    "dexie": "^4.2.1",
     "jsqr": "^1.4.0",
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "^0.0.38",

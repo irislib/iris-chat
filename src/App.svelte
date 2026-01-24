@@ -6,8 +6,9 @@
   import SettingsView from './components/SettingsView.svelte'
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData } from './lib/chat'
+  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats } from './lib/chat'
   import type { ChatSession } from './lib/chat'
+  import { get } from 'svelte/store'
 
   // View routing
   type View = 'chat' | 'settings'
@@ -64,6 +65,21 @@
     }
     window.addEventListener('popstate', handlePopState)
 
+    // Listen for notification clicks from service worker
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'NOTIFICATION_CLICK' && event.data?.chatId) {
+        const chatMap = get(chats)
+        const chat = chatMap.get(event.data.chatId)
+        if (chat) {
+          selectedChat = chat
+          currentChat.set(chat)
+          currentView = 'chat'
+          mobileView = 'main'
+        }
+      }
+    }
+    navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage)
+
     // Try to auto-login
     const isLoggedIn = await autoLogin()
 
@@ -82,6 +98,7 @@
 
     return () => {
       window.removeEventListener('popstate', handlePopState)
+      navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
     }
   })
 

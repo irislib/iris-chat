@@ -4,7 +4,6 @@ import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { VerifiedEvent, Filter } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey } from './identity'
 import {
-  initDB,
   saveSession as saveSessionToDb,
   getAllSessions,
   saveMessage as saveMessageToDb,
@@ -473,7 +472,6 @@ export async function loadChatsFromStorage(): Promise<void> {
   if (isInitialized) return
 
   try {
-    await initDB()
     const storedSessions = await getAllSessions()
     const nostrSubscribe = createNostrSubscribe()
 

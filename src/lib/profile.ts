@@ -1,5 +1,6 @@
 import { writable, type Readable, get } from 'svelte/store'
 import { ndk } from './identity'
+import { saveProfileToStorage } from './storage'
 
 export interface Profile {
   pubkey: string
@@ -44,6 +45,16 @@ export function saveLocalProfile(pubkey: string, name: string): Profile {
   // Also add to cache
   profileCache.set(pubkey, profile)
   notifyListeners(pubkey, profile)
+
+  // Save to IndexedDB for service worker access
+  saveProfileToStorage({
+    pubkey,
+    name: profile.name,
+    display_name: profile.display_name,
+    picture: profile.picture,
+    updatedAt: Date.now()
+  }).catch(e => console.error('[profile] failed to save local profile to IndexedDB', e))
+
   return profile
 }
 
@@ -57,6 +68,15 @@ export function addProfileToCache(profile: Profile): void {
   if (!profile.pubkey) return
   profileCache.set(profile.pubkey, profile)
   notifyListeners(profile.pubkey, profile)
+
+  // Save to IndexedDB for service worker access
+  saveProfileToStorage({
+    pubkey: profile.pubkey,
+    name: profile.name,
+    display_name: profile.display_name,
+    picture: profile.picture,
+    updatedAt: Date.now()
+  }).catch(e => console.error('[profile] failed to save to IndexedDB', e))
 }
 
 // Clear local profile on logout
@@ -118,6 +138,15 @@ async function fetchProfile(pubkey: string): Promise<void> {
         profile.pubkey = event.pubkey
         profileCache.set(pubkey, profile)
         notifyListeners(pubkey, profile)
+
+        // Save to IndexedDB for service worker access
+        saveProfileToStorage({
+          pubkey,
+          name: profile.name,
+          display_name: profile.display_name,
+          picture: profile.picture,
+          updatedAt: Date.now()
+        }).catch(e => console.error('[profile] failed to save to IndexedDB', e))
       } catch (e) {
         console.error('[profile] JSON parse error', e)
       }
