@@ -12,7 +12,7 @@ async function getInviteUrl(page: Page): Promise<string> {
 // Helper to setup a user and get their invite URL
 async function setupUserWithInvite(page: Page): Promise<string> {
   await page.goto('/')
-  await page.getByRole('button', { name: 'Get Started' }).click()
+  await page.getByRole('button', { name: 'Go' }).click()
   await page.getByRole('button', { name: 'New Chat' }).click()
   // Invite is auto-created, just get the URL
   return getInviteUrl(page)
@@ -35,7 +35,7 @@ test.describe('iris chat', () => {
 
         // User 2 joins first chat
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl1)
 
@@ -61,7 +61,7 @@ test.describe('iris chat', () => {
 
         // User 3 joins second chat
         await page3.goto('/')
-        await page3.getByRole('button', { name: 'Get Started' }).click()
+        await page3.getByRole('button', { name: 'Go' }).click()
         await page3.getByRole('button', { name: 'New Chat' }).click()
         await page3.getByPlaceholder('Paste invite link').fill(inviteUrl2)
 
@@ -93,12 +93,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -144,12 +144,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -182,12 +182,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -225,12 +225,12 @@ test.describe('iris chat', () => {
     test('should show login page initially', async ({ page }) => {
       await page.goto('/')
       await expect(page.getByText('iris chat')).toBeVisible()
-      await expect(page.getByRole('button', { name: 'Get Started' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Go' })).toBeVisible()
     })
 
     test('should login and show home view', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Should show sidebar with New Chat button
       await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible()
@@ -238,7 +238,7 @@ test.describe('iris chat', () => {
 
     test('should persist login across page reload', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
       await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible()
 
       // Reload page
@@ -252,7 +252,7 @@ test.describe('iris chat', () => {
   test.describe('Invite', () => {
     test('should auto-create invite and show link', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
       await page.getByRole('button', { name: 'New Chat' }).click()
 
       // Should auto-create invite with default label
@@ -265,7 +265,7 @@ test.describe('iris chat', () => {
       await context.grantPermissions(['clipboard-read', 'clipboard-write'])
 
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
       await page.getByRole('button', { name: 'New Chat' }).click()
 
       // Click copy button (has the URL in title)
@@ -292,12 +292,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -335,12 +335,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -392,12 +392,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -436,12 +436,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -481,12 +481,12 @@ test.describe('iris chat', () => {
       try {
         // Setup: Create chat between two users
         await page1.goto('/')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -577,7 +577,7 @@ test.describe('iris chat', () => {
 
         // User 2: Login and join via paste link
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
 
         // Paste the link in the Join Chat input
@@ -621,7 +621,7 @@ test.describe('iris chat', () => {
 
         // User 2: Login and join via paste link
         await page2.goto('/')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
@@ -694,14 +694,14 @@ test.describe('iris chat', () => {
         // User 1: Enter name "Alice" and login
         await page1.goto('/')
         await page1.getByPlaceholder('Name').fill('Alice')
-        await page1.getByRole('button', { name: 'Get Started' }).click()
+        await page1.getByRole('button', { name: 'Go' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
         const inviteUrl = await getInviteUrl(page1)
 
         // User 2: Enter name "Bob" and join
         await page2.goto('/')
         await page2.getByPlaceholder('Name').fill('Bob')
-        await page2.getByRole('button', { name: 'Get Started' }).click()
+        await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
         await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 

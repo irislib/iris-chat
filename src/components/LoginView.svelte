@@ -97,12 +97,11 @@
         </button>
       {:else}
         <button
-          class="btn-primary w-full flex items-center justify-center gap-2"
+          class="btn-primary w-full flex items-center justify-center"
           onclick={handleGenerateIdentity}
           disabled={loading}
         >
-          <span class="i-carbon-arrow-right"></span>
-          {hasInviteInUrl ? 'Join Chat' : 'Get Started'}
+          {hasInviteInUrl ? 'Join Chat' : 'Go'}
         </button>
       {/if}
     </div>

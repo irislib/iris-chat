@@ -4,7 +4,7 @@ test.describe('Notifications', () => {
   test.describe('Settings Page', () => {
     test('should show Settings in avatar dropdown', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Click on avatar to go to settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -15,7 +15,7 @@ test.describe('Notifications', () => {
 
     test('should navigate to Settings page', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Click on avatar to go to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -35,7 +35,7 @@ test.describe('Notifications', () => {
 
     test('should navigate back from Settings', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -50,7 +50,7 @@ test.describe('Notifications', () => {
 
     test('should show status indicators', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -61,7 +61,7 @@ test.describe('Notifications', () => {
 
     test('should toggle advanced section', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -79,7 +79,7 @@ test.describe('Notifications', () => {
 
     test('should persist notification settings in localStorage', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -107,7 +107,7 @@ test.describe('Notifications', () => {
     test('should show permission denied status in headless browser', async ({ page }) => {
       // In headless Chromium, notification permission is 'denied' by default
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -122,7 +122,7 @@ test.describe('Notifications', () => {
       // In headless Chromium, notification permission is 'denied' by default
       // The prompt only shows when permission is 'default'
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Prompt should NOT be visible when permission is denied
       await expect(page.getByText('Get notified when you receive new messages')).not.toBeVisible()
@@ -130,7 +130,7 @@ test.describe('Notifications', () => {
 
     test('should persist declined state in localStorage when declined via store', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Manually set declined state via localStorage (simulating decline action)
       await page.evaluate(() => {
@@ -155,7 +155,7 @@ test.describe('Notifications', () => {
   test.describe('Test Notification', () => {
     test('test notification button should be disabled without permission', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -169,7 +169,7 @@ test.describe('Notifications', () => {
   test.describe('Settings Toggle', () => {
     test('should show toggle in off state by default', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
@@ -183,7 +183,7 @@ test.describe('Notifications', () => {
   test.describe('Service Worker', () => {
     test('should show service worker as running', async ({ page }) => {
       await page.goto('/')
-      await page.getByRole('button', { name: 'Get Started' }).click()
+      await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
