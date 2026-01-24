@@ -30,6 +30,12 @@
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
   let duplicateTab = $state(false)
 
+  // Notify service worker when chat is opened/closed
+  $effect(() => {
+    const chatId = selectedChat?.id || null
+    postToServiceWorker({ type: 'CHAT_OPENED', chatId })
+  })
+
   // Parse view from URL hash
   function getViewFromHash(): View {
     const hash = window.location.hash
@@ -174,8 +180,19 @@
 
     initializing = false
 
+    // Track visibility changes to update service worker
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && selectedChat) {
+        postToServiceWorker({ type: 'CHAT_OPENED', chatId: selectedChat.id })
+      } else if (document.visibilityState === 'hidden') {
+        postToServiceWorker({ type: 'CHAT_OPENED', chatId: null })
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
     return () => {
       window.removeEventListener('popstate', handlePopState)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
       navigator.serviceWorker?.removeEventListener('message', handleIsOpenMessage)
     }
@@ -259,7 +276,7 @@
   }
 </script>
 
-<main class="h-[100dvh] bg-[#121212] text-white overflow-hidden">
+<main class="min-h-[100dvh] h-[100dvh] bg-[#121212] text-white overflow-hidden">
   {#if initializing}
     <div class="h-full flex items-center justify-center">
       <div class="text-center">
@@ -311,8 +328,8 @@
 
         <!-- Main content - always visible on desktop, conditionally on mobile -->
         <div class="
-          flex-1 bg-[#0a0a0a] h-full
-          {mobileView === 'main' ? 'block w-full' : 'hidden'} md:block md:w-auto
+          flex-1 flex flex-col bg-[#0a0a0a] h-full min-h-0
+          {mobileView === 'main' ? 'flex w-full' : 'hidden'} md:flex md:w-auto
         ">
           {#if currentView === 'settings'}
             <SettingsView onBack={handleSettingsBack} />

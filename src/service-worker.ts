@@ -65,6 +65,9 @@ class IrisChatDB extends Dexie {
 
 const db = new IrisChatDB()
 
+// Track currently open chat (only one can be open at a time)
+let currentOpenChatId: string | null = null
+
 // Get display name from profile, fallback to animal name
 async function getDisplayName(pubkey: string): Promise<string> {
   try {
@@ -83,6 +86,21 @@ interface DecryptResult {
   success: boolean
   content?: string
   chatId?: string
+  isReaction?: boolean
+  emoji?: string
+}
+
+// Check if content is a reaction payload
+function parseReaction(content: string): { emoji: string } | null {
+  try {
+    const parsed = JSON.parse(content)
+    if (parsed.type === 'reaction' && parsed.emoji) {
+      return { emoji: parsed.emoji }
+    }
+  } catch {
+    // Not JSON
+  }
+  return null
 }
 
 // Find session and decrypt message
@@ -104,10 +122,13 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       if (outerId) {
         const storedMessage = await db.messages.get(outerId)
         if (storedMessage && !storedMessage.isMine) {
+          const reaction = parseReaction(storedMessage.content)
           return {
             success: true,
             content: storedMessage.content,
-            chatId: storedSession.recipientPubkey
+            chatId: storedSession.recipientPubkey,
+            isReaction: !!reaction,
+            emoji: reaction?.emoji
           }
         }
       }
@@ -140,10 +161,13 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       })
 
       if (innerEvent) {
+        const reaction = parseReaction(innerEvent.content)
         return {
           success: true,
           content: innerEvent.content,
-          chatId: storedSession.recipientPubkey
+          chatId: storedSession.recipientPubkey,
+          isReaction: !!reaction,
+          emoji: reaction?.emoji
         }
       }
 
@@ -160,29 +184,13 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
   return { success: false }
 }
 
-// Check if a specific chat is currently open in any visible client
+// Check if a specific chat is currently open in a visible window
 async function isChatOpen(chatId: string): Promise<boolean> {
-  const clients = await self.clients.matchAll({
-    type: 'window',
-    includeUncontrolled: true
-  })
+  if (currentOpenChatId !== chatId) return false
 
-  for (const client of clients) {
-    if (client.visibilityState === 'visible') {
-      // Ask client if this chat is open
-      const channel = new MessageChannel()
-      const response = await new Promise<boolean>((resolve) => {
-        const timeout = setTimeout(() => resolve(false), 100)
-        channel.port1.onmessage = (e) => {
-          clearTimeout(timeout)
-          resolve(e.data?.isOpen === true)
-        }
-        client.postMessage({ type: 'IS_CHAT_OPEN', chatId }, [channel.port2])
-      })
-      if (response) return true
-    }
-  }
-  return false
+  // Verify there's actually a visible client
+  const clients = await self.clients.matchAll({ type: 'window' })
+  return clients.some(c => c.visibilityState === 'visible')
 }
 
 // Handle push notifications
@@ -244,7 +252,14 @@ self.addEventListener('push', (event) => {
           }
 
           const senderName = await getDisplayName(result.chatId)
-          const body = result.success && result.content ? result.content : 'New message'
+          let body: string
+          if (result.isReaction && result.emoji) {
+            body = result.emoji
+          } else if (result.success && result.content) {
+            body = result.content
+          } else {
+            body = 'New message'
+          }
           const tag = `dm-${result.chatId}`
           console.log('[sw] showing notification with tag:', tag)
           await self.registration.showNotification(senderName, {
@@ -328,6 +343,10 @@ self.addEventListener('activate', (event) => {
 
 // Listen for messages from client
 self.addEventListener('message', (event) => {
+  if (event.data?.type === 'CHAT_OPENED') {
+    currentOpenChatId = event.data.chatId || null
+  }
+
   if (event.data?.type === 'CLEAR_NOTIFICATION' && event.data?.chatId) {
     const tag = `dm-${event.data.chatId}`
     console.log('[sw] clearing notifications with tag:', tag)

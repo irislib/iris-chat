@@ -68,7 +68,7 @@
   let messages = $derived($currentChat?.messages || chat.messages)
 </script>
 
-<div class="h-[100dvh] flex flex-col">
+<div class="flex-1 flex flex-col min-h-0">
   <!-- Header -->
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
     {#if showBackButton}

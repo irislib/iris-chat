@@ -14,12 +14,12 @@
   let { chat, onChatJoined, onBack, showBackButton }: Props = $props()
 </script>
 
-<div class="h-full flex flex-col">
+<div class="flex-1 flex flex-col min-h-0">
   {#if chat}
     <ChatView {chat} onleave={onBack} {showBackButton} />
   {:else}
     <!-- Home / Welcome screen -->
-    <div class="h-full flex flex-col">
+    <div class="flex-1 flex flex-col min-h-0">
       <!-- Header for mobile back -->
       {#if showBackButton}
         <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 md:hidden">
