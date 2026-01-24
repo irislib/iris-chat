@@ -13,7 +13,6 @@
   let { chat, onleave, showBackButton = true }: Props = $props()
 
   let messageText = $state('')
-  let messagesContainer = $state<HTMLDivElement | null>(null)
   let inputRef = $state<HTMLTextAreaElement | null>(null)
   let showMenu = $state(false)
 
@@ -54,8 +53,10 @@
 
   // Auto-scroll to bottom when new messages arrive
   $effect(() => {
-    if (messagesContainer && $currentChat?.messages.length) {
-      messagesContainer.scrollTop = messagesContainer.scrollHeight
+    if ($currentChat?.messages.length) {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: document.body.scrollHeight })
+      })
     }
   })
 
@@ -72,9 +73,9 @@
   let messages = $derived($currentChat?.messages || chat.messages)
 </script>
 
-<div class="h-full flex flex-col">
-  <!-- Header -->
-  <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0">
+<div class="min-h-[100dvh] pb-[76px] pt-16">
+  <!-- Header - Fixed -->
+  <header class="fixed top-0 left-0 right-0 md:left-80 lg:left-96 h-16 px-4 flex items-center gap-3 border-b border-surface-lighter bg-[#0a0a0a] z-20">
     {#if showBackButton}
       <button
         class="btn-ghost p-2 rounded-full"
@@ -119,17 +120,14 @@
 
   {#if showMenu}
     <button
-      class="fixed inset-0 z-40 bg-transparent border-none cursor-default"
+      class="fixed inset-0 z-10 bg-transparent border-none cursor-default"
       onclick={() => showMenu = false}
       aria-label="Close menu"
     ></button>
   {/if}
 
   <!-- Messages -->
-  <div
-    bind:this={messagesContainer}
-    class="flex-1 overflow-y-auto p-4"
-  >
+  <div class="p-4">
     <!-- Invite started system message -->
     {#if chat.inviteId}
       <div class="text-center py-2 mb-2">
@@ -159,8 +157,8 @@
     {/if}
   </div>
 
-  <!-- Input -->
-  <div class="p-4 border-t border-surface-lighter">
+  <!-- Input - Fixed -->
+  <div class="fixed bottom-0 left-0 right-0 md:left-80 lg:left-96 p-4 border-t border-surface-lighter bg-[#0a0a0a]">
     <div class="flex gap-2 items-end">
       <!-- svelte-ignore a11y_autofocus -->
       <textarea

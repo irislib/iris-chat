@@ -90,7 +90,7 @@
             onclick={handleCopy}
           >
             <span class="{copied ? 'i-carbon-checkmark' : 'i-carbon-copy'}"></span>
-            {copied ? 'Copied!' : 'Copy Link'}
+            {copied ? 'Copied' : 'Copy Link'}
           </button>
 
           {#if navigator.share}

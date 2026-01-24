@@ -32,7 +32,7 @@
 >
   {#if copied}
     <span class="i-carbon-checkmark flex-shrink-0"></span>
-    <span>Copied!</span>
+    <span>Copied</span>
   {:else}
     <span class="i-carbon-copy flex-shrink-0"></span>
     <span class="truncate">{truncateMiddle(text, maxLength)}</span>

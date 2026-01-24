@@ -35,7 +35,7 @@
   )
 </script>
 
-<div class="h-full flex flex-col bg-surface border-r border-surface-lighter">
+<div class="h-[100dvh] md:sticky md:top-0 flex flex-col bg-surface border-r border-surface-lighter">
   <!-- Header -->
   <header class="h-16 px-4 flex items-center justify-between border-b border-surface-lighter flex-shrink-0">
     <button

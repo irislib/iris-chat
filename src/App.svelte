@@ -259,7 +259,7 @@
   }
 </script>
 
-<main class="h-screen bg-[#121212] text-white overflow-hidden">
+<main class="min-h-[100dvh] bg-[#121212] text-white">
   {#if initializing}
     <div class="h-full flex items-center justify-center">
       <div class="text-center">
@@ -289,15 +289,15 @@
       <LoginView onlogin={handleLogin} />
     </div>
   {:else}
-    <div class="h-full flex flex-col">
+    <div class="min-h-[100dvh]">
       <!-- Notification prompt -->
       <NotificationPrompt />
 
       <!-- Main app layout -->
-      <div class="flex flex-1 min-h-0">
+      <div class="flex min-h-[100dvh]">
         <!-- Sidebar - always visible on desktop, conditionally on mobile -->
         <div class="
-          w-full md:w-80 lg:w-96 flex-shrink-0 h-full
+          w-full md:w-80 lg:w-96 flex-shrink-0
           {mobileView === 'sidebar' ? 'block' : 'hidden'} md:block
         ">
           <Sidebar
@@ -311,7 +311,7 @@
 
         <!-- Main content - always visible on desktop, conditionally on mobile -->
         <div class="
-          flex-1 h-full bg-[#0a0a0a]
+          flex-1 bg-[#0a0a0a]
           {mobileView === 'main' ? 'block' : 'hidden'} md:block
         ">
           {#if currentView === 'settings'}
