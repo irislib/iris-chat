@@ -19,6 +19,7 @@
   let currentView = $state<View>('chat')
   // Mobile: which panel to show - 'sidebar' or 'main'
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
+  let duplicateTab = $state(false)
 
   // Parse view from URL hash
   function getViewFromHash(): View {
@@ -46,6 +47,22 @@
   }
 
   onMount(async () => {
+    // Prevent multiple tabs - encryption state can't sync between them
+    const channel = new BroadcastChannel('iris-chat-tab')
+    channel.postMessage('ping')
+    channel.onmessage = (e) => {
+      if (e.data === 'ping' && !duplicateTab) {
+        channel.postMessage('pong')
+      } else if (e.data === 'pong') {
+        duplicateTab = true
+        initializing = false
+      }
+    }
+
+    // Small delay to detect existing tabs
+    await new Promise(r => setTimeout(r, 100))
+    if (duplicateTab) return
+
     // Check for invite in URL hash (invite hashes start with #invite-)
     const hashInvite = parseInviteFromHash()
 
@@ -75,10 +92,24 @@
           currentChat.set(chat)
           currentView = 'chat'
           mobileView = 'main'
+          // Clear any remaining notifications for this chat
+          navigator.serviceWorker?.controller?.postMessage({
+            type: 'CLEAR_NOTIFICATION',
+            chatId: chat.id
+          })
         }
       }
     }
     navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage)
+
+    // Handle IS_CHAT_OPEN queries from service worker (via MessageChannel)
+    const handleWindowMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'IS_CHAT_OPEN' && event.ports[0]) {
+        const isOpen = selectedChat?.id === event.data.chatId && document.visibilityState === 'visible'
+        event.ports[0].postMessage({ isOpen })
+      }
+    }
+    window.addEventListener('message', handleWindowMessage)
 
     // Try to auto-login
     const isLoggedIn = await autoLogin()
@@ -98,6 +129,7 @@
 
     return () => {
       window.removeEventListener('popstate', handlePopState)
+      window.removeEventListener('message', handleWindowMessage)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
     }
   })
@@ -115,6 +147,11 @@
       navigateTo('chat')
     }
     mobileView = 'main'
+    // Clear any notification for this chat
+    navigator.serviceWorker?.controller?.postMessage({
+      type: 'CLEAR_NOTIFICATION',
+      chatId: chat.id
+    })
   }
 
   function handleChatJoined(event: CustomEvent<{ chat: ChatSession }>) {
@@ -124,6 +161,11 @@
       navigateTo('chat')
     }
     mobileView = 'main'
+    // Clear any notification for this chat
+    navigator.serviceWorker?.controller?.postMessage({
+      type: 'CLEAR_NOTIFICATION',
+      chatId: event.detail.chat.id
+    })
   }
 
   function handleNewChat() {
@@ -170,6 +212,16 @@
       <div class="text-center">
         <div class="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
         <p class="text-gray-400">Loading...</p>
+      </div>
+    </div>
+  {:else if duplicateTab}
+    <div class="h-full flex flex-col items-center justify-center p-4">
+      <div class="text-center flex flex-col items-center select-none">
+        <img src="/iris-logo.png" alt="Iris" class="w-16 h-16 mb-4 opacity-50" draggable="false" />
+        <h1 class="text-2xl font-bold text-gray-400 mb-4">Already open in another tab</h1>
+        <p class="text-gray-500 max-w-sm">
+          iris chat can only run in one tab at a time to keep your encrypted messages in sync.
+        </p>
       </div>
     </div>
   {:else if !loggedIn}

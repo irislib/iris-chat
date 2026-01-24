@@ -197,7 +197,7 @@ function subscribeToSession(chatSession: ChatSession) {
   const myPubkey = getPubkey()
   const sessionId = chatSession.id
 
-  chatSession.session.onEvent((rumor: Rumor) => {
+  chatSession.session.onEvent((rumor: Rumor, outerEvent?: VerifiedEvent) => {
     // Get current state from store (not the captured reference which may be stale)
     const currentChats = get(chats)
     const currentSession = currentChats.get(sessionId)
@@ -210,8 +210,9 @@ function subscribeToSession(chatSession: ChatSession) {
       return
     }
 
+    // Use outer event ID for message ID - allows service worker to look up by push event ID
     const message: ChatMessage = {
-      id: rumor.id,
+      id: outerEvent?.id || rumor.id,
       content: rumor.content,
       timestamp: rumor.created_at * 1000,
       isMine: rumor.pubkey === myPubkey,
@@ -295,9 +296,9 @@ function handleIncomingReaction(chatSession: ChatSession, reaction: ReactionPayl
 export function sendMessage(chatSession: ChatSession, text: string): void {
   const { event, innerEvent } = chatSession.session.send(text)
 
-  // Add message optimistically
+  // Add message optimistically - use outer event ID for service worker lookup
   const message: ChatMessage = {
-    id: innerEvent.id,
+    id: event.id,
     content: text,
     timestamp: Date.now(),
     isMine: true,

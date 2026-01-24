@@ -26,8 +26,17 @@ interface StoredProfile {
   updatedAt: number
 }
 
+interface StoredMessage {
+  id: string
+  sessionId: string
+  content: string
+  timestamp: number
+  isMine: boolean
+}
+
 class IrisChatDB extends Dexie {
   sessions!: Table<StoredSession, string>
+  messages!: Table<StoredMessage, string>
   profiles!: Table<StoredProfile, string>
 
   constructor() {
@@ -51,7 +60,7 @@ async function getDisplayName(pubkey: string): Promise<string> {
       if (name) return name
     }
   } catch (err) {
-    console.error('[service-worker] error fetching profile:', err)
+    console.error('[sw] error fetching profile:', err)
   }
   return getAnimalName(pubkey)
 }
@@ -63,61 +72,43 @@ interface DecryptResult {
 }
 
 // Find session and decrypt message
-async function decryptPushMessage(eventData: { pubkey: string; tags: string[][]; [key: string]: unknown }): Promise<DecryptResult> {
+async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags: string[][]; [key: string]: unknown }): Promise<DecryptResult> {
   const sessions = await db.sessions.toArray()
-  console.log('[service-worker] checking', sessions.length, 'sessions for pubkey:', eventData.pubkey)
 
   for (const storedSession of sessions) {
     try {
       const state = deserializeSessionState(storedSession.sessionState)
-      console.log('[service-worker] session', storedSession.recipientPubkey,
-        'theirCurrent:', state.theirCurrentNostrPublicKey,
-        'theirNext:', state.theirNextNostrPublicKey)
 
+      // Check if this message is from this session's peer
       if (state.theirCurrentNostrPublicKey !== eventData.pubkey &&
           state.theirNextNostrPublicKey !== eventData.pubkey) {
-        console.log('[service-worker] pubkey mismatch, skipping')
         continue
       }
 
-      console.log('[service-worker] found matching session, attempting decrypt')
-
-      // Found matching session - try to decrypt
+      // Found matching session - try to decrypt using Session class
       const eventForSession: VerifiedEvent = {
         ...eventData as unknown as VerifiedEvent,
         tags: eventData.tags.filter(([key]) => key === 'header'),
       }
-      console.log('[service-worker] event for session:', JSON.stringify(eventForSession))
 
       let deliverToSession: ((event: VerifiedEvent) => void) | undefined
-      const session = new Session((filter, onEvent) => {
-        console.log('[service-worker] Session requested subscription with filter:', filter)
+      const session = new Session((_, onEvent) => {
         deliverToSession = onEvent
         return () => { deliverToSession = undefined }
       }, state)
 
       const innerEvent = await new Promise<Rumor | null>((resolve) => {
-        const timeout = setTimeout(() => {
-          console.log('[service-worker] decrypt timeout')
-          resolve(null)
-        }, 1500)
-        const unsub = session.onEvent((rumor) => {
-          console.log('[service-worker] decrypted rumor:', rumor)
+        const timeout = setTimeout(() => resolve(null), 1500)
+        session.onEvent((rumor) => {
           clearTimeout(timeout)
           resolve(rumor)
         })
-        console.log('[service-worker] onEvent registered, unsub:', typeof unsub)
         if (deliverToSession) {
-          console.log('[service-worker] delivering event to session...')
           try {
             deliverToSession(eventForSession)
-            console.log('[service-worker] event delivered')
-          } catch (e) {
-            console.error('[service-worker] error delivering event:', e)
+          } catch {
             resolve(null)
           }
-        } else {
-          console.log('[service-worker] deliverToSession not ready')
         }
       })
 
@@ -127,78 +118,109 @@ async function decryptPushMessage(eventData: { pubkey: string; tags: string[][];
           content: innerEvent.content,
           chatId: storedSession.recipientPubkey
         }
-      } else {
-        console.log('[service-worker] decrypt returned null, but session matched')
-        // Decrypt failed but we know who it's from
-        return {
-          success: false,
-          chatId: storedSession.recipientPubkey
+      }
+
+      // Decrypt failed - try to look up message by outer event ID
+      // Main app may have already decrypted and saved it (race condition)
+      const outerId = eventData.id
+      if (outerId) {
+        const storedMessage = await db.messages.get(outerId)
+        if (storedMessage && !storedMessage.isMine) {
+          console.log('[sw] found message in DB')
+          return {
+            success: true,
+            content: storedMessage.content,
+            chatId: storedSession.recipientPubkey
+          }
         }
       }
+
+      // Fallback: show generic notification with sender name
+      return {
+        success: false,
+        chatId: storedSession.recipientPubkey
+      }
     } catch (err) {
-      console.error('[service-worker] decrypt error:', err)
+      console.error('[sw] decrypt error:', err)
     }
   }
 
   return { success: false }
 }
 
+// Check if a specific chat is currently open in any visible client
+async function isChatOpen(chatId: string): Promise<boolean> {
+  const clients = await self.clients.matchAll({
+    type: 'window',
+    includeUncontrolled: true
+  })
+
+  for (const client of clients) {
+    if (client.visibilityState === 'visible') {
+      // Ask client if this chat is open
+      const channel = new MessageChannel()
+      const response = await new Promise<boolean>((resolve) => {
+        const timeout = setTimeout(() => resolve(false), 500)
+        channel.port1.onmessage = (e) => {
+          clearTimeout(timeout)
+          resolve(e.data?.isOpen === true)
+        }
+        client.postMessage({ type: 'IS_CHAT_OPEN', chatId }, [channel.port2])
+      })
+      if (response) return true
+    }
+  }
+  return false
+}
+
 // Handle push notifications
 self.addEventListener('push', (event) => {
-  console.log('[service-worker] v2 push event received:', event)
-  if (!event.data) {
-    console.log('[service-worker] no push data')
-    return
-  }
+  if (!event.data) return
 
   const handlePush = async () => {
     try {
       const payload = event.data?.json()
-      console.log('[service-worker] push payload:', payload)
-      console.log('[service-worker] event.content:', payload.event?.content)
-      console.log('[service-worker] event.sig:', payload.event?.sig)
-      console.log('[service-worker] event.tags:', payload.event?.tags)
-
-      // Try to decrypt the message
-      if (payload.event) {
-        const result = await decryptPushMessage(payload.event)
-        console.log('[service-worker] decrypt result:', result)
-
-        // Show notification if we know who it's from (even if decrypt failed)
-        if (result.chatId) {
-          const senderName = await getDisplayName(result.chatId)
-          const body = result.success && result.content ? result.content : 'New message'
-          await self.registration.showNotification(senderName, {
-            body,
-            icon: '/iris-logo.png',
-            badge: '/iris-logo.png',
-            tag: `dm-${result.chatId}`,
-            data: { chatId: result.chatId }
-          })
-          console.log('[service-worker] notification shown:', senderName, body)
-          return
-        }
+      if (!payload?.event) {
+        await showFallbackNotification()
+        return
       }
 
-      // Fallback notification
-      await self.registration.showNotification('iris chat', {
-        body: 'You have a new message',
-        icon: '/iris-logo.png',
-        badge: '/iris-logo.png'
-      })
-      console.log('[service-worker] fallback notification shown')
+      const result = await decryptPushMessage(payload.event)
+
+      if (result.chatId) {
+        // Skip notification if this specific chat is already open
+        if (await isChatOpen(result.chatId)) {
+          return
+        }
+
+        const senderName = await getDisplayName(result.chatId)
+        const body = result.success && result.content ? result.content : 'New message'
+        await self.registration.showNotification(senderName, {
+          body,
+          icon: '/iris-logo.png',
+          badge: '/iris-logo.png',
+          tag: `dm-${result.chatId}`,
+          data: { chatId: result.chatId }
+        })
+      } else {
+        await showFallbackNotification()
+      }
     } catch (error) {
-      console.error('[service-worker] Error handling push notification:', error)
-      await self.registration.showNotification('iris chat', {
-        body: 'You have a new message',
-        icon: '/iris-logo.png',
-        badge: '/iris-logo.png'
-      })
+      console.error('[sw] push error:', error)
+      await showFallbackNotification()
     }
   }
 
   event.waitUntil(handlePush())
 })
+
+async function showFallbackNotification() {
+  await self.registration.showNotification('iris chat', {
+    body: 'You have a new message',
+    icon: '/iris-logo.png',
+    badge: '/iris-logo.png'
+  })
+}
 
 // Handle notification clicks
 self.addEventListener('notificationclick', (event) => {
@@ -207,7 +229,6 @@ self.addEventListener('notificationclick', (event) => {
   const handleClick = async () => {
     const chatId = event.notification.data?.chatId
 
-    // Focus existing window or open new one
     const windowClients = await self.clients.matchAll({
       type: 'window',
       includeUncontrolled: true
@@ -217,12 +238,8 @@ self.addEventListener('notificationclick', (event) => {
     for (const client of windowClients) {
       if (client.url.includes(self.location.origin) && 'focus' in client) {
         await client.focus()
-        // Navigate to the specific chat
         if (chatId) {
-          client.postMessage({
-            type: 'NOTIFICATION_CLICK',
-            chatId
-          })
+          client.postMessage({ type: 'NOTIFICATION_CLICK', chatId })
         }
         return
       }
@@ -238,4 +255,15 @@ self.addEventListener('notificationclick', (event) => {
 // Handle activation - claim clients
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim())
+})
+
+// Listen for messages from client
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'CLEAR_NOTIFICATION' && event.data?.chatId) {
+    // Clear notifications for this chat
+    self.registration.getNotifications({ tag: `dm-${event.data.chatId}` })
+      .then(notifications => {
+        notifications.forEach(n => n.close())
+      })
+  }
 })

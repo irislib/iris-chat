@@ -72,6 +72,10 @@ export async function deleteMessagesForSession(sessionId: string): Promise<void>
   await db.messages.where('sessionId').equals(sessionId).delete()
 }
 
+export async function getMessageById(id: string): Promise<StoredMessage | undefined> {
+  return db.messages.get(id)
+}
+
 // Profile operations
 export async function saveProfileToStorage(profile: StoredProfile): Promise<void> {
   await db.profiles.put(profile)

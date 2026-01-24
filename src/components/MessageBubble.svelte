@@ -8,10 +8,12 @@
     isLast: boolean
     prevHasReactions?: boolean
     hasReactions?: boolean
+    showSenderName?: boolean
+    senderName?: string
     onreact?: (messageId: string, emoji: string) => Promise<void>
   }
 
-  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, onreact }: Props = $props()
+  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, onreact }: Props = $props()
 
   // For styling: treat as visually first/last if adjacent to reactions
   let styleFirst = $derived(isFirst || prevHasReactions)
@@ -103,7 +105,9 @@
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'}">
   {#if isFirst}
     <div class="flex items-center gap-2 mb-1 {message.isMine ? 'justify-end' : ''}">
-      <span class="text-xs text-gray-400 font-medium">{message.isMine ? 'You' : 'Them'}</span>
+      {#if showSenderName && senderName}
+        <span class="text-xs text-gray-400 font-medium">{senderName}</span>
+      {/if}
       <span class="text-xs text-gray-600">{formatTime(message.timestamp)}</span>
     </div>
   {/if}

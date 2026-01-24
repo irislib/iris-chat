@@ -15,11 +15,20 @@
 
   let isLoading = $state(false)
   let permissionState = $state<NotificationPermission>('default')
+  let hasAutoSubscribed = $state(false)
 
-  // Check permission on mount
+  // Check permission on mount and auto-subscribe if already granted
   $effect(() => {
     if ('Notification' in window) {
       permissionState = Notification.permission
+
+      // Auto-subscribe if permission is already granted but not yet subscribed
+      if (permissionState === 'granted' && !settings.enabled && !hasAutoSubscribed) {
+        hasAutoSubscribed = true
+        subscribeToDMNotifications().catch(err => {
+          console.error('Failed to auto-subscribe to notifications:', err)
+        })
+      }
     }
   })
 
