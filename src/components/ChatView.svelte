@@ -13,6 +13,7 @@
   let { chat, onleave, showBackButton = true }: Props = $props()
 
   let messageText = $state('')
+  let messagesContainer = $state<HTMLDivElement | null>(null)
   let inputRef = $state<HTMLTextAreaElement | null>(null)
   let showMenu = $state(false)
 
@@ -27,10 +28,8 @@
     const text = messageText.trim()
     messageText = ''
 
-    // Send optimistically - don't block UI
     sendMessage(chat, text)
 
-    // Keep focus in input
     requestAnimationFrame(() => inputRef?.focus())
   }
 
@@ -53,29 +52,25 @@
 
   // Auto-scroll to bottom when new messages arrive
   $effect(() => {
-    if ($currentChat?.messages.length) {
-      requestAnimationFrame(() => {
-        window.scrollTo({ top: document.body.scrollHeight })
-      })
+    if (messagesContainer && $currentChat?.messages.length) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight
     }
   })
 
   // Autofocus input when chat opens or changes
   $effect(() => {
-    // Re-run when chat changes
     chat.id
     if (inputRef) {
       inputRef.focus()
     }
   })
 
-  // Get messages from current chat store for reactivity
   let messages = $derived($currentChat?.messages || chat.messages)
 </script>
 
-<div class="min-h-[100dvh] pb-[calc(76px+env(safe-area-inset-bottom))] pt-16">
-  <!-- Header - Fixed -->
-  <header class="fixed top-0 left-0 right-0 md:left-80 lg:left-96 h-16 px-4 flex items-center gap-3 border-b border-surface-lighter bg-[#0a0a0a] z-20">
+<div class="h-[100dvh] flex flex-col">
+  <!-- Header -->
+  <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
     {#if showBackButton}
       <button
         class="btn-ghost p-2 rounded-full"
@@ -126,8 +121,11 @@
     ></button>
   {/if}
 
-  <!-- Messages -->
-  <div class="p-4">
+  <!-- Messages - scrollable -->
+  <div
+    bind:this={messagesContainer}
+    class="flex-1 overflow-y-auto p-4 min-h-0"
+  >
     <!-- Invite started system message -->
     {#if chat.inviteId}
       <div class="text-center py-2 mb-2">
@@ -157,8 +155,8 @@
     {/if}
   </div>
 
-  <!-- Input - Fixed -->
-  <div class="fixed bottom-0 left-0 right-0 md:left-80 lg:left-96 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-surface-lighter bg-[#0a0a0a] z-20">
+  <!-- Input - flex-shrink-0 keeps it at bottom -->
+  <div class="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
     <div class="flex gap-2 items-end">
       <!-- svelte-ignore a11y_autofocus -->
       <textarea
