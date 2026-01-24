@@ -2,7 +2,34 @@ import { writable, get } from 'svelte/store'
 import { Invite, Session, type Rumor } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { VerifiedEvent, Filter } from 'nostr-tools'
-import { ndk, getPrivkeyBytes, getPubkey } from './identity'
+import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
+import type { EncryptFunction, DecryptFunction } from 'nostr-double-ratchet'
+
+// Type for encryptor/decryptor - either raw key bytes or encrypt/decrypt functions
+type Encryptor = Uint8Array | { encrypt: EncryptFunction; decrypt: DecryptFunction }
+
+// Get encryptor that works for both local key and NIP-07
+function getEncryptor(): Encryptor | null {
+  // Try local private key first
+  const privkeyBytes = getPrivkeyBytes()
+  if (privkeyBytes) {
+    return privkeyBytes
+  }
+
+  // For NIP-07, use the extension's nip44 encrypt/decrypt functions
+  if (isNip07Login() && window.nostr?.nip44) {
+    return {
+      encrypt: async (plaintext: string, pubkey: string) => {
+        return window.nostr!.nip44!.encrypt(pubkey, plaintext)
+      },
+      decrypt: async (ciphertext: string, pubkey: string) => {
+        return window.nostr!.nip44!.decrypt(pubkey, ciphertext)
+      }
+    }
+  }
+
+  return null
+}
 import {
   saveSession as saveSessionToDb,
   getAllSessions,
@@ -324,14 +351,14 @@ export function getInviteEphemeralPubkeys(): string[] {
 // Accept an invite and create a session
 export async function acceptInvite(invite: Invite): Promise<ChatSession> {
   const pubkey = getPubkey()
-  const privkeyBytes = getPrivkeyBytes()
+  const encryptor = getEncryptor()
 
-  if (!pubkey || !privkeyBytes) {
+  if (!pubkey || !encryptor) {
     throw new Error('Not logged in')
   }
 
   const nostrSubscribe = createNostrSubscribe()
-  const { session, event } = await invite.accept(nostrSubscribe, pubkey, privkeyBytes)
+  const { session, event } = await invite.accept(nostrSubscribe, pubkey, encryptor)
 
   // Publish the accept event using NDKEvent
   const ndkInstance = get(ndk)
@@ -365,14 +392,14 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
 
 // Listen for invite acceptance and create session
 export function listenForInviteAcceptance(invite: Invite, onSession: (session: ChatSession) => void): () => void {
-  const privkeyBytes = getPrivkeyBytes()
-  if (!privkeyBytes) {
-    throw new Error('Not logged in')
+  const encryptor = getEncryptor()
+  if (!encryptor) {
+    throw new Error('Not logged in or NIP-44 not available')
   }
 
   const nostrSubscribe = createNostrSubscribe()
 
-  return invite.listen(privkeyBytes, nostrSubscribe, (session, identity) => {
+  return invite.listen(encryptor, nostrSubscribe, (session, identity) => {
     // Check if we already have a session with this identity (e.g., loaded from storage)
     const existingChats = get(chats)
     if (existingChats.has(identity)) {

@@ -68,7 +68,7 @@
   })
 </script>
 
-<div class="w-full max-w-md mx-auto p-6 bg-surface rounded-2xl shadow-xl overflow-hidden">
+<div class="w-full max-w-md p-6 bg-surface rounded-2xl shadow-xl overflow-hidden">
   <h2 class="text-2xl font-bold text-white mb-4 text-center">Join Chat</h2>
 
   <div class="space-y-4">

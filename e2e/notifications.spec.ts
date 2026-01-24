@@ -6,31 +6,27 @@ test.describe('Notifications', () => {
       await page.goto('/')
       await page.getByRole('button', { name: 'Get Started' }).click()
 
-      // Click on avatar dropdown
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
+      // Click on avatar to go to settings
+      await page.getByRole('button', { name: 'Settings' }).click()
 
-      // Should see Settings option
-      await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible()
+      // Should see Settings header
+      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
     })
 
     test('should navigate to Settings page', async ({ page }) => {
       await page.goto('/')
       await page.getByRole('button', { name: 'Get Started' }).click()
 
-      // Click on avatar dropdown
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
-
-      // Click Settings
+      // Click on avatar to go to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Should see Settings header
       await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
 
-      // Should see notification toggle
-      await expect(page.getByText('Enable DM Notifications')).toBeVisible()
+      // Should see notification section
+      await expect(page.getByText('Notifications')).toBeVisible()
 
-      // Should see Status section
-      await expect(page.getByText('Status')).toBeVisible()
+      // Should see status indicators
       await expect(page.getByText('Notification API')).toBeVisible()
       await expect(page.getByText('Permission')).toBeVisible()
       await expect(page.getByText('Service Worker')).toBeVisible()
@@ -42,7 +38,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Click back button
@@ -58,7 +53,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Notification API should show as Available (browsers support it)
@@ -70,7 +64,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Advanced section should be collapsed
@@ -89,7 +82,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Expand advanced section
@@ -118,7 +110,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Permission should show as Denied in headless browser
@@ -167,7 +158,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Test notification button should be disabled (permission is denied in headless)
@@ -182,7 +172,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Toggle should be in off state (aria-checked="false")
@@ -197,7 +186,6 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Get Started' }).click()
 
       // Navigate to Settings
-      await page.locator('button').filter({ has: page.locator('.i-carbon-chevron-down') }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
 
       // Service Worker should show as Running

@@ -34,9 +34,9 @@
         </header>
       {/if}
 
-      <div class="flex-1 overflow-y-auto overflow-x-hidden p-4">
-        <div class="w-full max-w-3xl mx-auto space-y-6">
-          <div class="grid md:grid-cols-2 gap-6">
+      <div class="flex-1 overflow-y-auto overflow-x-hidden p-4 flex items-center justify-center">
+        <div class="w-full max-w-3xl">
+          <div class="flex flex-wrap justify-center gap-6">
             <NewChat onjoin={onChatJoined} />
             <JoinChat onjoin={onChatJoined} />
           </div>

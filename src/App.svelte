@@ -322,7 +322,6 @@
             onSelectChat={handleSelectChat}
             onNewChat={handleNewChat}
             onSettings={handleSettings}
-            onlogout={handleLogout}
           />
         </div>
 
@@ -332,7 +331,7 @@
           {mobileView === 'main' ? 'flex w-full' : 'hidden'} md:flex md:w-auto
         ">
           {#if currentView === 'settings'}
-            <SettingsView onBack={handleSettingsBack} />
+            <SettingsView onBack={handleSettingsBack} onLogout={handleLogout} />
           {:else}
             <MainContent
               chat={selectedChat}

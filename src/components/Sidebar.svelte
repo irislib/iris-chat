@@ -2,7 +2,6 @@
   import { identity } from '../lib/identity'
   import { chats, type ChatSession } from '../lib/chat'
   import Avatar from './Avatar.svelte'
-  import Name from './Name.svelte'
   import ChatListItem from './ChatListItem.svelte'
 
   interface Props {
@@ -10,20 +9,9 @@
     onSelectChat: (chat: ChatSession) => void
     onNewChat: () => void
     onSettings: () => void
-    onlogout: () => void
   }
 
-  let { selectedChatId, onSelectChat, onNewChat, onSettings, onlogout }: Props = $props()
-
-  let showUserMenu = $state(false)
-
-  function toggleUserMenu() {
-    showUserMenu = !showUserMenu
-  }
-
-  function closeUserMenu() {
-    showUserMenu = false
-  }
+  let { selectedChatId, onSelectChat, onNewChat, onSettings }: Props = $props()
 
   // Sorted chats by most recent
   let sortedChats = $derived(
@@ -47,45 +35,14 @@
         <span class="text-primary">iris</span> chat
       </h1>
     </button>
-    <div class="relative">
-      <button
-        class="flex items-center gap-2 cursor-pointer bg-transparent border-none p-0"
-        onclick={toggleUserMenu}
-      >
-        <Avatar pubkey={$identity?.pubkey || ''} size={32} />
-        <span class="i-carbon-chevron-down text-gray-400 text-xs"></span>
-      </button>
-
-      {#if showUserMenu}
-        <div
-          class="absolute right-0 top-full mt-1 w-48 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50"
-        >
-          <button
-            class="btn-ghost w-full text-left text-sm flex items-center gap-2"
-            onclick={() => { onSettings(); closeUserMenu(); }}
-          >
-            <span class="i-carbon-settings"></span>
-            Settings
-          </button>
-          <button
-            class="btn-ghost w-full text-left text-sm flex items-center gap-2"
-            onclick={() => { onlogout(); closeUserMenu(); }}
-          >
-            <span class="i-carbon-logout"></span>
-            Logout
-          </button>
-        </div>
-      {/if}
-    </div>
-  </header>
-
-  {#if showUserMenu}
     <button
-      class="fixed inset-0 z-40 bg-transparent border-none cursor-default"
-      onclick={closeUserMenu}
-      aria-label="Close menu"
-    ></button>
-  {/if}
+      class="cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity"
+      onclick={onSettings}
+      aria-label="Settings"
+    >
+      <Avatar pubkey={$identity?.pubkey || ''} size={32} />
+    </button>
+  </header>
 
   <!-- New Chat Button -->
   <div class="p-3 border-b border-surface-lighter flex-shrink-0">

@@ -1,12 +1,23 @@
 <script lang="ts">
   import { notificationSettings } from '../lib/notificationStore'
   import { subscribeToDMNotifications, unsubscribeFromDMNotifications, NotificationService, type NotificationSubscription } from '../lib/notifications'
+  import { identity, getPrivkeyHex } from '../lib/identity'
+  import { nip19 } from 'nostr-tools'
+  import Avatar from './Avatar.svelte'
+  import Name from './Name.svelte'
 
   interface Props {
     onBack: () => void
+    onLogout: () => void
   }
 
-  let { onBack }: Props = $props()
+  let { onBack, onLogout }: Props = $props()
+
+  function handleLogout() {
+    if (confirm('Are you sure you want to logout?\n\nAll chats will be permanently deleted.')) {
+      onLogout()
+    }
+  }
 
   // Reactive state from store
   let settings = $state($notificationSettings)
@@ -30,6 +41,25 @@
   let statusMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null)
   let subscriptions = $state<Record<string, NotificationSubscription>>({})
   let loadingSubscriptions = $state(false)
+  let showPrivateKey = $state(false)
+  let keyCopied = $state(false)
+
+  // Get nsec for private key copy
+  function getNsec(): string | null {
+    const hex = getPrivkeyHex()
+    if (!hex) return null
+    const bytes = new Uint8Array(hex.match(/.{2}/g)!.map(b => parseInt(b, 16)))
+    return nip19.nsecEncode(bytes)
+  }
+
+  async function copyPrivateKey() {
+    const nsec = getNsec()
+    if (nsec) {
+      await navigator.clipboard.writeText(nsec)
+      keyCopied = true
+      setTimeout(() => keyCopied = false, 2000)
+    }
+  }
 
   // Check status on mount
   $effect(() => {
@@ -223,11 +253,69 @@
         </div>
       {/if}
 
-      <!-- DM Notifications Toggle -->
+      <!-- Profile Section -->
+      {#if $identity}
+        <div class="bg-surface rounded-lg p-4">
+          <div class="flex items-center gap-4">
+            <Avatar pubkey={$identity.pubkey} size={64} />
+            <div class="flex-1 min-w-0">
+              <h2 class="font-medium text-lg truncate">
+                <Name pubkey={$identity.pubkey} />
+              </h2>
+              <p class="text-sm text-gray-400">
+                {$identity.isNip07 ? 'Logged in with extension' : 'Logged in with private key'}
+              </p>
+            </div>
+          </div>
+
+          <!-- Private Key Section (only for non-NIP07) -->
+          {#if !$identity.isNip07}
+            <div class="mt-4 pt-4 border-t border-surface-lighter">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-sm text-gray-400">Private Key</span>
+                <button
+                  class="text-xs text-primary hover:underline"
+                  onclick={() => showPrivateKey = !showPrivateKey}
+                >
+                  {showPrivateKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {#if showPrivateKey}
+                <div class="bg-surface-light rounded p-2 mb-2">
+                  <code class="text-xs text-gray-300 break-all">{getNsec()}</code>
+                </div>
+              {/if}
+              <button
+                class="btn-secondary text-sm w-full flex items-center justify-center gap-2"
+                onclick={copyPrivateKey}
+              >
+                <span class="i-carbon-copy"></span>
+                {keyCopied ? 'Copied' : 'Copy Private Key'}
+              </button>
+              <p class="text-xs text-red-400 mt-2">
+                Never share your private key. Anyone with it can access your account.
+              </p>
+            </div>
+          {/if}
+
+          <!-- Logout Button -->
+          <div class="mt-4 pt-4 border-t border-surface-lighter">
+            <button
+              class="w-full flex items-center justify-center gap-2 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg py-2 transition-colors"
+              onclick={handleLogout}
+            >
+              <span class="i-carbon-logout"></span>
+              Logout
+            </button>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Notifications Section -->
       <div class="bg-surface rounded-lg p-4">
         <div class="flex items-center justify-between">
           <div>
-            <h2 class="font-medium">Enable DM Notifications</h2>
+            <h2 class="font-medium">Notifications</h2>
             <p class="text-sm text-gray-400 mt-1">Get notified when you receive new messages</p>
           </div>
           <button
@@ -243,13 +331,9 @@
             ></span>
           </button>
         </div>
-      </div>
 
-      <!-- Status Section -->
-      <div class="bg-surface rounded-lg p-4">
-        <h2 class="font-medium mb-3">Status</h2>
-        <div class="space-y-3">
-          <!-- Notification API -->
+        <!-- Status -->
+        <div class="mt-4 pt-4 border-t border-surface-lighter space-y-3">
           <div class="flex items-center justify-between text-sm">
             <span class="text-gray-400">Notification API</span>
             <span class="flex items-center gap-2">
@@ -263,7 +347,6 @@
             </span>
           </div>
 
-          <!-- Permission -->
           <div class="flex items-center justify-between text-sm">
             <span class="text-gray-400">Permission</span>
             <span class="flex items-center gap-2">
@@ -283,7 +366,6 @@
             </span>
           </div>
 
-          <!-- Service Worker -->
           <div class="flex items-center justify-between text-sm">
             <span class="text-gray-400">Service Worker</span>
             <span class="flex items-center gap-2">
@@ -297,7 +379,6 @@
             </span>
           </div>
 
-          <!-- Push Subscription -->
           <div class="flex items-center justify-between text-sm">
             <span class="text-gray-400">Push Subscription</span>
             <span class="flex items-center gap-2">
@@ -320,18 +401,18 @@
             </span>
           </div>
         </div>
-      </div>
 
-      <!-- Test Notification -->
-      <div class="bg-surface rounded-lg p-4">
-        <button
-          class="btn-primary w-full flex items-center justify-center"
-          onclick={handleSendTestNotification}
-          disabled={permissionState !== 'granted' || isLoading}
-        >
-          <span class="i-carbon-notification mr-2"></span>
-          Send Test Notification
-        </button>
+        <!-- Test Notification -->
+        <div class="mt-4 pt-4 border-t border-surface-lighter">
+          <button
+            class="btn-secondary w-full flex items-center justify-center"
+            onclick={handleSendTestNotification}
+            disabled={permissionState !== 'granted' || isLoading}
+          >
+            <span class="i-carbon-notification mr-2"></span>
+            Send Test Notification
+          </button>
+        </div>
       </div>
 
       <!-- Source Code -->
@@ -342,7 +423,7 @@
           rel="noopener noreferrer"
           class="flex items-center gap-2 text-primary hover:underline"
         >
-          <span class="i-carbon-logo-github text-lg"></span>
+          <span class="i-carbon-code text-lg"></span>
           View Source Code
         </a>
       </div>
