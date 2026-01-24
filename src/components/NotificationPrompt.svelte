@@ -67,7 +67,7 @@
 </script>
 
 {#if shouldShow}
-  <div class="bg-primary/20 border-b border-primary/30 px-4 py-3 flex items-center justify-between gap-4">
+  <div class="bg-primary/20 border-b border-primary/30 px-4 py-3 flex items-center justify-between gap-4 sticky top-0 z-30">
     <div class="flex items-center gap-3">
       <span class="i-carbon-notification text-primary text-xl flex-shrink-0"></span>
       <p class="text-sm">
