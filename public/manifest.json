@@ -1,0 +1,17 @@
+{
+  "name": "iris chat",
+  "short_name": "iris chat",
+  "description": "Secure, private messaging",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "icons": [
+    {
+      "src": "/iris-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

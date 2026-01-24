@@ -9,10 +9,11 @@
     selectedChatId: string | null
     onSelectChat: (chat: ChatSession) => void
     onNewChat: () => void
+    onSettings: () => void
     onlogout: () => void
   }
 
-  let { selectedChatId, onSelectChat, onNewChat, onlogout }: Props = $props()
+  let { selectedChatId, onSelectChat, onNewChat, onSettings, onlogout }: Props = $props()
 
   let showUserMenu = $state(false)
 
@@ -56,6 +57,13 @@
         <div
           class="absolute right-0 top-full mt-1 w-48 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50"
         >
+          <button
+            class="btn-ghost w-full text-left text-sm flex items-center gap-2"
+            onclick={() => { onSettings(); closeUserMenu(); }}
+          >
+            <span class="i-carbon-settings"></span>
+            Settings
+          </button>
           <button
             class="btn-ghost w-full text-left text-sm flex items-center gap-2"
             onclick={() => { onlogout(); closeUserMenu(); }}

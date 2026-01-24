@@ -1,0 +1,440 @@
+<script lang="ts">
+  import { notificationSettings } from '../lib/notificationStore'
+  import { subscribeToDMNotifications, unsubscribeFromDMNotifications, NotificationService, type NotificationSubscription } from '../lib/notifications'
+
+  interface Props {
+    onBack: () => void
+  }
+
+  let { onBack }: Props = $props()
+
+  // Reactive state from store
+  let settings = $state($notificationSettings)
+
+  // Subscribe to store changes
+  $effect(() => {
+    const unsubscribe = notificationSettings.subscribe((value) => {
+      settings = value
+    })
+    return unsubscribe
+  })
+
+  // Status indicators
+  let notificationApiAvailable = $state(false)
+  let permissionState = $state<NotificationPermission>('default')
+  let serviceWorkerRunning = $state(false)
+  let isSubscribed = $state(false)
+  let showAdvanced = $state(false)
+  let serverUrlInput = $state($notificationSettings.serverUrl)
+  let isLoading = $state(false)
+  let statusMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null)
+  let subscriptions = $state<Record<string, NotificationSubscription>>({})
+  let loadingSubscriptions = $state(false)
+
+  // Check status on mount
+  $effect(() => {
+    checkStatus()
+  })
+
+  // Load subscriptions when advanced section is opened
+  $effect(() => {
+    if (showAdvanced && Object.keys(subscriptions).length === 0) {
+      loadSubscriptions()
+    }
+  })
+
+  async function checkStatus() {
+    // Check Notification API
+    notificationApiAvailable = 'Notification' in window
+
+    // Check permission
+    if (notificationApiAvailable) {
+      permissionState = Notification.permission
+    }
+
+    // Check service worker
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration()
+      serviceWorkerRunning = !!registration?.active
+
+      // Check push subscription
+      if (registration) {
+        const subscription = await registration.pushManager?.getSubscription()
+        isSubscribed = !!subscription
+      }
+    }
+  }
+
+  async function handleToggleNotifications() {
+    isLoading = true
+    statusMessage = null
+
+    try {
+      if (!settings.enabled) {
+        // Enable notifications
+        const result = await subscribeToDMNotifications()
+        if (result.success) {
+          statusMessage = { type: 'success', text: 'Notifications enabled' }
+        } else {
+          statusMessage = { type: 'error', text: result.error || 'Failed to enable notifications' }
+        }
+      } else {
+        // Disable notifications
+        const result = await unsubscribeFromDMNotifications()
+        if (result.success) {
+          statusMessage = { type: 'success', text: 'Notifications disabled' }
+        } else {
+          statusMessage = { type: 'error', text: result.error || 'Failed to disable notifications' }
+        }
+      }
+    } catch (error) {
+      statusMessage = { type: 'error', text: String(error) }
+    }
+
+    isLoading = false
+    await checkStatus()
+  }
+
+  async function handleRequestPermission() {
+    const result = await Notification.requestPermission()
+    permissionState = result
+  }
+
+  async function handleSubscribe() {
+    isLoading = true
+    statusMessage = null
+
+    try {
+      const result = await subscribeToDMNotifications()
+      if (result.success) {
+        statusMessage = { type: 'success', text: 'Subscribed to notifications' }
+      } else {
+        statusMessage = { type: 'error', text: result.error || 'Failed to subscribe' }
+      }
+    } catch (error) {
+      statusMessage = { type: 'error', text: String(error) }
+    }
+
+    isLoading = false
+    await checkStatus()
+  }
+
+  async function handleSendTestNotification() {
+    isLoading = true
+    statusMessage = null
+
+    try {
+      if (permissionState === 'granted') {
+        const registration = await navigator.serviceWorker.getRegistration()
+        if (registration) {
+          await registration.showNotification('Test Notification', {
+            body: 'This is a test notification from iris chat',
+            icon: '/iris-logo.png'
+          })
+        } else {
+          new Notification('Test Notification', {
+            body: 'This is a test notification from iris chat',
+            icon: '/iris-logo.png'
+          })
+        }
+        statusMessage = { type: 'success', text: 'Test notification sent' }
+      } else {
+        statusMessage = { type: 'error', text: 'Permission not granted' }
+      }
+    } catch (error) {
+      statusMessage = { type: 'error', text: String(error) }
+    }
+
+    isLoading = false
+  }
+
+  function handleSaveServerUrl() {
+    notificationSettings.setServerUrl(serverUrlInput)
+    statusMessage = { type: 'success', text: 'Server URL saved' }
+    // Reload subscriptions with new server URL
+    loadSubscriptions()
+  }
+
+  async function loadSubscriptions() {
+    loadingSubscriptions = true
+    try {
+      const api = new NotificationService()
+      subscriptions = await api.getNotificationSubscriptions()
+    } catch (error) {
+      console.error('Failed to load subscriptions:', error)
+      subscriptions = {}
+    }
+    loadingSubscriptions = false
+  }
+
+  async function handleDeleteSubscription(id: string) {
+    try {
+      const api = new NotificationService()
+      await api.deleteNotificationSubscription(id)
+      // Remove from local state
+      const { [id]: _, ...rest } = subscriptions
+      subscriptions = rest
+      statusMessage = { type: 'success', text: 'Subscription deleted' }
+    } catch (error) {
+      statusMessage = { type: 'error', text: `Failed to delete: ${error}` }
+    }
+  }
+
+  function formatKinds(kinds?: number[]): string {
+    if (!kinds?.length) return ''
+    const kindNames: Record<number, string> = { 1060: 'DM', 1059: 'Invite' }
+    return kinds.map(k => kindNames[k] || `kind:${k}`).join(', ')
+  }
+
+  function truncatePubkey(pubkey: string): string {
+    return pubkey.slice(0, 8) + '...' + pubkey.slice(-4)
+  }
+
+  function truncateEndpoint(endpoint: string): string {
+    try {
+      const url = new URL(endpoint)
+      return url.hostname + '/...' + endpoint.slice(-8)
+    } catch {
+      return endpoint.slice(0, 20) + '...'
+    }
+  }
+</script>
+
+<div class="h-full flex flex-col bg-[#0a0a0a]">
+  <!-- Header -->
+  <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-surface">
+    <button
+      class="btn-ghost p-2"
+      onclick={onBack}
+      aria-label="Back"
+    >
+      <span class="i-carbon-arrow-left text-xl"></span>
+    </button>
+    <h1 class="text-xl font-semibold">Settings</h1>
+  </header>
+
+  <!-- Content -->
+  <div class="flex-1 overflow-y-auto p-4">
+    <div class="max-w-lg mx-auto space-y-6">
+      <!-- Status Message -->
+      {#if statusMessage}
+        <div class="p-3 rounded-lg {statusMessage.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}">
+          {statusMessage.text}
+        </div>
+      {/if}
+
+      <!-- DM Notifications Toggle -->
+      <div class="bg-surface rounded-lg p-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="font-medium">Enable DM Notifications</h2>
+            <p class="text-sm text-gray-400 mt-1">Get notified when you receive new messages</p>
+          </div>
+          <button
+            class="w-12 h-6 rounded-full transition-colors relative {settings.enabled ? 'bg-primary' : 'bg-gray-600'} {isLoading ? 'opacity-50' : ''}"
+            onclick={handleToggleNotifications}
+            disabled={isLoading}
+            role="switch"
+            aria-checked={settings.enabled}
+            aria-label="Toggle DM notifications"
+          >
+            <span
+              class="absolute top-1 w-4 h-4 bg-white rounded-full transition-transform {settings.enabled ? 'left-7' : 'left-1'}"
+            ></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Status Section -->
+      <div class="bg-surface rounded-lg p-4">
+        <h2 class="font-medium mb-3">Status</h2>
+        <div class="space-y-3">
+          <!-- Notification API -->
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-gray-400">Notification API</span>
+            <span class="flex items-center gap-2">
+              {#if notificationApiAvailable}
+                <span class="i-carbon-checkmark-filled text-green-500"></span>
+                <span class="text-green-500">Available</span>
+              {:else}
+                <span class="i-carbon-close-filled text-red-500"></span>
+                <span class="text-red-500">Not Available</span>
+              {/if}
+            </span>
+          </div>
+
+          <!-- Permission -->
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-gray-400">Permission</span>
+            <span class="flex items-center gap-2">
+              {#if permissionState === 'granted'}
+                <span class="i-carbon-checkmark-filled text-green-500"></span>
+                <span class="text-green-500">Granted</span>
+              {:else if permissionState === 'denied'}
+                <span class="i-carbon-close-filled text-red-500"></span>
+                <span class="text-red-500">Denied</span>
+              {:else}
+                <span class="i-carbon-warning-filled text-yellow-500"></span>
+                <span class="text-yellow-500">Not Requested</span>
+                <button class="btn-primary text-xs py-1 px-2" onclick={handleRequestPermission}>
+                  Allow
+                </button>
+              {/if}
+            </span>
+          </div>
+
+          <!-- Service Worker -->
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-gray-400">Service Worker</span>
+            <span class="flex items-center gap-2">
+              {#if serviceWorkerRunning}
+                <span class="i-carbon-checkmark-filled text-green-500"></span>
+                <span class="text-green-500">Running</span>
+              {:else}
+                <span class="i-carbon-close-filled text-red-500"></span>
+                <span class="text-red-500">Not Running</span>
+              {/if}
+            </span>
+          </div>
+
+          <!-- Push Subscription -->
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-gray-400">Push Subscription</span>
+            <span class="flex items-center gap-2">
+              {#if isSubscribed}
+                <span class="i-carbon-checkmark-filled text-green-500"></span>
+                <span class="text-green-500">Subscribed</span>
+              {:else}
+                <span class="i-carbon-close-filled text-red-500"></span>
+                <span class="text-red-500">Not Subscribed</span>
+                {#if serviceWorkerRunning && permissionState === 'granted'}
+                  <button
+                    class="btn-primary text-xs py-1 px-2"
+                    onclick={handleSubscribe}
+                    disabled={isLoading}
+                  >
+                    Subscribe
+                  </button>
+                {/if}
+              {/if}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Test Notification -->
+      <div class="bg-surface rounded-lg p-4">
+        <button
+          class="btn-primary w-full flex items-center justify-center"
+          onclick={handleSendTestNotification}
+          disabled={permissionState !== 'granted' || isLoading}
+        >
+          <span class="i-carbon-notification mr-2"></span>
+          Send Test Notification
+        </button>
+      </div>
+
+      <!-- Advanced Section -->
+      <div class="bg-surface rounded-lg p-4">
+        <button
+          class="w-full flex items-center justify-between text-left"
+          onclick={() => showAdvanced = !showAdvanced}
+        >
+          <h2 class="font-medium">Advanced</h2>
+          <span class="i-carbon-chevron-down text-gray-400 transition-transform {showAdvanced ? 'rotate-180' : ''}"></span>
+        </button>
+
+        {#if showAdvanced}
+          <div class="mt-4 space-y-4">
+            <div>
+              <label class="block text-sm text-gray-400 mb-2" for="server-url">
+                Notification Server URL
+              </label>
+              <div class="flex gap-2">
+                <input
+                  id="server-url"
+                  type="url"
+                  class="flex-1 bg-surface-light border border-surface-lighter rounded px-3 py-2 text-sm"
+                  bind:value={serverUrlInput}
+                  placeholder="https://notifications.iris.to"
+                />
+                <button class="btn-primary px-3" onclick={handleSaveServerUrl}>
+                  Save
+                </button>
+              </div>
+            </div>
+
+            <!-- Active Subscriptions -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm text-gray-400">Active Subscriptions</label>
+                <button
+                  class="text-xs text-primary hover:underline"
+                  onclick={loadSubscriptions}
+                  disabled={loadingSubscriptions}
+                >
+                  {loadingSubscriptions ? 'Loading...' : 'Refresh'}
+                </button>
+              </div>
+              {#if loadingSubscriptions}
+                <div class="text-sm text-gray-500 py-2">Loading...</div>
+              {:else if Object.keys(subscriptions).length === 0}
+                <div class="text-sm text-gray-500 py-2">No active subscriptions</div>
+              {:else}
+                <div class="space-y-3">
+                  {#each Object.entries(subscriptions) as [id, sub]}
+                    <div class="bg-surface-light rounded p-3 text-sm">
+                      <div class="flex items-start justify-between gap-2 mb-2">
+                        <div class="text-gray-300 font-mono text-xs" title={id}>
+                          ID: {id.slice(0, 12)}...
+                        </div>
+                        <button
+                          class="text-red-400 hover:text-red-300 flex-shrink-0"
+                          onclick={() => handleDeleteSubscription(id)}
+                          title="Delete subscription"
+                        >
+                          <span class="i-carbon-trash-can"></span>
+                        </button>
+                      </div>
+
+                      {#if sub.filter.kinds?.length}
+                        <div class="text-gray-400 text-xs mb-1">
+                          <span class="text-gray-500">Kinds:</span> {formatKinds(sub.filter.kinds)}
+                        </div>
+                      {/if}
+
+                      {#if sub.filter.authors?.length}
+                        <div class="text-xs mb-1">
+                          <span class="text-gray-500">Authors ({sub.filter.authors.length}):</span>
+                          <div class="text-gray-400 font-mono mt-1 space-y-0.5">
+                            {#each sub.filter.authors.slice(0, 5) as author}
+                              <div title={author}>{truncatePubkey(author)}</div>
+                            {/each}
+                            {#if sub.filter.authors.length > 5}
+                              <div class="text-gray-500">...and {sub.filter.authors.length - 5} more</div>
+                            {/if}
+                          </div>
+                        </div>
+                      {/if}
+
+                      {#if sub.web_push_subscriptions?.length}
+                        <div class="text-xs">
+                          <span class="text-gray-500">Endpoints ({sub.web_push_subscriptions.length}):</span>
+                          <div class="text-gray-400 font-mono mt-1 space-y-0.5">
+                            {#each sub.web_push_subscriptions as pushSub}
+                              <div title={pushSub.endpoint}>{truncateEndpoint(pushSub.endpoint)}</div>
+                            {/each}
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+</div>

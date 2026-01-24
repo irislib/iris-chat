@@ -17,6 +17,7 @@ import {
   type StoredSession,
   type StoredMessage
 } from './storage'
+import { updateDMSubscription } from './notifications'
 
 export interface ChatMessage {
   id: string
@@ -130,6 +131,9 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
   // Save to IndexedDB
   await saveSessionToStorage(chatSession)
 
+  // Update notification subscription for new session
+  updateDMSubscription()
+
   return chatSession
 }
 
@@ -162,6 +166,10 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
 
     // Save to IndexedDB
     saveSessionToStorage(chatSession)
+
+    // Update notification subscription for new session
+    updateDMSubscription()
+
     onSession(chatSession)
   })
 }
@@ -231,6 +239,9 @@ function subscribeToSession(chatSession: ChatSession) {
     // Save message and updated session state to IndexedDB
     saveMessageToStorage(sessionId, message)
     saveSessionToStorage(updatedSession)
+
+    // Update notification subscription (debounced) since keys may have rotated
+    updateDMSubscription()
   })
 }
 
@@ -309,6 +320,9 @@ export function sendMessage(chatSession: ChatSession, text: string): void {
   // Save and publish in background - don't block UI
   saveMessageToStorage(chatSession.id, message)
   saveSessionToStorage(chatSession)
+
+  // Update notification subscription (debounced) since keys may have rotated
+  updateDMSubscription()
 
   const ndkInstance = get(ndk)
   const ndkPublishEvent = new NDKEvent(ndkInstance, event)
