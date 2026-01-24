@@ -334,6 +334,19 @@
         </button>
       </div>
 
+      <!-- Source Code -->
+      <div class="bg-surface rounded-lg p-4">
+        <a
+          href="https://files.iris.to/#/npub1xndmdgymsf4a34rzr7346vp8qcptxf75pjqweh8naa8rklgxpfqqmfjtce/iris-chat"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center gap-2 text-primary hover:underline"
+        >
+          <span class="i-carbon-logo-github text-lg"></span>
+          View Source Code
+        </a>
+      </div>
+
       <!-- Advanced Section -->
       <div class="bg-surface rounded-lg p-4">
         <button
