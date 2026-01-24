@@ -73,7 +73,7 @@
   let messages = $derived($currentChat?.messages || chat.messages)
 </script>
 
-<div class="min-h-[100dvh] pb-[76px] pt-16">
+<div class="min-h-[100dvh] pb-[calc(76px+env(safe-area-inset-bottom))] pt-16">
   <!-- Header - Fixed -->
   <header class="fixed top-0 left-0 right-0 md:left-80 lg:left-96 h-16 px-4 flex items-center gap-3 border-b border-surface-lighter bg-[#0a0a0a] z-20">
     {#if showBackButton}
@@ -158,7 +158,7 @@
   </div>
 
   <!-- Input - Fixed -->
-  <div class="fixed bottom-0 left-0 right-0 md:left-80 lg:left-96 p-4 border-t border-surface-lighter bg-[#0a0a0a]">
+  <div class="fixed bottom-0 left-0 right-0 md:left-80 lg:left-96 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-surface-lighter bg-[#0a0a0a] z-20">
     <div class="flex gap-2 items-end">
       <!-- svelte-ignore a11y_autofocus -->
       <textarea

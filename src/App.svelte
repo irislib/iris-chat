@@ -297,8 +297,8 @@
       <div class="flex min-h-[100dvh]">
         <!-- Sidebar - always visible on desktop, conditionally on mobile -->
         <div class="
-          w-full md:w-80 lg:w-96 flex-shrink-0
-          {mobileView === 'sidebar' ? 'block' : 'hidden'} md:block
+          md:w-80 lg:w-96 flex-shrink-0
+          {mobileView === 'sidebar' ? 'block w-full' : 'hidden'} md:block
         ">
           <Sidebar
             selectedChatId={selectedChat?.id || null}
@@ -311,8 +311,8 @@
 
         <!-- Main content - always visible on desktop, conditionally on mobile -->
         <div class="
-          flex-1 bg-[#0a0a0a]
-          {mobileView === 'main' ? 'block' : 'hidden'} md:block
+          flex-1 bg-[#0a0a0a] min-h-[100dvh]
+          {mobileView === 'main' ? 'block w-full' : 'hidden'} md:block md:w-auto
         ">
           {#if currentView === 'settings'}
             <SettingsView onBack={handleSettingsBack} />
