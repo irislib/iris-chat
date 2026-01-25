@@ -529,6 +529,26 @@
           </div>
         {/if}
       </div>
+
+      <!-- About Section -->
+      <div class="bg-surface rounded-lg p-4">
+        <h2 class="font-medium mb-3">About iris chat</h2>
+        <div class="text-sm text-gray-400 space-y-3">
+          <p>
+            Single-device encrypted chat that just works &mdash; because it's simple. Uses the
+            <a href="https://en.wikipedia.org/wiki/Double_Ratchet_Algorithm" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">double ratchet algorithm</a>
+            for end-to-end encryption.
+          </p>
+          <p>
+            Your encryption keys are stored only on this device.
+          </p>
+          <p class="text-gray-500">
+            Looking for multi-device support?
+            <a href="https://iris.to" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">iris.to</a>
+            has it in the works &mdash; reliably relaying messages to every device is tricky to get right.
+          </p>
+        </div>
+      </div>
     </div>
   </div>
 </div>
