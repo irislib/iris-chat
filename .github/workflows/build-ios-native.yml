@@ -1,0 +1,41 @@
+name: Build iOS Native Library
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-ios-native.yml'
+
+jobs:
+  build-ndr-ffi:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout iris-chat-flutter
+        uses: actions/checkout@v4
+
+      - name: Checkout nostr-double-ratchet
+        uses: actions/checkout@v4
+        with:
+          repository: mmalmi/nostr-double-ratchet
+          path: nostr-double-ratchet
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Build iOS library
+        working-directory: nostr-double-ratchet
+        run: ./scripts/mobile/build-ios.sh --release
+
+      - name: Upload XCFramework
+        uses: actions/upload-artifact@v4
+        with:
+          name: NdrFfi.xcframework
+          path: nostr-double-ratchet/rust/target/ios/NdrFfi.xcframework
+
+      - name: Upload Swift bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-bindings
+          path: nostr-double-ratchet/rust/target/ios/bindings/
