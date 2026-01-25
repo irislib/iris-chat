@@ -58,8 +58,9 @@ class MessageSubscription {
           final state = jsonDecode(stateJson) as Map<String, dynamic>;
 
           // Get their current and next ephemeral pubkeys
-          final theirCurrent = state['theirCurrentNostrPublicKey'] as String?;
-          final theirNext = state['theirNextNostrPublicKey'] as String?;
+          // Note: Rust FFI uses snake_case for SessionState serialization
+          final theirCurrent = state['their_current_nostr_public_key'] as String?;
+          final theirNext = state['their_next_nostr_public_key'] as String?;
 
           if (theirCurrent != null && theirCurrent.isNotEmpty) {
             authors.add(theirCurrent);

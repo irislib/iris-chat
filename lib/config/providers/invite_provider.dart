@@ -78,6 +78,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
         isCreating: false,
       );
 
+      // Refresh subscription to listen for responses to the new invite
+      await _ref.read(messageSubscriptionProvider).refreshSubscription();
+
       return invite;
     } catch (e) {
       state = state.copyWith(isCreating: false, error: e.toString());
@@ -129,6 +132,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
       // Publish response event to Nostr relays
       final nostrService = _ref.read(nostrServiceProvider);
       await nostrService.publishEvent(acceptResult.responseEventJson);
+
+      // Refresh subscription to listen for messages from the new session
+      await _ref.read(messageSubscriptionProvider).refreshSubscription();
 
       state = state.copyWith(isAccepting: false);
       return session.id;
