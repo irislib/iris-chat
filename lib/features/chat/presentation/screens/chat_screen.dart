@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../config/providers/auth_provider.dart';
 import '../../../../config/providers/chat_provider.dart';
 import '../../../../shared/utils/formatters.dart';
 import '../../domain/models/message.dart';
@@ -357,11 +358,19 @@ class _DateSeparator extends StatelessWidget {
   }
 }
 
-class _MessageBubble extends StatelessWidget {
+class _MessageBubble extends ConsumerStatefulWidget {
   const _MessageBubble({super.key, required this.message});
 
   final ChatMessage message;
 
+  @override
+  ConsumerState<_MessageBubble> createState() => _MessageBubbleState();
+}
+
+class _MessageBubbleState extends ConsumerState<_MessageBubble> {
+  bool _showEmojiPicker = false;
+
+  static const _quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏'];
   static const _margin = EdgeInsets.symmetric(vertical: 4);
   static const _padding = EdgeInsets.symmetric(horizontal: 12, vertical: 8);
   static const _outgoingBorderRadius = BorderRadius.only(
@@ -376,61 +385,193 @@ class _MessageBubble extends StatelessWidget {
     bottomLeft: Radius.circular(4),
     bottomRight: Radius.circular(16),
   );
-  static const _spacing = SizedBox(height: 4);
-  static const _statusSpacing = SizedBox(width: 4);
+
+  Future<void> _onReact(String emoji) async {
+    setState(() => _showEmojiPicker = false);
+    final myPubkey = ref.read(authStateProvider).pubkeyHex ?? 'me';
+    await ref.read(chatStateProvider.notifier).sendReaction(
+      widget.message.sessionId,
+      widget.message.id,
+      emoji,
+      myPubkey,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final message = widget.message;
     final isOutgoing = message.isOutgoing;
+    final hasReactions = message.reactions.isNotEmpty;
 
-    return Align(
-      alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: _margin,
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.75,
-        ),
-        padding: _padding,
-        decoration: BoxDecoration(
-          color: isOutgoing
-              ? theme.colorScheme.primaryContainer
-              : theme.colorScheme.surfaceContainerHighest,
-          borderRadius: isOutgoing ? _outgoingBorderRadius : _incomingBorderRadius,
-        ),
+    return GestureDetector(
+      onLongPress: () => setState(() => _showEmojiPicker = true),
+      child: Align(
+        alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment: isOutgoing ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Text(
-              message.text,
-              style: TextStyle(
+            // Emoji picker
+            if (_showEmojiPicker)
+              _EmojiPicker(
+                emojis: _quickEmojis,
+                onSelect: _onReact,
+                onDismiss: () => setState(() => _showEmojiPicker = false),
+                isOutgoing: isOutgoing,
+              ),
+            // Message bubble
+            Container(
+              margin: _margin.copyWith(bottom: hasReactions ? 0 : 4),
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width * 0.75,
+              ),
+              padding: _padding,
+              decoration: BoxDecoration(
                 color: isOutgoing
-                    ? theme.colorScheme.onPrimaryContainer
-                    : theme.colorScheme.onSurface,
+                    ? theme.colorScheme.primaryContainer
+                    : theme.colorScheme.surfaceContainerHighest,
+                borderRadius: isOutgoing ? _outgoingBorderRadius : _incomingBorderRadius,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    message.text,
+                    style: TextStyle(
+                      color: isOutgoing
+                          ? theme.colorScheme.onPrimaryContainer
+                          : theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        formatTime(message.timestamp),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: isOutgoing
+                              ? theme.colorScheme.onPrimaryContainer.withOpacity(0.7)
+                              : theme.colorScheme.onSurfaceVariant,
+                          fontSize: 11,
+                        ),
+                      ),
+                      if (isOutgoing) ...[
+                        const SizedBox(width: 4),
+                        _StatusIcon(status: message.status),
+                      ],
+                    ],
+                  ),
+                ],
               ),
             ),
-            _spacing,
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  formatTime(message.timestamp),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: isOutgoing
-                        ? theme.colorScheme.onPrimaryContainer.withOpacity(0.7)
-                        : theme.colorScheme.onSurfaceVariant,
-                    fontSize: 11,
-                  ),
+            // Reactions display
+            if (hasReactions)
+              Padding(
+                padding: EdgeInsets.only(
+                  left: isOutgoing ? 0 : 8,
+                  right: isOutgoing ? 8 : 0,
+                  bottom: 4,
                 ),
-                if (isOutgoing) ...[
-                  _statusSpacing,
-                  _StatusIcon(status: message.status),
-                ],
-              ],
-            ),
+                child: _ReactionsDisplay(reactions: message.reactions),
+              ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _EmojiPicker extends StatelessWidget {
+  const _EmojiPicker({
+    required this.emojis,
+    required this.onSelect,
+    required this.onDismiss,
+    required this.isOutgoing,
+  });
+
+  final List<String> emojis;
+  final ValueChanged<String> onSelect;
+  final VoidCallback onDismiss;
+  final bool isOutgoing;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...emojis.map((emoji) => GestureDetector(
+            onTap: () => onSelect(emoji),
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Text(emoji, style: const TextStyle(fontSize: 24)),
+            ),
+          )),
+          GestureDetector(
+            onTap: onDismiss,
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(Icons.close, size: 20, color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReactionsDisplay extends StatelessWidget {
+  const _ReactionsDisplay({required this.reactions});
+
+  final Map<String, List<String>> reactions;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Wrap(
+      spacing: 4,
+      children: reactions.entries.map((entry) {
+        final emoji = entry.key;
+        final count = entry.value.length;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 14)),
+              if (count > 1) ...[
+                const SizedBox(width: 2),
+                Text(
+                  count.toString(),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 }

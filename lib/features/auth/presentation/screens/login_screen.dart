@@ -57,6 +57,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const Spacer(),
               // Logo/Title
               Icon(
                 Icons.chat_bubble_outline,
@@ -65,17 +66,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
               const SizedBox(height: 24),
               Text(
-                'Iris Chat',
+                'Iris',
                 style: theme.textTheme.headlineLarge?.copyWith(
                   fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'End-to-end encrypted messaging',
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -155,17 +148,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   label: const Text('Import Existing Key'),
                 ),
               ],
-
-              const SizedBox(height: 48),
-
-              // Info text
-              Text(
-                'Your messages are encrypted using the Double Ratchet protocol.\nNo account required - just generate a key and start chatting.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                textAlign: TextAlign.center,
-              ),
+              const Spacer(),
             ],
           ),
         ),

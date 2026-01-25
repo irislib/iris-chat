@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../../config/providers/chat_provider.dart';
 import '../../../../config/providers/invite_provider.dart';
+import '../../../../config/providers/nostr_provider.dart';
 import '../../../../shared/utils/formatters.dart';
 import '../../domain/models/session.dart';
 import '../widgets/offline_indicator.dart';
@@ -16,58 +17,45 @@ class ChatListScreen extends ConsumerStatefulWidget {
 }
 
 class _ChatListScreenState extends ConsumerState<ChatListScreen> {
+  bool _initialLoadDone = false;
+  bool _redirected = false;
+
   @override
   void initState() {
     super.initState();
-    // Load sessions and invites on screen init
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(sessionStateProvider.notifier).loadSessions();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await ref.read(sessionStateProvider.notifier).loadSessions();
       ref.read(inviteStateProvider.notifier).loadInvites();
+      // Start message subscription
+      ref.read(messageSubscriptionProvider);
+      if (mounted) {
+        setState(() => _initialLoadDone = true);
+      }
     });
-  }
-
-  void _showNewChatOptions() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.qr_code),
-              title: const Text('Create Invite'),
-              subtitle: const Text('Share a link or QR code'),
-              onTap: () {
-                Navigator.pop(context);
-                context.push('/invite/create');
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.qr_code_scanner),
-              title: const Text('Scan Invite'),
-              subtitle: const Text('Scan a QR code or paste a link'),
-              onTap: () {
-                Navigator.pop(context);
-                context.push('/invite/scan');
-              },
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Optimized: Use select() to only watch isLoading and sessions, not the entire state
     final isLoading = ref.watch(sessionStateProvider.select((s) => s.isLoading));
     final sessions = ref.watch(sessionStateProvider.select((s) => s.sessions));
-    final theme = Theme.of(context);
+
+    // Redirect to new chat if empty (only once after initial load completes)
+    if (_initialLoadDone && !isLoading && sessions.isEmpty && !_redirected) {
+      _redirected = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        context.go('/chats/new');
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Chats'),
+        title: const Text('Iris'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () => context.push('/chats/new'),
+            tooltip: 'New Chat',
+          ),
           const Padding(
             padding: EdgeInsets.only(right: 8),
             child: ConnectionStatusIcon(size: 20),
@@ -84,52 +72,9 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
           Expanded(
             child: isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : sessions.isEmpty
-                    ? _buildEmptyState(theme)
-                    : _buildChatList(sessions),
+                : _buildChatList(sessions),
           ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showNewChatOptions,
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState(ThemeData theme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.chat_bubble_outline,
-              size: 80,
-              color: theme.colorScheme.outline,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No conversations yet',
-              style: theme.textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Start a new chat by creating an invite or scanning one from a friend.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _showNewChatOptions,
-              icon: const Icon(Icons.add),
-              label: const Text('Start a new chat'),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -137,8 +82,7 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
   Widget _buildChatList(List<ChatSession> sessions) {
     return ListView.builder(
       itemCount: sessions.length,
-      // Performance: Add cacheExtent for smoother scrolling
-      cacheExtent: 80.0 * 3, // Cache ~3 items worth of height
+      cacheExtent: 80.0 * 3,
       itemBuilder: (context, index) {
         final session = sessions[index];
         return _ChatListItem(

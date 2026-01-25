@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 
 import '../../../../core/services/database_service.dart';
@@ -107,6 +109,13 @@ class MessageLocalDatasource {
   }
 
   ChatMessage _messageFromMap(Map<String, dynamic> map) {
+    Map<String, List<String>> reactions = {};
+    final reactionsJson = map['reactions'] as String?;
+    if (reactionsJson != null && reactionsJson.isNotEmpty) {
+      final decoded = jsonDecode(reactionsJson) as Map<String, dynamic>;
+      reactions = decoded.map((k, v) => MapEntry(k, (v as List).cast<String>()));
+    }
+
     return ChatMessage(
       id: map['id'] as String,
       sessionId: map['session_id'] as String,
@@ -116,6 +125,7 @@ class MessageLocalDatasource {
       status: MessageStatus.values.byName(map['status'] as String),
       eventId: map['event_id'] as String?,
       replyToId: map['reply_to_id'] as String?,
+      reactions: reactions,
     );
   }
 
@@ -129,6 +139,7 @@ class MessageLocalDatasource {
       'status': message.status.name,
       'event_id': message.eventId,
       'reply_to_id': message.replyToId,
+      'reactions': message.reactions.isEmpty ? null : jsonEncode(message.reactions),
     };
   }
 }

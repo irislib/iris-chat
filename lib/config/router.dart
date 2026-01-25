@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../features/auth/presentation/screens/login_screen.dart';
 import '../features/chat/presentation/screens/chat_list_screen.dart';
 import '../features/chat/presentation/screens/chat_screen.dart';
+import '../features/chat/presentation/screens/new_chat_screen.dart';
 import '../features/invite/presentation/screens/create_invite_screen.dart';
 import '../features/invite/presentation/screens/scan_invite_screen.dart';
 import '../features/settings/presentation/screens/settings_screen.dart';
@@ -13,9 +14,21 @@ import 'providers/auth_provider.dart';
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authStateProvider);
 
+  // Trigger auth check on first access
+  if (!authState.isInitialized && !authState.isLoading) {
+    Future.microtask(() {
+      ref.read(authStateProvider.notifier).checkAuth();
+    });
+  }
+
   return GoRouter(
     initialLocation: '/',
     redirect: (context, state) {
+      // Show nothing while checking auth
+      if (!authState.isInitialized) {
+        return null;
+      }
+
       final isAuthenticated = authState.isAuthenticated;
       final isAuthRoute = state.matchedLocation == '/login';
 
@@ -34,12 +47,28 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/',
-        redirect: (context, state) => '/chats',
+        builder: (context, state) {
+          // Show loading while checking auth
+          if (!authState.isInitialized) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          return const SizedBox.shrink(); // Will redirect
+        },
+        redirect: (context, state) {
+          if (!authState.isInitialized) return null;
+          return '/chats';
+        },
       ),
       GoRoute(
         path: '/chats',
         builder: (context, state) => const ChatListScreen(),
         routes: [
+          GoRoute(
+            path: 'new',
+            builder: (context, state) => const NewChatScreen(),
+          ),
           GoRoute(
             path: ':id',
             builder: (context, state) => ChatScreen(

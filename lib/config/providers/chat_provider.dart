@@ -327,7 +327,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   /// Receive a message from Nostr.
-  Future<void> receiveMessage(String sessionId, String eventJson) async {
+  Future<void> receiveMessage(String sessionId, String eventJson, {String? senderPubkey}) async {
     try {
       // Check if already have this message
       final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
@@ -349,6 +349,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
       // Update session state
       final newState = await handle.stateJson();
       await _sessionDatasource.saveSessionState(sessionId, newState);
+
+      // Check if this is a reaction
+      final reactionPayload = parseReactionPayload(decryptResult.plaintext);
+      if (reactionPayload != null && senderPubkey != null) {
+        handleIncomingReaction(
+          sessionId,
+          reactionPayload['messageId'] as String,
+          reactionPayload['emoji'] as String,
+          senderPubkey,
+        );
+        return;
+      }
 
       // Parse timestamp
       final createdAt = eventData['created_at'] as int;
@@ -407,6 +419,105 @@ class ChatNotifier extends StateNotifier<ChatState> {
         sessionId: [...currentMessages, message],
       },
     );
+  }
+
+  /// Send a reaction to a message.
+  /// Note: messageId here is the internal message ID, we need to use eventId for the reaction payload
+  Future<void> sendReaction(String sessionId, String messageId, String emoji, String myPubkey) async {
+    try {
+      // Find the message to get its eventId (Nostr event ID)
+      final messages = state.messages[sessionId] ?? [];
+      final message = messages.firstWhere(
+        (m) => m.id == messageId,
+        orElse: () => throw const AppError(
+          type: AppErrorType.unknown,
+          message: 'Message not found',
+          isRetryable: false,
+        ),
+      );
+
+      // Use eventId for the reaction - this is what iris-chat expects
+      final reactionMessageId = message.eventId ?? message.id;
+
+      final handle = await _getSessionHandle(sessionId);
+      if (handle == null) return;
+
+      // Send reaction as JSON payload
+      final payload = jsonEncode({
+        'type': 'reaction',
+        'messageId': reactionMessageId,
+        'emoji': emoji,
+      });
+
+      final sendResult = await handle.sendText(payload);
+
+      // Update session state
+      final newState = await handle.stateJson();
+      await _sessionDatasource.saveSessionState(sessionId, newState);
+
+      // Publish to Nostr
+      await _nostrService.publishEvent(sendResult.outerEventJson);
+
+      // Update reaction optimistically (use internal ID for state management)
+      _applyReaction(sessionId, messageId, emoji, myPubkey);
+    } catch (e, st) {
+      final appError = e is AppError ? e : AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  /// Handle incoming reaction.
+  void handleIncomingReaction(String sessionId, String messageId, String emoji, String fromPubkey) {
+    _applyReaction(sessionId, messageId, emoji, fromPubkey);
+  }
+
+  /// Apply a reaction to a message (used for both sent and received reactions).
+  /// messageId can be either internal id or eventId (Nostr event ID)
+  void _applyReaction(String sessionId, String messageId, String emoji, String pubkey) {
+    final currentMessages = state.messages[sessionId] ?? [];
+    // Match by internal id first, then by eventId
+    var messageIndex = currentMessages.indexWhere((m) => m.id == messageId);
+    if (messageIndex == -1) {
+      messageIndex = currentMessages.indexWhere((m) => m.eventId == messageId);
+    }
+    if (messageIndex == -1) return;
+
+    final message = currentMessages[messageIndex];
+
+    // Create updated reactions - remove user from any existing reactions first
+    final reactions = <String, List<String>>{};
+    for (final entry in message.reactions.entries) {
+      final filtered = entry.value.where((u) => u != pubkey).toList();
+      if (filtered.isNotEmpty) {
+        reactions[entry.key] = filtered;
+      }
+    }
+
+    // Add user to new reaction
+    reactions[emoji] = [...(reactions[emoji] ?? []), pubkey];
+
+    // Update message
+    final updatedMessage = message.copyWith(reactions: reactions);
+    final updatedMessages = [...currentMessages];
+    updatedMessages[messageIndex] = updatedMessage;
+
+    state = state.copyWith(
+      messages: {...state.messages, sessionId: updatedMessages},
+    );
+
+    // Save to database
+    _messageDatasource.saveMessage(updatedMessage);
+  }
+
+  /// Check if content is a reaction payload and return parsed data.
+  static Map<String, dynamic>? parseReactionPayload(String content) {
+    try {
+      final parsed = jsonDecode(content) as Map<String, dynamic>;
+      if (parsed['type'] == 'reaction' && parsed['messageId'] != null && parsed['emoji'] != null) {
+        return parsed;
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Update message status.

@@ -115,6 +115,7 @@ class MessageSubscription {
         kinds: [drMessageKind],
         authors: uniqueAuthors,
         since: DateTime.now().subtract(const Duration(days: 7)).millisecondsSinceEpoch ~/ 1000,
+        limit: 500,
       ),
     );
   }
@@ -197,9 +198,21 @@ class MessageSubscription {
   }
 
   Future<void> _handleDrMessage(NostrEvent event) async {
+    Logger.debug(
+      'Handling DR message',
+      category: LogCategory.message,
+      data: {'eventId': event.id.substring(0, 8), 'pubkey': event.pubkey.substring(0, 8)},
+    );
+
+    // Convert event to proper JSON string
+    final eventJson = jsonEncode(event.toJson());
+
     // Find the session this message belongs to
     final sessions = await _sessionDatasource.getAllSessions();
-    final eventJson = event.toJsonString();
+    Logger.debug(
+      'Checking ${sessions.length} sessions',
+      category: LogCategory.message,
+    );
 
     for (final session in sessions) {
       // Try to decrypt with this session
@@ -207,21 +220,56 @@ class MessageSubscription {
       if (stateJson == null) continue;
 
       try {
+        Logger.debug(
+          'Restoring session for check',
+          category: LogCategory.message,
+          data: {'sessionId': session.id},
+        );
         final handle = await NdrFfi.sessionFromStateJson(stateJson);
+
+        Logger.debug(
+          'Calling isDrMessage',
+          category: LogCategory.message,
+          data: {'sessionId': session.id},
+        );
         final isDrMessage = await handle.isDrMessage(eventJson);
+
+        Logger.debug(
+          'isDrMessage result',
+          category: LogCategory.message,
+          data: {'sessionId': session.id, 'isDrMessage': isDrMessage},
+        );
 
         if (isDrMessage) {
           // This message belongs to this session
+          Logger.info(
+            'Routing message to session',
+            category: LogCategory.message,
+            data: {'sessionId': session.id, 'eventId': event.id.substring(0, 8)},
+          );
           onMessage?.call(session.id, eventJson);
           await handle.dispose();
           return;
         }
 
         await handle.dispose();
-      } catch (e) {
+      } catch (e, st) {
+        Logger.error(
+          'Session check failed',
+          category: LogCategory.message,
+          error: e,
+          stackTrace: st,
+          data: {'sessionId': session.id},
+        );
         // Not for this session, try next
       }
     }
+
+    Logger.warning(
+      'No session found for DR message',
+      category: LogCategory.message,
+      data: {'eventId': event.id.substring(0, 8)},
+    );
   }
 
   Future<void> _handleInviteResponse(NostrEvent event) async {
@@ -254,7 +302,7 @@ class MessageSubscription {
                 'ephemeralPubkey': ephemeralPubkey?.substring(0, 8),
               },
             );
-            onInviteResponse?.call(invite.id, event.toJsonString());
+            onInviteResponse?.call(invite.id, jsonEncode(event.toJson()));
             return;
           }
         } catch (e) {
@@ -292,12 +340,5 @@ class MessageSubscription {
       _nostrService.closeSubscription(_inviteSubscriptionId!);
       _inviteSubscriptionId = null;
     }
-  }
-}
-
-/// Extension to convert NostrEvent to JSON string.
-extension NostrEventJson on NostrEvent {
-  String toJsonString() {
-    return jsonEncode(toJson());
   }
 }

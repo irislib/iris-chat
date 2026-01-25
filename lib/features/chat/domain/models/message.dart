@@ -30,6 +30,9 @@ class ChatMessage with _$ChatMessage {
 
     /// Optional reply reference.
     String? replyToId,
+
+    /// Reactions: emoji -> list of pubkeys who reacted.
+    @Default({}) Map<String, List<String>> reactions,
   }) = _ChatMessage;
 
   const ChatMessage._();

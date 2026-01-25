@@ -6,7 +6,7 @@ import 'package:sqflite/sqflite.dart';
 class DatabaseService {
   static Database? _database;
   static const _dbName = 'iris_chat.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
 
   /// Get the database instance, initializing if necessary.
   Future<Database> get database async {
@@ -54,6 +54,7 @@ class DatabaseService {
         status TEXT NOT NULL,
         event_id TEXT,
         reply_to_id TEXT,
+        reactions TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
       )
     ''');
@@ -82,7 +83,10 @@ class DatabaseService {
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Handle migrations here
+    if (oldVersion < 2) {
+      // Add reactions column to messages table
+      await db.execute('ALTER TABLE messages ADD COLUMN reactions TEXT');
+    }
   }
 
   /// Close the database connection.
