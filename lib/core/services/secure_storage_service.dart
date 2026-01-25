@@ -4,17 +4,17 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 ///
 /// Uses platform-specific secure storage (Keychain on iOS, EncryptedSharedPreferences on Android).
 class SecureStorageService {
-  final FlutterSecureStorage _storage;
-
-  static const _privkeyKey = 'iris_chat_privkey';
-  static const _pubkeyKey = 'iris_chat_pubkey';
-
   SecureStorageService([FlutterSecureStorage? storage])
       : _storage = storage ??
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
               iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
             );
+
+  final FlutterSecureStorage _storage;
+
+  static const _privkeyKey = 'iris_chat_privkey';
+  static const _pubkeyKey = 'iris_chat_pubkey';
 
   /// Save the user's private key.
   Future<void> savePrivateKey(String privkeyHex) async {
@@ -38,7 +38,7 @@ class SecureStorageService {
 
   /// Check if an identity exists.
   Future<bool> hasIdentity() async {
-    return await _storage.containsKey(key: _privkeyKey);
+    return _storage.containsKey(key: _privkeyKey);
   }
 
   /// Clear all stored identity data.

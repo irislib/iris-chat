@@ -6,8 +6,6 @@ part 'message.g.dart';
 /// Represents a chat message.
 @freezed
 class ChatMessage with _$ChatMessage {
-  const ChatMessage._();
-
   const factory ChatMessage({
     /// Unique identifier for this message.
     required String id,
@@ -33,6 +31,8 @@ class ChatMessage with _$ChatMessage {
     /// Optional reply reference.
     String? replyToId,
   }) = _ChatMessage;
+
+  const ChatMessage._();
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) =>
       _$ChatMessageFromJson(json);
@@ -92,6 +92,9 @@ enum MessageDirection {
 enum MessageStatus {
   /// Message is being sent.
   pending,
+
+  /// Message is queued (offline).
+  queued,
 
   /// Message has been sent to relays.
   sent,

@@ -21,25 +21,6 @@ Widget createTestApp(
   );
 }
 
-/// Creates a navigable test app with GoRouter
-Widget createNavigableTestApp({
-  required String initialLocation,
-  List<Override> overrides = const [],
-}) {
-  return ProviderScope(
-    overrides: overrides,
-    child: ScreenUtilInit(
-      designSize: const Size(390, 844),
-      minTextAdapt: true,
-      builder: (context, _) {
-        return const MaterialApp(
-          home: Placeholder(), // Router will handle navigation
-        );
-      },
-    ),
-  );
-}
-
 // Test fixtures
 const testPubkeyHex =
     'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';

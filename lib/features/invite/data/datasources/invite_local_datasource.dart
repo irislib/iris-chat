@@ -7,9 +7,9 @@ import '../../domain/models/invite.dart';
 
 /// Local data source for invites.
 class InviteLocalDatasource {
-  final DatabaseService _databaseService;
-
   InviteLocalDatasource(this._databaseService);
+
+  final DatabaseService _databaseService;
 
   Future<Database> get _db => _databaseService.database;
 

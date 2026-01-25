@@ -26,10 +26,10 @@ class InviteState with _$InviteState {
 
 /// Notifier for invite state.
 class InviteNotifier extends StateNotifier<InviteState> {
+  InviteNotifier(this._datasource, this._ref) : super(const InviteState());
+
   final InviteLocalDatasource _datasource;
   final Ref _ref;
-
-  InviteNotifier(this._datasource, this._ref) : super(const InviteState());
 
   /// Load all invites from storage.
   Future<void> loadInvites() async {

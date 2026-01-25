@@ -8,6 +8,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import '../services/logger_service.dart';
 import 'models/models.dart';
 
 export 'models/models.dart';
@@ -20,7 +21,9 @@ class NdrFfi {
 
   /// Returns the version of the ndr-ffi library.
   static Future<String> version() async {
+    Logger.ffiCall('version');
     final result = await _channel.invokeMethod<String>('version');
+    Logger.ffiResult('version', success: result != null);
     return result ?? 'unknown';
   }
 
@@ -28,11 +31,21 @@ class NdrFfi {
   ///
   /// Returns a [FfiKeyPair] with hex-encoded public and private keys.
   static Future<FfiKeyPair> generateKeypair() async {
-    final result = await _channel.invokeMethod<Map>('generateKeypair');
-    if (result == null) {
-      throw NdrException.invalidKey('Failed to generate keypair');
+    Logger.cryptoStart('generateKeypair');
+    try {
+      final result = await _channel.invokeMethod<Map>('generateKeypair');
+      if (result == null) {
+        throw NdrException.invalidKey('Failed to generate keypair');
+      }
+      final keypair = FfiKeyPair.fromMap(Map<String, dynamic>.from(result));
+      Logger.cryptoSuccess('generateKeypair', data: {
+        'pubkey': keypair.publicKeyHex.substring(0, 8),
+      });
+      return keypair;
+    } catch (e, st) {
+      Logger.cryptoError('generateKeypair', e, stackTrace: st);
+      rethrow;
     }
-    return FfiKeyPair.fromMap(Map<String, dynamic>.from(result));
   }
 
   /// Create a new invite.
@@ -45,26 +58,67 @@ class NdrFfi {
     String? deviceId,
     int? maxUses,
   }) async {
-    final result = await _channel.invokeMethod<Map>('createInvite', {
-      'inviterPubkeyHex': inviterPubkeyHex,
-      'deviceId': deviceId,
-      'maxUses': maxUses,
-    });
-    if (result == null) {
-      throw NdrException.inviteError('Failed to create invite');
+    Logger.debug(
+      'Creating invite',
+      category: LogCategory.invite,
+      data: {'pubkey': inviterPubkeyHex.substring(0, 8), 'maxUses': maxUses},
+    );
+    try {
+      final result = await _channel.invokeMethod<Map>('createInvite', {
+        'inviterPubkeyHex': inviterPubkeyHex,
+        'deviceId': deviceId,
+        'maxUses': maxUses,
+      });
+      if (result == null) {
+        throw NdrException.inviteError('Failed to create invite');
+      }
+      final invite = InviteHandle._fromMap(Map<String, dynamic>.from(result));
+      Logger.info(
+        'Invite created',
+        category: LogCategory.invite,
+        data: {'inviteId': invite._id},
+      );
+      return invite;
+    } catch (e, st) {
+      Logger.error(
+        'Failed to create invite',
+        category: LogCategory.invite,
+        error: e,
+        stackTrace: st,
+      );
+      rethrow;
     }
-    return InviteHandle._fromMap(Map<String, dynamic>.from(result));
   }
 
   /// Parse an invite from a URL.
   static Future<InviteHandle> inviteFromUrl(String url) async {
-    final result = await _channel.invokeMethod<Map>('inviteFromUrl', {
-      'url': url,
-    });
-    if (result == null) {
-      throw NdrException.inviteError('Failed to parse invite URL');
+    Logger.debug(
+      'Parsing invite from URL',
+      category: LogCategory.invite,
+    );
+    try {
+      final result = await _channel.invokeMethod<Map>('inviteFromUrl', {
+        'url': url,
+      });
+      if (result == null) {
+        throw NdrException.inviteError('Failed to parse invite URL');
+      }
+      final invite = InviteHandle._fromMap(Map<String, dynamic>.from(result));
+      Logger.info(
+        'Invite parsed from URL',
+        category: LogCategory.invite,
+        data: {'inviteId': invite._id},
+      );
+      return invite;
+    } catch (e, st) {
+      Logger.error(
+        'Failed to parse invite URL',
+        category: LogCategory.invite,
+        error: e,
+        stackTrace: st,
+      );
+      rethrow;
     }
-    return InviteHandle._fromMap(Map<String, dynamic>.from(result));
   }
 
   /// Parse an invite from a Nostr event JSON.
@@ -91,13 +145,26 @@ class NdrFfi {
 
   /// Restore a session from serialized state JSON.
   static Future<SessionHandle> sessionFromStateJson(String stateJson) async {
-    final result = await _channel.invokeMethod<Map>('sessionFromStateJson', {
-      'stateJson': stateJson,
-    });
-    if (result == null) {
-      throw NdrException.serialization('Failed to restore session');
+    Logger.sessionEvent('Restoring session from state');
+    try {
+      final result = await _channel.invokeMethod<Map>('sessionFromStateJson', {
+        'stateJson': stateJson,
+      });
+      if (result == null) {
+        throw NdrException.serialization('Failed to restore session');
+      }
+      final session = SessionHandle._fromMap(Map<String, dynamic>.from(result));
+      Logger.sessionEvent('Session restored', sessionId: session._id);
+      return session;
+    } catch (e, st) {
+      Logger.error(
+        'Failed to restore session',
+        category: LogCategory.session,
+        error: e,
+        stackTrace: st,
+      );
+      rethrow;
     }
-    return SessionHandle._fromMap(Map<String, dynamic>.from(result));
   }
 
   /// Derive a public key from a private key.
@@ -105,13 +172,22 @@ class NdrFfi {
   /// [privkeyHex] - The private key as 64-char hex string.
   /// Returns the public key as 64-char hex string.
   static Future<String> derivePublicKey(String privkeyHex) async {
-    final result = await _channel.invokeMethod<String>('derivePublicKey', {
-      'privkeyHex': privkeyHex,
-    });
-    if (result == null) {
-      throw NdrException.invalidKey('Failed to derive public key');
+    Logger.cryptoStart('derivePublicKey');
+    try {
+      final result = await _channel.invokeMethod<String>('derivePublicKey', {
+        'privkeyHex': privkeyHex,
+      });
+      if (result == null) {
+        throw NdrException.invalidKey('Failed to derive public key');
+      }
+      Logger.cryptoSuccess('derivePublicKey', data: {
+        'pubkey': result.substring(0, 8),
+      });
+      return result;
+    } catch (e, st) {
+      Logger.cryptoError('derivePublicKey', e, stackTrace: st);
+      rethrow;
     }
-    return result;
   }
 
   /// Initialize a new session directly (advanced use).
@@ -122,17 +198,33 @@ class NdrFfi {
     required String sharedSecretHex,
     String? name,
   }) async {
-    final result = await _channel.invokeMethod<Map>('sessionInit', {
-      'theirEphemeralPubkeyHex': theirEphemeralPubkeyHex,
-      'ourEphemeralPrivkeyHex': ourEphemeralPrivkeyHex,
-      'isInitiator': isInitiator,
-      'sharedSecretHex': sharedSecretHex,
-      'name': name,
-    });
-    if (result == null) {
-      throw NdrException.sessionNotReady('Failed to initialize session');
+    Logger.sessionEvent(
+      'Initializing session directly',
+      data: {'isInitiator': isInitiator, 'name': name},
+    );
+    try {
+      final result = await _channel.invokeMethod<Map>('sessionInit', {
+        'theirEphemeralPubkeyHex': theirEphemeralPubkeyHex,
+        'ourEphemeralPrivkeyHex': ourEphemeralPrivkeyHex,
+        'isInitiator': isInitiator,
+        'sharedSecretHex': sharedSecretHex,
+        'name': name,
+      });
+      if (result == null) {
+        throw NdrException.sessionNotReady('Failed to initialize session');
+      }
+      final session = SessionHandle._fromMap(Map<String, dynamic>.from(result));
+      Logger.sessionEvent('Session initialized', sessionId: session._id);
+      return session;
+    } catch (e, st) {
+      Logger.error(
+        'Failed to initialize session',
+        category: LogCategory.session,
+        error: e,
+        stackTrace: st,
+      );
+      rethrow;
     }
-    return SessionHandle._fromMap(Map<String, dynamic>.from(result));
   }
 }
 
@@ -140,15 +232,18 @@ class NdrFfi {
 ///
 /// This class wraps native operations on an invite object.
 class InviteHandle {
-  final String _id;
-
-  static const _channel = MethodChannel('to.iris.chat/ndr_ffi');
-
   InviteHandle._(this._id);
 
   factory InviteHandle._fromMap(Map<String, dynamic> map) {
     return InviteHandle._(map['id'] as String);
   }
+
+  final String _id;
+
+  static const _channel = MethodChannel('to.iris.chat/ndr_ffi');
+
+  /// Unique identifier for this invite handle.
+  String get id => _id;
 
   /// Convert the invite to a shareable URL.
   Future<String> toUrl(String root) async {
@@ -192,16 +287,42 @@ class InviteHandle {
     required String inviteePrivkeyHex,
     String? deviceId,
   }) async {
-    final result = await _channel.invokeMethod<Map>('inviteAccept', {
-      'id': _id,
-      'inviteePubkeyHex': inviteePubkeyHex,
-      'inviteePrivkeyHex': inviteePrivkeyHex,
-      'deviceId': deviceId,
-    });
-    if (result == null) {
-      throw NdrException.inviteError('Failed to accept invite');
+    Logger.info(
+      'Accepting invite',
+      category: LogCategory.invite,
+      data: {
+        'inviteId': _id,
+        'inviteePubkey': inviteePubkeyHex.substring(0, 8),
+      },
+    );
+    try {
+      final result = await _channel.invokeMethod<Map>('inviteAccept', {
+        'id': _id,
+        'inviteePubkeyHex': inviteePubkeyHex,
+        'inviteePrivkeyHex': inviteePrivkeyHex,
+        'deviceId': deviceId,
+      });
+      if (result == null) {
+        throw NdrException.inviteError('Failed to accept invite');
+      }
+      final acceptResult =
+          InviteAcceptResult._fromMap(Map<String, dynamic>.from(result));
+      Logger.sessionEvent(
+        'Session established from invite',
+        sessionId: acceptResult.session._id,
+        data: {'inviteId': _id},
+      );
+      return acceptResult;
+    } catch (e, st) {
+      Logger.error(
+        'Failed to accept invite',
+        category: LogCategory.invite,
+        error: e,
+        stackTrace: st,
+        data: {'inviteId': _id},
+      );
+      rethrow;
     }
-    return InviteAcceptResult._fromMap(Map<String, dynamic>.from(result));
   }
 
   /// Get the inviter's public key as hex.
@@ -230,6 +351,11 @@ class InviteHandle {
 
   /// Dispose of the native invite handle.
   Future<void> dispose() async {
+    Logger.debug(
+      'Disposing invite handle',
+      category: LogCategory.invite,
+      data: {'inviteId': _id},
+    );
     await _channel.invokeMethod<void>('inviteDispose', {'id': _id});
   }
 }
@@ -238,15 +364,15 @@ class InviteHandle {
 ///
 /// This class wraps native operations on a session object.
 class SessionHandle {
-  final String _id;
-
-  static const _channel = MethodChannel('to.iris.chat/ndr_ffi');
-
   SessionHandle._(this._id);
 
   factory SessionHandle._fromMap(Map<String, dynamic> map) {
     return SessionHandle._(map['id'] as String);
   }
+
+  final String _id;
+
+  static const _channel = MethodChannel('to.iris.chat/ndr_ffi');
 
   /// Unique identifier for this session handle.
   String get id => _id;
@@ -264,38 +390,78 @@ class SessionHandle {
   /// Returns a [SendResult] containing the encrypted outer event
   /// and the original inner event.
   Future<SendResult> sendText(String text) async {
-    final result = await _channel.invokeMethod<Map>('sessionSendText', {
-      'id': _id,
-      'text': text,
+    Logger.cryptoStart('sendText', data: {
+      'sessionId': _id,
+      'textLength': text.length,
     });
-    if (result == null) {
-      throw NdrException.sessionNotReady('Failed to send message');
+    try {
+      final result = await _channel.invokeMethod<Map>('sessionSendText', {
+        'id': _id,
+        'text': text,
+      });
+      if (result == null) {
+        throw NdrException.sessionNotReady('Failed to send message');
+      }
+      final sendResult = SendResult.fromMap(Map<String, dynamic>.from(result));
+      Logger.cryptoSuccess('sendText', data: {'sessionId': _id});
+      Logger.messageEvent(
+        'Message encrypted and ready to send',
+        sessionId: _id,
+        data: {'textLength': text.length},
+      );
+      return sendResult;
+    } catch (e, st) {
+      Logger.cryptoError('sendText', e, stackTrace: st, data: {'sessionId': _id});
+      rethrow;
     }
-    return SendResult.fromMap(Map<String, dynamic>.from(result));
   }
 
   /// Decrypt a received event.
   ///
   /// Returns a [DecryptResult] containing the plaintext and inner event.
   Future<DecryptResult> decryptEvent(String outerEventJson) async {
-    final result = await _channel.invokeMethod<Map>('sessionDecryptEvent', {
-      'id': _id,
-      'outerEventJson': outerEventJson,
-    });
-    if (result == null) {
-      throw NdrException.cryptoFailure('Failed to decrypt event');
+    Logger.cryptoStart('decryptEvent', data: {'sessionId': _id});
+    try {
+      final result = await _channel.invokeMethod<Map>('sessionDecryptEvent', {
+        'id': _id,
+        'outerEventJson': outerEventJson,
+      });
+      if (result == null) {
+        throw NdrException.cryptoFailure('Failed to decrypt event');
+      }
+      final decryptResult =
+          DecryptResult.fromMap(Map<String, dynamic>.from(result));
+      Logger.cryptoSuccess('decryptEvent', data: {'sessionId': _id});
+      Logger.messageEvent(
+        'Message decrypted',
+        sessionId: _id,
+        data: {'plaintextLength': decryptResult.plaintext.length},
+      );
+      return decryptResult;
+    } catch (e, st) {
+      Logger.cryptoError('decryptEvent', e, stackTrace: st, data: {'sessionId': _id});
+      rethrow;
     }
-    return DecryptResult.fromMap(Map<String, dynamic>.from(result));
   }
 
   /// Serialize the session state to JSON.
   Future<String> stateJson() async {
+    Logger.debug(
+      'Serializing session state',
+      category: LogCategory.session,
+      data: {'sessionId': _id},
+    );
     final result = await _channel.invokeMethod<String>('sessionStateJson', {
       'id': _id,
     });
     if (result == null) {
       throw NdrException.serialization('Failed to serialize session');
     }
+    Logger.debug(
+      'Session state serialized',
+      category: LogCategory.session,
+      data: {'sessionId': _id, 'stateLength': result.length},
+    );
     return result;
   }
 
@@ -310,15 +476,13 @@ class SessionHandle {
 
   /// Dispose of the native session handle.
   Future<void> dispose() async {
+    Logger.sessionEvent('Disposing session', sessionId: _id);
     await _channel.invokeMethod<void>('sessionDispose', {'id': _id});
   }
 }
 
 /// Result of accepting an invite.
 class InviteAcceptResult {
-  final SessionHandle session;
-  final String responseEventJson;
-
   InviteAcceptResult({
     required this.session,
     required this.responseEventJson,
@@ -332,4 +496,7 @@ class InviteAcceptResult {
       responseEventJson: map['responseEventJson'] as String,
     );
   }
+
+  final SessionHandle session;
+  final String responseEventJson;
 }

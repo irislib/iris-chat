@@ -161,7 +161,7 @@ void main() {
 
   group('InviteAcceptData', () {
     test('creates with required fields', () {
-      final data = InviteAcceptData(
+      const data = InviteAcceptData(
         sessionId: 'session-123',
         responseEventJson: '{"kind": 443}',
         inviterPubkeyHex: 'pubkey123',

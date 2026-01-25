@@ -1,10 +1,11 @@
+import 'package:flutter/services.dart' show PlatformException;
+
+export 'package:flutter/services.dart' show PlatformException;
+
 /// Exception types for ndr-ffi operations.
 ///
 /// These map to the NdrError enum in the Rust code.
 class NdrException implements Exception {
-  final NdrErrorType type;
-  final String message;
-
   const NdrException(this.type, this.message);
 
   factory NdrException.invalidKey(String message) =>
@@ -53,6 +54,9 @@ class NdrException implements Exception {
     }
   }
 
+  final NdrErrorType type;
+  final String message;
+
   @override
   String toString() => 'NdrException(${type.name}): $message';
 }
@@ -67,17 +71,4 @@ enum NdrErrorType {
   inviteError,
   sessionNotReady,
   unknown,
-}
-
-// Re-export for convenience
-class PlatformException implements Exception {
-  final String code;
-  final String? message;
-  final dynamic details;
-
-  PlatformException({
-    required this.code,
-    this.message,
-    this.details,
-  });
 }

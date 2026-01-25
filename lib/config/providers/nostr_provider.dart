@@ -14,9 +14,7 @@ final nostrServiceProvider = Provider<NostrService>((ref) {
   service.connect();
 
   // Disconnect on disposal
-  ref.onDispose(() {
-    service.disconnect();
-  });
+  ref.onDispose(service.disconnect);
 
   return service;
 });
@@ -29,17 +27,13 @@ final messageSubscriptionProvider = Provider<MessageSubscription>((ref) {
   final subscription = MessageSubscription(nostrService, sessionDatasource);
 
   // Set up message handler
-  subscription.onMessage = (sessionId, eventJson) {
-    ref.read(chatStateProvider.notifier).receiveMessage(sessionId, eventJson);
-  };
+  subscription.onMessage = ref.read(chatStateProvider.notifier).receiveMessage;
 
   // Start listening
   subscription.startListening();
 
   // Stop on disposal
-  ref.onDispose(() {
-    subscription.stopListening();
-  });
+  ref.onDispose(subscription.stopListening);
 
   return subscription;
 });

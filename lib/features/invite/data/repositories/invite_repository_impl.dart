@@ -8,14 +8,6 @@ import '../datasources/invite_local_datasource.dart';
 
 /// Implementation of [InviteRepository].
 class InviteRepositoryImpl implements InviteRepository {
-  final InviteLocalDatasource _datasource;
-  final NostrService _nostrService;
-  final String _userPubkeyHex;
-  final Future<String?> Function() _getPrivateKey;
-
-  // Cache of active invite handles
-  final Map<String, InviteHandle> _inviteHandles = {};
-
   InviteRepositoryImpl({
     required InviteLocalDatasource datasource,
     required NostrService nostrService,
@@ -25,6 +17,14 @@ class InviteRepositoryImpl implements InviteRepository {
         _nostrService = nostrService,
         _userPubkeyHex = userPubkeyHex,
         _getPrivateKey = getPrivateKey;
+
+  final InviteLocalDatasource _datasource;
+  final NostrService _nostrService;
+  final String _userPubkeyHex;
+  final Future<String?> Function() _getPrivateKey;
+
+  // Cache of active invite handles
+  final Map<String, InviteHandle> _inviteHandles = {};
 
   @override
   Future<Invite> createInvite({String? label, int? maxUses}) async {

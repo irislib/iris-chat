@@ -5,9 +5,9 @@ import '../../domain/models/message.dart';
 
 /// Local data source for chat messages.
 class MessageLocalDatasource {
-  final DatabaseService _databaseService;
-
   MessageLocalDatasource(this._databaseService);
+
+  final DatabaseService _databaseService;
 
   Future<Database> get _db => _databaseService.database;
 

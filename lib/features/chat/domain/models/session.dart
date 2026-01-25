@@ -1,13 +1,13 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../../../../shared/utils/formatters.dart';
+
 part 'session.freezed.dart';
 part 'session.g.dart';
 
 /// Represents an encrypted chat session with another user.
 @freezed
 class ChatSession with _$ChatSession {
-  const ChatSession._();
-
   const factory ChatSession({
     /// Unique identifier for this session.
     required String id,
@@ -40,17 +40,14 @@ class ChatSession with _$ChatSession {
     String? serializedState,
   }) = _ChatSession;
 
+  const ChatSession._();
+
   factory ChatSession.fromJson(Map<String, dynamic> json) =>
       _$ChatSessionFromJson(json);
 
   /// Get a display name for the recipient.
   String get displayName =>
-      recipientName ?? _formatPubkey(recipientPubkeyHex);
-
-  static String _formatPubkey(String hex) {
-    if (hex.length < 12) return hex;
-    return '${hex.substring(0, 6)}...${hex.substring(hex.length - 6)}';
-  }
+      recipientName ?? formatPubkeyForDisplay(recipientPubkeyHex);
 }
 
 /// Session state for UI purposes.

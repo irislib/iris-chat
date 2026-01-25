@@ -1,11 +1,5 @@
 /// Result of decrypting a received message.
 class DecryptResult {
-  /// The decrypted plaintext content.
-  final String plaintext;
-
-  /// The inner event JSON (parsed or wrapped plaintext).
-  final String innerEventJson;
-
   const DecryptResult({
     required this.plaintext,
     required this.innerEventJson,
@@ -17,6 +11,12 @@ class DecryptResult {
       innerEventJson: map['innerEventJson'] as String,
     );
   }
+
+  /// The decrypted plaintext content.
+  final String plaintext;
+
+  /// The inner event JSON (parsed or wrapped plaintext).
+  final String innerEventJson;
 
   Map<String, dynamic> toMap() {
     return {

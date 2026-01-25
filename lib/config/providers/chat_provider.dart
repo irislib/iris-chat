@@ -5,6 +5,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../../core/ffi/ndr_ffi.dart';
 import '../../core/services/database_service.dart';
+import '../../core/services/error_service.dart';
 import '../../core/services/nostr_service.dart';
 import '../../features/chat/data/datasources/message_local_datasource.dart';
 import '../../features/chat/data/datasources/session_local_datasource.dart';
@@ -39,9 +40,9 @@ class ChatState with _$ChatState {
 
 /// Notifier for session state.
 class SessionNotifier extends StateNotifier<SessionState> {
-  final SessionLocalDatasource _sessionDatasource;
-
   SessionNotifier(this._sessionDatasource) : super(const SessionState());
+
+  final SessionLocalDatasource _sessionDatasource;
 
   /// Load all sessions from storage.
   Future<void> loadSessions() async {
@@ -49,8 +50,9 @@ class SessionNotifier extends StateNotifier<SessionState> {
     try {
       final sessions = await _sessionDatasource.getAllSessions();
       state = state.copyWith(sessions: sessions, isLoading: false);
-    } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(isLoading: false, error: appError.message);
     }
   }
 
@@ -147,18 +149,18 @@ class SessionNotifier extends StateNotifier<SessionState> {
 
 /// Notifier for chat messages.
 class ChatNotifier extends StateNotifier<ChatState> {
+  ChatNotifier(
+    this._messageDatasource,
+    this._sessionDatasource,
+    this._nostrService,
+  ) : super(const ChatState());
+
   final MessageLocalDatasource _messageDatasource;
   final SessionLocalDatasource _sessionDatasource;
   final NostrService _nostrService;
 
   // Cache of session handles for sending/receiving
   final Map<String, SessionHandle> _sessionHandles = {};
-
-  ChatNotifier(
-    this._messageDatasource,
-    this._sessionDatasource,
-    this._nostrService,
-  ) : super(const ChatState());
 
   /// Load messages for a session.
   Future<void> loadMessages(String sessionId, {int limit = 50}) async {
@@ -169,9 +171,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
       );
       state = state.copyWith(
         messages: {...state.messages, sessionId: messages},
+        error: null,
       );
-    } catch (e) {
-      state = state.copyWith(error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
     }
   }
 
@@ -195,9 +199,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
           ...state.messages,
           sessionId: [...olderMessages, ...currentMessages],
         },
+        error: null,
       );
-    } catch (e) {
-      state = state.copyWith(error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
     }
   }
 
@@ -226,28 +232,75 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // Add to UI immediately
     addMessageOptimistic(message);
 
+    await _sendMessageInternal(message);
+  }
+
+  /// Send a queued message (called by OfflineQueueService).
+  Future<void> sendQueuedMessage(
+    String sessionId,
+    String text,
+    String messageId,
+  ) async {
+    // Find existing message or create placeholder
+    final existingMessages = state.messages[sessionId] ?? [];
+    final existingMessage = existingMessages
+        .cast<ChatMessage?>()
+        .firstWhere((m) => m?.id == messageId, orElse: () => null);
+
+    if (existingMessage != null) {
+      // Update to pending and send
+      final pendingMessage = existingMessage.copyWith(status: MessageStatus.pending);
+      await _sendMessageInternal(pendingMessage);
+    } else {
+      // Message not in state, create it
+      final message = ChatMessage(
+        id: messageId,
+        sessionId: sessionId,
+        text: text,
+        timestamp: DateTime.now(),
+        direction: MessageDirection.outgoing,
+        status: MessageStatus.pending,
+      );
+      addMessageOptimistic(message);
+      await _sendMessageInternal(message);
+    }
+  }
+
+  Future<void> _sendMessageInternal(ChatMessage message) async {
     try {
       // Get or restore the session handle
-      final handle = await _getSessionHandle(sessionId);
+      final handle = await _getSessionHandle(message.sessionId);
       if (handle == null) {
-        throw Exception('Session not found');
+        throw const AppError(
+          type: AppErrorType.sessionExpired,
+          message: 'Session not found. Please start a new conversation.',
+          isRetryable: false,
+        );
       }
 
       // Check if can send
       final canSend = await handle.canSend();
       if (!canSend) {
-        throw Exception('Session is not ready');
+        throw const AppError(
+          type: AppErrorType.sessionExpired,
+          message: 'Session is not ready. Please wait for the connection.',
+          isRetryable: true,
+        );
       }
 
       // Encrypt and get event
-      final sendResult = await handle.sendText(text);
+      final sendResult = await handle.sendText(message.text);
 
       // Update session state
       final newState = await handle.stateJson();
-      await _sessionDatasource.saveSessionState(sessionId, newState);
+      await _sessionDatasource.saveSessionState(message.sessionId, newState);
 
-      // Publish to Nostr
-      await _nostrService.publishEvent(sendResult.outerEventJson);
+      // Publish to Nostr with retry logic for network failures
+      await ErrorService.withRetry(
+        operation: () => _nostrService.publishEvent(sendResult.outerEventJson),
+        maxAttempts: 3,
+        initialDelay: const Duration(seconds: 1),
+      );
 
       // Parse event ID
       final eventData = jsonDecode(sendResult.outerEventJson) as Map<String, dynamic>;
@@ -259,11 +312,17 @@ class ChatNotifier extends StateNotifier<ChatState> {
         eventId: eventId,
       );
       await updateMessage(sentMessage);
-    } catch (e) {
+    } catch (e, st) {
+      // Map to user-friendly error
+      final appError = e is AppError ? e : AppError.from(e, st);
+
       // Update message with failure
       final failedMessage = message.copyWith(status: MessageStatus.failed);
       await updateMessage(failedMessage);
-      state = state.copyWith(error: e.toString());
+      state = state.copyWith(error: appError.message);
+
+      // Re-throw so queue service knows to retry
+      rethrow;
     }
   }
 
@@ -305,8 +364,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // Save and add to state
       await addReceivedMessage(message);
-    } catch (e) {
-      state = state.copyWith(error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
     }
   }
 
@@ -442,8 +502,31 @@ final chatStateProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
 });
 
 /// Provider for messages in a specific session.
+/// Performance: Uses select() to only rebuild when messages for this specific session change.
 final sessionMessagesProvider =
     Provider.family<List<ChatMessage>, String>((ref, sessionId) {
-  final chatState = ref.watch(chatStateProvider);
-  return chatState.messages[sessionId] ?? [];
+  // Use select to only watch messages for this specific session
+  return ref.watch(
+    chatStateProvider.select((state) => state.messages[sessionId] ?? []),
+  );
+});
+
+/// Provider for message count in a specific session.
+/// Useful for UI that only needs to know if there are messages without watching the full list.
+final sessionMessageCountProvider =
+    Provider.family<int, String>((ref, sessionId) {
+  return ref.watch(
+    chatStateProvider.select((state) => state.messages[sessionId]?.length ?? 0),
+  );
+});
+
+/// Provider for checking if a session has messages.
+/// More efficient than watching the full message list when you only need a boolean.
+final sessionHasMessagesProvider =
+    Provider.family<bool, String>((ref, sessionId) {
+  return ref.watch(
+    chatStateProvider.select(
+      (state) => state.messages[sessionId]?.isNotEmpty ?? false,
+    ),
+  );
 });

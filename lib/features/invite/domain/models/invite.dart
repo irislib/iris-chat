@@ -6,8 +6,6 @@ part 'invite.g.dart';
 /// Represents a chat invite that can be shared.
 @freezed
 class Invite with _$Invite {
-  const Invite._();
-
   const factory Invite({
     /// Unique identifier for this invite.
     required String id,
@@ -33,6 +31,8 @@ class Invite with _$Invite {
     /// Serialized invite state for persistence.
     String? serializedState,
   }) = _Invite;
+
+  const Invite._();
 
   factory Invite.fromJson(Map<String, dynamic> json) => _$InviteFromJson(json);
 

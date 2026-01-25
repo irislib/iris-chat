@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../../config/providers/auth_provider.dart';
 import '../../../../config/providers/chat_provider.dart';
 import '../../../../core/services/secure_storage_service.dart';
+import '../../../../shared/utils/formatters.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -23,13 +24,13 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         children: [
           // Identity section
-          _SectionHeader(title: 'Identity'),
+          const _SectionHeader(title: 'Identity'),
           ListTile(
             leading: const Icon(Icons.person),
             title: const Text('Public Key'),
             subtitle: Text(
               authState.pubkeyHex != null
-                  ? _formatPubkey(authState.pubkeyHex!)
+                  ? formatPubkeyForDisplay(authState.pubkeyHex!)
                   : 'Not logged in',
             ),
             trailing: authState.pubkeyHex != null
@@ -50,7 +51,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
 
           // Security section
-          _SectionHeader(title: 'Security'),
+          const _SectionHeader(title: 'Security'),
           ListTile(
             leading: const Icon(Icons.key),
             title: const Text('Export Private Key'),
@@ -59,11 +60,11 @@ class SettingsScreen extends ConsumerWidget {
           ),
 
           // About section
-          _SectionHeader(title: 'About'),
-          ListTile(
-            leading: const Icon(Icons.info),
-            title: const Text('Version'),
-            subtitle: const Text('1.0.0'),
+          const _SectionHeader(title: 'About'),
+          const ListTile(
+            leading: Icon(Icons.info),
+            title: Text('Version'),
+            subtitle: Text('1.0.0'),
           ),
           ListTile(
             leading: const Icon(Icons.code),
@@ -73,7 +74,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
 
           // Danger zone
-          _SectionHeader(title: 'Danger Zone'),
+          const _SectionHeader(title: 'Danger Zone'),
           ListTile(
             leading: Icon(Icons.logout, color: theme.colorScheme.error),
             title: Text(
@@ -95,11 +96,6 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
-  }
-
-  String _formatPubkey(String hex) {
-    if (hex.length < 16) return hex;
-    return '${hex.substring(0, 8)}...${hex.substring(hex.length - 8)}';
   }
 
   Future<void> _openUrl(String url) async {
@@ -131,7 +127,7 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
 
-    if (confirmed == true && context.mounted) {
+    if ((confirmed ?? false) && context.mounted) {
       final authRepo = ref.read(authRepositoryProvider);
       final privkey = await authRepo.getPrivateKey();
 
@@ -207,7 +203,7 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
 
-    if (confirmed == true && context.mounted) {
+    if ((confirmed ?? false) && context.mounted) {
       await ref.read(authStateProvider.notifier).logout();
       if (context.mounted) {
         context.go('/login');
@@ -240,7 +236,7 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
 
-    if (confirmed == true && context.mounted) {
+    if ((confirmed ?? false) && context.mounted) {
       // Clear database
       final dbService = ref.read(databaseServiceProvider);
       await dbService.deleteDatabase();
@@ -260,9 +256,9 @@ class SettingsScreen extends ConsumerWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  final String title;
-
   const _SectionHeader({required this.title});
+
+  final String title;
 
   @override
   Widget build(BuildContext context) {

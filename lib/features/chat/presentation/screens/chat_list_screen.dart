@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../../config/providers/auth_provider.dart';
 import '../../../../config/providers/chat_provider.dart';
 import '../../../../config/providers/invite_provider.dart';
+import '../../../../shared/utils/formatters.dart';
 import '../../domain/models/session.dart';
+import '../widgets/offline_indicator.dart';
 
 class ChatListScreen extends ConsumerStatefulWidget {
   const ChatListScreen({super.key});
@@ -58,25 +59,37 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final sessionState = ref.watch(sessionStateProvider);
-    final authState = ref.watch(authStateProvider);
+    // Optimized: Use select() to only watch isLoading and sessions, not the entire state
+    final isLoading = ref.watch(sessionStateProvider.select((s) => s.isLoading));
+    final sessions = ref.watch(sessionStateProvider.select((s) => s.sessions));
     final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chats'),
         actions: [
+          const Padding(
+            padding: EdgeInsets.only(right: 8),
+            child: ConnectionStatusIcon(size: 20),
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () => context.push('/settings'),
           ),
         ],
       ),
-      body: sessionState.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : sessionState.sessions.isEmpty
-              ? _buildEmptyState(theme)
-              : _buildChatList(sessionState.sessions),
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(
+            child: isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : sessions.isEmpty
+                    ? _buildEmptyState(theme)
+                    : _buildChatList(sessions),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _showNewChatOptions,
         child: const Icon(Icons.add),
@@ -124,9 +137,12 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
   Widget _buildChatList(List<ChatSession> sessions) {
     return ListView.builder(
       itemCount: sessions.length,
+      // Performance: Add cacheExtent for smoother scrolling
+      cacheExtent: 80.0 * 3, // Cache ~3 items worth of height
       itemBuilder: (context, index) {
         final session = sessions[index];
         return _ChatListItem(
+          key: ValueKey(session.id),
           session: session,
           onTap: () => context.push('/chats/${session.id}'),
           onDelete: () async {
@@ -149,8 +165,8 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
                 ],
               ),
             );
-            if (confirmed == true) {
-              ref.read(sessionStateProvider.notifier).deleteSession(session.id);
+            if (confirmed ?? false) {
+              await ref.read(sessionStateProvider.notifier).deleteSession(session.id);
             }
           },
         );
@@ -160,15 +176,21 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
 }
 
 class _ChatListItem extends StatelessWidget {
-  final ChatSession session;
-  final VoidCallback onTap;
-  final VoidCallback onDelete;
-
   const _ChatListItem({
+    super.key,
     required this.session,
     required this.onTap,
     required this.onDelete,
   });
+
+  final ChatSession session;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  static const _dismissiblePadding = EdgeInsets.only(right: 16);
+  static const _unreadBadgePadding = EdgeInsets.symmetric(horizontal: 8, vertical: 2);
+  static const _unreadBadgeBorderRadius = BorderRadius.all(Radius.circular(12));
+  static const _unreadSpacing = SizedBox(height: 4);
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +202,7 @@ class _ChatListItem extends StatelessWidget {
       background: Container(
         color: theme.colorScheme.error,
         alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
+        padding: _dismissiblePadding,
         child: Icon(Icons.delete, color: theme.colorScheme.onError),
       ),
       onDismissed: (_) => onDelete(),
@@ -213,18 +235,18 @@ class _ChatListItem extends StatelessWidget {
           children: [
             if (session.lastMessageAt != null)
               Text(
-                _formatTime(session.lastMessageAt!),
+                formatRelativeDateTime(session.lastMessageAt!),
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
             if (session.unreadCount > 0) ...[
-              const SizedBox(height: 4),
+              _unreadSpacing,
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: _unreadBadgePadding,
                 decoration: BoxDecoration(
                   color: theme.colorScheme.primary,
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: _unreadBadgeBorderRadius,
                 ),
                 child: Text(
                   session.unreadCount.toString(),
@@ -239,21 +261,5 @@ class _ChatListItem extends StatelessWidget {
         onTap: onTap,
       ),
     );
-  }
-
-  String _formatTime(DateTime time) {
-    final now = DateTime.now();
-    final diff = now.difference(time);
-
-    if (diff.inDays == 0) {
-      return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-    } else if (diff.inDays == 1) {
-      return 'Yesterday';
-    } else if (diff.inDays < 7) {
-      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      return days[time.weekday - 1];
-    } else {
-      return '${time.day}/${time.month}';
-    }
   }
 }

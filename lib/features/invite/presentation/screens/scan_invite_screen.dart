@@ -204,9 +204,9 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
 }
 
 class _ScannerOverlayPainter extends CustomPainter {
-  final Color borderColor;
-
   _ScannerOverlayPainter({required this.borderColor});
+
+  final Color borderColor;
 
   @override
   void paint(Canvas canvas, Size size) {

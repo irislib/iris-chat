@@ -3,13 +3,18 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../config/providers/chat_provider.dart';
+import '../../../../shared/utils/formatters.dart';
 import '../../domain/models/message.dart';
 import '../../domain/models/session.dart';
 
-class ChatScreen extends ConsumerStatefulWidget {
-  final String sessionId;
+/// Estimated height for a typical message bubble.
+/// Used for ListView performance optimization.
+const double _kEstimatedMessageHeight = 80.0;
 
+class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.sessionId});
+
+  final String sessionId;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -75,7 +80,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Update session metadata
     final messages = ref.read(sessionMessagesProvider(widget.sessionId));
     if (messages.isNotEmpty) {
-      ref.read(sessionStateProvider.notifier).updateSessionWithMessage(
+      await ref.read(sessionStateProvider.notifier).updateSessionWithMessage(
             widget.sessionId,
             messages.last,
           );
@@ -84,14 +89,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final sessionState = ref.watch(sessionStateProvider);
+    // Optimized: Use select() to only watch the specific session we need,
+    // avoiding rebuilds when other sessions change
+    final session = ref.watch(
+      sessionStateProvider.select(
+        (state) => state.sessions.firstWhere(
+          (s) => s.id == widget.sessionId,
+          orElse: () => throw Exception('Session not found'),
+        ),
+      ),
+    );
     final messages = ref.watch(sessionMessagesProvider(widget.sessionId));
     final theme = Theme.of(context);
-
-    final session = sessionState.sessions.firstWhere(
-      (s) => s.id == widget.sessionId,
-      orElse: () => throw Exception('Session not found'),
-    );
 
     return Scaffold(
       appBar: AppBar(
@@ -124,6 +133,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     controller: _scrollController,
                     padding: const EdgeInsets.all(16),
                     itemCount: messages.length,
+                    // Performance: Add cacheExtent for smoother scrolling
+                    cacheExtent: _kEstimatedMessageHeight * 5,
+                    // Performance: addAutomaticKeepAlives helps with message state preservation
+                    addAutomaticKeepAlives: true,
                     itemBuilder: (context, index) {
                       final message = messages[index];
                       final showDate = index == 0 ||
@@ -136,7 +149,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         children: [
                           if (showDate)
                             _DateSeparator(date: message.timestamp),
-                          _MessageBubble(message: message),
+                          _MessageBubble(
+                            key: ValueKey(message.id),
+                            message: message,
+                          ),
                         ],
                       );
                     },
@@ -264,7 +280,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               const SizedBox(height: 12),
               _InfoRow(
                 label: 'Session Created',
-                value: _formatDate(session.createdAt),
+                value: formatDate(session.createdAt),
               ),
               if (session.inviteId != null) ...[
                 const SizedBox(height: 12),
@@ -294,15 +310,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  String _formatDate(DateTime date) {
-    return '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-  }
 }
 
 class _DateSeparator extends StatelessWidget {
+  const _DateSeparator({super.key, required this.date});
+
   final DateTime date;
 
-  const _DateSeparator({required this.date});
+  static const _padding = EdgeInsets.symmetric(vertical: 16);
+  static const _containerPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 4);
+  static const _borderRadius = BorderRadius.all(Radius.circular(12));
 
   @override
   Widget build(BuildContext context) {
@@ -320,13 +337,13 @@ class _DateSeparator extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: _padding,
       child: Center(
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          padding: _containerPadding,
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: _borderRadius,
           ),
           child: Text(
             text,
@@ -341,9 +358,26 @@ class _DateSeparator extends StatelessWidget {
 }
 
 class _MessageBubble extends StatelessWidget {
+  const _MessageBubble({super.key, required this.message});
+
   final ChatMessage message;
 
-  const _MessageBubble({required this.message});
+  static const _margin = EdgeInsets.symmetric(vertical: 4);
+  static const _padding = EdgeInsets.symmetric(horizontal: 12, vertical: 8);
+  static const _outgoingBorderRadius = BorderRadius.only(
+    topLeft: Radius.circular(16),
+    topRight: Radius.circular(16),
+    bottomLeft: Radius.circular(16),
+    bottomRight: Radius.circular(4),
+  );
+  static const _incomingBorderRadius = BorderRadius.only(
+    topLeft: Radius.circular(16),
+    topRight: Radius.circular(16),
+    bottomLeft: Radius.circular(4),
+    bottomRight: Radius.circular(16),
+  );
+  static const _spacing = SizedBox(height: 4);
+  static const _statusSpacing = SizedBox(width: 4);
 
   @override
   Widget build(BuildContext context) {
@@ -353,19 +387,16 @@ class _MessageBubble extends StatelessWidget {
     return Align(
       alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
+        margin: _margin,
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.sizeOf(context).width * 0.75,
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: _padding,
         decoration: BoxDecoration(
           color: isOutgoing
               ? theme.colorScheme.primaryContainer
               : theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(16).copyWith(
-            bottomRight: isOutgoing ? const Radius.circular(4) : null,
-            bottomLeft: !isOutgoing ? const Radius.circular(4) : null,
-          ),
+          borderRadius: isOutgoing ? _outgoingBorderRadius : _incomingBorderRadius,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -378,12 +409,12 @@ class _MessageBubble extends StatelessWidget {
                     : theme.colorScheme.onSurface,
               ),
             ),
-            const SizedBox(height: 4),
+            _spacing,
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  _formatTime(message.timestamp),
+                  formatTime(message.timestamp),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: isOutgoing
                         ? theme.colorScheme.onPrimaryContainer.withOpacity(0.7)
@@ -392,7 +423,7 @@ class _MessageBubble extends StatelessWidget {
                   ),
                 ),
                 if (isOutgoing) ...[
-                  const SizedBox(width: 4),
+                  _statusSpacing,
                   _StatusIcon(status: message.status),
                 ],
               ],
@@ -402,16 +433,17 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
   }
-
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  }
 }
 
 class _StatusIcon extends StatelessWidget {
+  const _StatusIcon({super.key, required this.status});
+
   final MessageStatus status;
 
-  const _StatusIcon({required this.status});
+  // Const icons for better performance - avoid recreating icons on every build
+  static const _queuedIcon = Icon(Icons.cloud_queue, size: 14, color: Colors.orange);
+  static const _iconSize = 14.0;
+  static const _progressSize = 12.0;
 
   @override
   Widget build(BuildContext context) {
@@ -421,31 +453,39 @@ class _StatusIcon extends StatelessWidget {
     switch (status) {
       case MessageStatus.pending:
         return SizedBox(
-          width: 12,
-          height: 12,
+          width: _progressSize,
+          height: _progressSize,
           child: CircularProgressIndicator(
             strokeWidth: 1.5,
             color: color,
           ),
         );
+      case MessageStatus.queued:
+        return _queuedIcon;
       case MessageStatus.sent:
-        return Icon(Icons.check, size: 14, color: color);
+        return Icon(Icons.check, size: _iconSize, color: color);
       case MessageStatus.delivered:
-        return Icon(Icons.done_all, size: 14, color: color);
+        return Icon(Icons.done_all, size: _iconSize, color: color);
       case MessageStatus.failed:
-        return Icon(Icons.error_outline, size: 14, color: theme.colorScheme.error);
+        return Icon(Icons.error_outline, size: _iconSize, color: theme.colorScheme.error);
     }
   }
 }
 
 class _MessageInput extends StatelessWidget {
-  final TextEditingController controller;
-  final VoidCallback onSend;
-
   const _MessageInput({
+    super.key,
     required this.controller,
     required this.onSend,
   });
+
+  final TextEditingController controller;
+  final VoidCallback onSend;
+
+  static const _inputBorderRadius = BorderRadius.all(Radius.circular(24));
+  static const _contentPadding = EdgeInsets.symmetric(horizontal: 16, vertical: 10);
+  static const _spacing = SizedBox(width: 8);
+  static const _sendIcon = Icon(Icons.send);
 
   @override
   Widget build(BuildContext context) {
@@ -456,7 +496,7 @@ class _MessageInput extends StatelessWidget {
         left: 16,
         right: 8,
         top: 8,
-        bottom: MediaQuery.of(context).padding.bottom + 8,
+        bottom: MediaQuery.paddingOf(context).bottom + 8,
       ),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
@@ -471,16 +511,13 @@ class _MessageInput extends StatelessWidget {
               controller: controller,
               decoration: InputDecoration(
                 hintText: 'Message',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
+                border: const OutlineInputBorder(
+                  borderRadius: _inputBorderRadius,
                   borderSide: BorderSide.none,
                 ),
                 filled: true,
                 fillColor: theme.colorScheme.surfaceContainerHighest,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
+                contentPadding: _contentPadding,
               ),
               textCapitalization: TextCapitalization.sentences,
               minLines: 1,
@@ -488,10 +525,10 @@ class _MessageInput extends StatelessWidget {
               onSubmitted: (_) => onSend(),
             ),
           ),
-          const SizedBox(width: 8),
+          _spacing,
           IconButton.filled(
             onPressed: onSend,
-            icon: const Icon(Icons.send),
+            icon: _sendIcon,
           ),
         ],
       ),
@@ -500,15 +537,20 @@ class _MessageInput extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool copyable;
-
   const _InfoRow({
+    super.key,
     required this.label,
     required this.value,
     this.copyable = false,
   });
+
+  final String label;
+  final String value;
+  final bool copyable;
+
+  static const _copyIcon = Icon(Icons.copy, size: 18);
+  static const _labelWidth = 100.0;
+  static const _copiedSnackBar = SnackBar(content: Text('Copied to clipboard'));
 
   @override
   Widget build(BuildContext context) {
@@ -518,7 +560,7 @@ class _InfoRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 100,
+          width: _labelWidth,
           child: Text(
             label,
             style: theme.textTheme.bodySmall?.copyWith(
@@ -538,13 +580,11 @@ class _InfoRow extends StatelessWidget {
         ),
         if (copyable)
           IconButton(
-            icon: const Icon(Icons.copy, size: 18),
+            icon: _copyIcon,
             onPressed: () async {
               await Clipboard.setData(ClipboardData(text: value));
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Copied to clipboard')),
-                );
+                ScaffoldMessenger.of(context).showSnackBar(_copiedSnackBar);
               }
             },
             padding: EdgeInsets.zero,

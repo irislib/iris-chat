@@ -1,10 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
-
 import 'package:iris_chat/config/providers/invite_provider.dart';
 import 'package:iris_chat/features/invite/data/datasources/invite_local_datasource.dart';
 import 'package:iris_chat/features/invite/domain/models/invite.dart';
+import 'package:mocktail/mocktail.dart';
 
 class MockInviteLocalDatasource extends Mock implements InviteLocalDatasource {}
 

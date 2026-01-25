@@ -5,9 +5,9 @@ import '../../domain/models/session.dart';
 
 /// Local data source for chat sessions.
 class SessionLocalDatasource {
-  final DatabaseService _databaseService;
-
   SessionLocalDatasource(this._databaseService);
+
+  final DatabaseService _databaseService;
 
   Future<Database> get _db => _databaseService.database;
 

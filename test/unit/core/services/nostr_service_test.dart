@@ -27,10 +27,27 @@ void main() {
         expect(event.kind, 1);
         expect(event.content, 'Hello world');
         expect(event.sig, 'sig123');
+        expect(event.subscriptionId, isNull);
+      });
+
+      test('fromJson with subscriptionId', () {
+        final json = {
+          'id': 'abc123',
+          'pubkey': 'pub123',
+          'created_at': 1700000000,
+          'kind': 1,
+          'tags': <List<String>>[],
+          'content': 'Hello',
+          'sig': 'sig123',
+        };
+
+        final event = NostrEvent.fromJson(json, subscriptionId: 'sub123');
+
+        expect(event.subscriptionId, 'sub123');
       });
 
       test('getTagValue returns correct value', () {
-        final event = NostrEvent(
+        const event = NostrEvent(
           id: 'abc',
           pubkey: 'pub',
           createdAt: 0,
@@ -49,7 +66,7 @@ void main() {
       });
 
       test('recipientPubkey returns p tag value', () {
-        final event = NostrEvent(
+        const event = NostrEvent(
           id: 'abc',
           pubkey: 'pub',
           createdAt: 0,
@@ -65,7 +82,7 @@ void main() {
       });
 
       test('toJson produces valid map', () {
-        final event = NostrEvent(
+        const event = NostrEvent(
           id: 'abc',
           pubkey: 'pub',
           createdAt: 1700000000,
@@ -85,12 +102,14 @@ void main() {
         expect(json['kind'], 1);
         expect(json['content'], 'Hello');
         expect(json['sig'], 'sig');
+        // subscriptionId should not be in JSON output
+        expect(json.containsKey('subscriptionId'), false);
       });
     });
 
     group('NostrFilter', () {
       test('toJson includes only non-null fields', () {
-        final filter = NostrFilter(
+        const filter = NostrFilter(
           authors: ['author1', 'author2'],
           kinds: [1, 4],
           since: 1700000000,
@@ -107,7 +126,7 @@ void main() {
       });
 
       test('toJson includes p tags correctly', () {
-        final filter = NostrFilter(
+        const filter = NostrFilter(
           pTags: ['pubkey1', 'pubkey2'],
           kinds: [443],
         );
@@ -119,7 +138,7 @@ void main() {
       });
 
       test('toJson includes e tags correctly', () {
-        final filter = NostrFilter(
+        const filter = NostrFilter(
           eTags: ['event1'],
           limit: 10,
         );
@@ -136,12 +155,14 @@ void main() {
         final service = NostrService();
 
         expect(service.connectedCount, 0); // Not connected yet
+        expect(service.isDisposed, false);
       });
 
       test('creates with custom relays', () {
         final service = NostrService(relayUrls: ['wss://custom.relay']);
 
         expect(service.connectedCount, 0);
+        expect(service.isDisposed, false);
       });
 
       test('connectionStatus returns map of relay statuses', () {
@@ -157,6 +178,82 @@ void main() {
         // Not connected initially
         expect(status['wss://relay1.com'], false);
         expect(status['wss://relay2.com'], false);
+      });
+
+      test('dispose sets isDisposed to true', () async {
+        final service = NostrService(relayUrls: ['wss://relay.test']);
+
+        expect(service.isDisposed, false);
+        await service.dispose();
+        expect(service.isDisposed, true);
+      });
+
+      test('dispose is idempotent', () async {
+        final service = NostrService(relayUrls: ['wss://relay.test']);
+
+        await service.dispose();
+        await service.dispose(); // Should not throw
+        expect(service.isDisposed, true);
+      });
+
+      test('connect throws after dispose', () async {
+        final service = NostrService(relayUrls: ['wss://relay.test']);
+        await service.dispose();
+
+        expect(service.connect, throwsStateError);
+      });
+
+      test('subscribe throws after dispose', () async {
+        final service = NostrService(relayUrls: ['wss://relay.test']);
+        await service.dispose();
+
+        expect(
+          () => service.subscribe(const NostrFilter(kinds: [1])),
+          throwsStateError,
+        );
+      });
+
+      test('publishEvent throws after dispose', () async {
+        final service = NostrService(relayUrls: ['wss://relay.test']);
+        await service.dispose();
+
+        expect(
+          () => service.publishEvent('{}'),
+          throwsStateError,
+        );
+      });
+    });
+
+    group('RelayConnectionEvent', () {
+      test('creates with required fields', () {
+        const event = RelayConnectionEvent(
+          url: 'wss://relay.test',
+          status: RelayStatus.connected,
+        );
+
+        expect(event.url, 'wss://relay.test');
+        expect(event.status, RelayStatus.connected);
+        expect(event.error, isNull);
+      });
+
+      test('creates with error', () {
+        const event = RelayConnectionEvent(
+          url: 'wss://relay.test',
+          status: RelayStatus.error,
+          error: 'Connection refused',
+        );
+
+        expect(event.status, RelayStatus.error);
+        expect(event.error, 'Connection refused');
+      });
+    });
+
+    group('NostrException', () {
+      test('toString includes message', () {
+        const exception = NostrException('Test error');
+
+        expect(exception.toString(), 'NostrException: Test error');
+        expect(exception.message, 'Test error');
       });
     });
   });

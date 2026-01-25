@@ -10,13 +10,6 @@ import '../datasources/session_local_datasource.dart';
 
 /// Implementation of [ChatRepository].
 class ChatRepositoryImpl implements ChatRepository {
-  final SessionLocalDatasource _sessionDatasource;
-  final MessageLocalDatasource _messageDatasource;
-  final NostrService _nostrService;
-
-  // Cache of active session handles
-  final Map<String, SessionHandle> _sessionHandles = {};
-
   ChatRepositoryImpl({
     required SessionLocalDatasource sessionDatasource,
     required MessageLocalDatasource messageDatasource,
@@ -24,6 +17,13 @@ class ChatRepositoryImpl implements ChatRepository {
   })  : _sessionDatasource = sessionDatasource,
         _messageDatasource = messageDatasource,
         _nostrService = nostrService;
+
+  final SessionLocalDatasource _sessionDatasource;
+  final MessageLocalDatasource _messageDatasource;
+  final NostrService _nostrService;
+
+  // Cache of active session handles
+  final Map<String, SessionHandle> _sessionHandles = {};
 
   @override
   Future<List<ChatSession>> getSessions() async {

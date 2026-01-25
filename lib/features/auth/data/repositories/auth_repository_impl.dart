@@ -5,9 +5,9 @@ import '../../domain/repositories/auth_repository.dart';
 
 /// Implementation of [AuthRepository] using ndr-ffi and secure storage.
 class AuthRepositoryImpl implements AuthRepository {
-  final SecureStorageService _storage;
-
   AuthRepositoryImpl(this._storage);
+
+  final SecureStorageService _storage;
 
   @override
   Future<Identity> createIdentity() async {

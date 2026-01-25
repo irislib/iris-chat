@@ -1,10 +1,9 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
-
 import 'package:iris_chat/core/services/secure_storage_service.dart';
 import 'package:iris_chat/features/auth/data/repositories/auth_repository_impl.dart';
 import 'package:iris_chat/features/auth/domain/models/identity.dart';
+import 'package:mocktail/mocktail.dart';
 
 class MockSecureStorageService extends Mock implements SecureStorageService {}
 

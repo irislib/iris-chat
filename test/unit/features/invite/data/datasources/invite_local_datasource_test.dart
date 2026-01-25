@@ -1,12 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
-import 'package:sqflite/sqflite.dart';
-
 import 'package:iris_chat/core/services/database_service.dart';
 import 'package:iris_chat/features/invite/data/datasources/invite_local_datasource.dart';
 import 'package:iris_chat/features/invite/domain/models/invite.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:sqflite/sqflite.dart';
 
 class MockDatabaseService extends Mock implements DatabaseService {}
 

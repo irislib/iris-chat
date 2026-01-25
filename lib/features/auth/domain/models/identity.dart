@@ -23,9 +23,9 @@ class Identity with _$Identity {
 
 /// Exception thrown when key validation fails.
 class InvalidKeyException implements Exception {
-  final String message;
-
   const InvalidKeyException(this.message);
+
+  final String message;
 
   @override
   String toString() => 'InvalidKeyException: $message';

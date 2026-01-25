@@ -1,11 +1,5 @@
 /// Result of sending a message through the double ratchet.
 class SendResult {
-  /// The encrypted outer event JSON ready to publish to relays.
-  final String outerEventJson;
-
-  /// The original inner event JSON (plaintext message as event).
-  final String innerEventJson;
-
   const SendResult({
     required this.outerEventJson,
     required this.innerEventJson,
@@ -17,6 +11,12 @@ class SendResult {
       innerEventJson: map['innerEventJson'] as String,
     );
   }
+
+  /// The encrypted outer event JSON ready to publish to relays.
+  final String outerEventJson;
+
+  /// The original inner event JSON (plaintext message as event).
+  final String innerEventJson;
 
   Map<String, dynamic> toMap() {
     return {

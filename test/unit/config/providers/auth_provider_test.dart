@@ -1,9 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
-
 import 'package:iris_chat/config/providers/auth_provider.dart';
 import 'package:iris_chat/features/auth/domain/models/identity.dart';
 import 'package:iris_chat/features/auth/domain/repositories/auth_repository.dart';
+import 'package:mocktail/mocktail.dart';
 
 class MockAuthRepository extends Mock implements AuthRepository {}
 

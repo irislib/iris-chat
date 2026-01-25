@@ -1,20 +1,23 @@
 import Flutter
 import UIKit
 
-// MARK: - UniFFI Import
-// After running build-ios.sh, uncomment and import the generated bindings:
-// import NdrFfi
+// MARK: - Configuration
+
+/// Set this to true once ndr-ffi is built and the UniFFI bindings are integrated.
+/// This enables the real Rust library calls instead of returning "NotImplemented" errors.
+///
+/// Integration steps:
+/// 1. Build ndr-ffi: cd /path/to/nostr-double-ratchet && ./scripts/mobile/build-ios.sh --release
+/// 2. Add NdrFfi.xcframework to the Xcode project (link with Runner target)
+/// 3. Replace ios/Runner/ndr_ffi.swift with the UniFFI-generated version
+/// 4. Set NDR_FFI_ENABLED to true below
+/// 5. Uncomment the UniFFI implementation blocks in each handler
+private let NDR_FFI_ENABLED = false
 
 /// Flutter plugin for ndr-ffi bindings.
 ///
 /// This plugin bridges Flutter's platform channels to the UniFFI-generated
 /// Swift bindings for the Rust ndr-ffi library.
-///
-/// Integration steps:
-/// 1. Build ndr-ffi: cd /path/to/nostr-double-ratchet && ./scripts/mobile/build-ios.sh --release
-/// 2. Add NdrFfi.xcframework to the Xcode project
-/// 3. Add the generated Swift binding files (ndr_ffi.swift) to Runner
-/// 4. Uncomment the UniFFI import above and the implementations below
 public class NdrFfiPlugin: NSObject, FlutterPlugin {
     // Handle storage with type-erased containers
     // These will hold InviteHandle and SessionHandle instances once UniFFI is integrated
@@ -35,6 +38,19 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         )
         let instance = NdrFfiPlugin()
         registrar.addMethodCallDelegate(instance, channel: channel)
+    }
+
+    /// Cleanup all handles when the plugin is detached
+    private func cleanup() {
+        // When UniFFI is integrated, close all handles:
+        // for (_, invite) in inviteHandles {
+        //     (invite as? InviteHandle)?.close()
+        // }
+        // for (_, session) in sessionHandles {
+        //     (session as? SessionHandle)?.close()
+        // }
+        inviteHandles.removeAll()
+        sessionHandles.removeAll()
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -97,21 +113,30 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
     // MARK: - Version
 
     private func handleVersion(result: FlutterResult) {
-        // Uncomment when UniFFI bindings are integrated:
-        // result(version())
-        result("0.0.39")
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // result(version())
+            result("0.0.39")
+        } else {
+            // Return version string even in stub mode for compatibility
+            result("0.0.39-stub")
+        }
     }
 
     // MARK: - Keypair
 
     private func handleGenerateKeypair(result: FlutterResult) {
-        // Uncomment when UniFFI bindings are integrated:
-        // let keypair = generateKeypair()
-        // result([
-        //     "publicKeyHex": keypair.publicKeyHex,
-        //     "privateKeyHex": keypair.privateKeyHex
-        // ])
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // let keypair = generateKeypair()
+            // result([
+            //     "publicKeyHex": keypair.publicKeyHex,
+            //     "privateKeyHex": keypair.privateKeyHex
+            // ])
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleDerivePublicKey(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -119,17 +144,20 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let privkeyHex = args["privkeyHex"] as? String else {
             throw NdrPluginError.invalidArguments("Missing privkeyHex")
         }
+        _ = privkeyHex // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // do {
-        //     // Use secp256k1 to derive public key from private key
-        //     // This would typically be exposed via UniFFI or a separate crypto library
-        //     let pubkeyHex = try derivePublicKey(privkeyHex: privkeyHex)
-        //     result(pubkeyHex)
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // do {
+            //     let pubkeyHex = try derivePublicKey(privkeyHex: privkeyHex)
+            //     result(pubkeyHex)
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     // MARK: - Invite Creation
@@ -140,22 +168,27 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing inviterPubkeyHex")
         }
         let deviceId = args["deviceId"] as? String
-        let maxUses = args["maxUses"] as? UInt32
+        let maxUses = args["maxUses"] as? Int
+        _ = (inviterPubkeyHex, deviceId, maxUses) // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // do {
-        //     let invite = try InviteHandle.createNew(
-        //         inviterPubkeyHex: inviterPubkeyHex,
-        //         deviceId: deviceId,
-        //         maxUses: maxUses
-        //     )
-        //     let id = generateHandleId()
-        //     inviteHandles[id] = invite
-        //     result(["id": id])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // do {
+            //     let invite = try InviteHandle.createNew(
+            //         inviterPubkeyHex: inviterPubkeyHex,
+            //         deviceId: deviceId,
+            //         maxUses: maxUses.map { UInt32($0) }
+            //     )
+            //     let id = generateHandleId()
+            //     inviteHandles[id] = invite
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteFromUrl(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -163,17 +196,22 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let url = args["url"] as? String else {
             throw NdrPluginError.invalidArguments("Missing url")
         }
+        _ = url // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // do {
-        //     let invite = try InviteHandle.fromUrl(url: url)
-        //     let id = generateHandleId()
-        //     inviteHandles[id] = invite
-        //     result(["id": id])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // do {
+            //     let invite = try InviteHandle.fromUrl(url: url)
+            //     let id = generateHandleId()
+            //     inviteHandles[id] = invite
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteFromEventJson(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -181,17 +219,22 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let eventJson = args["eventJson"] as? String else {
             throw NdrPluginError.invalidArguments("Missing eventJson")
         }
+        _ = eventJson // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // do {
-        //     let invite = try InviteHandle.fromEventJson(eventJson: eventJson)
-        //     let id = generateHandleId()
-        //     inviteHandles[id] = invite
-        //     result(["id": id])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // do {
+            //     let invite = try InviteHandle.fromEventJson(eventJson: eventJson)
+            //     let id = generateHandleId()
+            //     inviteHandles[id] = invite
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteDeserialize(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -199,17 +242,22 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let json = args["json"] as? String else {
             throw NdrPluginError.invalidArguments("Missing json")
         }
+        _ = json // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // do {
-        //     let invite = try InviteHandle.deserialize(json: json)
-        //     let id = generateHandleId()
-        //     inviteHandles[id] = invite
-        //     result(["id": id])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // do {
+            //     let invite = try InviteHandle.deserialize(json: json)
+            //     let id = generateHandleId()
+            //     inviteHandles[id] = invite
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     // MARK: - Invite Methods
@@ -220,18 +268,26 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let root = args["root"] as? String else {
             throw NdrPluginError.invalidArguments("Missing id or root")
         }
+        _ = root // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let invite = inviteHandles[id] as? InviteHandle else {
-        //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
-        // }
-        // do {
-        //     let url = try invite.toUrl(root: root)
-        //     result(url)
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let invite = inviteHandles[id] as? InviteHandle else {
+            //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            // }
+            // do {
+            //     let url = try invite.toUrl(root: root)
+            //     result(url)
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            guard inviteHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteToEventJson(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -240,17 +296,24 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing id")
         }
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let invite = inviteHandles[id] as? InviteHandle else {
-        //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
-        // }
-        // do {
-        //     let eventJson = try invite.toEventJson()
-        //     result(eventJson)
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let invite = inviteHandles[id] as? InviteHandle else {
+            //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            // }
+            // do {
+            //     let eventJson = try invite.toEventJson()
+            //     result(eventJson)
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            guard inviteHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteSerialize(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -259,17 +322,24 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing id")
         }
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let invite = inviteHandles[id] as? InviteHandle else {
-        //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
-        // }
-        // do {
-        //     let json = try invite.serialize()
-        //     result(json)
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let invite = inviteHandles[id] as? InviteHandle else {
+            //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            // }
+            // do {
+            //     let json = try invite.serialize()
+            //     result(json)
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            guard inviteHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteAccept(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -280,27 +350,35 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing required arguments")
         }
         let deviceId = args["deviceId"] as? String
+        _ = (inviteePubkeyHex, inviteePrivkeyHex, deviceId) // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let invite = inviteHandles[id] as? InviteHandle else {
-        //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
-        // }
-        // do {
-        //     let acceptResult = try invite.accept(
-        //         inviteePubkeyHex: inviteePubkeyHex,
-        //         inviteePrivkeyHex: inviteePrivkeyHex,
-        //         deviceId: deviceId
-        //     )
-        //     let sessionId = generateHandleId()
-        //     sessionHandles[sessionId] = acceptResult.session
-        //     result([
-        //         "session": ["id": sessionId],
-        //         "responseEventJson": acceptResult.responseEventJson
-        //     ])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let invite = inviteHandles[id] as? InviteHandle else {
+            //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            // }
+            // do {
+            //     let acceptResult = try invite.accept(
+            //         inviteePubkeyHex: inviteePubkeyHex,
+            //         inviteePrivkeyHex: inviteePrivkeyHex,
+            //         deviceId: deviceId
+            //     )
+            //     let sessionId = generateHandleId()
+            //     sessionHandles[sessionId] = acceptResult.session
+            //     result([
+            //         "session": ["id": sessionId],
+            //         "responseEventJson": acceptResult.responseEventJson
+            //     ])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            guard inviteHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteGetInviterPubkeyHex(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -309,12 +387,19 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing id")
         }
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let invite = inviteHandles[id] as? InviteHandle else {
-        //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
-        // }
-        // result(invite.getInviterPubkeyHex())
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let invite = inviteHandles[id] as? InviteHandle else {
+            //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            // }
+            // result(invite.getInviterPubkeyHex())
+            guard inviteHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteGetSharedSecretHex(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -323,12 +408,19 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing id")
         }
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let invite = inviteHandles[id] as? InviteHandle else {
-        //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
-        // }
-        // result(invite.getSharedSecretHex())
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let invite = inviteHandles[id] as? InviteHandle else {
+            //     throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            // }
+            // result(invite.getSharedSecretHex())
+            guard inviteHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Invite handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleInviteDispose(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -336,6 +428,9 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let id = args["id"] as? String else {
             throw NdrPluginError.invalidArguments("Missing id")
         }
+
+        // When UniFFI is integrated:
+        // (inviteHandles[id] as? InviteHandle)?.close()
         inviteHandles.removeValue(forKey: id)
         result(nil)
     }
@@ -347,17 +442,22 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let stateJson = args["stateJson"] as? String else {
             throw NdrPluginError.invalidArguments("Missing stateJson")
         }
+        _ = stateJson // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // do {
-        //     let session = try SessionHandle.fromStateJson(stateJson: stateJson)
-        //     let id = generateHandleId()
-        //     sessionHandles[id] = session
-        //     result(["id": id])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // do {
+            //     let session = try SessionHandle.fromStateJson(stateJson: stateJson)
+            //     let id = generateHandleId()
+            //     sessionHandles[id] = session
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleSessionInit(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -369,23 +469,28 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing required arguments")
         }
         let name = args["name"] as? String
+        _ = (theirEphemeralPubkeyHex, ourEphemeralPrivkeyHex, isInitiator, sharedSecretHex, name) // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // do {
-        //     let session = try SessionHandle.init(
-        //         theirEphemeralPubkeyHex: theirEphemeralPubkeyHex,
-        //         ourEphemeralPrivkeyHex: ourEphemeralPrivkeyHex,
-        //         isInitiator: isInitiator,
-        //         sharedSecretHex: sharedSecretHex,
-        //         name: name
-        //     )
-        //     let id = generateHandleId()
-        //     sessionHandles[id] = session
-        //     result(["id": id])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // do {
+            //     let session = try SessionHandle.init(
+            //         theirEphemeralPubkeyHex: theirEphemeralPubkeyHex,
+            //         ourEphemeralPrivkeyHex: ourEphemeralPrivkeyHex,
+            //         isInitiator: isInitiator,
+            //         sharedSecretHex: sharedSecretHex,
+            //         name: name
+            //     )
+            //     let id = generateHandleId()
+            //     sessionHandles[id] = session
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     // MARK: - Session Methods
@@ -396,12 +501,19 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing id")
         }
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let session = sessionHandles[id] as? SessionHandle else {
-        //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
-        // }
-        // result(session.canSend())
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let session = sessionHandles[id] as? SessionHandle else {
+            //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            // }
+            // result(session.canSend())
+            guard sessionHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleSessionSendText(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -410,21 +522,29 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let text = args["text"] as? String else {
             throw NdrPluginError.invalidArguments("Missing id or text")
         }
+        _ = text // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let session = sessionHandles[id] as? SessionHandle else {
-        //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
-        // }
-        // do {
-        //     let sendResult = try session.sendText(text: text)
-        //     result([
-        //         "outerEventJson": sendResult.outerEventJson,
-        //         "innerEventJson": sendResult.innerEventJson
-        //     ])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let session = sessionHandles[id] as? SessionHandle else {
+            //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            // }
+            // do {
+            //     let sendResult = try session.sendText(text: text)
+            //     result([
+            //         "outerEventJson": sendResult.outerEventJson,
+            //         "innerEventJson": sendResult.innerEventJson
+            //     ])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            guard sessionHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleSessionDecryptEvent(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -433,21 +553,29 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let outerEventJson = args["outerEventJson"] as? String else {
             throw NdrPluginError.invalidArguments("Missing id or outerEventJson")
         }
+        _ = outerEventJson // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let session = sessionHandles[id] as? SessionHandle else {
-        //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
-        // }
-        // do {
-        //     let decryptResult = try session.decryptEvent(outerEventJson: outerEventJson)
-        //     result([
-        //         "plaintext": decryptResult.plaintext,
-        //         "innerEventJson": decryptResult.innerEventJson
-        //     ])
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let session = sessionHandles[id] as? SessionHandle else {
+            //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            // }
+            // do {
+            //     let decryptResult = try session.decryptEvent(outerEventJson: outerEventJson)
+            //     result([
+            //         "plaintext": decryptResult.plaintext,
+            //         "innerEventJson": decryptResult.innerEventJson
+            //     ])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            guard sessionHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleSessionStateJson(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -456,17 +584,24 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing id")
         }
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let session = sessionHandles[id] as? SessionHandle else {
-        //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
-        // }
-        // do {
-        //     let stateJson = try session.stateJson()
-        //     result(stateJson)
-        // } catch {
-        //     throw NdrPluginError.ndrError(error.localizedDescription)
-        // }
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let session = sessionHandles[id] as? SessionHandle else {
+            //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            // }
+            // do {
+            //     let stateJson = try session.stateJson()
+            //     result(stateJson)
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            guard sessionHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleSessionIsDrMessage(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -475,13 +610,21 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let eventJson = args["eventJson"] as? String else {
             throw NdrPluginError.invalidArguments("Missing id or eventJson")
         }
+        _ = eventJson // Silence unused variable warning
 
-        // Uncomment when UniFFI bindings are integrated:
-        // guard let session = sessionHandles[id] as? SessionHandle else {
-        //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
-        // }
-        // result(session.isDrMessage(eventJson: eventJson))
-        result(FlutterError(code: "NotImplemented", message: "Build ndr-ffi and integrate UniFFI bindings", details: nil))
+        if NDR_FFI_ENABLED {
+            // Uncomment when UniFFI bindings are integrated:
+            // guard let session = sessionHandles[id] as? SessionHandle else {
+            //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            // }
+            // result(session.isDrMessage(eventJson: eventJson))
+            guard sessionHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
     }
 
     private func handleSessionDispose(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -489,8 +632,21 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
               let id = args["id"] as? String else {
             throw NdrPluginError.invalidArguments("Missing id")
         }
+
+        // When UniFFI is integrated:
+        // (sessionHandles[id] as? SessionHandle)?.close()
         sessionHandles.removeValue(forKey: id)
         result(nil)
+    }
+
+    // MARK: - Helper Methods
+
+    private func notImplementedError() -> FlutterError {
+        return FlutterError(
+            code: "NotImplemented",
+            message: "Build ndr-ffi for iOS and integrate UniFFI bindings. See NdrFfiPlugin.swift for instructions.",
+            details: nil
+        )
     }
 }
 

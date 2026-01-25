@@ -1,11 +1,5 @@
 /// A keypair with hex-encoded keys.
 class FfiKeyPair {
-  /// The public key as a 64-character hex string.
-  final String publicKeyHex;
-
-  /// The private key as a 64-character hex string.
-  final String privateKeyHex;
-
   const FfiKeyPair({
     required this.publicKeyHex,
     required this.privateKeyHex,
@@ -17,6 +11,12 @@ class FfiKeyPair {
       privateKeyHex: map['privateKeyHex'] as String,
     );
   }
+
+  /// The public key as a 64-character hex string.
+  final String publicKeyHex;
+
+  /// The private key as a 64-character hex string.
+  final String privateKeyHex;
 
   Map<String, dynamic> toMap() {
     return {

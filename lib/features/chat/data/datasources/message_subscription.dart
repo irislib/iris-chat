@@ -2,12 +2,13 @@ import 'dart:async';
 
 import '../../../../core/ffi/ndr_ffi.dart';
 import '../../../../core/services/nostr_service.dart';
-import '../../domain/models/session.dart';
 import 'session_local_datasource.dart';
 
 /// Service that subscribes to incoming messages from Nostr relays
 /// and routes them to the appropriate session handlers.
 class MessageSubscription {
+  MessageSubscription(this._nostrService, this._sessionDatasource);
+
   final NostrService _nostrService;
   final SessionLocalDatasource _sessionDatasource;
 
@@ -23,8 +24,6 @@ class MessageSubscription {
   // Double ratchet message kind (from ndr-ffi)
   static const int drMessageKind = 443;
   static const int inviteResponseKind = 444;
-
-  MessageSubscription(this._nostrService, this._sessionDatasource);
 
   /// Start listening for messages.
   Future<void> startListening() async {

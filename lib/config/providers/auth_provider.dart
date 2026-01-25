@@ -22,9 +22,9 @@ class AuthState with _$AuthState {
 
 /// Notifier for authentication state.
 class AuthNotifier extends StateNotifier<AuthState> {
-  final AuthRepository _repository;
-
   AuthNotifier(this._repository) : super(const AuthState());
+
+  final AuthRepository _repository;
 
   /// Check for existing identity on app start.
   Future<void> checkAuth() async {
