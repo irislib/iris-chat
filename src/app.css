@@ -21,6 +21,7 @@ html {
   touch-action: manipulation;
   -webkit-text-size-adjust: 100%;
   -ms-text-size-adjust: 100%;
+  overscroll-behavior: none;
 }
 
 body {
@@ -28,6 +29,7 @@ body {
   min-width: 320px;
   min-height: 100dvh;
   touch-action: manipulation;
+  overscroll-behavior: none;
 }
 
 html, #app {

@@ -56,7 +56,7 @@
   </div>
 
   <!-- Chat List -->
-  <div class="flex-1 overflow-y-auto">
+  <div class="flex-1 overflow-y-auto overscroll-contain">
     {#if sortedChats.length > 0}
       {#each sortedChats as chat (chat.id)}
         <div class="{selectedChatId === chat.id ? 'bg-surface-light' : ''}">

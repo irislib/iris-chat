@@ -124,7 +124,7 @@
   <!-- Messages - scrollable -->
   <div
     bind:this={messagesContainer}
-    class="flex-1 overflow-y-auto p-4 min-h-0"
+    class="flex-1 overflow-y-auto overscroll-contain p-4 min-h-0"
   >
     <!-- Invite started system message -->
     {#if chat.inviteId}

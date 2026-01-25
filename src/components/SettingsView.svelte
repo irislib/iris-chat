@@ -244,7 +244,7 @@
   </header>
 
   <!-- Content -->
-  <div class="flex-1 overflow-y-auto p-4">
+  <div class="flex-1 overflow-y-auto overscroll-contain p-4">
     <div class="max-w-lg mx-auto space-y-6">
       <!-- Status Message -->
       {#if statusMessage}
