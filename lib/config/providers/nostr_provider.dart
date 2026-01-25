@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/services/nostr_service.dart';
 import '../../features/chat/data/datasources/message_subscription.dart';
 import 'chat_provider.dart';
+import 'invite_provider.dart';
 
 /// Provider for the Nostr service.
 final nostrServiceProvider = Provider<NostrService>((ref) {
@@ -23,11 +24,20 @@ final nostrServiceProvider = Provider<NostrService>((ref) {
 final messageSubscriptionProvider = Provider<MessageSubscription>((ref) {
   final nostrService = ref.watch(nostrServiceProvider);
   final sessionDatasource = ref.watch(sessionDatasourceProvider);
+  final inviteDatasource = ref.watch(inviteDatasourceProvider);
 
-  final subscription = MessageSubscription(nostrService, sessionDatasource);
+  final subscription = MessageSubscription(
+    nostrService,
+    sessionDatasource,
+    inviteDatasource,
+  );
 
   // Set up message handler
   subscription.onMessage = ref.read(chatStateProvider.notifier).receiveMessage;
+
+  // Set up invite response handler
+  subscription.onInviteResponse =
+      ref.read(inviteStateProvider.notifier).handleInviteResponse;
 
   // Start listening
   subscription.startListening();

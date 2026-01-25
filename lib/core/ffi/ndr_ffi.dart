@@ -349,6 +349,52 @@ class InviteHandle {
     return result;
   }
 
+  /// Process an invite response event and create a session.
+  ///
+  /// This is called when someone accepts your invite and sends a response.
+  /// Returns an [InviteResponseResult] containing the session and invitee info,
+  /// or null if the response is not valid for this invite.
+  Future<InviteResponseResult?> processResponse({
+    required String eventJson,
+    required String inviterPrivkeyHex,
+  }) async {
+    Logger.info(
+      'Processing invite response',
+      category: LogCategory.invite,
+      data: {'inviteId': _id},
+    );
+    try {
+      final result = await _channel.invokeMethod<Map>('inviteProcessResponse', {
+        'id': _id,
+        'eventJson': eventJson,
+        'inviterPrivkeyHex': inviterPrivkeyHex,
+      });
+      if (result == null) {
+        return null;
+      }
+      final responseResult =
+          InviteResponseResult._fromMap(Map<String, dynamic>.from(result));
+      Logger.sessionEvent(
+        'Session established from invite response',
+        sessionId: responseResult.session._id,
+        data: {
+          'inviteId': _id,
+          'invitee': responseResult.inviteePubkeyHex.substring(0, 8),
+        },
+      );
+      return responseResult;
+    } catch (e, st) {
+      Logger.error(
+        'Failed to process invite response',
+        category: LogCategory.invite,
+        error: e,
+        stackTrace: st,
+        data: {'inviteId': _id},
+      );
+      rethrow;
+    }
+  }
+
   /// Dispose of the native invite handle.
   Future<void> dispose() async {
     Logger.debug(
@@ -499,4 +545,27 @@ class InviteAcceptResult {
 
   final SessionHandle session;
   final String responseEventJson;
+}
+
+/// Result of processing an invite response.
+class InviteResponseResult {
+  InviteResponseResult({
+    required this.session,
+    required this.inviteePubkeyHex,
+    this.deviceId,
+  });
+
+  factory InviteResponseResult._fromMap(Map<String, dynamic> map) {
+    return InviteResponseResult(
+      session: SessionHandle._fromMap(
+        Map<String, dynamic>.from(map['session'] as Map),
+      ),
+      inviteePubkeyHex: map['inviteePubkeyHex'] as String,
+      deviceId: map['deviceId'] as String?,
+    );
+  }
+
+  final SessionHandle session;
+  final String inviteePubkeyHex;
+  final String? deviceId;
 }
