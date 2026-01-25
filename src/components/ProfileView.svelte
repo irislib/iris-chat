@@ -14,24 +14,35 @@
 
   let { pubkey, onBack, onOpenChat }: Props = $props()
 
-  let profileStore = $derived(createProfileStore(pubkey))
-  let profile = $derived($profileStore)
-  let profileName = $derived(getProfileName(profile))
-  let animalName = $derived(getAnimalName(pubkey))
+  // Validate pubkey is a valid hex string
+  let isValidPubkey = $derived(typeof pubkey === 'string' && /^[0-9a-f]{64}$/i.test(pubkey))
+
+  // Only create derived values if pubkey is valid
+  let profileStore = $derived(isValidPubkey ? createProfileStore(pubkey) : null)
+  let profile = $derived(profileStore ? $profileStore : undefined)
+  let profileName = $derived(isValidPubkey ? getProfileName(profile) : undefined)
+  let animalName = $derived(isValidPubkey ? getAnimalName(pubkey) : 'Unknown')
   let displayName = $derived(profileName || animalName)
 
   let npubCopied = $state(false)
 
   // Check if we have an existing chat with this user
-  let hasExistingChat = $derived($chats.has(pubkey))
+  let hasExistingChat = $derived(isValidPubkey ? $chats.has(pubkey) : false)
 
   function getNpub(): string {
-    const bytes = new Uint8Array(pubkey.match(/.{2}/g)!.map(b => parseInt(b, 16)))
-    return nip19.npubEncode(bytes)
+    if (!isValidPubkey) return ''
+    try {
+      return nip19.npubEncode(pubkey)
+    } catch (e) {
+      console.error('[ProfileView] getNpub error:', e)
+      return ''
+    }
   }
 
   async function copyNpub() {
-    await navigator.clipboard.writeText(getNpub())
+    const npub = getNpub()
+    if (!npub) return
+    await navigator.clipboard.writeText(npub)
     npubCopied = true
     setTimeout(() => npubCopied = false, 2000)
   }
@@ -56,60 +67,72 @@
 
   <!-- Content -->
   <div class="flex-1 overflow-y-auto overscroll-contain p-4">
-    <div class="max-w-lg mx-auto space-y-6">
-      <!-- Profile Card -->
-      <div class="bg-surface rounded-2xl p-6 text-center">
-        <!-- Avatar -->
-        <div class="flex justify-center mb-4">
-          <Avatar {pubkey} size={96} />
-        </div>
+    {#if isValidPubkey}
+      <div class="max-w-lg mx-auto space-y-6">
+        <!-- Profile Card -->
+        <div class="bg-surface rounded-2xl p-6 text-center">
+          <!-- Avatar -->
+          <div class="flex justify-center mb-4">
+            <Avatar {pubkey} size={96} />
+          </div>
 
-        <!-- Name -->
-        <h2 class="text-2xl font-bold mb-1">
-          {#if profileName}
-            {profileName}
+          <!-- Name -->
+          <h2 class="text-2xl font-bold mb-1">
+            {#if profileName}
+              {profileName}
+            {:else}
+              <span class="italic opacity-70">{animalName}</span>
+            {/if}
+          </h2>
+
+          <!-- NIP-05 -->
+          {#if profile?.nip05}
+            <p class="text-primary text-sm mb-4">{profile.nip05}</p>
           {:else}
-            <span class="italic opacity-70">{animalName}</span>
+            <div class="mb-4"></div>
           {/if}
-        </h2>
 
-        <!-- NIP-05 -->
-        {#if profile?.nip05}
-          <p class="text-primary text-sm mb-4">{profile.nip05}</p>
-        {:else}
-          <div class="mb-4"></div>
-        {/if}
+          <!-- About -->
+          {#if profile?.about}
+            <p class="text-gray-300 text-sm whitespace-pre-wrap break-words mb-6 text-left bg-surface-light rounded-lg p-4">
+              {profile.about}
+            </p>
+          {/if}
 
-        <!-- About -->
-        {#if profile?.about}
-          <p class="text-gray-300 text-sm whitespace-pre-wrap break-words mb-6 text-left bg-surface-light rounded-lg p-4">
-            {profile.about}
-          </p>
-        {/if}
+          <!-- npub Copy Button -->
+          <div class="mb-4">
+            <button
+              class="w-full btn-secondary flex items-center justify-center gap-2"
+              onclick={copyNpub}
+            >
+              <span class="i-carbon-copy"></span>
+              {npubCopied ? 'Copied!' : 'Copy npub'}
+            </button>
+            <p class="text-xs text-gray-500 mt-2 font-mono break-all">
+              {getNpub()}
+            </p>
+          </div>
 
-        <!-- npub Copy Button -->
-        <div class="mb-4">
+          <!-- Chat Button -->
           <button
-            class="w-full btn-secondary flex items-center justify-center gap-2"
-            onclick={copyNpub}
+            class="w-full btn-primary flex items-center justify-center gap-2"
+            onclick={handleOpenChat}
           >
-            <span class="i-carbon-copy"></span>
-            {npubCopied ? 'Copied!' : 'Copy npub'}
+            <span class="i-carbon-chat"></span>
+            {hasExistingChat ? 'Open Chat' : 'Start Chat'}
           </button>
-          <p class="text-xs text-gray-500 mt-2 font-mono break-all">
-            {getNpub()}
-          </p>
         </div>
-
-        <!-- Chat Button -->
+      </div>
+    {:else}
+      <div class="max-w-lg mx-auto text-center py-8">
+        <p class="text-gray-400">Invalid profile</p>
         <button
-          class="w-full btn-primary flex items-center justify-center gap-2"
-          onclick={handleOpenChat}
+          class="mt-4 btn-secondary"
+          onclick={onBack}
         >
-          <span class="i-carbon-chat"></span>
-          {hasExistingChat ? 'Open Chat' : 'Start Chat'}
+          Go Back
         </button>
       </div>
-    </div>
+    {/if}
   </div>
 </div>
