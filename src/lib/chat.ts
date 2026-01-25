@@ -201,6 +201,7 @@ export function parseInviteFromHash(): Invite | null {
 
 // Parse invite from a pasted URL
 export function parseInviteFromUrl(url: string): Invite | null {
+  console.log('[chat] parseInviteFromUrl input:', url)
   try {
     return Invite.fromUrl(url)
   } catch {
@@ -461,6 +462,16 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
   }
 
   const nostrSubscribe = createNostrSubscribe()
+
+  // Debug: log invite values before accept
+  console.log('[chat] acceptInvite - invite values:', {
+    inviter: invite.inviter,
+    inviterEphemeralPublicKey: invite.inviterEphemeralPublicKey,
+    sharedSecret: invite.sharedSecret,
+    inviterEphemeralPublicKeyLength: invite.inviterEphemeralPublicKey?.length,
+    inviterEphemeralPublicKeyValid: /^[0-9a-f]{64}$/i.test(invite.inviterEphemeralPublicKey || ''),
+  })
+
   const { session, event } = await invite.accept(nostrSubscribe, pubkey, encryptor)
 
   const chatSession: ChatSession = {
