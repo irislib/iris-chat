@@ -4,6 +4,7 @@
   import Sidebar from './components/Sidebar.svelte'
   import MainContent from './components/MainContent.svelte'
   import SettingsView from './components/SettingsView.svelte'
+  import ProfileView from './components/ProfileView.svelte'
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
   import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback } from './lib/chat'
@@ -20,12 +21,13 @@
   }
 
   // View routing
-  type View = 'chat' | 'settings'
+  type View = 'chat' | 'settings' | 'profile'
 
   let loggedIn = $state(false)
   let initializing = $state(true)
   let selectedChat = $state<ChatSession | null>(null)
   let currentView = $state<View>('chat')
+  let profilePubkey = $state<string | null>(null)
   // Mobile: which panel to show - 'sidebar' or 'main'
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
   let duplicateTab = $state(false)
@@ -37,10 +39,13 @@
   })
 
   // Parse view from URL hash
-  function getViewFromHash(): View {
+  function getViewFromHash(): { view: View; profilePubkey?: string } {
     const hash = window.location.hash
-    if (hash === '#settings') return 'settings'
-    return 'chat'
+    if (hash === '#settings') return { view: 'settings' }
+    if (hash.startsWith('#profile-')) {
+      return { view: 'profile', profilePubkey: hash.slice(9) }
+    }
+    return { view: 'chat' }
   }
 
   // Update URL hash without triggering popstate
@@ -51,14 +56,23 @@
   }
 
   // Navigate to a view with history
-  function navigateTo(view: View, push = true) {
+  function navigateTo(view: View, push = true, pubkey?: string) {
     currentView = view
-    const hash = view === 'settings' ? '#settings' : ''
+    if (view === 'profile' && pubkey) {
+      profilePubkey = pubkey
+    }
+    const hash = view === 'settings' ? '#settings' : view === 'profile' && pubkey ? `#profile-${pubkey}` : ''
     if (push) {
-      history.pushState({ view }, '', hash || window.location.pathname)
+      history.pushState({ view, pubkey }, '', hash || window.location.pathname)
     } else {
       setHashSilently(hash)
     }
+  }
+
+  // Navigate to profile
+  function navigateToProfile(pubkey: string) {
+    navigateTo('profile', true, pubkey)
+    mobileView = 'main'
   }
 
   onMount(async () => {
@@ -90,17 +104,26 @@
 
     // Set initial view from URL hash (only if not an invite)
     if (!hashInvite) {
-      currentView = getViewFromHash()
-      if (currentView === 'settings') {
+      const hashState = getViewFromHash()
+      currentView = hashState.view
+      if (hashState.view === 'profile' && hashState.profilePubkey) {
+        profilePubkey = hashState.profilePubkey
+        mobileView = 'main'
+      } else if (hashState.view === 'settings') {
         mobileView = 'main'
       }
     }
 
     // Listen for browser back/forward
     const handlePopState = () => {
-      const view = getViewFromHash()
-      currentView = view
-      mobileView = view === 'settings' ? 'main' : 'sidebar'
+      const hashState = getViewFromHash()
+      currentView = hashState.view
+      if (hashState.view === 'profile' && hashState.profilePubkey) {
+        profilePubkey = hashState.profilePubkey
+        mobileView = 'main'
+      } else {
+        mobileView = hashState.view === 'settings' ? 'main' : 'sidebar'
+      }
     }
     window.addEventListener('popstate', handlePopState)
 
@@ -265,6 +288,27 @@
     history.back()
   }
 
+  function handleProfileBack() {
+    history.back()
+  }
+
+  function handleOpenChatFromProfile(pubkey: string) {
+    // Check if we have an existing chat with this user
+    const chatMap = get(chats)
+    const existingChat = chatMap.get(pubkey)
+    if (existingChat) {
+      selectedChat = existingChat
+      currentChat.set(existingChat)
+    } else {
+      // No existing chat - just go back to chat view
+      // The user would need to receive an invite from this person to chat
+      selectedChat = null
+      currentChat.set(null)
+    }
+    navigateTo('chat')
+    mobileView = 'main'
+  }
+
   async function handleLogout() {
     logout()
     leaveChat()
@@ -332,12 +376,19 @@
         ">
           {#if currentView === 'settings'}
             <SettingsView onBack={handleSettingsBack} onLogout={handleLogout} />
+          {:else if currentView === 'profile' && profilePubkey}
+            <ProfileView
+              pubkey={profilePubkey}
+              onBack={handleProfileBack}
+              onOpenChat={handleOpenChatFromProfile}
+            />
           {:else}
             <MainContent
               chat={selectedChat}
               onChatJoined={handleChatJoined}
               onBack={handleBack}
               showBackButton={mobileView === 'main'}
+              onViewProfile={navigateToProfile}
             />
           {/if}
         </div>

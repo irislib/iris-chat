@@ -8,9 +8,10 @@
     chat: ChatSession
     onleave: () => void
     showBackButton?: boolean
+    onViewProfile?: (pubkey: string) => void
   }
 
-  let { chat, onleave, showBackButton = true }: Props = $props()
+  let { chat, onleave, showBackButton = true, onViewProfile }: Props = $props()
 
   let messageText = $state('')
   let messagesContainer = $state<HTMLDivElement | null>(null)
@@ -81,13 +82,18 @@
       </button>
     {/if}
 
-    <Avatar pubkey={chat.recipientPubkey} size={40} />
-
-    <div class="flex-1 min-w-0">
-      <p class="font-medium">
-        <Name pubkey={chat.recipientPubkey} />
-      </p>
-    </div>
+    <button
+      class="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80 transition-opacity"
+      onclick={() => onViewProfile?.(chat.recipientPubkey)}
+      disabled={!onViewProfile}
+    >
+      <Avatar pubkey={chat.recipientPubkey} size={40} />
+      <div class="flex-1 min-w-0 text-left">
+        <p class="font-medium">
+          <Name pubkey={chat.recipientPubkey} />
+        </p>
+      </div>
+    </button>
 
     <!-- Menu -->
     <div class="relative">

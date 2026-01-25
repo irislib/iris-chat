@@ -9,6 +9,7 @@ export interface Profile {
   username?: string
   picture?: string
   nip05?: string
+  about?: string
 }
 
 // Local profile rumor (unsigned kind 0 event content)

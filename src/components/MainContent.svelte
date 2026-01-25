@@ -9,14 +9,15 @@
     onChatJoined: (event: CustomEvent<{ chat: ChatSession }>) => void
     onBack: () => void
     showBackButton: boolean
+    onViewProfile?: (pubkey: string) => void
   }
 
-  let { chat, onChatJoined, onBack, showBackButton }: Props = $props()
+  let { chat, onChatJoined, onBack, showBackButton, onViewProfile }: Props = $props()
 </script>
 
 <div class="flex-1 flex flex-col min-h-0">
   {#if chat}
-    <ChatView {chat} onleave={onBack} {showBackButton} />
+    <ChatView {chat} onleave={onBack} {showBackButton} {onViewProfile} />
   {:else}
     <!-- Home / Welcome screen -->
     <div class="flex-1 flex flex-col min-h-0">
