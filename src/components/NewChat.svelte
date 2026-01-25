@@ -24,6 +24,7 @@
   let editLabelValue = $state('')
   let creating = $state(false)
   let qrModalInvite = $state<ActiveInvite | null>(null)
+  let createError = $state('')
 
   // Subscribe to invites store
   const unsubscribe = invites.subscribe((inviteMap) => {
@@ -44,6 +45,7 @@
   async function handleCreateInvite() {
     if (creating) return
     creating = true
+    createError = ''
     try {
       // Generate default label "Invite #N"
       const nextNumber = inviteList.length + 1
@@ -51,6 +53,7 @@
       await createAndSaveInvite(defaultLabel)
     } catch (e) {
       console.error('Failed to create invite:', e)
+      createError = e instanceof Error ? e.message : 'Failed to create invite'
     } finally {
       creating = false
     }
@@ -173,6 +176,11 @@
     <p class="text-gray-400 text-center mb-6">
       Create an invite link to start a secure chat.
     </p>
+    {#if createError}
+      <div class="p-3 bg-red-900/30 border border-red-700 rounded-lg text-red-400 text-sm mb-4">
+        {createError}
+      </div>
+    {/if}
     <button
       class="btn-primary w-full flex items-center justify-center gap-2"
       onclick={handleCreateInvite}

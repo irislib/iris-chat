@@ -132,4 +132,103 @@ test.describe('NIP-07 Login', () => {
     const copyButton = page.locator('button', { has: page.locator('span.i-carbon-copy') }).first()
     await expect(copyButton).toBeVisible()
   })
+
+  test('should join chat via paste link with NIP-07 login', async ({ browser }) => {
+    // User 1: Regular login (privkey) and create invite
+    const context1 = await browser.newContext()
+    const page1 = await context1.newPage()
+
+    await page1.goto('/')
+    await page1.getByRole('button', { name: 'Go' }).click()
+    await page1.getByRole('button', { name: 'New Chat' }).click()
+
+    // Get the invite URL
+    const copyButton = page1.locator('button[title*="#"]').first()
+    await expect(copyButton).toBeVisible()
+    const inviteUrl = await copyButton.getAttribute('title')
+    if (!inviteUrl) throw new Error('Could not get invite URL')
+
+    // User 2: NIP-07 login and join via paste link
+    const context2 = await browser.newContext()
+    const page2 = await context2.newPage()
+
+    const privateKey2 = generateSecretKey()
+    const publicKey2 = getPublicKey(privateKey2)
+
+    // Inject mock NIP-07 for user 2
+    await page2.addInitScript((mockData) => {
+      const { publicKey } = mockData
+      ;(window as any).nostr = {
+        getPublicKey: async () => publicKey,
+        signEvent: async (event: any) => ({
+          ...event,
+          id: Array.from(crypto.getRandomValues(new Uint8Array(32)))
+            .map(b => b.toString(16).padStart(2, '0')).join(''),
+          pubkey: publicKey,
+          sig: Array.from(crypto.getRandomValues(new Uint8Array(64)))
+            .map(b => b.toString(16).padStart(2, '0')).join('')
+        }),
+        nip44: {
+          encrypt: async (_pubkey: string, plaintext: string) => btoa(plaintext),
+          decrypt: async (_pubkey: string, ciphertext: string) => atob(ciphertext)
+        }
+      }
+    }, { publicKey: publicKey2 })
+
+    await page2.goto('/')
+
+    // Login with NIP-07
+    await page2.click('button:has-text("Login with Extension")')
+    await expect(page2.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 5000 })
+
+    // Click New Chat and paste the invite link
+    await page2.getByRole('button', { name: 'New Chat' }).click()
+    await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+    // Should NOT show "Not logged in" error
+    await expect(page2.locator('text=Not logged in')).not.toBeVisible({ timeout: 2000 })
+
+    // Should successfully join and show chat input
+    await expect(page2.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 10000 })
+
+    await context1.close()
+    await context2.close()
+  })
+
+  test('should show error when NIP-07 extension lacks nip44 support', async ({ page }) => {
+    const privateKey = generateSecretKey()
+    const publicKey = getPublicKey(privateKey)
+
+    // Inject mock NIP-07 WITHOUT nip44 support
+    await page.addInitScript((mockData) => {
+      const { publicKey } = mockData
+      ;(window as any).nostr = {
+        getPublicKey: async () => publicKey,
+        signEvent: async (event: any) => ({
+          ...event,
+          id: Array.from(crypto.getRandomValues(new Uint8Array(32)))
+            .map(b => b.toString(16).padStart(2, '0')).join(''),
+          pubkey: publicKey,
+          sig: Array.from(crypto.getRandomValues(new Uint8Array(64)))
+            .map(b => b.toString(16).padStart(2, '0')).join('')
+        })
+        // NOTE: No nip44 property - simulating extension without NIP-44 support
+      }
+    }, { publicKey })
+
+    await page.goto('/')
+
+    // Login with NIP-07
+    await page.click('button:has-text("Login with Extension")')
+    await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 5000 })
+
+    // Click New Chat
+    await page.getByRole('button', { name: 'New Chat' }).click()
+
+    // Click Create Invite to trigger the error
+    await page.getByRole('button', { name: 'Create Invite' }).click()
+
+    // Should show NIP-44 error message
+    await expect(page.locator('text=does not support NIP-44')).toBeVisible({ timeout: 5000 })
+  })
 })

@@ -168,6 +168,11 @@ export function createInvite(): Invite {
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
 
+  // For NIP-07 users, verify nip44 support is available (needed for invite listening)
+  if (isNip07Login() && !window.nostr?.nip44) {
+    throw new Error('Your extension does not support NIP-44 encryption')
+  }
+
   return Invite.createNew(pubkey)
 }
 
@@ -221,6 +226,11 @@ export function setInviteAcceptedCallback(callback: (session: ChatSession) => vo
 export async function createAndSaveInvite(label?: string): Promise<ActiveInvite> {
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
+
+  // For NIP-07 users, verify nip44 support is available (needed for invite listening)
+  if (isNip07Login() && !window.nostr?.nip44) {
+    throw new Error('Your extension does not support NIP-44 encryption')
+  }
 
   const invite = Invite.createNew(pubkey)
   const id = crypto.randomUUID()
@@ -428,9 +438,20 @@ export function getInviteEphemeralPubkeys(): string[] {
 // Accept an invite and create a session
 export async function acceptInvite(invite: Invite): Promise<ChatSession> {
   const pubkey = getPubkey()
-  const encryptor = getEncryptor()
 
-  if (!pubkey || !encryptor) {
+  if (!pubkey) {
+    throw new Error('Not logged in')
+  }
+
+  const encryptor = getEncryptor()
+  if (!encryptor) {
+    // Provide more specific error for NIP-07 users without nip44 support
+    if (isNip07Login()) {
+      if (!window.nostr?.nip44) {
+        throw new Error('Your extension does not support NIP-44 encryption')
+      }
+      throw new Error('Encryption not available')
+    }
     throw new Error('Not logged in')
   }
 
@@ -474,7 +495,14 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
   const decryptor = getDecryptor()
   if (!decryptor) {
     console.error('[chat] No decryptor available for invite listening')
-    throw new Error('Not logged in or NIP-44 not available')
+    // Provide more specific error for NIP-07 users without nip44 support
+    if (isNip07Login()) {
+      if (!window.nostr?.nip44) {
+        throw new Error('Your extension does not support NIP-44 encryption')
+      }
+      throw new Error('Decryption not available')
+    }
+    throw new Error('Not logged in')
   }
 
   const nostrSubscribe = createNostrSubscribe()
