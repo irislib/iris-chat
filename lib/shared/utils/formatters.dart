@@ -7,9 +7,9 @@ library;
 /// Format a public key hex string for display.
 ///
 /// Shows the first 6 characters, ellipsis, and last 6 characters.
-/// If the string is too short (< 12 chars), returns it unchanged.
+/// If the string is 12 chars or shorter, returns it unchanged.
 String formatPubkeyForDisplay(String hex) {
-  if (hex.length < 12) return hex;
+  if (hex.length <= 12) return hex;
   return '${hex.substring(0, 6)}...${hex.substring(hex.length - 6)}';
 }
 

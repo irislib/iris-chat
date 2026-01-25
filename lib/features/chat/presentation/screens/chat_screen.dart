@@ -313,7 +313,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 }
 
 class _DateSeparator extends StatelessWidget {
-  const _DateSeparator({super.key, required this.date});
+  const _DateSeparator({required this.date});
 
   final DateTime date;
 
@@ -436,7 +436,7 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _StatusIcon extends StatelessWidget {
-  const _StatusIcon({super.key, required this.status});
+  const _StatusIcon({required this.status});
 
   final MessageStatus status;
 
@@ -474,7 +474,6 @@ class _StatusIcon extends StatelessWidget {
 
 class _MessageInput extends StatelessWidget {
   const _MessageInput({
-    super.key,
     required this.controller,
     required this.onSend,
   });
@@ -538,7 +537,6 @@ class _MessageInput extends StatelessWidget {
 
 class _InfoRow extends StatelessWidget {
   const _InfoRow({
-    super.key,
     required this.label,
     required this.value,
     this.copyable = false,

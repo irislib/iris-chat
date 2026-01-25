@@ -21,7 +21,7 @@ void main() {
 
     test('formats 13-char pubkey with ellipsis', () {
       const pubkey = '1234567890123';
-      expect(formatPubkeyForDisplay(pubkey), '123456...90123');
+      expect(formatPubkeyForDisplay(pubkey), '123456...890123');
     });
 
     test('handles empty string', () {

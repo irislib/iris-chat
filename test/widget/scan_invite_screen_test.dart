@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/auth_provider.dart';
 import 'package:iris_chat/config/providers/invite_provider.dart';
@@ -43,7 +42,7 @@ void main() {
         authRepositoryProvider.overrideWithValue(mockAuthRepo),
         authStateProvider.overrideWith((ref) {
           final notifier = AuthNotifier(mockAuthRepo);
-          notifier.state = AuthState(
+          notifier.state = const AuthState(
             isAuthenticated: true,
             pubkeyHex: testPubkeyHex,
             isInitialized: true,

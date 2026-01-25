@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/auth_provider.dart';
 import 'package:iris_chat/config/providers/invite_provider.dart';
@@ -8,7 +7,6 @@ import 'package:iris_chat/features/invite/data/datasources/invite_local_datasour
 import 'package:iris_chat/features/invite/domain/models/invite.dart';
 import 'package:iris_chat/features/invite/presentation/screens/create_invite_screen.dart';
 import 'package:mocktail/mocktail.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../test_helpers.dart';
 
@@ -45,7 +43,7 @@ void main() {
         authRepositoryProvider.overrideWithValue(mockAuthRepo),
         authStateProvider.overrideWith((ref) {
           final notifier = AuthNotifier(mockAuthRepo);
-          notifier.state = AuthState(
+          notifier.state = const AuthState(
             isAuthenticated: true,
             pubkeyHex: testPubkeyHex,
             isInitialized: true,
@@ -196,7 +194,7 @@ void main() {
           authRepositoryProvider.overrideWithValue(mockAuthRepo),
           authStateProvider.overrideWith((ref) {
             final notifier = AuthNotifier(mockAuthRepo);
-            notifier.state = AuthState(
+            notifier.state = const AuthState(
               isAuthenticated: true,
               pubkeyHex: testPubkeyHex,
               isInitialized: true,

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/chat_provider.dart';
 import 'package:iris_chat/config/providers/nostr_provider.dart';
@@ -72,7 +71,7 @@ void main() {
         )).thenAnswer((_) async {});
 
     return createTestApp(
-      ChatScreen(sessionId: testSessionId),
+      const ChatScreen(sessionId: testSessionId),
       overrides: [
         sessionDatasourceProvider.overrideWithValue(mockSessionDatasource),
         messageDatasourceProvider.overrideWithValue(mockMessageDatasource),
