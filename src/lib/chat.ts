@@ -18,9 +18,14 @@ function getPrivkeyBytesOrNull(): Uint8Array | null {
 function getNip07Encrypt(): EncryptFunction | null {
   if (isNip07Login() && window.nostr?.nip44) {
     return async (plaintext: string, pubkey: string) => {
-      console.log('[chat] NIP-07 encrypt called for pubkey:', pubkey.slice(0, 8))
+      // Validate pubkey format (should be 64 hex chars)
+      const isValidPubkey = /^[0-9a-f]{64}$/i.test(pubkey)
+      console.log('[chat] NIP-07 encrypt called for pubkey:', pubkey, 'valid:', isValidPubkey, 'length:', pubkey.length)
+      if (!isValidPubkey) {
+        throw new Error(`Invalid pubkey format: expected 64 hex chars, got ${pubkey.length} chars`)
+      }
       try {
-        // NIP-07 nip44.encrypt takes (pubkey, plaintext)
+        // NIP-07 nip44.encrypt takes (peer pubkey, plaintext) per NIP-07 spec
         const result = await window.nostr!.nip44!.encrypt(pubkey, plaintext)
         console.log('[chat] NIP-07 encrypt success')
         return result
