@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 
@@ -8,8 +9,15 @@ import 'package:iris_chat/features/auth/domain/models/identity.dart';
 class MockSecureStorageService extends Mock implements SecureStorageService {}
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   late AuthRepositoryImpl repository;
   late MockSecureStorageService mockStorage;
+
+  const testPubkey =
+      'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+  const testPrivkey =
+      'f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2';
 
   setUp(() {
     mockStorage = MockSecureStorageService();
@@ -19,8 +27,6 @@ void main() {
   group('AuthRepositoryImpl', () {
     group('getCurrentIdentity', () {
       test('returns identity when public key exists', () async {
-        const testPubkey =
-            'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
         when(() => mockStorage.getPublicKey())
             .thenAnswer((_) async => testPubkey);
 
@@ -62,8 +68,6 @@ void main() {
 
     group('getPrivateKey', () {
       test('returns stored private key', () async {
-        const testPrivkey =
-            'f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2';
         when(() => mockStorage.getPrivateKey())
             .thenAnswer((_) async => testPrivkey);
 
@@ -92,29 +96,73 @@ void main() {
           throwsA(isA<InvalidKeyException>()),
         );
       });
-
-      // Note: Full login test requires ndr-ffi integration for pubkey derivation
     });
 
-    // Note: createIdentity test requires ndr-ffi integration
     group('createIdentity', () {
-      test('generates keypair and stores both keys', () async {
-        // This test will work once ndr-ffi is integrated
-        // For now, it's a placeholder that shows expected behavior
+      test('generates keypair via ndr-ffi and stores both keys', () async {
+        // Mock the MethodChannel for ndr-ffi
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('to.iris.chat/ndr_ffi'),
+          (MethodCall methodCall) async {
+            if (methodCall.method == 'generateKeypair') {
+              return {
+                'publicKeyHex': testPubkey,
+                'privateKeyHex': testPrivkey,
+              };
+            }
+            return null;
+          },
+        );
 
-        // when(() => NdrFfi.generateKeypair()).thenAnswer((_) async => FfiKeyPair(
-        //   publicKeyHex: testPubkey,
-        //   privateKeyHex: testPrivkey,
-        // ));
-        // when(() => mockStorage.savePrivateKey(any())).thenAnswer((_) async {});
-        // when(() => mockStorage.savePublicKey(any())).thenAnswer((_) async {});
+        when(() => mockStorage.savePrivateKey(any())).thenAnswer((_) async {});
+        when(() => mockStorage.savePublicKey(any())).thenAnswer((_) async {});
 
-        // final result = await repository.createIdentity();
+        final result = await repository.createIdentity();
 
-        // expect(result.pubkeyHex, testPubkey);
-        // verify(() => mockStorage.savePrivateKey(testPrivkey)).called(1);
-        // verify(() => mockStorage.savePublicKey(testPubkey)).called(1);
-      }, skip: 'Requires ndr-ffi integration');
+        expect(result.pubkeyHex, testPubkey);
+        verify(() => mockStorage.savePrivateKey(testPrivkey)).called(1);
+        verify(() => mockStorage.savePublicKey(testPubkey)).called(1);
+
+        // Clean up mock
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('to.iris.chat/ndr_ffi'),
+          null,
+        );
+      });
+    });
+
+    group('login with valid key', () {
+      test('derives public key and stores identity', () async {
+        // Mock the MethodChannel for ndr-ffi
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('to.iris.chat/ndr_ffi'),
+          (MethodCall methodCall) async {
+            if (methodCall.method == 'derivePublicKey') {
+              return testPubkey;
+            }
+            return null;
+          },
+        );
+
+        when(() => mockStorage.savePrivateKey(any())).thenAnswer((_) async {});
+        when(() => mockStorage.savePublicKey(any())).thenAnswer((_) async {});
+
+        final result = await repository.login(testPrivkey);
+
+        expect(result.pubkeyHex, testPubkey);
+        verify(() => mockStorage.savePrivateKey(testPrivkey)).called(1);
+        verify(() => mockStorage.savePublicKey(testPubkey)).called(1);
+
+        // Clean up mock
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('to.iris.chat/ndr_ffi'),
+          null,
+        );
+      });
     });
   });
 }
