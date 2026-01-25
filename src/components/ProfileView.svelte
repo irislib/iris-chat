@@ -1,7 +1,7 @@
 <script lang="ts">
   import { nip19 } from 'nostr-tools'
   import Avatar from './Avatar.svelte'
-  import Name from './Name.svelte'
+  import CopyButton from './CopyButton.svelte'
   import { createProfileStore, getProfileName } from '../lib/profile'
   import { getAnimalName } from '../lib/animalNames'
   import { chats } from '../lib/chat'
@@ -22,30 +22,11 @@
   let profile = $derived(profileStore ? $profileStore : undefined)
   let profileName = $derived(isValidPubkey ? getProfileName(profile) : undefined)
   let animalName = $derived(isValidPubkey ? getAnimalName(pubkey) : 'Unknown')
-  let displayName = $derived(profileName || animalName)
-
-  let npubCopied = $state(false)
 
   // Check if we have an existing chat with this user
   let hasExistingChat = $derived(isValidPubkey ? $chats.has(pubkey) : false)
 
-  function getNpub(): string {
-    if (!isValidPubkey) return ''
-    try {
-      return nip19.npubEncode(pubkey)
-    } catch (e) {
-      console.error('[ProfileView] getNpub error:', e)
-      return ''
-    }
-  }
-
-  async function copyNpub() {
-    const npub = getNpub()
-    if (!npub) return
-    await navigator.clipboard.writeText(npub)
-    npubCopied = true
-    setTimeout(() => npubCopied = false, 2000)
-  }
+  let npub = $derived(isValidPubkey ? nip19.npubEncode(pubkey) : '')
 
   function handleOpenChat() {
     onOpenChat(pubkey)
@@ -100,17 +81,8 @@
           {/if}
 
           <!-- npub Copy Button -->
-          <div class="mb-4">
-            <button
-              class="w-full btn-secondary flex items-center justify-center gap-2"
-              onclick={copyNpub}
-            >
-              <span class="i-carbon-copy"></span>
-              {npubCopied ? 'Copied!' : 'Copy npub'}
-            </button>
-            <p class="text-xs text-gray-500 mt-2 font-mono break-all">
-              {getNpub()}
-            </p>
+          <div class="mb-4 flex">
+            <CopyButton text={npub} maxLength={48} />
           </div>
 
           <!-- Chat Button -->

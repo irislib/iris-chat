@@ -561,7 +561,8 @@ test.describe('iris chat', () => {
         // Should navigate to profile page
         await expect(page1.getByRole('heading', { name: 'Profile' })).toBeVisible()
         await expect(page1.getByRole('heading', { name: 'Bob' })).toBeVisible()
-        await expect(page1.getByRole('button', { name: 'Copy npub' })).toBeVisible()
+        // CopyButton shows truncated npub string
+        await expect(page1.locator('button').filter({ hasText: 'npub1' })).toBeVisible()
         await expect(page1.getByRole('button', { name: 'Open Chat' })).toBeVisible()
 
         // URL should have profile hash
