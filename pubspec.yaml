@@ -67,6 +67,43 @@ dev_dependencies:
   mocktail: ^1.0.4
   bloc_test: ^9.1.7
 
+  # App Icons & Splash
+  flutter_launcher_icons: ^0.14.2
+  flutter_native_splash: ^2.4.3
+
+# App Icon Configuration
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/app_icon.png"
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/icons/app_icon_adaptive.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true
+  web:
+    generate: false
+  windows:
+    generate: false
+  macos:
+    generate: false
+
+# Splash Screen Configuration
+flutter_native_splash:
+  color: "#000000"
+  image: "assets/icons/app_icon.png"
+  color_dark: "#000000"
+  image_dark: "assets/icons/app_icon.png"
+  android_12:
+    color: "#000000"
+    icon_background_color: "#000000"
+    image: "assets/icons/app_icon.png"
+    color_dark: "#000000"
+    icon_background_color_dark: "#000000"
+    image_dark: "assets/icons/app_icon.png"
+  ios: true
+  android: true
+  web: false
+
 flutter:
   uses-material-design: true
 
