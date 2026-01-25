@@ -74,7 +74,6 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final sessions = ref.watch(sessionStateProvider.select((s) => s.sessions));
     final hasChats = sessions.isNotEmpty;
     final inviteState = ref.watch(inviteStateProvider);

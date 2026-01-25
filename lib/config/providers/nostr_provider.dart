@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/nostr_service.dart';
+import '../../core/services/profile_service.dart';
 import '../../features/chat/data/datasources/message_subscription.dart';
 import 'chat_provider.dart';
 import 'invite_provider.dart';
@@ -63,4 +64,12 @@ final nostrConnectionStatusProvider = StreamProvider<Map<String, bool>>((ref) {
 final connectedRelayCountProvider = Provider<int>((ref) {
   final nostrService = ref.watch(nostrServiceProvider);
   return nostrService.connectedCount;
+});
+
+/// Provider for profile service.
+final profileServiceProvider = Provider<ProfileService>((ref) {
+  final nostrService = ref.watch(nostrServiceProvider);
+  final service = ProfileService(nostrService);
+  ref.onDispose(service.dispose);
+  return service;
 });

@@ -105,18 +105,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(session.displayName),
-            Text(
-              'Encrypted',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
+        title: Text(session.displayName),
         actions: [
           IconButton(
             icon: const Icon(Icons.info_outline),

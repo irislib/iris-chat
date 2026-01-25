@@ -7,6 +7,7 @@ import '../../core/ffi/ndr_ffi.dart';
 import '../../core/services/database_service.dart';
 import '../../core/services/error_service.dart';
 import '../../core/services/nostr_service.dart';
+import '../../core/services/profile_service.dart';
 import '../../features/chat/data/datasources/message_local_datasource.dart';
 import '../../features/chat/data/datasources/session_local_datasource.dart';
 import '../../features/chat/data/repositories/chat_repository_impl.dart';
@@ -40,9 +41,11 @@ class ChatState with _$ChatState {
 
 /// Notifier for session state.
 class SessionNotifier extends StateNotifier<SessionState> {
-  SessionNotifier(this._sessionDatasource) : super(const SessionState());
+  SessionNotifier(this._sessionDatasource, this._profileService)
+      : super(const SessionState());
 
   final SessionLocalDatasource _sessionDatasource;
+  final ProfileService _profileService;
 
   /// Load all sessions from storage.
   Future<void> loadSessions() async {
@@ -50,9 +53,53 @@ class SessionNotifier extends StateNotifier<SessionState> {
     try {
       final sessions = await _sessionDatasource.getAllSessions();
       state = state.copyWith(sessions: sessions, isLoading: false);
+
+      // Fetch profiles for all recipients without names
+      _fetchMissingProfiles(sessions);
     } catch (e, st) {
       final appError = AppError.from(e, st);
       state = state.copyWith(isLoading: false, error: appError.message);
+    }
+  }
+
+  /// Fetch profiles for sessions without recipient names.
+  Future<void> _fetchMissingProfiles(List<ChatSession> sessions) async {
+    final pubkeysToFetch = sessions
+        .where((s) => s.recipientName == null || s.recipientName!.isEmpty)
+        .map((s) => s.recipientPubkeyHex)
+        .toSet()
+        .toList();
+
+    if (pubkeysToFetch.isEmpty) return;
+
+    // Fetch profiles in background
+    await _profileService.fetchProfiles(pubkeysToFetch);
+
+    // Update sessions with profile names
+    for (final pubkey in pubkeysToFetch) {
+      final profile = await _profileService.getProfile(pubkey);
+      if (profile?.bestName != null) {
+        await updateRecipientName(pubkey, profile!.bestName!);
+      }
+    }
+  }
+
+  /// Update recipient name for sessions with a given pubkey.
+  Future<void> updateRecipientName(String pubkey, String name) async {
+    final updatedSessions = <ChatSession>[];
+
+    for (final session in state.sessions) {
+      if (session.recipientPubkeyHex == pubkey && session.recipientName != name) {
+        final updated = session.copyWith(recipientName: name);
+        await _sessionDatasource.saveSession(updated);
+        updatedSessions.add(updated);
+      } else {
+        updatedSessions.add(session);
+      }
+    }
+
+    if (updatedSessions != state.sessions) {
+      state = state.copyWith(sessions: updatedSessions);
     }
   }
 
@@ -602,7 +649,8 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
 final sessionStateProvider =
     StateNotifierProvider<SessionNotifier, SessionState>((ref) {
   final datasource = ref.watch(sessionDatasourceProvider);
-  return SessionNotifier(datasource);
+  final profileService = ref.watch(profileServiceProvider);
+  return SessionNotifier(datasource, profileService);
 });
 
 final chatStateProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {

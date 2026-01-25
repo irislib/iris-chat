@@ -1,6 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-import '../../../../shared/utils/formatters.dart';
+import '../../../../shared/utils/animal_names.dart';
 
 part 'session.freezed.dart';
 part 'session.g.dart';
@@ -46,8 +46,8 @@ class ChatSession with _$ChatSession {
       _$ChatSessionFromJson(json);
 
   /// Get a display name for the recipient.
-  String get displayName =>
-      recipientName ?? formatPubkeyForDisplay(recipientPubkeyHex);
+  /// Falls back to animal name based on pubkey if no custom name set.
+  String get displayName => getDisplayName(recipientPubkeyHex, recipientName);
 }
 
 /// Session state for UI purposes.
