@@ -143,7 +143,7 @@
     {/if}
 
     <div class="max-w-[85%] relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
-      <div class="px-3 py-1.5 text-sm break-words overflow-hidden {getBubbleClass(message.isMine, styleFirst, styleLast)}">{#each parseMessageWithLinks(message.content) as part}{#if part.type === 'link'}<a href={part.content} target="_blank" rel="noopener noreferrer" class="underline hover:opacity-80 break-all {message.isMine ? 'text-white' : 'text-primary'}">{part.content}</a>{:else}{part.content}{/if}{/each}</div>
+      <div class="px-3 py-1.5 text-sm break-all overflow-hidden {getBubbleClass(message.isMine, styleFirst, styleLast)}">{#each parseMessageWithLinks(message.content) as part}{#if part.type === 'link'}<a href={part.content} target="_blank" rel="noopener noreferrer" class="underline hover:opacity-80 break-all {message.isMine ? 'text-white' : 'text-primary'}">{part.content}</a>{:else}{part.content}{/if}{/each}</div>
 
       <!-- Reactions display - positioned to overlap bottom of message -->
       {#if message.reactions && Object.keys(message.reactions).length > 0}
