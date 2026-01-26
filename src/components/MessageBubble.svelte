@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { marked } from 'marked'
+  import DOMPurify from 'dompurify'
   import type { ChatMessage } from '../lib/chat'
 
   interface Props {
@@ -23,6 +25,29 @@
   let isHovered = $state(false)
 
   const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
+
+  // Configure marked for GFM (GitHub Flavored Markdown)
+  marked.setOptions({
+    gfm: true,
+    breaks: true, // Convert \n to <br>
+  })
+
+  // Render markdown content safely
+  let htmlContent = $derived.by(() => {
+    const raw = marked.parse(message.content, { async: false }) as string
+    return DOMPurify.sanitize(raw, {
+      ADD_ATTR: ['target'], // Allow target="_blank" on links
+    })
+  })
+
+  // Check if content has any markdown formatting
+  let hasMarkdown = $derived.by(() => {
+    const content = message.content
+    // Check for common markdown patterns
+    return /[*_`#\[\]!\-]/.test(content) || 
+           /```/.test(content) ||
+           /\n/.test(content)
+  })
 
   async function handleReact(emoji: string) {
     showEmojiPicker = false
@@ -74,32 +99,6 @@
       ? `${base} rounded-l-2xl rounded-r-sm`
       : `${base} rounded-r-2xl rounded-l-sm`
   }
-
-  // Simple URL regex
-  const urlRegex = /(https?:\/\/[^\s<]+[^\s<.,;:!?"'\])>])/g
-
-  function parseMessageWithLinks(text: string): Array<{ type: 'text' | 'link', content: string }> {
-    const parts: Array<{ type: 'text' | 'link', content: string }> = []
-    let lastIndex = 0
-    let match
-
-    while ((match = urlRegex.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push({ type: 'text', content: text.slice(lastIndex, match.index) })
-      }
-      parts.push({ type: 'link', content: match[0] })
-      lastIndex = urlRegex.lastIndex
-    }
-
-    if (lastIndex < text.length) {
-      parts.push({ type: 'text', content: text.slice(lastIndex) })
-    }
-
-    // Reset regex state
-    urlRegex.lastIndex = 0
-
-    return parts.length > 0 ? parts : [{ type: 'text', content: text }]
-  }
 </script>
 
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'}">
@@ -143,7 +142,10 @@
     {/if}
 
     <div class="max-w-[85%] relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
-      <div class="px-3 py-1.5 text-sm break-all overflow-hidden {getBubbleClass(message.isMine, styleFirst, styleLast)}">{#each parseMessageWithLinks(message.content) as part}{#if part.type === 'link'}<a href={part.content} target="_blank" rel="noopener noreferrer" class="underline hover:opacity-80 break-all {message.isMine ? 'text-white' : 'text-primary'}">{part.content}</a>{:else}{part.content}{/if}{/each}</div>
+      <div class="px-3 py-1.5 text-sm break-words overflow-hidden message-content {getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''}">
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
+        {@html htmlContent}
+      </div>
 
       <!-- Reactions display - positioned to overlap bottom of message -->
       {#if message.reactions && Object.keys(message.reactions).length > 0}
@@ -195,3 +197,105 @@
     aria-label="Close picker"
   ></button>
 {/if}
+
+<style>
+  /* Markdown content styling */
+  .message-content :global(p) {
+    margin: 0;
+  }
+  .message-content :global(p + p) {
+    margin-top: 0.5em;
+  }
+  .message-content :global(a) {
+    text-decoration: underline;
+    word-break: break-all;
+  }
+  .message-content :global(a:hover) {
+    opacity: 0.8;
+  }
+  .message-content :global(code) {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0.1em 0.3em;
+    border-radius: 0.25em;
+    font-size: 0.9em;
+    font-family: ui-monospace, monospace;
+  }
+  .message-content :global(pre) {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.5em;
+    border-radius: 0.5em;
+    overflow-x: auto;
+    margin: 0.5em 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .message-content :global(pre code) {
+    background: none;
+    padding: 0;
+  }
+  .message-content :global(blockquote) {
+    border-left: 3px solid currentColor;
+    margin: 0.5em 0;
+    padding-left: 0.75em;
+    opacity: 0.85;
+  }
+  .message-content :global(ul),
+  .message-content :global(ol) {
+    margin: 0.25em 0;
+    padding-left: 1.5em;
+  }
+  .message-content :global(li) {
+    margin: 0.1em 0;
+  }
+  .message-content :global(strong) {
+    font-weight: 600;
+  }
+  .message-content :global(em) {
+    font-style: italic;
+  }
+  .message-content :global(h1),
+  .message-content :global(h2),
+  .message-content :global(h3),
+  .message-content :global(h4),
+  .message-content :global(h5),
+  .message-content :global(h6) {
+    font-weight: 600;
+    margin: 0.5em 0 0.25em;
+  }
+  .message-content :global(h1) { font-size: 1.25em; }
+  .message-content :global(h2) { font-size: 1.15em; }
+  .message-content :global(h3) { font-size: 1.1em; }
+  .message-content :global(hr) {
+    border: none;
+    border-top: 1px solid currentColor;
+    opacity: 0.3;
+    margin: 0.5em 0;
+  }
+  .message-content :global(img) {
+    max-width: 100%;
+    border-radius: 0.5em;
+  }
+  .message-content :global(table) {
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    font-size: 0.9em;
+  }
+  .message-content :global(th),
+  .message-content :global(td) {
+    border: 1px solid currentColor;
+    padding: 0.25em 0.5em;
+    opacity: 0.7;
+  }
+  .message-content :global(th) {
+    opacity: 1;
+    font-weight: 600;
+  }
+  /* Link colors - default for received messages */
+  .message-content :global(a) {
+    color: #60a5fa; /* blue-400 */
+  }
+  /* Inverted for sent messages */
+  .message-content.prose-invert :global(a) {
+    color: white;
+  }
+</style>
