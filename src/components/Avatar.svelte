@@ -10,8 +10,8 @@
 
   let { pubkey, size = 32 }: Props = $props()
 
-  let profileStore = $derived(pubkey ? createProfileStore(pubkey) : null)
-  let profile = $derived(profileStore ? $profileStore : null)
+  let profileStore = $derived(pubkey ? createProfileStore(pubkey) : undefined)
+  let profile = $derived(profileStore ? $profileStore : undefined)
   let name = $derived(getProfileName(profile) || getAnimalName(pubkey))
 
   let imgError = $state(false)

@@ -20,6 +20,7 @@
     "@tsconfig/svelte": "^5.0.6",
     "@types/dompurify": "^3.2.0",
     "@types/node": "^24.10.1",
+    "@types/qrcode": "^1.5.6",
     "@unocss/preset-icons": "^66.5.10",
     "@unocss/preset-uno": "^66.5.10",
     "@unocss/transformer-directives": "^66.5.10",

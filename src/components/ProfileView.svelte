@@ -18,8 +18,8 @@
   let isValidPubkey = $derived(typeof pubkey === 'string' && /^[0-9a-f]{64}$/i.test(pubkey))
 
   // Only create derived values if pubkey is valid
-  let profileStore = $derived(isValidPubkey ? createProfileStore(pubkey) : null)
-  let profile = $derived(profileStore ? $profileStore : undefined)
+  let profileStore = $derived(isValidPubkey ? createProfileStore(pubkey) : undefined)
+  let profile = $derived(profileStore ? $profileStore ?? undefined : undefined)
   let profileName = $derived(isValidPubkey ? getProfileName(profile) : undefined)
   let animalName = $derived(isValidPubkey ? getAnimalName(pubkey) : 'Unknown')
 

@@ -229,15 +229,6 @@ export function isNip07Login(): boolean {
   return currentIdentity?.isNip07 ?? false
 }
 
-declare global {
-  interface Window {
-    nostr?: {
-      getPublicKey(): Promise<string>
-      signEvent(event: any): Promise<any>
-      nip44?: {
-        encrypt(pubkey: string, plaintext: string): Promise<string>
-        decrypt(pubkey: string, ciphertext: string): Promise<string>
-      }
-    }
-  }
-}
+// Window.nostr type is provided by nostr-tools/nip07
+// We just need to declare it exists on window for TypeScript
+declare const window: Window & { nostr?: import('nostr-tools/nip07').WindowNostr }

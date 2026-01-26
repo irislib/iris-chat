@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store'
 import { Invite, Session, type Rumor } from 'nostr-double-ratchet'
+export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { VerifiedEvent, Filter } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
@@ -749,6 +750,7 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
   if (messageIndex !== -1) {
     const message = currentSession.messages[messageIndex]
     const myPubkey = getPubkey()
+    if (!myPubkey) return
 
     // Create updated reactions - first remove user from any existing reactions
     const reactions: Record<string, string[]> = {}

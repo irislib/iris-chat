@@ -75,7 +75,11 @@
     mobileView = 'main'
   }
 
-  onMount(async () => {
+  onMount(() => {
+    let cleanup: (() => void) | undefined
+
+    // Run async initialization
+    ;(async () => {
     // Prevent multiple tabs - encryption state can't sync between them
     // Use sessionStorage to persist tab identity across hot reloads
     let tabId = sessionStorage.getItem('iris-tab-id')
@@ -213,12 +217,15 @@
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
-    return () => {
+    cleanup = () => {
       window.removeEventListener('popstate', handlePopState)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
       navigator.serviceWorker?.removeEventListener('message', handleIsOpenMessage)
     }
+    })()
+
+    return () => cleanup?.()
   })
 
   async function handleLogin() {

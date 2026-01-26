@@ -93,7 +93,7 @@
             {copied ? 'Copied' : 'Copy Link'}
           </button>
 
-          {#if navigator.share}
+          {#if typeof navigator !== 'undefined' && 'share' in navigator}
             <button
               class="btn-secondary w-full flex items-center justify-center gap-2"
               onclick={handleShare}

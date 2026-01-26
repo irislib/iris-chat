@@ -8,8 +8,8 @@
 
   let { pubkey }: Props = $props()
 
-  let profileStore = $derived(pubkey ? createProfileStore(pubkey) : null)
-  let profile = $derived(profileStore ? $profileStore : null)
+  let profileStore = $derived(pubkey ? createProfileStore(pubkey) : undefined)
+  let profile = $derived(profileStore ? $profileStore : undefined)
   let profileName = $derived(getProfileName(profile))
   let animalName = $derived(getAnimalName(pubkey))
 </script>
