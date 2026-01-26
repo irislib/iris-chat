@@ -112,7 +112,7 @@
   {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="flex items-center gap-1 {message.isMine ? 'justify-end' : ''}"
+    class="flex items-center gap-1 min-w-0 {message.isMine ? 'justify-end' : ''}"
     onmouseenter={() => isHovered = true}
     onmouseleave={() => { if (!showEmojiPicker) isHovered = false }}
   >
@@ -141,8 +141,8 @@
       </div>
     {/if}
 
-    <div class="max-w-[85%] relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
-      <div class="px-3 py-1.5 text-sm break-words overflow-hidden message-content {getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''}">
+    <div class="max-w-[85%] min-w-0 relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
+      <div class="px-3 py-1.5 text-sm overflow-hidden message-content {getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''}">
         <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
         {@html htmlContent}
       </div>
@@ -199,7 +199,19 @@
 {/if}
 
 <style>
-  /* Markdown content styling */
+  /* Markdown content styling - prevent overflow */
+  .message-content {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+    max-width: 100%;
+  }
+  .message-content :global(*) {
+    max-width: 100%;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
   .message-content :global(p) {
     margin: 0;
   }
@@ -219,6 +231,7 @@
     border-radius: 0.25em;
     font-size: 0.9em;
     font-family: ui-monospace, monospace;
+    word-break: break-all;
   }
   .message-content :global(pre) {
     background: rgba(0, 0, 0, 0.3);
@@ -227,11 +240,12 @@
     overflow-x: auto;
     margin: 0.5em 0;
     white-space: pre-wrap;
-    word-break: break-word;
+    word-break: break-all;
   }
   .message-content :global(pre code) {
     background: none;
     padding: 0;
+    word-break: break-all;
   }
   .message-content :global(blockquote) {
     border-left: 3px solid currentColor;
