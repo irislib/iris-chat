@@ -6,6 +6,7 @@
   import SettingsView from './components/SettingsView.svelte'
   import ProfileView from './components/ProfileView.svelte'
   import NotificationPrompt from './components/NotificationPrompt.svelte'
+  import InstallPrompt from './components/InstallPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
   import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback } from './lib/chat'
   import type { ChatSession } from './lib/chat'
@@ -402,4 +403,7 @@
       </div>
     </div>
   {/if}
+
+  <!-- PWA Install Prompt -->
+  <InstallPrompt />
 </main>

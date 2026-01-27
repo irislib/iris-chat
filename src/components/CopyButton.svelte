@@ -1,10 +1,11 @@
 <script lang="ts">
   interface Props {
     text: string
+    label?: string
     maxLength?: number
   }
 
-  let { text, maxLength = 32 }: Props = $props()
+  let { text, label, maxLength = 32 }: Props = $props()
 
   let copied = $state(false)
 
@@ -26,15 +27,18 @@
 </script>
 
 <button
-  class="btn-secondary flex-1 min-w-0 flex items-center justify-center gap-2 text-sm py-2 font-mono overflow-hidden"
+  class="btn-secondary flex-1 min-w-0 flex items-center justify-center gap-2 text-sm py-2 {label ? '' : 'font-mono'} overflow-hidden relative"
   onclick={handleCopy}
   title={text}
 >
-  {#if copied}
+  <!-- Copied state (overlays when active) -->
+  <span class="absolute inset-0 flex items-center justify-center gap-2 transition-opacity {copied ? 'opacity-100' : 'opacity-0 pointer-events-none'}">
     <span class="i-carbon-checkmark flex-shrink-0"></span>
     <span>Copied</span>
-  {:else}
+  </span>
+  <!-- Default state (maintains button width) -->
+  <span class="flex items-center justify-center gap-2 transition-opacity {copied ? 'opacity-0' : 'opacity-100'}">
     <span class="i-carbon-copy flex-shrink-0"></span>
-    <span class="truncate">{truncateMiddle(text, maxLength)}</span>
-  {/if}
+    <span class="truncate">{label || truncateMiddle(text, maxLength)}</span>
+  </span>
 </button>

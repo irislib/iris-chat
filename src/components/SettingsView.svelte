@@ -5,6 +5,7 @@
   import { nip19 } from 'nostr-tools'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
+  import CopyButton from './CopyButton.svelte'
 
   interface Props {
     onBack: () => void
@@ -42,24 +43,17 @@
   let subscriptions = $state<Record<string, NotificationSubscription>>({})
   let loadingSubscriptions = $state(false)
   let showPrivateKey = $state(false)
-  let keyCopied = $state(false)
 
-  // Get nsec for private key copy
-  function getNsec(): string | null {
+  // Get npub for public key
+  const npub = $derived($identity?.pubkey ? nip19.npubEncode($identity.pubkey) : null)
+
+  // Get nsec for secret key
+  const nsec = $derived.by(() => {
     const hex = getPrivkeyHex()
     if (!hex) return null
     const bytes = new Uint8Array(hex.match(/.{2}/g)!.map(b => parseInt(b, 16)))
     return nip19.nsecEncode(bytes)
-  }
-
-  async function copyPrivateKey() {
-    const nsec = getNsec()
-    if (nsec) {
-      await navigator.clipboard.writeText(nsec)
-      keyCopied = true
-      setTimeout(() => keyCopied = false, 2000)
-    }
-  }
+  })
 
   // Check status on mount
   $effect(() => {
@@ -263,16 +257,24 @@
                 <Name pubkey={$identity.pubkey} />
               </h2>
               <p class="text-sm text-gray-400">
-                {$identity.isNip07 ? 'Logged in with extension' : 'Logged in with private key'}
+                {$identity.isNip07 ? 'Logged in with extension' : 'Logged in with secret key'}
               </p>
             </div>
           </div>
 
-          <!-- Private Key Section (only for non-NIP07) -->
-          {#if !$identity.isNip07}
+          <!-- Public Key Section -->
+          <div class="mt-4 pt-4 border-t border-surface-lighter">
+            <span class="text-sm text-gray-400 block mb-2">Public Key</span>
+            {#if npub}
+              <CopyButton text={npub} maxLength={24} />
+            {/if}
+          </div>
+
+          <!-- Secret Key Section (only for non-NIP07) -->
+          {#if !$identity.isNip07 && nsec}
             <div class="mt-4 pt-4 border-t border-surface-lighter">
               <div class="flex items-center justify-between mb-2">
-                <span class="text-sm text-gray-400">Private Key</span>
+                <span class="text-sm text-gray-400">Secret Key</span>
                 <button
                   class="text-xs text-primary hover:underline"
                   onclick={() => showPrivateKey = !showPrivateKey}
@@ -282,18 +284,12 @@
               </div>
               {#if showPrivateKey}
                 <div class="bg-surface-light rounded p-2 mb-2">
-                  <code class="text-xs text-gray-300 break-all">{getNsec()}</code>
+                  <code class="text-xs text-gray-300 break-all">{nsec}</code>
                 </div>
               {/if}
-              <button
-                class="btn-secondary text-sm w-full flex items-center justify-center gap-2"
-                onclick={copyPrivateKey}
-              >
-                <span class="i-carbon-copy"></span>
-                {keyCopied ? 'Copied' : 'Copy Private Key'}
-              </button>
+              <CopyButton text={nsec} label="Copy Secret Key" />
               <p class="text-xs text-red-400 mt-2">
-                Never share your private key. Anyone with it can access your account.
+                Never share your secret key. Anyone with it can access your account.
               </p>
             </div>
           {/if}
