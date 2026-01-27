@@ -354,20 +354,11 @@ self.addEventListener('message', (event) => {
 
   if (event.data?.type === 'CLEAR_NOTIFICATION' && event.data?.chatId) {
     const tag = `dm-${event.data.chatId}`
-    console.log('[sw] clearing notifications with tag:', tag)
-    // Clear notifications for this chat - try both with tag and without
+    // Clear notifications for this chat
     self.registration.getNotifications({ tag })
-      .then(notifications => {
-        console.log('[sw] found notifications with tag:', notifications.length)
-        notifications.forEach(n => n.close())
-      })
+      .then(notifications => notifications.forEach(n => n.close()))
     // Also try without tag filter as fallback
     self.registration.getNotifications()
-      .then(notifications => {
-        console.log('[sw] all notifications:', notifications.length, notifications.map(n => n.tag))
-        notifications
-          .filter(n => n.tag === tag)
-          .forEach(n => n.close())
-      })
+      .then(notifications => notifications.filter(n => n.tag === tag).forEach(n => n.close()))
   }
 })

@@ -223,16 +223,10 @@ function getSessionAuthors(): string[] {
   const chatMap = get(chats)
   const authors: string[] = []
 
-  console.log('[notifications] getSessionAuthors: checking', chatMap.size, 'chats')
-
-  for (const [chatId, chat] of chatMap) {
+  for (const [, chat] of chatMap) {
     if (chat.session) {
       const state = chat.session.state
-      console.log('[notifications] chat', chatId, 'session state:', state ? 'exists' : 'null')
       if (state) {
-        console.log('[notifications] chat', chatId, 'theirCurrentNostrPublicKey:', state.theirCurrentNostrPublicKey)
-        console.log('[notifications] chat', chatId, 'theirNextNostrPublicKey:', state.theirNextNostrPublicKey)
-        // Get the ephemeral pubkeys from the double ratchet session
         if (state.theirCurrentNostrPublicKey) {
           authors.push(state.theirCurrentNostrPublicKey)
         }
@@ -243,23 +237,17 @@ function getSessionAuthors(): string[] {
     }
   }
 
-  const uniqueAuthors = [...new Set(authors)]
-  console.log('[notifications] getSessionAuthors result:', uniqueAuthors)
-  return uniqueAuthors
+  return [...new Set(authors)]
 }
 
 // Get invite ephemeral pubkeys for notification subscription
 function getInviteRecipients(): string[] {
-  const invitePubkeys = getInviteEphemeralPubkeys()
-  console.log('[notifications] getInviteRecipients:', invitePubkeys)
-  return invitePubkeys
+  return getInviteEphemeralPubkeys()
 }
 
 // Subscribe to DM notifications
 export async function subscribeToDMNotifications(): Promise<{ success: boolean; error?: string }> {
   try {
-    console.log('[notifications] subscribeToDMNotifications called')
-
     // Check permission
     if (Notification.permission !== 'granted') {
       const result = await Notification.requestPermission()
@@ -267,14 +255,12 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
         return { success: false, error: 'Notification permission denied' }
       }
     }
-    console.log('[notifications] permission granted')
 
     // Get push subscription
     const pushSubscription = await getOrCreatePushSubscription()
     if (!pushSubscription) {
       return { success: false, error: 'Failed to create push subscription' }
     }
-    console.log('[notifications] push subscription:', pushSubscription.endpoint)
 
     const currentIdentity = get(identity)
     if (!currentIdentity) {
@@ -283,15 +269,12 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
 
     // Get session authors for DM notifications
     const sessionAuthors = getSessionAuthors()
-    console.log('[notifications] session authors:', sessionAuthors)
 
     // Get invite recipients for invite response notifications
     const inviteRecipients = getInviteRecipients()
-    console.log('[notifications] invite recipients:', inviteRecipients)
 
     if (sessionAuthors.length === 0 && inviteRecipients.length === 0) {
       // No active sessions or invites, but we can still enable notifications for future
-      console.log('[notifications] no session authors or invite recipients, skipping server registration')
       notificationSettings.setEnabled(true)
       return { success: true }
     }
@@ -308,7 +291,6 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
 
     // Get current subscriptions
     const currentSubscriptions = await api.getNotificationSubscriptions()
-    console.log('[notifications] current server subscriptions:', currentSubscriptions)
 
     // Handle DM message subscription
     if (sessionAuthors.length > 0) {
@@ -329,26 +311,19 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
       if (existingMessageSub) {
         const [id, sub] = existingMessageSub
         const existingAuthors = sub.filter.authors || []
-        console.log('[notifications] found existing message subscription:', id, 'authors:', existingAuthors)
 
         // Update if authors changed
         if (!arraysEqual(existingAuthors, sessionAuthors)) {
-          console.log('[notifications] message authors changed, updating subscription')
           await api.updateNotificationSubscription(id, {
             filter: messageFilter,
             web_push_subscriptions: [webPushData],
             webhooks: [],
             subscriber: sub.subscriber
           })
-          console.log('[notifications] message subscription updated')
-        } else {
-          console.log('[notifications] message authors unchanged, skipping update')
         }
       } else {
         // Create new subscription
-        console.log('[notifications] creating new message subscription with filter:', messageFilter)
-        const result = await api.registerPushNotifications([webPushData], messageFilter)
-        console.log('[notifications] message subscription created:', result)
+        await api.registerPushNotifications([webPushData], messageFilter)
       }
 
       lastSyncedAuthors = sessionAuthors
@@ -373,26 +348,19 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
       if (existingInviteSub) {
         const [id, sub] = existingInviteSub
         const existingRecipients = sub.filter['#p'] || []
-        console.log('[notifications] found existing invite subscription:', id, 'recipients:', existingRecipients)
 
         // Update if recipients changed
         if (!arraysEqual(existingRecipients, inviteRecipients)) {
-          console.log('[notifications] invite recipients changed, updating subscription')
           await api.updateNotificationSubscription(id, {
             filter: inviteFilter,
             web_push_subscriptions: [webPushData],
             webhooks: [],
             subscriber: sub.subscriber
           })
-          console.log('[notifications] invite subscription updated')
-        } else {
-          console.log('[notifications] invite recipients unchanged, skipping update')
         }
       } else {
         // Create new subscription
-        console.log('[notifications] creating new invite subscription with filter:', inviteFilter)
-        const result = await api.registerPushNotifications([webPushData], inviteFilter)
-        console.log('[notifications] invite subscription created:', result)
+        await api.registerPushNotifications([webPushData], inviteFilter)
       }
 
       lastSyncedInviteRecipients = inviteRecipients
@@ -408,18 +376,14 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
 
       if (existingInviteSub) {
         const [id] = existingInviteSub
-        console.log('[notifications] removing invite subscription:', id)
         try {
           await api.deleteNotificationSubscription(id)
-        } catch (err) {
-          console.error('[notifications] failed to delete invite subscription:', err)
+        } catch {
+          // Ignore deletion errors
         }
       }
       lastSyncedInviteRecipients = []
     }
-
-    console.log('[notifications] cached authors:', lastSyncedAuthors)
-    console.log('[notifications] cached invite recipients:', lastSyncedInviteRecipients)
 
     notificationSettings.setEnabled(true)
     return { success: true }
@@ -488,29 +452,20 @@ function arraysEqual(a: string[], b: string[]): boolean {
 // Update subscription when sessions or invites change
 export async function updateDMSubscription(): Promise<void> {
   const settings = get(notificationSettings)
-  if (!settings.enabled) {
-    console.log('[notifications] updateDMSubscription: notifications disabled, skipping')
-    return
-  }
+  if (!settings.enabled) return
 
   // Check if authors have changed
   const currentAuthors = getSessionAuthors()
   const currentInviteRecipients = getInviteRecipients()
-  console.log('[notifications] updateDMSubscription: current authors:', currentAuthors, 'cached:', lastSyncedAuthors)
-  console.log('[notifications] updateDMSubscription: current invite recipients:', currentInviteRecipients, 'cached:', lastSyncedInviteRecipients)
 
   const authorsChanged = !arraysEqual(currentAuthors, lastSyncedAuthors)
   const inviteRecipientsChanged = !arraysEqual(currentInviteRecipients, lastSyncedInviteRecipients)
 
-  if (!authorsChanged && !inviteRecipientsChanged) {
-    console.log('[notifications] updateDMSubscription: no change, skipping')
-    return // No change, skip API call
-  }
+  if (!authorsChanged && !inviteRecipientsChanged) return
 
-  console.log('[notifications] updateDMSubscription: subscription data changed, syncing')
   try {
     await subscribeToDMNotifications()
-  } catch (error) {
-    console.error('Failed to update DM subscription:', error)
+  } catch {
+    // Ignore subscription errors
   }
 }
