@@ -147,10 +147,6 @@
           </div>
         </div>
 
-        <p class="text-gray-500 text-xs mt-6 max-w-xs">
-          Push notifications require the app to be installed on your home screen
-        </p>
-
       {:else if isAndroid}
         <!-- Android Instructions -->
         {#if deferredPrompt}
