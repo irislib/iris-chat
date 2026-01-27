@@ -415,7 +415,7 @@
             aria-label="Toggle connectivity indicator"
           >
             <span
-              class="absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform {showConnectivity ? 'translate-x-5' : 'translate-x-0.5'}"
+              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {showConnectivity ? 'translate-x-5' : ''}"
             ></span>
           </button>
         </div>
