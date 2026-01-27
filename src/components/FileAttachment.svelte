@@ -8,6 +8,7 @@
     isAudioFile,
     getMimeType,
   } from '../lib/hashtree'
+  import { openMediaModal } from '../lib/mediaModal'
 
   interface Props {
     nhash: string
@@ -82,9 +83,11 @@
   }
 
   function handleImageClick() {
-    if (mediaUrl) {
-      window.open(mediaUrl, '_blank')
-    }
+    openMediaModal(mediaUrl, filename, 'image')
+  }
+
+  function handleVideoClick() {
+    openMediaModal(mediaUrl, filename, 'video')
   }
 </script>
 
@@ -106,6 +109,15 @@
       <span class="i-carbon-circle-dash animate-spin"></span>
       Loading {filename}...
     </div>
+  {:else if error && isImage}
+    <!-- Image error - click to open modal with error -->
+    <button
+      class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors text-sm text-red-400"
+      onclick={handleImageClick}
+    >
+      <span class="i-carbon-warning-alt"></span>
+      <span class="truncate max-w-48">{filename} - failed to load</span>
+    </button>
   {:else if error}
     <button
       class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors text-sm text-red-400"

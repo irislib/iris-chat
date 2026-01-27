@@ -2,9 +2,11 @@
   import { onDestroy } from 'svelte'
   import { sendMessage, sendReaction, deleteChat, deleteMessage, type ChatSession, currentChat } from '../lib/chat'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
+  import { mediaModal, closeMediaModal } from '../lib/mediaModal'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
+  import MediaModal from './MediaModal.svelte'
 
   interface Props {
     chat: ChatSession
@@ -375,3 +377,13 @@
     </div>
   </div>
 </div>
+
+<!-- Media Modal -->
+{#if $mediaModal.open}
+  <MediaModal
+    src={$mediaModal.src}
+    filename={$mediaModal.filename}
+    type={$mediaModal.type}
+    onclose={closeMediaModal}
+  />
+{/if}

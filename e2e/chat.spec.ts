@@ -428,6 +428,175 @@ test.describe('iris chat', () => {
     })
   })
 
+  test.describe('Media modal', () => {
+    test('should open image in modal overlay when clicked', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message with a fake image nhash
+        const fakeNhash = 'nhash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr5thfd'
+        await page2.getByPlaceholder('Type a message...').fill(`${fakeNhash}/test.jpg`)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        // Wait for file attachment to appear
+        await expect(page1.locator('.file-attachment')).toBeVisible()
+
+        // Modal should not be visible initially
+        await expect(page1.locator('[data-testid="media-modal"]')).not.toBeVisible()
+
+        // Click the image (will show error state but modal should still open)
+        await page1.locator('.file-attachment button').first().click()
+
+        // Modal overlay should appear
+        await expect(page1.locator('[data-testid="media-modal"]')).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should close modal when clicking backdrop', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Send image link
+        const fakeNhash = 'nhash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr5thfd'
+        await page2.getByPlaceholder('Type a message...').fill(`${fakeNhash}/test.jpg`)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        await expect(page1.locator('.file-attachment')).toBeVisible()
+
+        // Open modal
+        await page1.locator('.file-attachment button').first().click()
+        await expect(page1.locator('[data-testid="media-modal"]')).toBeVisible()
+
+        // Click backdrop to close (click in corner to avoid content)
+        await page1.locator('[data-testid="media-modal-backdrop"]').click({ position: { x: 10, y: 10 } })
+        await expect(page1.locator('[data-testid="media-modal"]')).not.toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should close modal when pressing Escape', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Send image link
+        const fakeNhash = 'nhash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr5thfd'
+        await page2.getByPlaceholder('Type a message...').fill(`${fakeNhash}/test.jpg`)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        await expect(page1.locator('.file-attachment')).toBeVisible()
+
+        // Open modal
+        await page1.locator('.file-attachment button').first().click()
+        await expect(page1.locator('[data-testid="media-modal"]')).toBeVisible()
+
+        // Press Escape to close
+        await page1.keyboard.press('Escape')
+        await expect(page1.locator('[data-testid="media-modal"]')).not.toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should have close button in modal', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Send image link
+        const fakeNhash = 'nhash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr5thfd'
+        await page2.getByPlaceholder('Type a message...').fill(`${fakeNhash}/test.jpg`)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        await expect(page1.locator('.file-attachment')).toBeVisible()
+
+        // Open modal
+        await page1.locator('.file-attachment button').first().click()
+        await expect(page1.locator('[data-testid="media-modal"]')).toBeVisible()
+
+        // Click close button
+        await page1.getByRole('button', { name: 'Close' }).click()
+        await expect(page1.locator('[data-testid="media-modal"]')).not.toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+  })
+
   test.describe('File attachments', () => {
     test('should show attachment button in chat', async ({ browser }) => {
       const context1 = await browser.newContext()
