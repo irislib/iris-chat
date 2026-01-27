@@ -99,6 +99,7 @@ import {
   clearAllData,
   deleteSession as deleteSessionFromDb,
   deleteMessagesForSession,
+  deleteMessage as deleteMessageFromDb,
   saveInvite as saveInviteToDb,
   getAllInvites,
   deleteInvite as deleteInviteFromDb,
@@ -794,6 +795,32 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
   const ndkInstance = get(ndk)
   const ndkPublishEvent = new NDKEvent(ndkInstance, event)
   await ndkPublishEvent.publish()
+}
+
+// Delete a single message locally
+export async function deleteMessage(sessionId: string, messageId: string): Promise<void> {
+  // Get current state from store
+  const currentChats = get(chats)
+  const currentSession = currentChats.get(sessionId)
+  if (!currentSession) return
+
+  // Filter out the message
+  const updatedMessages = currentSession.messages.filter(m => m.id !== messageId)
+  const updatedSession = { ...currentSession, messages: updatedMessages }
+
+  // Update stores
+  chats.update(c => {
+    c.set(sessionId, updatedSession)
+    return c
+  })
+
+  const current = get(currentChat)
+  if (current?.id === sessionId) {
+    currentChat.set(updatedSession)
+  }
+
+  // Delete from IndexedDB
+  await deleteMessageFromDb(messageId)
 }
 
 // Leave current chat

@@ -93,6 +93,10 @@ export async function getMessageById(id: string): Promise<StoredMessage | undefi
   return db.messages.get(id)
 }
 
+export async function deleteMessage(id: string): Promise<void> {
+  await db.messages.delete(id)
+}
+
 // Profile operations
 export async function saveProfileToStorage(profile: StoredProfile): Promise<void> {
   await db.profiles.put(profile)

@@ -13,18 +13,37 @@
     showSenderName?: boolean
     senderName?: string
     onreact?: (messageId: string, emoji: string) => Promise<void>
+    ondelete?: (messageId: string) => void
   }
 
-  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, onreact }: Props = $props()
+  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, onreact, ondelete }: Props = $props()
 
   // For styling: treat as visually first/last if adjacent to reactions
   let styleFirst = $derived(isFirst || prevHasReactions)
   let styleLast = $derived(isLast || hasReactions)
 
   let showEmojiPicker = $state(false)
+  let showMenu = $state(false)
   let isHovered = $state(false)
 
   const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
+
+  async function handleCopy() {
+    await navigator.clipboard.writeText(message.content)
+    showMenu = false
+    isHovered = false
+  }
+
+  function handleDelete() {
+    ondelete?.(message.id)
+    showMenu = false
+    isHovered = false
+  }
+
+  function closeMenu() {
+    showMenu = false
+    isHovered = false
+  }
 
   // Configure marked for GFM (GitHub Flavored Markdown)
   marked.setOptions({
@@ -56,9 +75,15 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && showEmojiPicker) {
-      showEmojiPicker = false
-      isHovered = false
+    if (e.key === 'Escape') {
+      if (showEmojiPicker) {
+        showEmojiPicker = false
+        isHovered = false
+      }
+      if (showMenu) {
+        showMenu = false
+        isHovered = false
+      }
     }
   }
 
@@ -69,7 +94,7 @@
 
   // Listen for escape key
   $effect(() => {
-    if (showEmojiPicker) {
+    if (showEmojiPicker || showMenu) {
       document.addEventListener('keydown', handleKeydown)
       return () => document.removeEventListener('keydown', handleKeydown)
     }
@@ -114,31 +139,62 @@
   <div
     class="flex items-center gap-1 min-w-0 {message.isMine ? 'justify-end' : ''}"
     onmouseenter={() => isHovered = true}
-    onmouseleave={() => { if (!showEmojiPicker) isHovered = false }}
+    onmouseleave={() => { if (!showEmojiPicker && !showMenu) isHovered = false }}
   >
-    <!-- Reaction button - before message for own messages -->
-    {#if message.isMine && (isHovered || showEmojiPicker) && onreact}
+    <!-- Action buttons - before message for own messages -->
+    {#if message.isMine && (isHovered || showEmojiPicker || showMenu)}
+      <!-- Menu button -->
       <div class="relative">
         <button
           class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-          onclick={() => showEmojiPicker = !showEmojiPicker}
-          aria-label="Add reaction"
+          onclick={() => showMenu = !showMenu}
+          aria-label="Message menu"
         >
-          <span class="i-carbon-face-add text-sm"></span>
+          <span class="i-carbon-overflow-menu-vertical text-sm"></span>
         </button>
-        {#if showEmojiPicker}
-          <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
-            {#each quickEmojis as emoji}
-              <button
-                class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
-                onclick={() => handleReact(emoji)}
-              >
-                {emoji}
-              </button>
-            {/each}
+        {#if showMenu}
+          <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+            <button
+              class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+              onclick={handleCopy}
+            >
+              <span class="i-carbon-copy text-base"></span>
+              Copy
+            </button>
+            <button
+              class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
+              onclick={handleDelete}
+            >
+              <span class="i-carbon-trash-can text-base"></span>
+              Delete for you
+            </button>
           </div>
         {/if}
       </div>
+      <!-- Reaction button -->
+      {#if onreact}
+        <div class="relative">
+          <button
+            class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+            onclick={() => showEmojiPicker = !showEmojiPicker}
+            aria-label="Add reaction"
+          >
+            <span class="i-carbon-face-add text-sm"></span>
+          </button>
+          {#if showEmojiPicker}
+            <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
+              {#each quickEmojis as emoji}
+                <button
+                  class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+                  onclick={() => handleReact(emoji)}
+                >
+                  {emoji}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     {/if}
 
     <div class="max-w-[85%] min-w-0 relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
@@ -162,26 +218,57 @@
       {/if}
     </div>
 
-    <!-- Reaction button - after message for their messages -->
-    {#if !message.isMine && (isHovered || showEmojiPicker) && onreact}
+    <!-- Action buttons - after message for their messages -->
+    {#if !message.isMine && (isHovered || showEmojiPicker || showMenu)}
+      <!-- Reaction button -->
+      {#if onreact}
+        <div class="relative">
+          <button
+            class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+            onclick={() => showEmojiPicker = !showEmojiPicker}
+            aria-label="Add reaction"
+          >
+            <span class="i-carbon-face-add text-sm"></span>
+          </button>
+          {#if showEmojiPicker}
+            <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
+              {#each quickEmojis as emoji}
+                <button
+                  class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+                  onclick={() => handleReact(emoji)}
+                >
+                  {emoji}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+      <!-- Menu button -->
       <div class="relative">
         <button
           class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-          onclick={() => showEmojiPicker = !showEmojiPicker}
-          aria-label="Add reaction"
+          onclick={() => showMenu = !showMenu}
+          aria-label="Message menu"
         >
-          <span class="i-carbon-face-add text-sm"></span>
+          <span class="i-carbon-overflow-menu-vertical text-sm"></span>
         </button>
-        {#if showEmojiPicker}
-          <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
-            {#each quickEmojis as emoji}
-              <button
-                class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
-                onclick={() => handleReact(emoji)}
-              >
-                {emoji}
-              </button>
-            {/each}
+        {#if showMenu}
+          <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+            <button
+              class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+              onclick={handleCopy}
+            >
+              <span class="i-carbon-copy text-base"></span>
+              Copy
+            </button>
+            <button
+              class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
+              onclick={handleDelete}
+            >
+              <span class="i-carbon-trash-can text-base"></span>
+              Delete for you
+            </button>
           </div>
         {/if}
       </div>
@@ -189,12 +276,19 @@
   </div>
 </div>
 
-<!-- Click outside to close emoji picker -->
+<!-- Click outside to close emoji picker or menu -->
 {#if showEmojiPicker}
   <button
     class="fixed inset-0 z-20 bg-transparent border-none cursor-default"
     onclick={closePicker}
     aria-label="Close picker"
+  ></button>
+{/if}
+{#if showMenu}
+  <button
+    class="fixed inset-0 z-20 bg-transparent border-none cursor-default"
+    onclick={closeMenu}
+    aria-label="Close menu"
   ></button>
 {/if}
 

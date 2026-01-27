@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sendMessage, sendReaction, deleteChat, type ChatSession, currentChat } from '../lib/chat'
+  import { sendMessage, sendReaction, deleteChat, deleteMessage, type ChatSession, currentChat } from '../lib/chat'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
@@ -49,6 +49,10 @@
     } catch (e) {
       console.error('Failed to send reaction:', e)
     }
+  }
+
+  async function handleDeleteMessage(messageId: string) {
+    await deleteMessage(chat.id, messageId)
   }
 
   // Auto-scroll to bottom when new messages arrive
@@ -156,7 +160,7 @@
         {@const isLast = nextMsg?.isMine !== message.isMine}
         {@const prevHasReactions = prevMsg?.reactions && Object.keys(prevMsg.reactions).length > 0}
         {@const hasReactions = message.reactions && Object.keys(message.reactions).length > 0}
-        <MessageBubble {message} {isFirst} {isLast} {prevHasReactions} {hasReactions} onreact={handleReact} />
+        <MessageBubble {message} {isFirst} {isLast} {prevHasReactions} {hasReactions} onreact={handleReact} ondelete={handleDeleteMessage} />
       {/each}
     {/if}
   </div>
