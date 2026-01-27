@@ -6,6 +6,7 @@
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import CopyButton from './CopyButton.svelte'
+  import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
 
   interface Props {
     onBack: () => void
@@ -43,6 +44,44 @@
   let subscriptions = $state<Record<string, NotificationSubscription>>({})
   let loadingSubscriptions = $state(false)
   let showPrivateKey = $state(false)
+
+  // Relay settings
+  let editingRelays = $state(false)
+  let newRelayUrl = $state('')
+  let relays = $derived([...$relayStore.relays])
+  let relayStatuses = $derived($relayStore.statuses)
+
+  function getRelayStatus(url: string): RelayStatus {
+    return relayStatuses.get(url) || 'disconnected'
+  }
+
+  function getStatusColor(status: RelayStatus): string {
+    switch (status) {
+      case 'connected': return 'bg-green-500'
+      case 'connecting': return 'bg-yellow-500'
+      default: return 'bg-gray-500'
+    }
+  }
+
+  function addRelay() {
+    const url = newRelayUrl.trim()
+    if (!url) return
+    try {
+      new URL(url)
+      if (!url.startsWith('wss://') && !url.startsWith('ws://')) return
+    } catch { return }
+    relayStore.addRelay(url)
+    newRelayUrl = ''
+  }
+
+  function removeRelay(url: string) {
+    relayStore.removeRelay(url)
+  }
+
+  function resetRelays() {
+    relayStore.resetToDefaults()
+    editingRelays = false
+  }
 
   // Get npub for public key
   const npub = $derived($identity?.pubkey ? nip19.npubEncode($identity.pubkey) : null)
@@ -306,6 +345,64 @@
           </div>
         </div>
       {/if}
+
+      <!-- Relays Section -->
+      <div class="bg-surface rounded-lg p-4">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h2 class="font-medium">Relays</h2>
+            <p class="text-sm text-gray-400 mt-1">Nostr servers for message delivery</p>
+          </div>
+          <button
+            class="text-sm text-primary hover:underline"
+            onclick={() => editingRelays = !editingRelays}
+          >
+            {editingRelays ? 'Done' : 'Edit'}
+          </button>
+        </div>
+
+        <div class="space-y-2">
+          {#each relays as relay (relay)}
+            {@const status = getRelayStatus(relay)}
+            <div class="flex items-center gap-2 p-2 bg-surface-light rounded">
+              <span class="w-2 h-2 rounded-full {getStatusColor(status)} flex-shrink-0"></span>
+              <span class="flex-1 text-sm truncate">
+                {(() => { try { return new URL(relay).hostname } catch { return relay } })()}
+              </span>
+              {#if editingRelays}
+                <button
+                  class="text-red-400 hover:text-red-300 p-1"
+                  onclick={() => removeRelay(relay)}
+                  aria-label="Remove relay"
+                >
+                  <span class="i-carbon-close text-sm"></span>
+                </button>
+              {:else}
+                <span class="text-xs text-gray-500 capitalize">{status}</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+
+        {#if editingRelays}
+          <div class="mt-3 flex gap-2">
+            <input
+              type="text"
+              bind:value={newRelayUrl}
+              placeholder="wss://relay.example.com"
+              class="flex-1 input-field text-sm py-2"
+              onkeydown={(e) => e.key === 'Enter' && addRelay()}
+            />
+            <button class="btn-primary text-sm px-3" onclick={addRelay}>Add</button>
+          </div>
+          <button
+            class="mt-2 text-xs text-gray-500 hover:text-gray-400"
+            onclick={resetRelays}
+          >
+            Reset to defaults
+          </button>
+        {/if}
+      </div>
 
       <!-- Notifications Section -->
       <div class="bg-surface rounded-lg p-4">

@@ -3,6 +3,7 @@
   import { chats, type ChatSession } from '../lib/chat'
   import Avatar from './Avatar.svelte'
   import ChatListItem from './ChatListItem.svelte'
+  import ConnectivityIndicator from './ConnectivityIndicator.svelte'
 
   interface Props {
     selectedChatId: string | null
@@ -35,13 +36,16 @@
         <span class="text-primary">iris</span> chat
       </h1>
     </button>
-    <button
-      class="cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity"
-      onclick={onSettings}
-      aria-label="Settings"
-    >
-      <Avatar pubkey={$identity?.pubkey || ''} size={32} />
-    </button>
+    <div class="flex items-center gap-1">
+      <ConnectivityIndicator onclick={onSettings} />
+      <button
+        class="cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity"
+        onclick={onSettings}
+        aria-label="Settings"
+      >
+        <Avatar pubkey={$identity?.pubkey || ''} size={32} />
+      </button>
+    </div>
   </header>
 
   <!-- New Chat Button -->

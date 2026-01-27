@@ -2,6 +2,7 @@ import NDK, { NDKPrivateKeySigner, NDKNip07Signer } from '@nostr-dev-kit/ndk'
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { writable, derived, get } from 'svelte/store'
 import { saveLocalProfile, clearLocalProfile, getLocalProfile } from './profile'
+import { relayStore } from './relayStore'
 
 // Helper functions
 function bytesToHex(bytes: Uint8Array): string {
@@ -29,22 +30,57 @@ export const identity = writable<Identity | null>(null)
 
 export const isLoggedIn = derived(identity, $identity => $identity !== null)
 
-const DEFAULT_RELAYS = [
-  'wss://temp.iris.to',
-  'wss://relay.damus.io',
-  'wss://relay.snort.social',
-  'wss://relay.nostr.band',
-  'wss://relay.primal.net',
-  'wss://nos.lol',
-]
-
-// Create NDK instance immediately and start connecting
+// Create NDK instance with relays from store
+const initialRelays = [...relayStore.getState().relays]
 const ndkInstance = new NDK({
-  explicitRelayUrls: DEFAULT_RELAYS,
+  explicitRelayUrls: initialRelays,
 })
 ndkInstance.connect()
 
 export const ndk = writable<NDK>(ndkInstance)
+
+// Start relay status polling
+function initRelayTracking() {
+  // Poll immediately
+  relayStore.updateStatuses(ndkInstance)
+
+  // Fast polling for first 5 seconds
+  let pollCount = 0
+  const fastPoll = setInterval(() => {
+    pollCount++
+    relayStore.updateStatuses(ndkInstance)
+    if (pollCount >= 25) clearInterval(fastPoll)
+  }, 200)
+
+  // Regular polling
+  setInterval(() => relayStore.updateStatuses(ndkInstance), 2000)
+}
+
+initRelayTracking()
+
+// Reconnect NDK when relays change
+relayStore.subscribe(state => {
+  const currentUrls = new Set(Array.from(ndkInstance.pool.relays.keys()))
+  const newUrls = state.relays
+
+  // Check if relay list changed
+  if (currentUrls.size !== newUrls.size || ![...currentUrls].every(url => newUrls.has(url))) {
+    // Disconnect removed relays
+    for (const url of currentUrls) {
+      if (!newUrls.has(url)) {
+        const relay = ndkInstance.pool.relays.get(url)
+        relay?.disconnect()
+        ndkInstance.pool.relays.delete(url)
+      }
+    }
+    // Add new relays
+    for (const url of newUrls) {
+      if (!currentUrls.has(url)) {
+        ndkInstance.addExplicitRelay(url)
+      }
+    }
+  }
+})
 
 export function parseNsecFromHash(): string | null {
   const hash = window.location.hash
