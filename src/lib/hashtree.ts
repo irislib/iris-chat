@@ -20,7 +20,6 @@ import { finalizeEvent } from 'nostr-tools'
 const DEFAULT_BLOSSOM_SERVERS = [
   { url: 'https://upload.iris.to', write: true, read: false },
   { url: 'https://cdn.iris.to', write: false, read: true },
-  { url: 'https://blossom.primal.net', write: true, read: true },
 ]
 
 // Singleton instances
