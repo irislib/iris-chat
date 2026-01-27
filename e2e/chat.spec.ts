@@ -428,6 +428,74 @@ test.describe('iris chat', () => {
     })
   })
 
+  test.describe('File attachments', () => {
+    test('should show attachment button in chat', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Attachment button should be visible
+        await expect(page1.getByRole('button', { name: 'Attach file' })).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should display file attachment when nhash link is in message', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message with a fake nhash link (will try to load and fail gracefully)
+        // Using a valid-looking nhash format but fake hash
+        const fakeNhash = 'nhash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr5thfd'
+        await page2.getByPlaceholder('Type a message...').fill(`${fakeNhash}/test-image.jpg`)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        // The file attachment component should appear (loading or error state)
+        // Look for the file-attachment div that wraps the content
+        await expect(page1.locator('.file-attachment')).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+  })
+
   test.describe('Reactions', () => {
     test('should persist reactions across reload', async ({ browser }) => {
       const context1 = await browser.newContext()

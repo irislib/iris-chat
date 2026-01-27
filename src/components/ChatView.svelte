@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { sendMessage, sendReaction, deleteChat, deleteMessage, type ChatSession, currentChat } from '../lib/chat'
+  import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
@@ -13,10 +15,25 @@
 
   let { chat, onleave, showBackButton = true, onViewProfile }: Props = $props()
 
+  // Pending attachment for preview
+  interface PendingAttachment {
+    file: File
+    previewUrl: string | null
+    nhash: string | null
+    uploading: boolean
+    progress: number // 0-100
+    error: string | null
+  }
+
   let messageText = $state('')
   let messagesContainer = $state<HTMLDivElement | null>(null)
   let inputRef = $state<HTMLTextAreaElement | null>(null)
+  let fileInputRef = $state<HTMLInputElement | null>(null)
   let showMenu = $state(false)
+  let pendingAttachment = $state<PendingAttachment | null>(null)
+
+  // Max file size for preview (10MB)
+  const MAX_PREVIEW_SIZE = 10 * 1024 * 1024
 
   function handleDelete() {
     deleteChat(chat)
@@ -24,10 +41,18 @@
   }
 
   function handleSend() {
-    if (!messageText.trim()) return
+    // Build message with attachment link if present
+    let text = messageText.trim()
 
-    const text = messageText.trim()
+    if (pendingAttachment?.nhash) {
+      const link = formatFileLink(pendingAttachment.nhash, pendingAttachment.file.name)
+      text = text ? `${text}\n${link}` : link
+    }
+
+    if (!text) return
+
     messageText = ''
+    clearAttachment()
 
     sendMessage(chat, text)
 
@@ -55,6 +80,84 @@
     await deleteMessage(chat.id, messageId)
   }
 
+  function clearAttachment() {
+    if (pendingAttachment?.previewUrl) {
+      URL.revokeObjectURL(pendingAttachment.previewUrl)
+    }
+    pendingAttachment = null
+  }
+
+  async function handleFileSelect(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    // Reset input so same file can be selected again
+    input.value = ''
+
+    // Clear any existing attachment
+    clearAttachment()
+
+    // Create preview URL for images/videos under size limit
+    let previewUrl: string | null = null
+    const canPreview = file.size < MAX_PREVIEW_SIZE &&
+      (isImageFile(file.name) || isVideoFile(file.name))
+
+    if (canPreview) {
+      previewUrl = URL.createObjectURL(file)
+    }
+
+    // Set pending attachment
+    pendingAttachment = {
+      file,
+      previewUrl,
+      nhash: null,
+      uploading: true,
+      progress: 0,
+      error: null,
+    }
+
+    // Start upload
+    try {
+      const { nhash } = await uploadFile(file, (bytesUploaded, totalBytes) => {
+        if (pendingAttachment) {
+          pendingAttachment = {
+            ...pendingAttachment,
+            progress: Math.round((bytesUploaded / totalBytes) * 100),
+          }
+        }
+      })
+
+      if (pendingAttachment) {
+        pendingAttachment = {
+          ...pendingAttachment,
+          nhash,
+          uploading: false,
+          progress: 100,
+        }
+      }
+
+      // Focus input after upload
+      requestAnimationFrame(() => inputRef?.focus())
+    } catch (e) {
+      console.error('Failed to upload file:', e)
+      if (pendingAttachment) {
+        pendingAttachment = {
+          ...pendingAttachment,
+          uploading: false,
+          error: e instanceof Error ? e.message : 'Upload failed',
+        }
+      }
+    }
+  }
+
+  // Cleanup preview URLs on destroy
+  onDestroy(() => {
+    if (pendingAttachment?.previewUrl) {
+      URL.revokeObjectURL(pendingAttachment.previewUrl)
+    }
+  })
+
   // Auto-scroll to bottom when new messages arrive
   $effect(() => {
     if (messagesContainer && $currentChat?.messages.length) {
@@ -71,6 +174,10 @@
   })
 
   let messages = $derived($currentChat?.messages || chat.messages)
+  let canSend = $derived(
+    (messageText.trim() || pendingAttachment?.nhash) &&
+    !pendingAttachment?.uploading
+  )
 </script>
 
 <div class="flex-1 flex flex-col min-h-0">
@@ -166,8 +273,87 @@
   </div>
 
   <!-- Input - flex-shrink-0 keeps it at bottom -->
-  <div class="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
-    <div class="flex gap-2 items-end">
+  <div class="border-t border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
+    <!-- Attachment preview -->
+    {#if pendingAttachment}
+      <div class="px-4 pt-3 pb-2">
+        <div class="relative inline-block">
+          <!-- Preview content -->
+          {#if pendingAttachment.previewUrl && isImageFile(pendingAttachment.file.name)}
+            <img
+              src={pendingAttachment.previewUrl}
+              alt={pendingAttachment.file.name}
+              class="max-h-32 max-w-48 rounded-lg object-cover"
+            />
+          {:else if pendingAttachment.previewUrl && isVideoFile(pendingAttachment.file.name)}
+            <!-- svelte-ignore a11y_media_has_caption -->
+            <video
+              src={pendingAttachment.previewUrl}
+              class="max-h-32 max-w-48 rounded-lg object-cover"
+            ></video>
+          {:else}
+            <!-- File icon for non-previewable files -->
+            <div class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg">
+              <span class="i-carbon-document text-xl text-gray-400"></span>
+              <span class="text-sm text-gray-300 max-w-32 truncate">{pendingAttachment.file.name}</span>
+            </div>
+          {/if}
+
+          <!-- Progress overlay -->
+          {#if pendingAttachment.uploading}
+            <div class="absolute inset-0 bg-black/60 rounded-lg flex items-center justify-center">
+              <div class="text-center">
+                <div class="text-white text-sm font-medium">{pendingAttachment.progress}%</div>
+                <div class="w-16 h-1 bg-gray-600 rounded-full mt-1 overflow-hidden">
+                  <div
+                    class="h-full bg-primary transition-all duration-150"
+                    style="width: {pendingAttachment.progress}%"
+                  ></div>
+                </div>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Error state -->
+          {#if pendingAttachment.error}
+            <div class="absolute inset-0 bg-red-900/60 rounded-lg flex items-center justify-center">
+              <span class="i-carbon-warning-alt text-red-400 text-xl"></span>
+            </div>
+          {/if}
+
+          <!-- Remove button -->
+          <button
+            class="absolute -top-2 -right-2 w-6 h-6 bg-surface border border-surface-lighter rounded-full flex items-center justify-center text-gray-400 hover:text-white hover:bg-red-600 hover:border-red-600 transition-colors"
+            onclick={clearAttachment}
+            aria-label="Remove attachment"
+          >
+            <span class="i-carbon-close text-sm"></span>
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Input row -->
+    <div class="p-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))] flex gap-2 items-end">
+      <!-- Hidden file input -->
+      <input
+        bind:this={fileInputRef}
+        type="file"
+        class="hidden"
+        onchange={handleFileSelect}
+        accept="image/*,video/*,audio/*,.pdf,.txt,.json,.md"
+      />
+
+      <!-- Attachment button -->
+      <button
+        class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
+        onclick={() => fileInputRef?.click()}
+        disabled={pendingAttachment?.uploading}
+        aria-label="Attach file"
+      >
+        <span class="i-carbon-attachment text-xl"></span>
+      </button>
+
       <!-- svelte-ignore a11y_autofocus -->
       <textarea
         bind:this={inputRef}
@@ -181,7 +367,7 @@
       <button
         class="btn-primary w-11 h-11 p-0 flex items-center justify-center flex-shrink-0"
         onclick={handleSend}
-        disabled={!messageText.trim()}
+        disabled={!canSend}
         aria-label="Send"
       >
         <span class="i-carbon-send text-xl"></span>

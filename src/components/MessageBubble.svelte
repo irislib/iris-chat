@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
   import { marked } from 'marked'
   import DOMPurify from 'dompurify'
   import type { ChatMessage } from '../lib/chat'
+  import { FILE_LINK_REGEX, parseFileLink } from '../lib/hashtree'
+  import FileAttachment from './FileAttachment.svelte'
 
   interface Props {
     message: ChatMessage
@@ -51,9 +52,27 @@
     breaks: true, // Convert \n to <br>
   })
 
+  // Extract file links from content
+  let fileLinks = $derived.by(() => {
+    const links: { nhash: string; filename: string }[] = []
+    const regex = new RegExp(FILE_LINK_REGEX.source, 'gi')
+    let match
+    while ((match = regex.exec(message.content)) !== null) {
+      // Decode URL-encoded filename
+      links.push({ nhash: match[1], filename: decodeURIComponent(match[2]) })
+    }
+    return links
+  })
+
+  // Remove file links from content for display (they'll be rendered separately)
+  let textContent = $derived.by(() => {
+    return message.content.replace(FILE_LINK_REGEX, '').trim()
+  })
+
   // Render markdown content safely
   let htmlContent = $derived.by(() => {
-    const raw = marked.parse(message.content, { async: false }) as string
+    if (!textContent) return ''
+    const raw = marked.parse(textContent, { async: false }) as string
     return DOMPurify.sanitize(raw, {
       ADD_ATTR: ['target'], // Allow target="_blank" on links
     })
@@ -61,9 +80,9 @@
 
   // Check if content has any markdown formatting
   let hasMarkdown = $derived.by(() => {
-    const content = message.content
+    const content = textContent
     // Check for common markdown patterns
-    return /[*_`#\[\]!\-]/.test(content) || 
+    return /[*_`#\[\]!\-]/.test(content) ||
            /```/.test(content) ||
            /\n/.test(content)
   })
@@ -198,10 +217,17 @@
     {/if}
 
     <div class="max-w-[85%] min-w-0 relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
-      <div class="px-3 py-1.5 text-sm overflow-hidden message-content {getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''}">
-        <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
-        {@html htmlContent}
-      </div>
+      {#if htmlContent}
+        <div class="px-3 py-1.5 text-sm overflow-hidden message-content {getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''}">
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
+          {@html htmlContent}
+        </div>
+      {/if}
+
+      <!-- File attachments -->
+      {#each fileLinks as link (link.nhash + link.filename)}
+        <FileAttachment nhash={link.nhash} filename={link.filename} />
+      {/each}
 
       <!-- Reactions display - positioned to overlap bottom of message -->
       {#if message.reactions && Object.keys(message.reactions).length > 0}

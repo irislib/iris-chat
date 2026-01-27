@@ -36,6 +36,7 @@
     "workbox-precaching": "^7.4.0"
   },
   "dependencies": {
+    "@hashtree/core": "^0.1.1",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@nostr-dev-kit/ndk": "^2.18.1",
