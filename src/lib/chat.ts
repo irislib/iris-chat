@@ -149,24 +149,17 @@ function createNostrSubscribe() {
   const ndkInstance = get(ndk)
 
   return (filter: Filter, callback: (event: VerifiedEvent) => void) => {
-    console.log('[chat] createNostrSubscribe - filter:', JSON.stringify(filter))
     const seenIds = new Set<string>()
     const sub = ndkInstance.subscribe(filter, { closeOnEose: false })
 
     sub.on('event', (ndkEvent) => {
-      console.log('[chat] NDK received event:', ndkEvent.id, 'kind:', ndkEvent.kind, 'pubkey:', ndkEvent.pubkey?.slice(0, 8))
       const event = ndkEvent.rawEvent() as VerifiedEvent
       if (seenIds.has(event.id)) return
       seenIds.add(event.id)
-      console.log('[chat] Passing event to callback:', event.id)
       callback(event)
     })
 
-    console.log('[chat] Subscription created for filter')
-    return () => {
-      console.log('[chat] Stopping subscription')
-      sub.stop()
-    }
+    return () => sub.stop()
   }
 }
 

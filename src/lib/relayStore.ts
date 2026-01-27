@@ -11,9 +11,11 @@ export interface RelayState {
   relays: Set<string>
   statuses: Map<string, RelayStatus>
   connectedCount: number
+  showConnectivity: boolean
 }
 
 const RELAYS_STORAGE_KEY = 'iris-chat-relays'
+const SHOW_CONNECTIVITY_KEY = 'iris-chat-show-connectivity'
 
 // Normalize relay URL (remove trailing slash)
 function normalizeRelayUrl(url: string): string {
@@ -51,12 +53,30 @@ function saveRelays(relays: Set<string>): void {
   }
 }
 
+function loadShowConnectivity(): boolean {
+  try {
+    const stored = localStorage.getItem(SHOW_CONNECTIVITY_KEY)
+    return stored !== 'false' // default to true
+  } catch {
+    return true
+  }
+}
+
+function saveShowConnectivity(show: boolean): void {
+  try {
+    localStorage.setItem(SHOW_CONNECTIVITY_KEY, String(show))
+  } catch {
+    // ignore
+  }
+}
+
 function createRelayStore() {
   const initialRelays = loadRelays()
   const { subscribe, update, set } = writable<RelayState>({
     relays: initialRelays,
     statuses: new Map([...initialRelays].map(url => [url, 'disconnected' as RelayStatus])),
     connectedCount: 0,
+    showConnectivity: loadShowConnectivity(),
   })
 
   return {
@@ -99,11 +119,17 @@ function createRelayStore() {
     resetToDefaults() {
       const defaults = new Set(DEFAULT_RELAYS)
       saveRelays(defaults)
-      set({
+      update(state => ({
+        ...state,
         relays: defaults,
         statuses: new Map(DEFAULT_RELAYS.map(url => [url, 'disconnected' as RelayStatus])),
         connectedCount: 0,
-      })
+      }))
+    },
+
+    setShowConnectivity(show: boolean) {
+      saveShowConnectivity(show)
+      update(state => ({ ...state, showConnectivity: show }))
     },
 
     updateStatuses(ndk: NDK) {

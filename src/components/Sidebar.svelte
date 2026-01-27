@@ -1,6 +1,7 @@
 <script lang="ts">
   import { identity } from '../lib/identity'
   import { chats, type ChatSession } from '../lib/chat'
+  import { relayStore } from '../lib/relayStore'
   import Avatar from './Avatar.svelte'
   import ChatListItem from './ChatListItem.svelte'
   import ConnectivityIndicator from './ConnectivityIndicator.svelte'
@@ -13,6 +14,8 @@
   }
 
   let { selectedChatId, onSelectChat, onNewChat, onSettings }: Props = $props()
+
+  let showConnectivity = $derived($relayStore.showConnectivity)
 
   // Sorted chats by most recent
   let sortedChats = $derived(
@@ -37,7 +40,9 @@
       </h1>
     </button>
     <div class="flex items-center gap-1">
-      <ConnectivityIndicator onclick={onSettings} />
+      {#if showConnectivity}
+        <ConnectivityIndicator onclick={onSettings} />
+      {/if}
       <button
         class="cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity"
         onclick={onSettings}

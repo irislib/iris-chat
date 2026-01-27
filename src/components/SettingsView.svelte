@@ -50,6 +50,7 @@
   let newRelayUrl = $state('')
   let relays = $derived([...$relayStore.relays])
   let relayStatuses = $derived($relayStore.statuses)
+  let showConnectivity = $derived($relayStore.showConnectivity)
 
   function getRelayStatus(url: string): RelayStatus {
     return relayStatuses.get(url) || 'disconnected'
@@ -402,6 +403,22 @@
             Reset to defaults
           </button>
         {/if}
+
+        <!-- Show connectivity indicator toggle -->
+        <div class="mt-4 pt-4 border-t border-surface-lighter flex items-center justify-between">
+          <span class="text-sm">Show connectivity indicator</span>
+          <button
+            class="w-10 h-5 rounded-full transition-colors relative {showConnectivity ? 'bg-primary' : 'bg-gray-600'}"
+            onclick={() => relayStore.setShowConnectivity(!showConnectivity)}
+            role="switch"
+            aria-checked={showConnectivity}
+            aria-label="Toggle connectivity indicator"
+          >
+            <span
+              class="absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform {showConnectivity ? 'translate-x-5' : 'translate-x-0.5'}"
+            ></span>
+          </button>
+        </div>
       </div>
 
       <!-- Notifications Section -->
