@@ -96,7 +96,7 @@
 </script>
 
 {#if showPrompt}
-  <div class="fixed inset-0 z-[100] bg-[#121212] flex flex-col">
+  <div class="fixed inset-0 z-[100] bg-[#121212] flex flex-col overflow-y-auto">
     <!-- Header -->
     <div class="flex justify-end p-4">
       <button
@@ -130,7 +130,7 @@
             <div class="text-left">
               <p class="text-white">Tap the share button</p>
               <p class="text-gray-500 text-sm mt-1">
-                <span class="i-carbon-share-knowledge text-primary"></span> at the bottom of Safari
+                <span class="i-carbon-share text-primary"></span> at the bottom of Safari
               </p>
             </div>
           </div>
