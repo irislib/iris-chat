@@ -336,6 +336,11 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(handleClick())
 })
 
+// Skip waiting to activate new SW immediately
+self.addEventListener('install', () => {
+  self.skipWaiting()
+})
+
 // Handle activation - claim clients
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim())
