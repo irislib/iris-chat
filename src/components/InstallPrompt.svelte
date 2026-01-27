@@ -97,17 +97,6 @@
 
 {#if showPrompt}
   <div class="fixed inset-0 z-[100] bg-[#121212] flex flex-col overflow-y-auto">
-    <!-- Header -->
-    <div class="flex justify-end p-4">
-      <button
-        class="text-gray-400 hover:text-white p-2"
-        onclick={dismiss}
-        aria-label="Close"
-      >
-        <span class="i-carbon-close text-2xl"></span>
-      </button>
-    </div>
-
     <!-- Content -->
     <div class="flex-1 flex flex-col items-center justify-center px-6 text-center">
       <img src="/iris-logo.png" alt="Iris" class="w-20 h-20 mb-6" draggable="false" />
@@ -128,9 +117,9 @@
               <span class="text-primary font-bold">1</span>
             </div>
             <div class="text-left">
-              <p class="text-white">Tap the share button</p>
+              <p class="text-white">Tap the menu button</p>
               <p class="text-gray-500 text-sm mt-1">
-                <span class="i-carbon-share text-primary"></span> at the bottom of Safari
+                <span class="i-carbon-overflow-menu-horizontal text-primary"></span> then tap Share <span class="i-carbon-share text-primary"></span>
               </p>
             </div>
           </div>
