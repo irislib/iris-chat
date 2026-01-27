@@ -59,27 +59,31 @@ function initRelayTracking() {
 initRelayTracking()
 
 // Reconnect NDK when relays change
+let previousRelays = new Set(initialRelays)
 relayStore.subscribe(state => {
-  const currentUrls = new Set(Array.from(ndkInstance.pool.relays.keys()))
   const newUrls = state.relays
 
-  // Check if relay list changed
-  if (currentUrls.size !== newUrls.size || ![...currentUrls].every(url => newUrls.has(url))) {
-    // Disconnect removed relays
-    for (const url of currentUrls) {
-      if (!newUrls.has(url)) {
-        const relay = ndkInstance.pool.relays.get(url)
-        relay?.disconnect()
-        ndkInstance.pool.relays.delete(url)
-      }
-    }
-    // Add new relays
-    for (const url of newUrls) {
-      if (!currentUrls.has(url)) {
-        ndkInstance.addExplicitRelay(url)
-      }
+  // Skip if relays haven't actually changed (prevents initial subscription trigger)
+  if (previousRelays.size === newUrls.size && [...previousRelays].every(url => newUrls.has(url))) {
+    return
+  }
+
+  // Disconnect removed relays
+  for (const url of previousRelays) {
+    if (!newUrls.has(url)) {
+      const relay = ndkInstance.pool.relays.get(url)
+      relay?.disconnect()
+      ndkInstance.pool.relays.delete(url)
     }
   }
+  // Add new relays
+  for (const url of newUrls) {
+    if (!previousRelays.has(url)) {
+      ndkInstance.addExplicitRelay(url)
+    }
+  }
+
+  previousRelays = new Set(newUrls)
 })
 
 export function parseNsecFromHash(): string | null {
