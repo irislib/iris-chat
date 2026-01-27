@@ -8,7 +8,7 @@
     isAudioFile,
     getMimeType,
   } from '../lib/hashtree'
-  import { openMediaModal } from '../lib/mediaModal'
+  import { openMediaModal, openMediaModalWithNhash } from '../lib/mediaModal'
 
   interface Props {
     nhash: string
@@ -87,18 +87,13 @@
   }
 
   function handleVideoClick() {
-    openMediaModal(mediaUrl, filename, 'video')
+    // Open modal and let it load the video
+    openMediaModalWithNhash(nhash, filename, 'video')
   }
 </script>
 
 <div class="file-attachment mt-2">
-  {#if loading && isVideo}
-    <!-- Video loading - maintain placeholder size -->
-    <div class="relative flex items-center justify-center w-48 h-32 bg-surface-light rounded-lg">
-      <span class="i-carbon-circle-dash animate-spin text-2xl text-gray-400"></span>
-      <span class="absolute bottom-2 left-2 right-2 text-xs text-gray-400 truncate">{filename}</span>
-    </div>
-  {:else if loading && isAudio}
+  {#if loading && isAudio}
     <!-- Audio loading - maintain button size -->
     <div class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg text-sm">
       <span class="i-carbon-circle-dash animate-spin text-lg text-gray-400"></span>
@@ -138,13 +133,6 @@
         class="max-w-full max-h-64 rounded-lg"
       />
     </button>
-  {:else if isVideo && mediaUrl}
-    <!-- svelte-ignore a11y_media_has_caption -->
-    <video
-      src={mediaUrl}
-      controls
-      class="max-w-full max-h-64 rounded-lg"
-    ></video>
   {:else if isAudio && mediaUrl}
     <audio
       src={mediaUrl}
@@ -152,11 +140,11 @@
       class="w-full max-w-xs"
     ></audio>
   {:else if isVideo}
-    <!-- Video placeholder - click to load -->
+    <!-- Video placeholder - click to open in modal -->
     <button
       class="relative flex items-center justify-center w-48 h-32 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors"
-      onclick={handleLoadClick}
-      aria-label="Load video {filename}"
+      onclick={handleVideoClick}
+      aria-label="Play video {filename}"
     >
       <div class="absolute inset-0 flex items-center justify-center">
         <span class="i-carbon-play-filled text-4xl text-gray-400"></span>

@@ -382,6 +382,7 @@
 {#if $mediaModal.open}
   <MediaModal
     src={$mediaModal.src}
+    nhash={$mediaModal.nhash}
     filename={$mediaModal.filename}
     type={$mediaModal.type}
     onclose={closeMediaModal}

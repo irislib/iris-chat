@@ -1,14 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { getMediaUrl, getMimeType } from '../lib/hashtree'
 
   interface Props {
     src: string | null
+    nhash: string | null
     filename: string
     type: 'image' | 'video'
     onclose: () => void
   }
 
-  let { src, filename, type, onclose }: Props = $props()
+  let { src, nhash, filename, type, onclose }: Props = $props()
+
+  let mediaSrc = $state<string | null>(src)
+  let loading = $state(!src && !!nhash)
+  let error = $state<string | null>(null)
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
@@ -22,14 +28,39 @@
     }
   }
 
+  async function loadMedia() {
+    if (!nhash) return
+
+    loading = true
+    error = null
+
+    try {
+      const mimeType = getMimeType(filename)
+      mediaSrc = await getMediaUrl(nhash, mimeType)
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to load'
+    } finally {
+      loading = false
+    }
+  }
+
   onMount(() => {
     document.addEventListener('keydown', handleKeydown)
     // Prevent body scroll when modal is open
     document.body.style.overflow = 'hidden'
 
+    // Load media if nhash provided
+    if (nhash && !src) {
+      loadMedia()
+    }
+
     return () => {
       document.removeEventListener('keydown', handleKeydown)
       document.body.style.overflow = ''
+      // Cleanup blob URL if we created one
+      if (mediaSrc && nhash) {
+        URL.revokeObjectURL(mediaSrc)
+      }
     }
   })
 </script>
@@ -59,17 +90,26 @@
     </button>
 
     <!-- Media content -->
-    {#if src}
+    {#if loading}
+      <div class="flex items-center justify-center w-64 h-48 bg-surface">
+        <span class="i-carbon-circle-dash animate-spin text-3xl text-gray-400"></span>
+      </div>
+    {:else if error}
+      <div class="flex flex-col items-center justify-center w-64 h-48 bg-surface text-center">
+        <span class="i-carbon-warning-alt text-3xl text-red-400 mb-2"></span>
+        <p class="text-sm text-red-400">Failed to load</p>
+      </div>
+    {:else if mediaSrc}
       {#if type === 'image'}
         <img
-          {src}
+          src={mediaSrc}
           alt={filename}
           class="max-w-full max-h-[85vh] object-contain"
         />
       {:else if type === 'video'}
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
-          {src}
+          src={mediaSrc}
           controls
           autoplay
           class="max-w-full max-h-[85vh]"
