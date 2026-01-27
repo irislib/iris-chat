@@ -107,7 +107,7 @@
   {:else if error && isImage}
     <!-- Image error - click to open modal with error -->
     <button
-      class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors text-sm text-red-400"
+      class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-full hover:bg-surface-lighter transition-colors text-sm text-red-400"
       onclick={handleImageClick}
     >
       <span class="i-carbon-warning-alt"></span>
@@ -115,7 +115,7 @@
     </button>
   {:else if error}
     <button
-      class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors text-sm text-red-400"
+      class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-full hover:bg-surface-lighter transition-colors text-sm text-red-400"
       onclick={handleLoadClick}
     >
       <span class="i-carbon-warning-alt"></span>
