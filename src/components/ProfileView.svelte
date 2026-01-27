@@ -2,6 +2,7 @@
   import { nip19 } from 'nostr-tools'
   import Avatar from './Avatar.svelte'
   import CopyButton from './CopyButton.svelte'
+  import MediaModal from './MediaModal.svelte'
   import { createProfileStore, getProfileName } from '../lib/profile'
   import { getAnimalName } from '../lib/animalNames'
   import { chats } from '../lib/chat'
@@ -28,8 +29,18 @@
 
   let npub = $derived(isValidPubkey ? nip19.npubEncode(pubkey) : '')
 
+  // Profile picture modal
+  let showPictureModal = $state(false)
+  let profilePicture = $derived(profile?.picture)
+
   function handleOpenChat() {
     onOpenChat(pubkey)
+  }
+
+  function handleAvatarClick() {
+    if (profilePicture) {
+      showPictureModal = true
+    }
   }
 </script>
 
@@ -54,7 +65,17 @@
         <div class="bg-surface rounded-2xl p-6 text-center">
           <!-- Avatar -->
           <div class="flex justify-center mb-4">
-            <Avatar {pubkey} size={96} />
+            {#if profilePicture}
+              <button
+                class="rounded-full overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+                onclick={handleAvatarClick}
+                aria-label="View profile picture"
+              >
+                <Avatar {pubkey} size={96} />
+              </button>
+            {:else}
+              <Avatar {pubkey} size={96} />
+            {/if}
           </div>
 
           <!-- Name -->
@@ -108,3 +129,13 @@
     {/if}
   </div>
 </div>
+
+{#if showPictureModal && profilePicture}
+  <MediaModal
+    src={profilePicture}
+    nhash={null}
+    filename={profileName || animalName}
+    type="image"
+    onclose={() => showPictureModal = false}
+  />
+{/if}
