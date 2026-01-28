@@ -1,4 +1,5 @@
-import { test, expect, type Page, type BrowserContext } from '@playwright/test'
+import { test, expect, useTestRelay } from './fixtures'
+import type { Page, BrowserContext } from '@playwright/test'
 
 // Helper to get invite URL from CopyButton (has title attribute with full URL)
 // Rewrites chat.iris.to URLs to localhost for e2e tests
@@ -20,12 +21,19 @@ async function setupUserWithInvite(page: Page): Promise<string> {
   return getInviteUrl(page)
 }
 
+// Helper to create a context configured to use the test relay
+async function createContext(browser: import('@playwright/test').Browser, relayUrl: string): Promise<BrowserContext> {
+  const context = await browser.newContext()
+  await useTestRelay(context, relayUrl)
+  return context
+}
+
 test.describe('iris chat', () => {
   test.describe('Chat input', () => {
-    test('should focus input when opening or switching chat', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
-      const context3 = await browser.newContext()
+    test('should focus input when opening or switching chat', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
+      const context3 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -85,9 +93,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should persist own messages across reload', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should persist own messages across reload', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -136,9 +144,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should unfocus input on Escape key', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should unfocus input on Escape key', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -174,9 +182,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should keep focus in input after sending message', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should keep focus in input after sending message', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -222,10 +230,10 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should persist message drafts per chat when switching', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
-      const context3 = await browser.newContext()
+    test('should persist message drafts per chat when switching', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
+      const context3 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -355,9 +363,9 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Chat menu', () => {
-    test('should delete chat from header menu', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should delete chat from header menu', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -398,9 +406,9 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Message menu', () => {
-    test('should delete message locally via context menu', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should delete message locally via context menu', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -452,9 +460,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should copy message via context menu', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should copy message via context menu', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       await context1.grantPermissions(['clipboard-read', 'clipboard-write'])
 
@@ -502,9 +510,9 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Media modal', () => {
-    test('should open image in modal overlay when clicked', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should open image in modal overlay when clicked', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -546,9 +554,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should close modal when clicking backdrop', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should close modal when clicking backdrop', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -587,9 +595,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should close modal when pressing Escape', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should close modal when pressing Escape', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -628,9 +636,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should have close button in modal', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should have close button in modal', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -671,9 +679,9 @@ test.describe('iris chat', () => {
   })
 
   test.describe('File attachments', () => {
-    test('should show attachment button in chat', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should show attachment button in chat', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -700,9 +708,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should display file attachment when nhash link is in message', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should display file attachment when nhash link is in message', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -739,9 +747,9 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Reactions', () => {
-    test('should persist reactions across reload', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should persist reactions across reload', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -793,9 +801,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should sync reaction to other user', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should sync reaction to other user', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -840,9 +848,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should add reaction to message on click', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should add reaction to message on click', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -885,9 +893,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should allow only one reaction per user (latest wins)', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should allow only one reaction per user (latest wins)', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -935,9 +943,9 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Profile page', () => {
-    test('should navigate to profile page when clicking avatar in chat header', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should navigate to profile page when clicking avatar in chat header', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -993,9 +1001,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should open existing chat from profile page', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should open existing chat from profile page', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -1039,9 +1047,9 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Two-user chat', () => {
-    test('should allow two users to chat via URL', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should allow two users to chat via URL', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -1082,9 +1090,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should allow two users to chat via paste link', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should allow two users to chat via paste link', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -1126,9 +1134,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should persist chat session across page reload', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should persist chat session across page reload', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()
@@ -1201,9 +1209,9 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should display each others names in chat', async ({ browser }) => {
-      const context1 = await browser.newContext()
-      const context2 = await browser.newContext()
+    test('should display each others names in chat', async ({ browser, testRelay }) => {
+      const context1 = await createContext(browser, testRelay.url)
+      const context2 = await createContext(browser, testRelay.url)
 
       const page1 = await context1.newPage()
       const page2 = await context2.newPage()

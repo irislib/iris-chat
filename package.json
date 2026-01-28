@@ -26,6 +26,7 @@
     "@types/dompurify": "^3.2.0",
     "@types/node": "^24.10.1",
     "@types/qrcode": "^1.5.6",
+    "@types/ws": "^8.18.1",
     "@unocss/preset-icons": "^66.5.10",
     "@unocss/preset-uno": "^66.5.10",
     "@unocss/transformer-directives": "^66.5.10",
@@ -38,7 +39,8 @@
     "vite-plugin-pwa": "^1.2.0",
     "vitest": "^3.2.4",
     "workbox-core": "^7.4.0",
-    "workbox-precaching": "^7.4.0"
+    "workbox-precaching": "^7.4.0",
+    "ws": "^8.19.0"
   },
   "dependencies": {
     "@hashtree/core": "^0.1.1",

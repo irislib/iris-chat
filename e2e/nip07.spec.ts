@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, useTestRelay } from './fixtures'
 import { generateSecretKey, getPublicKey, nip44 } from 'nostr-tools'
 import { bytesToHex } from '@noble/hashes/utils'
 
@@ -133,9 +133,10 @@ test.describe('NIP-07 Login', () => {
     await expect(copyButton).toBeVisible()
   })
 
-  test('should join chat via paste link with NIP-07 login', async ({ browser }) => {
+  test('should join chat via paste link with NIP-07 login', async ({ browser, testRelay }) => {
     // User 1: Regular login (privkey) and create invite
     const context1 = await browser.newContext()
+    await useTestRelay(context1, testRelay.url)
     const page1 = await context1.newPage()
 
     await page1.goto('/')
@@ -145,11 +146,13 @@ test.describe('NIP-07 Login', () => {
     // Get the invite URL
     const copyButton = page1.locator('button[title*="#"]').first()
     await expect(copyButton).toBeVisible()
-    const inviteUrl = await copyButton.getAttribute('title')
-    if (!inviteUrl) throw new Error('Could not get invite URL')
+    const rawUrl = await copyButton.getAttribute('title')
+    if (!rawUrl) throw new Error('Could not get invite URL')
+    const inviteUrl = rawUrl.replace('https://chat.iris.to', 'http://localhost:5173')
 
     // User 2: NIP-07 login and join via paste link
     const context2 = await browser.newContext()
+    await useTestRelay(context2, testRelay.url)
     const page2 = await context2.newPage()
 
     const privateKey2 = generateSecretKey()
