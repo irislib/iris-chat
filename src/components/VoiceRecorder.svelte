@@ -15,10 +15,6 @@
   let recordingTime = $state(0)
   let timerInterval: ReturnType<typeof setInterval> | null = null
 
-  // Preview state
-  let previewFile: File | null = $state(null)
-  let previewUrl: string | null = $state(null)
-
   // Auto-start recording on mount
   onMount(() => {
     startRecording()
@@ -32,10 +28,6 @@
     if (timerInterval) {
       clearInterval(timerInterval)
       timerInterval = null
-    }
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl)
-      previewUrl = null
     }
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       mediaRecorder.stream.getTracks().forEach(track => track.stop())
@@ -64,14 +56,6 @@
         }
       }
 
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(track => track.stop())
-        if (timerInterval) {
-          clearInterval(timerInterval)
-          timerInterval = null
-        }
-      }
-
       mediaRecorder.start()
       isRecording = true
 
@@ -86,7 +70,7 @@
     }
   }
 
-  function stopRecording() {
+  function stopAndSend() {
     if (!mediaRecorder || mediaRecorder.state !== 'recording') return
 
     mediaRecorder.onstop = () => {
@@ -100,29 +84,17 @@
       const mimeType = mediaRecorder!.mimeType
       const ext = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'm4a' : 'ogg'
       const blob = new Blob(audioChunks, { type: mimeType })
-      previewFile = new File([blob], `voice-${Date.now()}.${ext}`, { type: mimeType })
-      previewUrl = URL.createObjectURL(blob)
+      const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mimeType })
 
-      isRecording = false
+      onrecorded(file)
     }
 
     mediaRecorder.stop()
   }
 
-  function send() {
-    if (previewFile) {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl)
-        previewUrl = null
-      }
-      onrecorded(previewFile)
-    }
-  }
-
   function cancel() {
     cleanup()
     isRecording = false
-    previewFile = null
     oncancel()
   }
 
@@ -133,31 +105,7 @@
   }
 </script>
 
-{#if previewFile && previewUrl}
-  <!-- Preview UI -->
-  <div class="flex items-center gap-2 flex-1">
-    <button
-      class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-red-400 hover:text-red-300 hover:bg-surface-light rounded-full transition-colors"
-      onclick={cancel}
-      aria-label="Discard recording"
-    >
-      <span class="i-carbon-trash-can text-xl"></span>
-    </button>
-
-    <div class="flex-1 flex items-center bg-surface-light rounded-full overflow-hidden">
-      <!-- svelte-ignore a11y_media_has_caption -->
-      <audio src={previewUrl} controls class="w-full h-11 [&::-webkit-media-controls-panel]:bg-transparent"></audio>
-    </div>
-
-    <button
-      class="btn-primary w-11 h-11 p-0 flex items-center justify-center flex-shrink-0"
-      onclick={send}
-      aria-label="Send voice message"
-    >
-      <span class="i-carbon-send text-xl"></span>
-    </button>
-  </div>
-{:else if isRecording}
+{#if isRecording}
   <!-- Recording UI -->
   <div class="flex items-center gap-2 flex-1">
     <button
@@ -177,11 +125,11 @@
     </div>
 
     <button
-      class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-white hover:bg-surface-lighter bg-surface-light rounded-full transition-colors"
-      onclick={stopRecording}
-      aria-label="Stop recording"
+      class="btn-primary w-11 h-11 p-0 flex items-center justify-center flex-shrink-0"
+      onclick={stopAndSend}
+      aria-label="Send voice message"
     >
-      <span class="i-carbon-stop-filled text-xl"></span>
+      <span class="i-carbon-send text-xl"></span>
     </button>
   </div>
 {:else}
