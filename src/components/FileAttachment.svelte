@@ -135,7 +135,7 @@
       />
     </button>
   {:else if isAudio && mediaUrl}
-    <div class="rounded-lg overflow-hidden {isMine ? 'audio-mine' : ''}">
+    <div class="rounded-lg overflow-hidden p-2 {isMine ? 'bg-primary' : 'bg-surface-light'}">
       <audio
         src={mediaUrl}
         controls
@@ -145,14 +145,14 @@
   {:else if isVideo}
     <!-- Video placeholder - click to open in modal -->
     <button
-      class="relative flex items-center justify-center w-48 h-32 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors"
+      class="relative flex items-center justify-center w-48 h-32 rounded-lg transition-colors {isMine ? 'bg-primary hover:bg-primary/80' : 'bg-surface-light hover:bg-surface-lighter'}"
       onclick={handleVideoClick}
       aria-label="Play video {filename}"
     >
       <div class="absolute inset-0 flex items-center justify-center">
-        <span class="i-carbon-play-filled text-4xl text-gray-400"></span>
+        <span class="i-carbon-play-filled text-4xl {isMine ? 'text-white/70' : 'text-gray-400'}"></span>
       </div>
-      <span class="absolute bottom-2 left-2 right-2 text-xs text-gray-400 truncate">{filename}</span>
+      <span class="absolute bottom-2 left-2 right-2 text-xs truncate {isMine ? 'text-white/70' : 'text-gray-400'}">{filename}</span>
     </button>
   {:else if isAudio}
     <!-- Audio placeholder - click to load -->
@@ -167,21 +167,12 @@
   {:else}
     <!-- Generic file download -->
     <button
-      class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors text-sm"
+      class="flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-sm {isMine ? 'bg-primary hover:bg-primary/80' : 'bg-surface-light hover:bg-surface-lighter'}"
       onclick={handleDownload}
     >
-      <span class="i-carbon-document-download text-lg"></span>
+      <span class="i-carbon-document-download text-lg {isMine ? 'text-white/70' : ''}"></span>
       <span class="truncate max-w-48">{filename}</span>
     </button>
   {/if}
 </div>
 
-<style>
-  /* Style audio controls for "mine" messages */
-  .audio-mine audio {
-    filter: brightness(1.1) saturate(0.9);
-  }
-  .audio-mine audio::-webkit-media-controls-panel {
-    background: rgba(255, 255, 255, 0.15);
-  }
-</style>
