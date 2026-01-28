@@ -1,12 +1,14 @@
 import { test, expect, type Page, type BrowserContext } from '@playwright/test'
 
 // Helper to get invite URL from CopyButton (has title attribute with full URL)
+// Rewrites chat.iris.to URLs to localhost for e2e tests
 async function getInviteUrl(page: Page): Promise<string> {
   const copyButton = page.locator('button[title*="#"]').first()
   await expect(copyButton).toBeVisible()
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get invite URL')
-  return url
+  // Rewrite production URL to test server (invite URLs use chat.iris.to on localhost)
+  return url.replace('https://chat.iris.to', 'http://localhost:5173')
 }
 
 // Helper to setup a user and get their invite URL
