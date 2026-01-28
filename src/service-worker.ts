@@ -186,11 +186,16 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
 
 // Check if a specific chat is currently open in a visible window
 async function isChatOpen(chatId: string): Promise<boolean> {
-  if (currentOpenChatId !== chatId) return false
-
-  // Verify there's actually a visible client
   const clients = await self.clients.matchAll({ type: 'window' })
-  return clients.some(c => c.visibilityState === 'visible')
+
+  // If no clients or none visible, clear stale state
+  const hasVisibleClient = clients.some(c => c.visibilityState === 'visible')
+  if (!hasVisibleClient) {
+    currentOpenChatId = null
+    return false
+  }
+
+  return currentOpenChatId === chatId
 }
 
 // Handle push notifications
@@ -251,11 +256,14 @@ self.addEventListener('push', (event) => {
             return
           }
 
+          // Skip notifications for reactions
+          if (result.isReaction) {
+            return
+          }
+
           const senderName = await getDisplayName(result.chatId)
           let body: string
-          if (result.isReaction && result.emoji) {
-            body = result.emoji
-          } else if (result.success && result.content) {
+          if (result.success && result.content) {
             body = result.content
           } else {
             body = 'New message'

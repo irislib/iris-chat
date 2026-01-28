@@ -145,6 +145,8 @@
           currentChat.set(chat)
           currentView = 'chat'
           mobileView = 'main'
+          // Tell service worker this chat is now open
+          postToServiceWorker({ type: 'CHAT_OPENED', chatId: chat.id })
           // Clear any remaining notifications for this chat
           postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
         } else {
@@ -176,6 +178,8 @@
         currentChat.set(chatSession)
         currentView = 'chat'
         mobileView = 'main'
+        // Tell service worker this chat is now open
+        postToServiceWorker({ type: 'CHAT_OPENED', chatId: chatSession.id })
       })
 
       // Load and monitor saved invites
@@ -200,6 +204,8 @@
           mobileView = 'main'
           // Clear the hash
           history.replaceState(null, '', window.location.pathname)
+          // Tell service worker this chat is now open
+          postToServiceWorker({ type: 'CHAT_OPENED', chatId: chat.id })
           // Clear any notifications for this chat
           postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
         }
@@ -239,6 +245,8 @@
       currentChat.set(chatSession)
       currentView = 'chat'
       mobileView = 'main'
+      // Tell service worker this chat is now open
+      postToServiceWorker({ type: 'CHAT_OPENED', chatId: chatSession.id })
     })
 
     // Load and monitor saved invites
@@ -254,7 +262,9 @@
       navigateTo('chat')
     }
     mobileView = 'main'
-    // Clear any notification for this chat
+    // Tell service worker this chat is now open (suppresses notifications)
+    postToServiceWorker({ type: 'CHAT_OPENED', chatId: chat.id })
+    // Clear any existing notification for this chat
     postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
   }
 
@@ -265,7 +275,9 @@
       navigateTo('chat')
     }
     mobileView = 'main'
-    // Clear any notification for this chat
+    // Tell service worker this chat is now open (suppresses notifications)
+    postToServiceWorker({ type: 'CHAT_OPENED', chatId: event.detail.chat.id })
+    // Clear any existing notification for this chat
     postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: event.detail.chat.id })
   }
 
@@ -281,6 +293,8 @@
   function handleBack() {
     selectedChat = null
     currentChat.set(null)
+    // Tell service worker no chat is open
+    postToServiceWorker({ type: 'CHAT_OPENED', chatId: null })
     if (currentView !== 'chat') {
       navigateTo('chat')
     }
