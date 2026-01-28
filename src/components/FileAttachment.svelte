@@ -13,9 +13,10 @@
   interface Props {
     nhash: string
     filename: string
+    isMine?: boolean
   }
 
-  let { nhash, filename }: Props = $props()
+  let { nhash, filename, isMine = false }: Props = $props()
 
   let mediaUrl = $state<string | null>(null)
   let loading = $state(false)
@@ -95,8 +96,8 @@
 <div class="file-attachment mt-2">
   {#if loading && isAudio}
     <!-- Audio loading - maintain button size -->
-    <div class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg text-sm">
-      <span class="i-carbon-circle-dash animate-spin text-lg text-gray-400"></span>
+    <div class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {isMine ? 'bg-white/20' : 'bg-surface-light'}">
+      <span class="i-carbon-circle-dash animate-spin text-lg {isMine ? 'text-white/70' : 'text-gray-400'}"></span>
       <span class="truncate max-w-48">{filename}</span>
     </div>
   {:else if loading}
@@ -134,11 +135,13 @@
       />
     </button>
   {:else if isAudio && mediaUrl}
-    <audio
-      src={mediaUrl}
-      controls
-      class="w-full max-w-xs"
-    ></audio>
+    <div class="rounded-lg overflow-hidden {isMine ? 'audio-mine' : ''}">
+      <audio
+        src={mediaUrl}
+        controls
+        class="w-full max-w-xs block"
+      ></audio>
+    </div>
   {:else if isVideo}
     <!-- Video placeholder - click to open in modal -->
     <button
@@ -154,11 +157,11 @@
   {:else if isAudio}
     <!-- Audio placeholder - click to load -->
     <button
-      class="flex items-center gap-2 px-3 py-2 bg-surface-light rounded-lg hover:bg-surface-lighter transition-colors text-sm"
+      class="flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-sm {isMine ? 'bg-white/20 hover:bg-white/30' : 'bg-surface-light hover:bg-surface-lighter'}"
       onclick={handleLoadClick}
       aria-label="Load audio {filename}"
     >
-      <span class="i-carbon-play-filled text-lg text-gray-400"></span>
+      <span class="i-carbon-play-filled text-lg {isMine ? 'text-white/70' : 'text-gray-400'}"></span>
       <span class="truncate max-w-48">{filename}</span>
     </button>
   {:else}
@@ -172,3 +175,13 @@
     </button>
   {/if}
 </div>
+
+<style>
+  /* Style audio controls for "mine" messages */
+  .audio-mine audio {
+    filter: brightness(1.1) saturate(0.9);
+  }
+  .audio-mine audio::-webkit-media-controls-panel {
+    background: rgba(255, 255, 255, 0.15);
+  }
+</style>

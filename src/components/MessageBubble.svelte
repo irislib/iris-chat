@@ -226,7 +226,7 @@
 
       <!-- File attachments -->
       {#each fileLinks as link (link.nhash + link.filename)}
-        <FileAttachment nhash={link.nhash} filename={link.filename} />
+        <FileAttachment nhash={link.nhash} filename={link.filename} isMine={message.isMine} />
       {/each}
 
       <!-- Reactions display - positioned to overlap bottom of message -->
