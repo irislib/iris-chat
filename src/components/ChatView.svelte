@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte'
   import { sendMessage, sendReaction, deleteChat, deleteMessage, type ChatSession, currentChat } from '../lib/chat'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
+  import { getDraft, setDraft, clearDraft } from '../lib/drafts'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
@@ -28,13 +29,31 @@
     error: string | null
   }
 
-  let messageText = $state('')
+  let messageText = $state(getDraft(chat.id))
   let messagesContainer = $state<HTMLDivElement | null>(null)
   let inputRef = $state<HTMLTextAreaElement | null>(null)
   let fileInputRef = $state<HTMLInputElement | null>(null)
   let showMenu = $state(false)
   let pendingAttachment = $state<PendingAttachment | null>(null)
   let isRecordingVoice = $state(false)
+  let activeChatId = $state(chat.id)
+
+  // Save draft for old chat and restore draft for new chat when switching
+  $effect(() => {
+    const newChatId = chat.id
+    if (newChatId !== activeChatId) {
+      // Save current draft for the old chat
+      setDraft(activeChatId, messageText)
+      // Restore draft for the new chat
+      messageText = getDraft(newChatId)
+      activeChatId = newChatId
+    }
+  })
+
+  // Continuously persist draft while typing
+  $effect(() => {
+    setDraft(activeChatId, messageText)
+  })
 
   // Max file size for preview (10MB)
   const MAX_PREVIEW_SIZE = 10 * 1024 * 1024
@@ -56,6 +75,7 @@
     if (!text) return
 
     messageText = ''
+    clearDraft(chat.id)
     clearAttachment()
 
     sendMessage(chat, text)

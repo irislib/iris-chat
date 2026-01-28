@@ -219,6 +219,77 @@ test.describe('iris chat', () => {
         await context2.close()
       }
     })
+
+    test('should persist message drafts per chat when switching', async ({ browser }) => {
+      const context1 = await browser.newContext()
+      const context2 = await browser.newContext()
+      const context3 = await browser.newContext()
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+      const page3 = await context3.newPage()
+
+      try {
+        // User 1 creates first chat
+        const inviteUrl1 = await setupUserWithInvite(page1)
+
+        // User 2 joins first chat
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl1)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message so chat appears in sidebar
+        await page2.getByPlaceholder('Type a message...').fill('Chat one')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Chat one' })).toBeVisible()
+
+        // User 1 types a draft in chat 1 (but does NOT send)
+        await page1.getByPlaceholder('Type a message...').fill('Draft for chat one')
+
+        // User 1 goes back to create second chat
+        await page1.getByRole('button', { name: 'Back' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByRole('button', { name: 'Create New Invite' }).click()
+        const inviteUrl2 = await getInviteUrl(page1)
+
+        // User 3 joins second chat
+        await page3.goto('/')
+        await page3.getByRole('button', { name: 'Go' }).click()
+        await page3.getByRole('button', { name: 'New Chat' }).click()
+        await page3.getByPlaceholder('Paste invite link').fill(inviteUrl2)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 3 sends a message so chat 2 appears in sidebar
+        await page3.getByPlaceholder('Type a message...').fill('Chat two')
+        await page3.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Chat two' })).toBeVisible()
+
+        // User 1 types a draft in chat 2
+        await page1.getByPlaceholder('Type a message...').fill('Draft for chat two')
+
+        // Switch back to chat 1
+        await page1.getByRole('button', { name: 'Back' }).click()
+        await page1.locator('button').filter({ hasText: 'Chat one' }).click()
+
+        // Draft for chat 1 should be restored
+        await expect(page1.getByPlaceholder('Type a message...')).toHaveValue('Draft for chat one')
+
+        // Switch back to chat 2
+        await page1.getByRole('button', { name: 'Back' }).click()
+        await page1.locator('button').filter({ hasText: 'Chat two' }).click()
+
+        // Draft for chat 2 should be restored
+        await expect(page1.getByPlaceholder('Type a message...')).toHaveValue('Draft for chat two')
+      } finally {
+        await context1.close()
+        await context2.close()
+        await context3.close()
+      }
+    })
   })
 
   test.describe('Login', () => {
