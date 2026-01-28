@@ -7,6 +7,7 @@
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
   import MediaModal from './MediaModal.svelte'
+  import VoiceRecorder from './VoiceRecorder.svelte'
 
   interface Props {
     chat: ChatSession
@@ -33,6 +34,7 @@
   let fileInputRef = $state<HTMLInputElement | null>(null)
   let showMenu = $state(false)
   let pendingAttachment = $state<PendingAttachment | null>(null)
+  let isRecordingVoice = $state(false)
 
   // Max file size for preview (10MB)
   const MAX_PREVIEW_SIZE = 10 * 1024 * 1024
@@ -87,6 +89,60 @@
       URL.revokeObjectURL(pendingAttachment.previewUrl)
     }
     pendingAttachment = null
+  }
+
+  async function handleVoiceRecorded(file: File) {
+    isRecordingVoice = false
+
+    // Clear any existing attachment
+    clearAttachment()
+
+    // Set pending attachment (no preview for audio)
+    pendingAttachment = {
+      file,
+      previewUrl: null,
+      nhash: null,
+      uploading: true,
+      progress: 0,
+      error: null,
+    }
+
+    // Start upload
+    try {
+      const { nhash } = await uploadFile(file, (bytesUploaded, totalBytes) => {
+        if (pendingAttachment) {
+          pendingAttachment = {
+            ...pendingAttachment,
+            progress: Math.round((bytesUploaded / totalBytes) * 100),
+          }
+        }
+      })
+
+      if (pendingAttachment) {
+        pendingAttachment = {
+          ...pendingAttachment,
+          nhash,
+          uploading: false,
+          progress: 100,
+        }
+      }
+
+      // Auto-send voice message
+      handleSend()
+    } catch (e) {
+      console.error('Failed to upload voice message:', e)
+      if (pendingAttachment) {
+        pendingAttachment = {
+          ...pendingAttachment,
+          uploading: false,
+          error: e instanceof Error ? e.message : 'Upload failed',
+        }
+      }
+    }
+  }
+
+  function handleVoiceCancel() {
+    isRecordingVoice = false
   }
 
   async function handleFileSelect(e: Event) {
@@ -346,34 +402,55 @@
         accept="image/*,video/*,audio/*,.pdf,.txt,.json,.md"
       />
 
-      <!-- Attachment button -->
-      <button
-        class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
-        onclick={() => fileInputRef?.click()}
-        disabled={pendingAttachment?.uploading}
-        aria-label="Attach file"
-      >
-        <span class="i-carbon-attachment text-xl"></span>
-      </button>
+      {#if isRecordingVoice}
+        <!-- Voice recording UI -->
+        <VoiceRecorder
+          onrecorded={handleVoiceRecorded}
+          oncancel={handleVoiceCancel}
+        />
+      {:else}
+        <!-- Attachment button -->
+        <button
+          class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
+          onclick={() => fileInputRef?.click()}
+          disabled={pendingAttachment?.uploading}
+          aria-label="Attach file"
+        >
+          <span class="i-carbon-attachment text-xl"></span>
+        </button>
 
-      <!-- svelte-ignore a11y_autofocus -->
-      <textarea
-        bind:this={inputRef}
-        bind:value={messageText}
-        onkeydown={handleKeydown}
-        placeholder="Type a message..."
-        class="input-field flex-1 resize-none min-h-[44px] max-h-32 py-3"
-        rows="1"
-        autofocus
-      ></textarea>
-      <button
-        class="btn-primary w-11 h-11 p-0 flex items-center justify-center flex-shrink-0"
-        onclick={handleSend}
-        disabled={!canSend}
-        aria-label="Send"
-      >
-        <span class="i-carbon-send text-xl"></span>
-      </button>
+        <!-- svelte-ignore a11y_autofocus -->
+        <textarea
+          bind:this={inputRef}
+          bind:value={messageText}
+          onkeydown={handleKeydown}
+          placeholder="Type a message..."
+          class="input-field flex-1 resize-none min-h-[44px] max-h-32 py-3"
+          rows="1"
+          autofocus
+        ></textarea>
+
+        <!-- Voice/Send button -->
+        {#if messageText.trim() || pendingAttachment?.nhash}
+          <button
+            class="btn-primary w-11 h-11 p-0 flex items-center justify-center flex-shrink-0"
+            onclick={handleSend}
+            disabled={!canSend}
+            aria-label="Send"
+          >
+            <span class="i-carbon-send text-xl"></span>
+          </button>
+        {:else}
+          <button
+            class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
+            onclick={() => isRecordingVoice = true}
+            disabled={pendingAttachment?.uploading}
+            aria-label="Record voice message"
+          >
+            <span class="i-carbon-microphone text-xl"></span>
+          </button>
+        {/if}
+      {/if}
     </div>
   </div>
 </div>
