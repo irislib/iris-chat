@@ -188,13 +188,36 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
 async function isChatOpen(chatId: string): Promise<boolean> {
   const clients = await self.clients.matchAll({ type: 'window' })
 
-  // If no clients or none visible, clear stale state
-  const hasVisibleClient = clients.some(c => c.visibilityState === 'visible')
-  if (!hasVisibleClient) {
+  // Find visible clients
+  const visibleClients = clients.filter(c => c.visibilityState === 'visible')
+  
+  if (visibleClients.length === 0) {
     currentOpenChatId = null
+    console.log('[sw] isChatOpen: no visible clients')
     return false
   }
 
+  // Ask visible clients what chat is currently open
+  // This handles the case where SW was restarted and lost in-memory state
+  for (const client of visibleClients) {
+    try {
+      const channel = new MessageChannel()
+      const response = await Promise.race([
+        new Promise<string | null>((resolve) => {
+          channel.port1.onmessage = (e) => resolve(e.data?.chatId ?? null)
+          client.postMessage({ type: 'GET_OPEN_CHAT' }, [channel.port2])
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 100))
+      ])
+      if (response !== null) {
+        currentOpenChatId = response
+      }
+    } catch {
+      // Client might not respond, continue
+    }
+  }
+
+  console.log('[sw] isChatOpen check:', { chatId, currentOpenChatId, match: currentOpenChatId === chatId })
   return currentOpenChatId === chatId
 }
 
@@ -357,6 +380,7 @@ self.addEventListener('activate', (event) => {
 // Listen for messages from client
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'CHAT_OPENED') {
+    console.log('[sw] CHAT_OPENED received:', event.data.chatId)
     currentOpenChatId = event.data.chatId || null
   }
 

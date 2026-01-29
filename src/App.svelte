@@ -156,14 +156,15 @@
     }
     navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage)
 
-    // Handle IS_CHAT_OPEN queries from service worker (via MessageChannel)
-    const handleIsOpenMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'IS_CHAT_OPEN' && event.ports[0]) {
-        const isOpen = selectedChat?.id === event.data.chatId && document.visibilityState === 'visible'
-        event.ports[0].postMessage({ isOpen })
+    // Handle GET_OPEN_CHAT queries from service worker (via MessageChannel)
+    const handleGetOpenChat = (event: MessageEvent) => {
+      if (event.data?.type === 'GET_OPEN_CHAT' && event.ports[0]) {
+        const chatId = document.visibilityState === 'visible' ? (selectedChat?.id || null) : null
+        console.log('[app] GET_OPEN_CHAT response:', chatId)
+        event.ports[0].postMessage({ chatId })
       }
     }
-    navigator.serviceWorker?.addEventListener('message', handleIsOpenMessage)
+    navigator.serviceWorker?.addEventListener('message', handleGetOpenChat)
 
     // Try to auto-login
     const isLoggedIn = await autoLogin()
@@ -228,7 +229,7 @@
       window.removeEventListener('popstate', handlePopState)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
-      navigator.serviceWorker?.removeEventListener('message', handleIsOpenMessage)
+      navigator.serviceWorker?.removeEventListener('message', handleGetOpenChat)
     }
     })()
 
