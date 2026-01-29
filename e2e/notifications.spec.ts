@@ -1,4 +1,19 @@
 import { test, expect } from './fixtures'
+import type { Page } from '@playwright/test'
+
+// Helper: reload page, retrying if navigation is aborted by background activity
+async function safeReload(page: Page) {
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded' })
+  } catch (e: any) {
+    if (e.message?.includes('ERR_ABORTED') || e.message?.includes('frame was detached')) {
+      await page.waitForTimeout(500)
+      await page.reload({ waitUntil: 'domcontentloaded' })
+    } else {
+      throw e
+    }
+  }
+}
 
 test.describe('Notifications', () => {
   test.describe('Settings Page', () => {
@@ -92,7 +107,7 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Save' }).click()
 
       // Reload page - settings page should still be shown (URL has #settings)
-      await page.reload()
+      await safeReload(page)
 
       // Settings page should already be visible after reload
       await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
@@ -128,21 +143,32 @@ test.describe('Notifications', () => {
       await expect(page.getByText('Get notified when you receive new messages')).not.toBeVisible()
     })
 
-    test('should persist declined state in localStorage when declined via store', async ({ page }) => {
+    test('should persist declined state in localStorage when declined via store', async ({ context, page }) => {
+      // Pre-inject the declined notification state so it's set on every page load
+      const notifValue = JSON.stringify({
+        enabled: false,
+        serverUrl: 'https://notifications.iris.to',
+        declined: true
+      })
+      await context.addInitScript((val: string) => {
+        localStorage.setItem('iris-chat-notifications', val)
+      }, notifValue)
+
+      // Login first to establish identity
       await page.goto('/')
       await page.getByRole('button', { name: 'Go' }).click()
+      await expect(page.getByRole('heading', { name: 'New Chat' })).toBeVisible()
+      // Let app settle after login (avoid navigation race)
+      await page.waitForTimeout(200)
 
-      // Manually set declined state via localStorage (simulating decline action)
-      await page.evaluate(() => {
-        localStorage.setItem('iris-chat-notifications', JSON.stringify({
-          enabled: false,
-          serverUrl: 'https://notifications.iris.to',
-          declined: true
-        }))
-      })
-
-      // Reload page
-      await page.reload()
+      // Navigate fresh, retrying if app is mid-navigation
+      try {
+        await page.goto('/')
+      } catch {
+        await page.waitForTimeout(300)
+        await page.goto('/')
+      }
+      await expect(page.getByRole('heading', { name: 'New Chat' })).toBeVisible()
 
       // Verify localStorage was persisted
       const settings = await page.evaluate(() => localStorage.getItem('iris-chat-notifications'))

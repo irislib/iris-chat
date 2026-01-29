@@ -56,6 +56,14 @@ export class TestRelay {
       ws.on('close', () => {
         this.subscriptions.delete(ws)
       })
+
+      ws.on('error', (err) => {
+        console.error(`[relay:${this.port}] ws error:`, err.message)
+      })
+    })
+
+    this.wss.on('error', (err) => {
+      console.error(`[relay] wss error:`, err.message)
     })
   }
 
@@ -69,7 +77,7 @@ export class TestRelay {
       // Send OK
       ws.send(JSON.stringify(['OK', event.id, true, '']))
       // Broadcast to matching subscriptions
-      this.broadcastEvent(event)
+      this.broadcastEvent(event, ws)
     } else if (type === 'REQ') {
       const subId = msg[1] as string
       const filters = msg.slice(2) as Filter[]
@@ -96,16 +104,23 @@ export class TestRelay {
     }
   }
 
-  private broadcastEvent(event: NostrEvent) {
+  private broadcastEvent(event: NostrEvent, sender?: WebSocket) {
+    let matched = 0
     for (const [ws, subs] of this.subscriptions) {
       if (ws.readyState !== WebSocket.OPEN) continue
       for (const [subId, filters] of subs) {
         if (this.matchesFilters(event, filters)) {
           ws.send(JSON.stringify(['EVENT', subId, event]))
+          matched++
         }
       }
     }
+    if (this.debug) {
+      console.log(`[relay:${this.port}] broadcast kind=${event.kind} id=${event.id.slice(0,8)} → ${matched} subscribers (${this.subscriptions.size} clients)`)
+    }
   }
+
+  public debug = false
 
   private matchesFilters(event: NostrEvent, filters: Filter[]): boolean {
     return filters.some(f => this.matchesFilter(event, f))

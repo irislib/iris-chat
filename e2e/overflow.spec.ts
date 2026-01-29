@@ -1,11 +1,11 @@
 import { test, expect, useTestRelay } from './fixtures'
 
 test.describe('Message overflow', () => {
-  test('long text without spaces should not overflow container', async ({ browser, testRelay }) => {
+  test('long text without spaces should not overflow container', async ({ browser, testRelayUrl }) => {
     const context1 = await browser.newContext()
-    await useTestRelay(context1, testRelay.url)
+    await useTestRelay(context1, testRelayUrl)
     const context2 = await browser.newContext()
-    await useTestRelay(context2, testRelay.url)
+    await useTestRelay(context2, testRelayUrl)
 
     const page1 = await context1.newPage()
     const page2 = await context2.newPage()
@@ -20,7 +20,7 @@ test.describe('Message overflow', () => {
       await expect(copyButton).toBeVisible()
       const rawInviteUrl = await copyButton.getAttribute('title')
       if (!rawInviteUrl) throw new Error('Could not get invite URL')
-      const inviteUrl = rawInviteUrl.replace('https://chat.iris.to', 'http://localhost:5173')
+      const inviteUrl = rawInviteUrl.replace('https://chat.iris.to', 'http://localhost:4173')
 
       // User 2: Join via paste link
       await page2.goto('/')
