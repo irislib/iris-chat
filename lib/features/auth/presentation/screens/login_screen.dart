@@ -59,18 +59,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             children: [
               const Spacer(),
               // Logo/Title
-              Icon(
-                Icons.chat_bubble_outline,
-                size: 80,
-                color: theme.colorScheme.primary,
+              Image.asset(
+                'assets/icons/app_icon.png',
+                width: 100,
+                height: 100,
               ),
               const SizedBox(height: 24),
-              Text(
-                'Iris',
-                style: theme.textTheme.headlineLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+              RichText(
                 textAlign: TextAlign.center,
+                text: TextSpan(
+                  style: theme.textTheme.headlineLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: 'iris',
+                      style: TextStyle(color: theme.colorScheme.primary),
+                    ),
+                    const TextSpan(text: ' chat'),
+                  ],
+                ),
               ),
               const SizedBox(height: 48),
 

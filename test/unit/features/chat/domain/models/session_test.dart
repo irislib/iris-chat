@@ -17,30 +17,27 @@ void main() {
         expect(session.displayName, 'Alice');
       });
 
-      test('returns animal name when no name', () {
+      test('returns animal name when no custom name', () {
+        const pubkey =
+            'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
         final session = ChatSession(
           id: 'session-1',
-          recipientPubkeyHex: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+          recipientPubkeyHex: pubkey,
           createdAt: DateTime.now(),
         );
 
-        expect(
-          session.displayName,
-          getAnimalName(session.recipientPubkeyHex),
-        );
+        expect(session.displayName, getAnimalName(pubkey));
       });
 
-      test('returns animal name even if pubkey is short', () {
+      test('returns animal name for short pubkey', () {
+        const pubkey = 'short';
         final session = ChatSession(
           id: 'session-1',
-          recipientPubkeyHex: 'short',
+          recipientPubkeyHex: pubkey,
           createdAt: DateTime.now(),
         );
 
-        expect(
-          session.displayName,
-          getAnimalName(session.recipientPubkeyHex),
-        );
+        expect(session.displayName, getAnimalName(pubkey));
       });
     });
 

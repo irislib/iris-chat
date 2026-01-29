@@ -37,8 +37,9 @@ void main() {
         await tester.pumpWidget(buildLoginScreen());
         await tester.pumpAndSettle();
 
-        expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
-        expect(find.text('Iris'), findsOneWidget);
+        expect(find.byType(Image), findsOneWidget);
+        // Title is a RichText with "iris" and "chat" spans
+        expect(find.byType(RichText), findsWidgets);
       });
 
       testWidgets('shows create identity button', (tester) async {

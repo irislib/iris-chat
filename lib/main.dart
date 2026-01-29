@@ -23,11 +23,11 @@ class IrisChatApp extends ConsumerWidget {
       splitScreenMode: true,
       builder: (context, child) {
         return MaterialApp.router(
-          title: 'Iris Chat',
+          title: 'iris chat',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light,
           darkTheme: AppTheme.dark,
-          themeMode: ThemeMode.system,
+          themeMode: ThemeMode.dark,
           routerConfig: router,
         );
       },

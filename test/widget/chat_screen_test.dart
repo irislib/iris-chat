@@ -23,6 +23,8 @@ class MockMessageLocalDatasource extends Mock
 class MockNostrService extends Mock implements NostrService {}
 class MockSessionManagerService extends Mock implements SessionManagerService {}
 
+class MockProfileService extends Mock implements ProfileService {}
+
 void main() {
   late MockSessionLocalDatasource mockSessionDatasource;
   late MockMessageLocalDatasource mockMessageDatasource;
@@ -83,8 +85,7 @@ void main() {
         nostrServiceProvider.overrideWithValue(mockNostrService),
         sessionManagerServiceProvider.overrideWithValue(mockSessionManagerService),
         sessionStateProvider.overrideWith((ref) {
-          final notifier =
-              SessionNotifier(mockSessionDatasource, ProfileService(mockNostrService));
+          final notifier = SessionNotifier(mockSessionDatasource, MockProfileService());
           // Pre-populate the sessions
           notifier.state = SessionState(
             sessions: [effectiveSession],
@@ -103,6 +104,13 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Alice'), findsOneWidget);
+      });
+
+      testWidgets('shows encrypted status', (tester) async {
+        await tester.pumpWidget(buildChatScreen());
+        await tester.pumpAndSettle();
+
+        expect(find.text('End-to-end encrypted'), findsAtLeastNWidgets(1));
       });
 
       testWidgets('shows info button', (tester) async {
