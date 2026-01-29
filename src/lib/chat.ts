@@ -116,6 +116,7 @@ export interface ChatMessage {
   content: string
   timestamp: number
   isMine: boolean
+  replyTo?: string  // ID of the message being replied to
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
 }
 
@@ -609,12 +610,20 @@ function subscribeToSession(chatSession: ChatSession) {
       return
     }
 
+    // Extract reply tag if present
+    const replyTag = rumor.tags?.find(
+      (tag: string[]) => tag[0] === 'e' && tag[3] === 'reply'
+    )?.[1] || rumor.tags?.find(
+      (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
+    )?.[1]
+
     // Use outer event ID for message ID - allows service worker to look up by push event ID
     const message: ChatMessage = {
       id: outerEvent?.id || rumor.id,
       content: rumor.content,
       timestamp: rumor.created_at * 1000,
       isMine: rumor.pubkey === myPubkey,
+      ...(replyTag && { replyTo: replyTag }),
     }
 
     // Check if message already exists
@@ -692,8 +701,15 @@ function handleIncomingReaction(chatSession: ChatSession, reaction: ReactionPayl
 }
 
 // Send a message
-export function sendMessage(chatSession: ChatSession, text: string): void {
-  const { event } = chatSession.session.send(text)
+export function sendMessage(chatSession: ChatSession, text: string, replyTo?: string): void {
+  const tags: string[][] = []
+  if (replyTo) {
+    tags.push(['e', replyTo, '', 'reply'])
+  }
+
+  const { event } = tags.length > 0
+    ? chatSession.session.sendEvent({ content: text, kind: 14, tags })
+    : chatSession.session.send(text)
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -706,6 +722,7 @@ export function sendMessage(chatSession: ChatSession, text: string): void {
     content: text,
     timestamp: Date.now(),
     isMine: true,
+    ...(replyTo && { replyTo }),
   }
 
   const updatedMessages = [...currentSession.messages, message]
@@ -894,6 +911,7 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       content: message.content,
       timestamp: message.timestamp,
       isMine: message.isMine,
+      ...(message.replyTo && { replyTo: message.replyTo }),
       reactions
     }
     await saveMessageToDb(storedMessage)
@@ -926,6 +944,7 @@ export async function loadChatsFromStorage(): Promise<void> {
             content: m.content,
             timestamp: m.timestamp,
             isMine: m.isMine,
+            ...(m.replyTo && { replyTo: m.replyTo }),
             reactions: m.reactions
           }))
           .sort((a, b) => a.timestamp - b.timestamp)

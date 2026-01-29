@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { sendMessage, sendReaction, deleteChat, deleteMessage, type ChatSession, currentChat } from '../lib/chat'
+  import { sendMessage, sendReaction, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
@@ -37,6 +37,7 @@
   let pendingAttachment = $state<PendingAttachment | null>(null)
   let isRecordingVoice = $state(false)
   let activeChatId = $state(chat.id)
+  let replyingTo = $state<ChatMessage | null>(null)
 
   // Save draft for old chat and restore draft for new chat when switching
   $effect(() => {
@@ -74,11 +75,13 @@
 
     if (!text) return
 
+    const replyToId = replyingTo?.id
     messageText = ''
     clearDraft(chat.id)
     clearAttachment()
+    replyingTo = null
 
-    sendMessage(chat, text)
+    sendMessage(chat, text, replyToId)
 
     requestAnimationFrame(() => inputRef?.focus())
   }
@@ -88,8 +91,17 @@
       e.preventDefault()
       handleSend()
     } else if (e.key === 'Escape') {
-      inputRef?.blur()
+      if (replyingTo) {
+        replyingTo = null
+      } else {
+        inputRef?.blur()
+      }
     }
+  }
+
+  function handleReply(message: ChatMessage) {
+    replyingTo = message
+    requestAnimationFrame(() => inputRef?.focus())
   }
 
   async function handleReact(messageId: string, emoji: string) {
@@ -252,6 +264,8 @@
   })
 
   let messages = $derived($currentChat?.messages || chat.messages)
+  // Build a map for quick reply lookups
+  let messageMap = $derived(new Map(messages.map(m => [m.id, m])))
   let canSend = $derived(
     (messageText.trim() || pendingAttachment?.nhash) &&
     !pendingAttachment?.uploading
@@ -345,13 +359,36 @@
         {@const isLast = nextMsg?.isMine !== message.isMine}
         {@const prevHasReactions = prevMsg?.reactions && Object.keys(prevMsg.reactions).length > 0}
         {@const hasReactions = message.reactions && Object.keys(message.reactions).length > 0}
-        <MessageBubble {message} {isFirst} {isLast} {prevHasReactions} {hasReactions} onreact={handleReact} ondelete={handleDeleteMessage} />
+        {@const replyToMessage = message.replyTo ? messageMap.get(message.replyTo) ?? null : null}
+        <MessageBubble {message} {isFirst} {isLast} {prevHasReactions} {hasReactions} {replyToMessage} onreact={handleReact} ondelete={handleDeleteMessage} onreply={handleReply} />
       {/each}
     {/if}
   </div>
 
   <!-- Input - flex-shrink-0 keeps it at bottom -->
   <div class="border-t border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
+    <!-- Reply preview -->
+    {#if replyingTo}
+      <div class="px-4 pt-3 pb-1 flex items-center gap-2">
+        <div class="flex-1 min-w-0 border-l-2 border-primary pl-3">
+          <div class="text-xs text-primary font-semibold mb-0.5">
+            {replyingTo.isMine ? 'You' : ''}
+            {#if !replyingTo.isMine}
+              <Name pubkey={chat.recipientPubkey} />
+            {/if}
+          </div>
+          <div class="text-sm text-gray-400 truncate">{replyingTo.content}</div>
+        </div>
+        <button
+          class="w-7 h-7 flex-shrink-0 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+          onclick={() => replyingTo = null}
+          aria-label="Cancel reply"
+        >
+          <span class="i-carbon-close text-sm"></span>
+        </button>
+      </div>
+    {/if}
+
     <!-- Attachment preview -->
     {#if pendingAttachment}
       <div class="px-4 pt-3 pb-2">

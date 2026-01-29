@@ -13,11 +13,26 @@
     hasReactions?: boolean
     showSenderName?: boolean
     senderName?: string
+    replyToMessage?: ChatMessage | null
     onreact?: (messageId: string, emoji: string) => Promise<void>
     ondelete?: (messageId: string) => void
+    onreply?: (message: ChatMessage) => void
   }
 
-  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, onreact, ondelete }: Props = $props()
+  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, replyToMessage = null, onreact, ondelete, onreply }: Props = $props()
+
+  function handleReply() {
+    onreply?.(message)
+  }
+
+  function scrollToMessage(id: string) {
+    const el = document.getElementById(`msg-${id}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.classList.add('highlight-message')
+      setTimeout(() => el.classList.remove('highlight-message'), 2000)
+    }
+  }
 
   // For styling: treat as visually first/last if adjacent to reactions
   let styleFirst = $derived(isFirst || prevHasReactions)
@@ -145,7 +160,7 @@
   }
 </script>
 
-<div class="{styleFirst ? 'mt-3' : 'mt-0.5'}">
+<div class="{styleFirst ? 'mt-3' : 'mt-0.5'}" id="msg-{message.id}">
   {#if isFirst}
     <div class="flex items-center gap-2 mb-1 {message.isMine ? 'justify-end' : ''}">
       {#if showSenderName && senderName}
@@ -162,6 +177,16 @@
   >
     <!-- Action buttons - before message for own messages -->
     {#if message.isMine && (isHovered || showEmojiPicker || showMenu)}
+      <!-- Reply button -->
+      {#if onreply}
+        <button
+          class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+          onclick={handleReply}
+          aria-label="Reply"
+        >
+          <span class="i-carbon-reply text-sm"></span>
+        </button>
+      {/if}
       <!-- Menu button -->
       <div class="relative">
         <button
@@ -217,10 +242,25 @@
     {/if}
 
     <div class="max-w-[85%] min-w-0 relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
-      {#if htmlContent}
-        <div class="px-3 py-1.5 text-sm overflow-hidden message-content {getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''}">
-          <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
-          {@html htmlContent}
+      {#if replyToMessage || htmlContent}
+        <div class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden">
+          <!-- Reply preview -->
+          {#if replyToMessage}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="text-xs px-3 py-1.5 mx-2 mt-2 border-l-2 rounded-sm cursor-pointer truncate {message.isMine ? 'border-white/40 bg-white/10 text-white/70' : 'border-primary/60 bg-primary/10 text-gray-300'}"
+              onclick={() => scrollToMessage(replyToMessage.id)}
+            >
+              <div class="font-semibold mb-0.5">{replyToMessage.isMine ? 'You' : 'Them'}</div>
+              <div class="truncate max-w-[225px]">{replyToMessage.content}</div>
+            </div>
+          {/if}
+          {#if htmlContent}
+            <div class="px-3 py-1.5 text-sm overflow-hidden message-content">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
+              {@html htmlContent}
+            </div>
+          {/if}
         </div>
       {/if}
 
@@ -246,6 +286,16 @@
 
     <!-- Action buttons - after message for their messages -->
     {#if !message.isMine && (isHovered || showEmojiPicker || showMenu)}
+      <!-- Reply button -->
+      {#if onreply}
+        <button
+          class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+          onclick={handleReply}
+          aria-label="Reply"
+        >
+          <span class="i-carbon-reply text-sm"></span>
+        </button>
+      {/if}
       <!-- Reaction button -->
       {#if onreact}
         <div class="relative">
@@ -319,6 +369,15 @@
 {/if}
 
 <style>
+  /* Highlight animation for scrolling to replied message */
+  :global(.highlight-message) {
+    animation: highlight-flash 2s ease-out;
+  }
+  @keyframes highlight-flash {
+    0%, 20% { background-color: rgba(139, 92, 246, 0.2); }
+    100% { background-color: transparent; }
+  }
+
   /* Markdown content styling - prevent overflow */
   .message-content {
     overflow-wrap: break-word;

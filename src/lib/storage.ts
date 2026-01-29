@@ -20,6 +20,7 @@ export interface StoredMessage {
   content: string
   timestamp: number
   isMine: boolean
+  replyTo?: string
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
 }
 
