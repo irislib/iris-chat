@@ -1,7 +1,7 @@
 import { test, expect, useTestRelay } from './fixtures'
 
 test.describe('Message overflow', () => {
-  test('long text without spaces should not overflow container', async ({ browser, testRelayUrl }) => {
+  test('long text and reply previews should not overflow container', async ({ browser, testRelayUrl }) => {
     const context1 = await browser.newContext()
     await useTestRelay(context1, testRelayUrl)
     const context2 = await browser.newContext()
@@ -15,7 +15,7 @@ test.describe('Message overflow', () => {
       await page1.goto('/')
       await page1.getByRole('button', { name: 'Go' }).click()
       await page1.getByRole('button', { name: 'New Chat' }).click()
-      
+
       const copyButton = page1.locator('button[title*="#"]').first()
       await expect(copyButton).toBeVisible()
       const rawInviteUrl = await copyButton.getAttribute('title')
@@ -31,30 +31,65 @@ test.describe('Message overflow', () => {
       await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
       await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
 
-      // User 2 sends a very long message without spaces
-      const longMessage = 'ABCD'.repeat(50) // 200 chars without spaces
-      await page2.getByPlaceholder('Type a message...').fill(longMessage)
+      const viewportSize = page1.viewportSize()!
+
+      // --- Test 1: Long nhash from other user (received, left-aligned) ---
+      const longNhash = 'nhash1qqsrpw0pysrwnxjuwscg0vh2sectsdustpkq9hnre6qux9r9yc3wcxg9yq88a9mc1zye0p6ju465w8y49350abcdef1234567890'
+      await page2.getByPlaceholder('Type a message...').fill(longNhash)
       await page2.getByRole('button', { name: 'Send' }).click()
 
-      // Wait for message to appear on page1
-      await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'ABCD' })).toBeVisible()
+      const receivedMsg = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'nhash1qq' })
+      await expect(receivedMsg).toBeVisible()
 
-      // Take screenshot for visual verification
-      await page1.screenshot({ path: 'test-results/overflow-test.png', fullPage: true })
+      const box1 = await receivedMsg.boundingBox()
+      expect(box1).toBeTruthy()
+      expect(box1!.x + box1!.width).toBeLessThanOrEqual(viewportSize.width)
 
-      // Check that the message bubble doesn't overflow its container
-      const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'ABCD' })
-      const bubbleBox = await messageBubble.boundingBox()
-      const viewportSize = page1.viewportSize()
-      
-      if (bubbleBox && viewportSize) {
-        // Message should not extend beyond 85% of viewport + some padding
-        const maxAllowedWidth = viewportSize.width * 0.85 + 50 // some tolerance
-        expect(bubbleBox.width).toBeLessThan(maxAllowedWidth)
-        
-        // Message should not extend past the right edge
-        expect(bubbleBox.x + bubbleBox.width).toBeLessThan(viewportSize.width)
-      }
+      await page1.screenshot({ path: 'test-results/overflow-received-long.png', fullPage: true })
+
+      // --- Test 2: Long nhash from own user (sent, right-aligned) ---
+      await page1.getByPlaceholder('Type a message...').fill(longNhash)
+      await page1.getByRole('button', { name: 'Send' }).click()
+
+      // Wait for own message to render
+      const ownMsgs = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'nhash1qq' })
+      await expect(ownMsgs.nth(1)).toBeVisible()
+
+      const box2 = await ownMsgs.nth(1).boundingBox()
+      expect(box2).toBeTruthy()
+      expect(box2!.x + box2!.width).toBeLessThanOrEqual(viewportSize.width)
+
+      await page1.screenshot({ path: 'test-results/overflow-own-long.png', fullPage: true })
+
+      // --- Test 3: Reply with long nhash to a long nhash (own message with reply preview) ---
+      // User 1 replies to the received long nhash
+      const firstMsg = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'nhash1qq' }).first()
+      await firstMsg.hover()
+      await firstMsg.getByLabel('Reply').click()
+      const replyText = 'nhash1zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+      await page1.getByPlaceholder('Type a message...').fill(replyText)
+      await page1.getByRole('button', { name: 'Send' }).click()
+
+      // Own reply message with reply preview
+      const replyMsg = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'nhash1zz' })
+      await expect(replyMsg).toBeVisible()
+
+      const box3 = await replyMsg.boundingBox()
+      expect(box3).toBeTruthy()
+      expect(box3!.x + box3!.width).toBeLessThanOrEqual(viewportSize.width)
+      expect(box3!.x).toBeGreaterThanOrEqual(0)
+
+      await page1.screenshot({ path: 'test-results/overflow-own-reply.png', fullPage: true })
+
+      // --- Test 4: Hover own reply to show action buttons ---
+      await replyMsg.hover()
+      await page1.waitForTimeout(300)
+
+      const box4 = await replyMsg.boundingBox()
+      expect(box4).toBeTruthy()
+      expect(box4!.x + box4!.width).toBeLessThanOrEqual(viewportSize.width)
+
+      await page1.screenshot({ path: 'test-results/overflow-own-reply-hover.png', fullPage: true })
 
     } finally {
       await context1.close()

@@ -40,25 +40,21 @@
 
   let showEmojiPicker = $state(false)
   let showMenu = $state(false)
-  let isHovered = $state(false)
 
   const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
 
   async function handleCopy() {
     await navigator.clipboard.writeText(message.content)
     showMenu = false
-    isHovered = false
   }
 
   function handleDelete() {
     ondelete?.(message.id)
     showMenu = false
-    isHovered = false
   }
 
   function closeMenu() {
     showMenu = false
-    isHovered = false
   }
 
   // Configure marked for GFM (GitHub Flavored Markdown)
@@ -104,7 +100,6 @@
 
   async function handleReact(emoji: string) {
     showEmojiPicker = false
-    isHovered = false
     await onreact?.(message.id, emoji)
   }
 
@@ -112,18 +107,15 @@
     if (e.key === 'Escape') {
       if (showEmojiPicker) {
         showEmojiPicker = false
-        isHovered = false
       }
       if (showMenu) {
         showMenu = false
-        isHovered = false
       }
     }
   }
 
   function closePicker() {
     showEmojiPicker = false
-    isHovered = false
   }
 
   // Listen for escape key
@@ -158,6 +150,8 @@
       ? `${base} rounded-l-2xl rounded-r-sm`
       : `${base} rounded-r-2xl rounded-l-sm`
   }
+
+  let actionsVisible = $derived(showEmojiPicker || showMenu)
 </script>
 
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'}" id="msg-{message.id}">
@@ -169,186 +163,184 @@
       <span class="text-xs text-gray-600">{formatTime(message.timestamp)}</span>
     </div>
   {/if}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="flex items-center gap-1 min-w-0 {message.isMine ? 'justify-end' : ''}"
-    onmouseenter={() => isHovered = true}
-    onmouseleave={() => { if (!showEmojiPicker && !showMenu) isHovered = false }}
-  >
-    <!-- Action buttons - before message for own messages -->
-    {#if message.isMine && (isHovered || showEmojiPicker || showMenu)}
-      <!-- Reply button -->
-      {#if onreply}
-        <button
-          class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-          onclick={handleReply}
-          aria-label="Reply"
-        >
-          <span class="i-carbon-reply text-sm"></span>
-        </button>
+  <div class="group flex min-w-0 {message.isMine ? 'justify-end' : ''}">
+    <div class="flex items-center gap-1 max-w-[85%]">
+      <!-- Action buttons - before message for own messages -->
+      {#if message.isMine}
+        <div class="{actionsVisible ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 transition-opacity flex items-center gap-0.5 flex-shrink-0">
+          {#if onreply}
+            <button
+              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+              onclick={handleReply}
+              aria-label="Reply"
+            >
+              <span class="i-carbon-reply text-sm"></span>
+            </button>
+          {/if}
+          <div class="relative">
+            <button
+              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+              onclick={() => showMenu = !showMenu}
+              aria-label="Message menu"
+            >
+              <span class="i-carbon-overflow-menu-vertical text-sm"></span>
+            </button>
+            {#if showMenu}
+              <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+                <button
+                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+                  onclick={handleCopy}
+                >
+                  <span class="i-carbon-copy text-base"></span>
+                  Copy
+                </button>
+                <button
+                  class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
+                  onclick={handleDelete}
+                >
+                  <span class="i-carbon-trash-can text-base"></span>
+                  Delete for you
+                </button>
+              </div>
+            {/if}
+          </div>
+          {#if onreact}
+            <div class="relative">
+              <button
+                class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                onclick={() => showEmojiPicker = !showEmojiPicker}
+                aria-label="Add reaction"
+              >
+                <span class="i-carbon-face-add text-sm"></span>
+              </button>
+              {#if showEmojiPicker}
+                <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
+                  {#each quickEmojis as emoji}
+                    <button
+                      class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+                      onclick={() => handleReact(emoji)}
+                    >
+                      {emoji}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
       {/if}
-      <!-- Menu button -->
-      <div class="relative">
-        <button
-          class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-          onclick={() => showMenu = !showMenu}
-          aria-label="Message menu"
-        >
-          <span class="i-carbon-overflow-menu-vertical text-sm"></span>
-        </button>
-        {#if showMenu}
-          <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
-            <button
-              class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
-              onclick={handleCopy}
-            >
-              <span class="i-carbon-copy text-base"></span>
-              Copy
-            </button>
-            <button
-              class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
-              onclick={handleDelete}
-            >
-              <span class="i-carbon-trash-can text-base"></span>
-              Delete for you
-            </button>
+
+      <!-- Message bubble -->
+      <div class="flex-1 min-w-0 relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
+        <div class="overflow-hidden">
+          {#if replyToMessage || htmlContent}
+            <div class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden">
+              <!-- Reply preview -->
+              {#if replyToMessage}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="text-xs px-3 py-1.5 mx-2 mt-2 border-l-2 rounded-sm cursor-pointer overflow-hidden {message.isMine ? 'border-white/40 bg-white/10 text-white/70' : 'border-primary/60 bg-primary/10 text-gray-300'}"
+                  onclick={() => scrollToMessage(replyToMessage.id)}
+                >
+                  <div class="font-semibold mb-0.5">{replyToMessage.isMine ? 'You' : 'Them'}</div>
+                  <div class="truncate">{replyToMessage.content}</div>
+                </div>
+              {/if}
+              {#if htmlContent}
+                <div class="px-3 py-1.5 text-sm overflow-hidden message-content">
+                  <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
+                  {@html htmlContent}
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- File attachments -->
+          {#each fileLinks as link (link.nhash + link.filename)}
+            <FileAttachment nhash={link.nhash} filename={link.filename} isMine={message.isMine} />
+          {/each}
+        </div>
+
+        <!-- Reactions display - positioned to overlap bottom of message -->
+        {#if message.reactions && Object.keys(message.reactions).length > 0}
+          <div class="absolute -bottom-4 right-2 flex gap-1">
+            {#each Object.entries(message.reactions) as [emoji, users]}
+              <span class="reaction px-1.5 py-0.5 bg-surface border border-surface-lighter rounded-full text-xs flex items-center gap-1 shadow-sm">
+                {emoji}
+                {#if users.length > 1}
+                  <span class="text-gray-400">{users.length}</span>
+                {/if}
+              </span>
+            {/each}
           </div>
         {/if}
       </div>
-      <!-- Reaction button -->
-      {#if onreact}
-        <div class="relative">
-          <button
-            class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-            onclick={() => showEmojiPicker = !showEmojiPicker}
-            aria-label="Add reaction"
-          >
-            <span class="i-carbon-face-add text-sm"></span>
-          </button>
-          {#if showEmojiPicker}
-            <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
-              {#each quickEmojis as emoji}
-                <button
-                  class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
-                  onclick={() => handleReact(emoji)}
-                >
-                  {emoji}
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/if}
-    {/if}
 
-    <div class="max-w-[85%] min-w-0 relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
-      {#if replyToMessage || htmlContent}
-        <div class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden">
-          <!-- Reply preview -->
-          {#if replyToMessage}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class="text-xs px-3 py-1.5 mx-2 mt-2 border-l-2 rounded-sm cursor-pointer truncate {message.isMine ? 'border-white/40 bg-white/10 text-white/70' : 'border-primary/60 bg-primary/10 text-gray-300'}"
-              onclick={() => scrollToMessage(replyToMessage.id)}
+      <!-- Action buttons - after message for their messages -->
+      {#if !message.isMine}
+        <div class="{actionsVisible ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 transition-opacity flex items-center gap-0.5 flex-shrink-0">
+          {#if onreply}
+            <button
+              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+              onclick={handleReply}
+              aria-label="Reply"
             >
-              <div class="font-semibold mb-0.5">{replyToMessage.isMine ? 'You' : 'Them'}</div>
-              <div class="truncate max-w-[225px]">{replyToMessage.content}</div>
-            </div>
+              <span class="i-carbon-reply text-sm"></span>
+            </button>
           {/if}
-          {#if htmlContent}
-            <div class="px-3 py-1.5 text-sm overflow-hidden message-content">
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
-              {@html htmlContent}
-            </div>
-          {/if}
-        </div>
-      {/if}
-
-      <!-- File attachments -->
-      {#each fileLinks as link (link.nhash + link.filename)}
-        <FileAttachment nhash={link.nhash} filename={link.filename} isMine={message.isMine} />
-      {/each}
-
-      <!-- Reactions display - positioned to overlap bottom of message -->
-      {#if message.reactions && Object.keys(message.reactions).length > 0}
-        <div class="absolute -bottom-4 right-2 flex gap-1">
-          {#each Object.entries(message.reactions) as [emoji, users]}
-            <span class="reaction px-1.5 py-0.5 bg-surface border border-surface-lighter rounded-full text-xs flex items-center gap-1 shadow-sm">
-              {emoji}
-              {#if users.length > 1}
-                <span class="text-gray-400">{users.length}</span>
+          {#if onreact}
+            <div class="relative">
+              <button
+                class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                onclick={() => showEmojiPicker = !showEmojiPicker}
+                aria-label="Add reaction"
+              >
+                <span class="i-carbon-face-add text-sm"></span>
+              </button>
+              {#if showEmojiPicker}
+                <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
+                  {#each quickEmojis as emoji}
+                    <button
+                      class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+                      onclick={() => handleReact(emoji)}
+                    >
+                      {emoji}
+                    </button>
+                  {/each}
+                </div>
               {/if}
-            </span>
-          {/each}
+            </div>
+          {/if}
+          <div class="relative">
+            <button
+              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+              onclick={() => showMenu = !showMenu}
+              aria-label="Message menu"
+            >
+              <span class="i-carbon-overflow-menu-vertical text-sm"></span>
+            </button>
+            {#if showMenu}
+              <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+                <button
+                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+                  onclick={handleCopy}
+                >
+                  <span class="i-carbon-copy text-base"></span>
+                  Copy
+                </button>
+                <button
+                  class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
+                  onclick={handleDelete}
+                >
+                  <span class="i-carbon-trash-can text-base"></span>
+                  Delete for you
+                </button>
+              </div>
+            {/if}
+          </div>
         </div>
       {/if}
     </div>
-
-    <!-- Action buttons - after message for their messages -->
-    {#if !message.isMine && (isHovered || showEmojiPicker || showMenu)}
-      <!-- Reply button -->
-      {#if onreply}
-        <button
-          class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-          onclick={handleReply}
-          aria-label="Reply"
-        >
-          <span class="i-carbon-reply text-sm"></span>
-        </button>
-      {/if}
-      <!-- Reaction button -->
-      {#if onreact}
-        <div class="relative">
-          <button
-            class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-            onclick={() => showEmojiPicker = !showEmojiPicker}
-            aria-label="Add reaction"
-          >
-            <span class="i-carbon-face-add text-sm"></span>
-          </button>
-          {#if showEmojiPicker}
-            <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
-              {#each quickEmojis as emoji}
-                <button
-                  class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
-                  onclick={() => handleReact(emoji)}
-                >
-                  {emoji}
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/if}
-      <!-- Menu button -->
-      <div class="relative">
-        <button
-          class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-          onclick={() => showMenu = !showMenu}
-          aria-label="Message menu"
-        >
-          <span class="i-carbon-overflow-menu-vertical text-sm"></span>
-        </button>
-        {#if showMenu}
-          <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
-            <button
-              class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
-              onclick={handleCopy}
-            >
-              <span class="i-carbon-copy text-base"></span>
-              Copy
-            </button>
-            <button
-              class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
-              onclick={handleDelete}
-            >
-              <span class="i-carbon-trash-can text-base"></span>
-              Delete for you
-            </button>
-          </div>
-        {/if}
-      </div>
-    {/if}
   </div>
 </div>
 
