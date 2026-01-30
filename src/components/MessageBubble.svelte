@@ -163,12 +163,9 @@
 </script>
 
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'}" id="msg-{message.id}">
-  {#if isFirst}
+  {#if isFirst && showSenderName && senderName}
     <div class="flex items-center gap-2 mb-1 {message.isMine ? 'justify-end' : ''}">
-      {#if showSenderName && senderName}
-        <span class="text-xs text-gray-400 font-medium">{senderName}</span>
-      {/if}
-      <span class="text-xs text-gray-600">{formatTime(message.timestamp)}</span>
+      <span class="text-xs text-gray-400 font-medium">{senderName}</span>
     </div>
   {/if}
   <div class="group flex min-w-0 {message.isMine ? 'justify-end' : ''}">
@@ -239,7 +236,7 @@
       {/if}
 
       <!-- Message bubble -->
-      <div class="flex-1 min-w-0 relative {message.reactions && Object.keys(message.reactions).length > 0 ? 'mb-4' : ''}">
+      <div class="flex-1 min-w-0">
         <div class="overflow-hidden">
           {#if replyToMessage || htmlContent}
             <div class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden">
@@ -254,12 +251,37 @@
                   <div class="truncate">{replyToMessage.content}</div>
                 </div>
               {/if}
-              {#if htmlContent}
-                <div class="px-3 py-1.5 text-sm overflow-hidden message-content">
-                  <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
-                  {@html htmlContent}
+              <!-- Content + time (inline for short messages, wraps for long) -->
+              <div class="flex flex-wrap items-end gap-x-2 px-3 {htmlContent ? 'pt-1.5' : 'pt-0.5'} pb-1">
+                {#if htmlContent}
+                  <div class="text-sm overflow-hidden message-content min-w-0">
+                    <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
+                    {@html htmlContent}
+                  </div>
+                {/if}
+                <div class="flex items-center gap-1 ml-auto">
+                  <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
+                  {#if message.isMine}
+                    {#if message.status === 'seen'}
+                      <span class="relative inline-block w-4 h-3">
+                        <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-[#7dd3fc]"></span>
+                        <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#6366f1] check-outline-size"></span>
+                        <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-[#7dd3fc]"></span>
+                      </span>
+                    {:else if message.status === 'delivered'}
+                      <span class="relative inline-block w-4 h-3">
+                        <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-white/60"></span>
+                        <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#6366f1] check-outline-size"></span>
+                        <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-white/60"></span>
+                      </span>
+                    {:else}
+                      <span class="relative inline-block w-4 h-3 text-white/60">
+                        <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
+                      </span>
+                    {/if}
+                  {/if}
                 </div>
-              {/if}
+              </div>
             </div>
           {/if}
 
@@ -269,40 +291,45 @@
           {/each}
         </div>
 
-        <!-- Status indicator for own messages (last in group only) -->
-        {#if message.isMine && isLast}
-          <div class="flex justify-end mt-0.5 mr-1">
-            {#if message.status === 'seen'}
-              <span class="relative inline-block w-4 h-3">
-                <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-primary"></span>
-                <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
-                <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-primary"></span>
-              </span>
-            {:else if message.status === 'delivered'}
-              <span class="relative inline-block w-4 h-3">
-                <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-gray-500"></span>
-                <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
-                <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-gray-500"></span>
-              </span>
-            {:else}
-              <span class="relative inline-block w-4 h-3 text-gray-500">
-                <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
-              </span>
+        <!-- Time + status for file-only messages -->
+        {#if !htmlContent && !replyToMessage && fileLinks.length > 0}
+          <div class="flex items-center justify-end gap-1 mt-0.5 mr-1">
+            <span class="text-[10px] text-gray-500">{formatTime(message.timestamp)}</span>
+            {#if message.isMine}
+              {#if message.status === 'seen'}
+                <span class="relative inline-block w-4 h-3">
+                  <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-primary"></span>
+                  <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
+                  <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-primary"></span>
+                </span>
+              {:else if message.status === 'delivered'}
+                <span class="relative inline-block w-4 h-3">
+                  <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-gray-500"></span>
+                  <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
+                  <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-gray-500"></span>
+                </span>
+              {:else}
+                <span class="relative inline-block w-4 h-3 text-gray-500">
+                  <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
+                </span>
+              {/if}
             {/if}
           </div>
         {/if}
 
-        <!-- Reactions display - positioned to overlap bottom of message -->
+        <!-- Reactions -->
         {#if message.reactions && Object.keys(message.reactions).length > 0}
-          <div class="absolute -bottom-4 right-2 flex gap-1">
-            {#each Object.entries(message.reactions) as [emoji, users]}
-              <span class="reaction px-1.5 py-0.5 bg-surface border border-surface-lighter rounded-full text-xs flex items-center gap-1 shadow-sm">
-                {emoji}
-                {#if users.length > 1}
-                  <span class="text-gray-400">{users.length}</span>
-                {/if}
-              </span>
-            {/each}
+          <div class="flex items-center mt-0.5 px-1 {message.isMine ? '' : 'justify-end'}">
+            <div class="flex gap-1">
+              {#each Object.entries(message.reactions) as [emoji, users]}
+                <span class="reaction px-1.5 py-0.5 bg-surface border border-surface-lighter rounded-full text-xs flex items-center gap-1 shadow-sm">
+                  {emoji}
+                  {#if users.length > 1}
+                    <span class="text-gray-400">{users.length}</span>
+                  {/if}
+                </span>
+              {/each}
+            </div>
           </div>
         {/if}
       </div>

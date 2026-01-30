@@ -5,8 +5,14 @@ export const TYPING_EXPIRY_MS = 10000
 export const isTyping = writable<Map<string, boolean>>(new Map())
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
+const lastMessageAt = new Map<string, number>()
 
-export function setRemoteTyping(chatId: string): void {
+export function setRemoteTyping(chatId: string, eventTimestamp?: number): void {
+  // Ignore typing events older than the last received message
+  if (eventTimestamp) {
+    const lastMsg = lastMessageAt.get(chatId)
+    if (lastMsg && eventTimestamp <= lastMsg) return
+  }
   // Clear existing timer
   const existing = timers.get(chatId)
   if (existing) clearTimeout(existing)
@@ -28,7 +34,11 @@ export function setRemoteTyping(chatId: string): void {
   }, TYPING_EXPIRY_MS))
 }
 
-export function clearRemoteTyping(chatId: string): void {
+export function clearRemoteTyping(chatId: string, messageTimestamp?: number): void {
+  if (messageTimestamp) {
+    const existing = lastMessageAt.get(chatId) || 0
+    lastMessageAt.set(chatId, Math.max(existing, messageTimestamp))
+  }
   const existing = timers.get(chatId)
   if (existing) {
     clearTimeout(existing)
@@ -41,13 +51,18 @@ export function clearRemoteTyping(chatId: string): void {
   })
 }
 
-export function createTypingThrottle(callback: () => void, intervalMs: number): () => void {
+export function createTypingThrottle(callback: () => void, intervalMs: number): { fire: () => void, reset: () => void } {
   let lastFired = 0
-  return () => {
-    const now = Date.now()
-    if (now - lastFired >= intervalMs) {
-      lastFired = now
-      callback()
-    }
+  return {
+    fire() {
+      const now = Date.now()
+      if (now - lastFired >= intervalMs) {
+        lastFired = now
+        callback()
+      }
+    },
+    reset() {
+      lastFired = 0
+    },
   }
 }

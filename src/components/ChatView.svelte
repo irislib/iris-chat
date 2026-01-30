@@ -44,12 +44,12 @@
   // Throttled typing event sender - recreated per chat
   let sendThrottledTyping = $derived(createTypingThrottle(() => sendTypingEvent(chat), 3000))
 
-  // Send typing event when user types
-  $effect(() => {
+  // Send typing event when user types (imperative, not reactive)
+  function handleTypingInput() {
     if (messageText.trim()) {
-      sendThrottledTyping()
+      sendThrottledTyping.fire()
     }
-  })
+  }
 
   // Save draft for old chat and restore draft for new chat when switching
   $effect(() => {
@@ -92,6 +92,7 @@
     clearDraft(chat.id)
     clearAttachment()
     replyingTo = null
+    sendThrottledTyping.reset()
 
     sendMessage(chat, text, replyToId)
 
@@ -389,8 +390,10 @@
       {#each messages as message, i (message.id)}
         {@const prevMsg = messages[i - 1]}
         {@const nextMsg = messages[i + 1]}
-        {@const isFirst = prevMsg?.isMine !== message.isMine}
-        {@const isLast = nextMsg?.isMine !== message.isMine}
+        {@const timeGapPrev = prevMsg ? (message.timestamp - prevMsg.timestamp) > 5 * 60 * 1000 : false}
+        {@const timeGapNext = nextMsg ? (nextMsg.timestamp - message.timestamp) > 5 * 60 * 1000 : false}
+        {@const isFirst = prevMsg?.isMine !== message.isMine || timeGapPrev}
+        {@const isLast = nextMsg?.isMine !== message.isMine || timeGapNext}
         {@const prevHasReactions = prevMsg?.reactions && Object.keys(prevMsg.reactions).length > 0}
         {@const hasReactions = message.reactions && Object.keys(message.reactions).length > 0}
         {@const replyToMessage = message.replyTo ? messageMap.get(message.replyTo) ?? null : null}
@@ -525,6 +528,7 @@
           bind:this={inputRef}
           bind:value={messageText}
           onkeydown={handleKeydown}
+          oninput={handleTypingInput}
           placeholder="Type a message..."
           class="input-field flex-1 resize-none min-h-[44px] max-h-32 py-3"
           rows="1"

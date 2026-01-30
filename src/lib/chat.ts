@@ -628,13 +628,13 @@ function subscribeToSession(chatSession: ChatSession) {
       }
       const ageMs = Date.now() - rumor.created_at * 1000
       if (ageMs < TYPING_EXPIRY_MS) {
-        setRemoteTyping(sessionId)
+        setRemoteTyping(sessionId, rumor.created_at)
       }
       return
     }
 
     // Incoming message clears typing indicator
-    clearRemoteTyping(sessionId)
+    clearRemoteTyping(sessionId, rumor.created_at)
 
     // Extract reply tag if present
     const replyTag = rumor.tags?.find(
