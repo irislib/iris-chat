@@ -1060,6 +1060,87 @@ test.describe('iris chat', () => {
     })
   })
 
+  test.describe('Day separator', () => {
+    test('should show "Today" day separator above messages', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message
+        await page2.getByPlaceholder('Type a message...').fill('Hello!')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello!' })).toBeVisible()
+
+        // "Today" separator should be visible above the message
+        await expect(page1.locator('.day-separator').filter({ hasText: 'Today' })).toBeVisible()
+        await expect(page2.locator('.day-separator').filter({ hasText: 'Today' })).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should show only one day separator for consecutive same-day messages', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
+
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // Send multiple messages
+        await page2.getByPlaceholder('Type a message...').fill('First')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'First' })).toBeVisible()
+
+        await page2.getByPlaceholder('Type a message...').fill('Second')
+        await page2.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Second' })).toBeVisible()
+
+        await page1.getByPlaceholder('Type a message...').fill('Third')
+        await page1.getByRole('button', { name: 'Send' }).click()
+        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Third' })).toBeVisible()
+
+        // Should have exactly one "Today" separator
+        await expect(page1.locator('.day-separator')).toHaveCount(1)
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+  })
+
   test.describe('Two-user chat', () => {
     test('should allow two users to chat via URL', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)

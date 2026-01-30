@@ -5,7 +5,7 @@
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
-  import { getErrorMessage } from '../lib/utils'
+  import { getErrorMessage, formatDayLabel, isDifferentDay } from '../lib/utils'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
@@ -303,6 +303,7 @@
   let messages = $derived($currentChat?.messages || chat.messages)
   // Build a map for quick reply lookups
   let messageMap = $derived(new Map(messages.map(m => [m.id, m])))
+
   let canSend = $derived(
     (messageText.trim() || pendingAttachment?.nhash) &&
     !pendingAttachment?.uploading
@@ -393,13 +394,21 @@
       {#each messages as message, i (message.id)}
         {@const prevMsg = messages[i - 1]}
         {@const nextMsg = messages[i + 1]}
-        {@const timeGapPrev = prevMsg ? (message.timestamp - prevMsg.timestamp) > 5 * 60 * 1000 : false}
-        {@const timeGapNext = nextMsg ? (nextMsg.timestamp - message.timestamp) > 5 * 60 * 1000 : false}
-        {@const isFirst = prevMsg?.isMine !== message.isMine || timeGapPrev}
-        {@const isLast = nextMsg?.isMine !== message.isMine || timeGapNext}
+        {@const newDay = !prevMsg || isDifferentDay(prevMsg.timestamp, message.timestamp)}
+        {@const timeGapPrev = prevMsg ? (message.timestamp - prevMsg.timestamp) > 3 * 60 * 1000 : false}
+        {@const timeGapNext = nextMsg ? (nextMsg.timestamp - message.timestamp) > 3 * 60 * 1000 : false}
+        {@const isFirst = prevMsg?.isMine !== message.isMine || timeGapPrev || newDay}
+        {@const isLast = nextMsg?.isMine !== message.isMine || timeGapNext || (nextMsg && isDifferentDay(message.timestamp, nextMsg.timestamp))}
         {@const prevHasReactions = prevMsg?.reactions && Object.keys(prevMsg.reactions).length > 0}
         {@const hasReactions = message.reactions && Object.keys(message.reactions).length > 0}
         {@const replyToMessage = message.replyTo ? messageMap.get(message.replyTo) ?? null : null}
+        {#if newDay}
+          <div class="day-separator sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
+            <span class="px-3 py-1 rounded-full text-xs text-gray-400 bg-[#0a0a0a]/60 backdrop-blur-md shadow-sm pointer-events-auto">
+              {formatDayLabel(message.timestamp)}
+            </span>
+          </div>
+        {/if}
         <MessageBubble {message} {isFirst} {isLast} {prevHasReactions} {hasReactions} {replyToMessage} onreact={handleReact} ondelete={handleDeleteMessage} onreply={handleReply} />
       {/each}
     {/if}
