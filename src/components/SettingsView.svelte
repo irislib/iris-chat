@@ -717,6 +717,16 @@
             <a href="https://iris.to" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">iris.to</a>
             has it in the works &mdash; reliably relaying messages to every device is tricky to get right.
           </p>
+          <div class="pt-3 border-t border-surface-lighter space-y-1 text-xs text-gray-500">
+            <div class="flex justify-between">
+              <span>Version</span>
+              <span class="font-mono">{import.meta.env.VITE_APP_VERSION || 'dev'}</span>
+            </div>
+            <div class="flex justify-between">
+              <span>Build</span>
+              <span class="font-mono">{(() => { const t = import.meta.env.VITE_BUILD_TIME; if (!t || t === 'undefined') return 'development'; try { return new Date(t).toLocaleString() } catch { return t } })()}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
