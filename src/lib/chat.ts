@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store'
-import { Invite, Session, type Rumor } from 'nostr-double-ratchet'
+import { Invite, Session, type Rumor, REACTION_KIND, RECEIPT_KIND, TYPING_KIND, CHAT_MESSAGE_KIND, parseReaction } from 'nostr-double-ratchet'
 export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { VerifiedEvent, Filter } from 'nostr-tools'
@@ -580,11 +580,6 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
   })
 }
 
-// Event kinds for inner Rumors
-const KIND_REACTION = 7
-const KIND_RECEIPT = 15
-const KIND_TYPING = 25
-
 // Subscribe to incoming messages for a session
 function subscribeToSession(chatSession: ChatSession) {
   const myPubkey = getPubkey()
@@ -597,7 +592,7 @@ function subscribeToSession(chatSession: ChatSession) {
     if (!currentSession) return
 
     // Dispatch on inner event kind
-    if (rumor.kind === KIND_RECEIPT) {
+    if (rumor.kind === RECEIPT_KIND) {
       if (outerEvent?.id) {
         saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
       }
@@ -611,18 +606,19 @@ function subscribeToSession(chatSession: ChatSession) {
       return
     }
 
-    if (rumor.kind === KIND_REACTION) {
+    if (rumor.kind === REACTION_KIND) {
       if (outerEvent?.id) {
         saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
       }
-      const emoji = rumor.content
-      const messageId = rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
+      const parsed = parseReaction(rumor.content)
+      const emoji = parsed?.emoji ?? rumor.content // fallback for old plain-emoji format
+      const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
       if (!emoji || !messageId) return
       handleIncomingReaction(currentSession, { messageId, emoji }, rumor.pubkey)
       return
     }
 
-    if (rumor.kind === KIND_TYPING) {
+    if (rumor.kind === TYPING_KIND) {
       if (outerEvent?.id) {
         saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
       }
@@ -775,11 +771,7 @@ function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload
 function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
   if (messageIds.length === 0) return
 
-  const { event } = chatSession.session.sendEvent({
-    content: type,
-    kind: KIND_RECEIPT,
-    tags: messageIds.map(id => ['e', id]),
-  })
+  const { event } = chatSession.session.sendReceipt(type, messageIds)
 
   const ndkInstance = get(ndk)
   const ndkPublishEvent = new NDKEvent(ndkInstance, event)
@@ -837,7 +829,7 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   }
 
   const { event } = tags.length > 0
-    ? chatSession.session.sendEvent({ content: text, kind: 14, tags })
+    ? chatSession.session.sendEvent({ content: text, kind: CHAT_MESSAGE_KIND, tags })
     : chatSession.session.send(text)
 
   // Get current state from store (not the passed reference which may be stale)
@@ -882,11 +874,7 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
 
 // Send a reaction to a message
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
-  const { event } = chatSession.session.sendEvent({
-    content: emoji,
-    kind: KIND_REACTION,
-    tags: [['e', messageId]],
-  })
+  const { event } = chatSession.session.sendReaction(messageId, emoji)
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1110,11 +1098,7 @@ export async function loadChatsFromStorage(): Promise<void> {
 export function sendTypingEvent(chatSession: ChatSession): void {
   if (!get(typingSettings).sendTypingIndicators) return
 
-  const { event } = chatSession.session.sendEvent({
-    content: 'typing',
-    kind: KIND_TYPING,
-    tags: [],
-  })
+  const { event } = chatSession.session.sendTyping()
 
   const ndkInstance = get(ndk)
   const ndkPublishEvent = new NDKEvent(ndkInstance, event)
