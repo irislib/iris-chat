@@ -14,6 +14,7 @@ vi.mock('./identity', () => {
   return {
     getPubkey: () => MY_PUBKEY,
     ndk: writable({}),
+    bytesToHex: (bytes: Uint8Array) => Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join(''),
   }
 })
 
@@ -46,12 +47,13 @@ vi.mock('@nostr-dev-kit/ndk', () => ({
   }))
 }))
 
-vi.mock('nostr-double-ratchet', () => ({
-  CHAT_MESSAGE_KIND: 14,
-  REACTION_KIND: 7,
-  TYPING_KIND: 25,
-  parseReaction: (content: string) => ({ emoji: content, isRemoval: content === '-' }),
-}))
+vi.mock('nostr-double-ratchet', async () => {
+  const actual = await vi.importActual('nostr-double-ratchet')
+  return {
+    ...actual as object,
+    parseReaction: (content: string) => ({ emoji: content, isRemoval: content === '-' }),
+  }
+})
 
 vi.mock('./storage', () => ({
   saveGroup: vi.fn().mockResolvedValue(undefined),
@@ -66,6 +68,11 @@ vi.mock('./typingState', () => ({
   setRemoteTyping: vi.fn(),
   clearRemoteTyping: vi.fn(),
   TYPING_EXPIRY_MS: 10000,
+}))
+
+vi.mock('./groupChannels', () => ({
+  setupGroupChannel: vi.fn(),
+  teardownGroupChannel: vi.fn(),
 }))
 
 // --- Tests ---
@@ -543,11 +550,164 @@ describe('groups', () => {
       expect(isAdmin(group, MEMBER_B)).toBe(false)
     })
   })
+
+  describe('group secret', () => {
+    it('createGroup includes a secret', async () => {
+      const { createGroup } = await import('./groups')
+      const group = createGroup('Secret Test', [MEMBER_B])
+
+      expect(group.secret).toBeDefined()
+      expect(group.secret!.length).toBe(64) // 32 bytes in hex
+    })
+
+    it('createGroup sets accepted to true', async () => {
+      const { createGroup } = await import('./groups')
+      const group = createGroup('Accepted Test', [MEMBER_B])
+
+      expect(group.accepted).toBe(true)
+    })
+
+    it('secret rotates on addGroupMember', async () => {
+      const { createGroup, addGroupMember, groups } = await import('./groups')
+      const group = createGroup('Rotate Add', [MEMBER_B])
+      const originalSecret = group.secret
+
+      addGroupMember(group.id, MEMBER_C)
+
+      const updated = get(groups).get(group.id)
+      expect(updated!.secret).toBeDefined()
+      expect(updated!.secret).not.toBe(originalSecret)
+    })
+
+    it('secret rotates on removeGroupMember', async () => {
+      const { createGroup, removeGroupMember, groups } = await import('./groups')
+      const group = createGroup('Rotate Remove', [MEMBER_B, MEMBER_C])
+      const originalSecret = group.secret
+
+      removeGroupMember(group.id, MEMBER_C)
+
+      const updated = get(groups).get(group.id)
+      expect(updated!.secret).toBeDefined()
+      expect(updated!.secret).not.toBe(originalSecret)
+    })
+
+    it('removed member does not receive new secret', async () => {
+      const { createGroup, removeGroupMember, groups } = await import('./groups')
+      const group = createGroup('No Secret For Removed', [MEMBER_B, MEMBER_C])
+      sendEventCalls.length = 0
+
+      removeGroupMember(group.id, MEMBER_C)
+
+      // Find what was sent to the removed member
+      const sentToC = sendEventCalls.filter(c => c.recipient === MEMBER_C)
+      expect(sentToC.length).toBeGreaterThan(0)
+
+      // Parse the event sent to removed member - it should not contain the new secret
+      const removedEvent = sentToC[0].event as { content: string }
+      const removedMetadata = JSON.parse(removedEvent.content)
+      expect(removedMetadata.secret).toBeUndefined()
+
+      // But remaining members should get the new secret
+      const sentToB = sendEventCalls.filter(c => c.recipient === MEMBER_B)
+      expect(sentToB.length).toBeGreaterThan(0)
+      const memberEvent = sentToB[0].event as { content: string }
+      const memberMetadata = JSON.parse(memberEvent.content)
+      expect(memberMetadata.secret).toBeDefined()
+    })
+  })
+
+  describe('group acceptance', () => {
+    it('handleGroupMetadata sets accepted to false for new groups', async () => {
+      const { handleGroupEvent, groups } = await import('./groups')
+
+      const groupId = 'test-group-pending'
+      const rumor = makeMetadataRumor(groupId, {
+        id: groupId,
+        name: 'Pending Group',
+        members: [MEMBER_B, MY_PUBKEY],
+        admins: [MEMBER_B],
+        secret: 'a'.repeat(64),
+      })
+
+      handleGroupEvent(rumor, MEMBER_B)
+
+      const group = get(groups).get(groupId)
+      expect(group).toBeDefined()
+      expect(group!.accepted).toBe(false)
+    })
+
+    it('acceptGroupInvitation sets accepted to true', async () => {
+      const { handleGroupEvent, acceptGroupInvitation, groups } = await import('./groups')
+
+      const groupId = 'test-group-accept'
+      const rumor = makeMetadataRumor(groupId, {
+        id: groupId,
+        name: 'Accept Test',
+        members: [MEMBER_B, MY_PUBKEY],
+        admins: [MEMBER_B],
+        secret: 'b'.repeat(64),
+      })
+
+      handleGroupEvent(rumor, MEMBER_B)
+      expect(get(groups).get(groupId)!.accepted).toBe(false)
+
+      acceptGroupInvitation(groupId)
+      expect(get(groups).get(groupId)!.accepted).toBe(true)
+    })
+
+    it('handleGroupMetadata preserves accepted status on update', async () => {
+      const { handleGroupEvent, acceptGroupInvitation, groups } = await import('./groups')
+
+      const groupId = 'test-group-preserve-accepted'
+      const createRumor = makeMetadataRumor(groupId, {
+        id: groupId,
+        name: 'Preserve Test',
+        members: [MEMBER_B, MY_PUBKEY],
+        admins: [MEMBER_B],
+        secret: 'c'.repeat(64),
+      })
+      handleGroupEvent(createRumor, MEMBER_B)
+      acceptGroupInvitation(groupId)
+
+      // Update from admin
+      const updateRumor = makeMetadataRumor(groupId, {
+        id: groupId,
+        name: 'Updated Name',
+        members: [MEMBER_B, MY_PUBKEY],
+        admins: [MEMBER_B],
+        secret: 'd'.repeat(64),
+      })
+      handleGroupEvent(updateRumor, MEMBER_B)
+
+      const group = get(groups).get(groupId)
+      expect(group!.name).toBe('Updated Name')
+      expect(group!.accepted).toBe(true) // should stay accepted
+    })
+
+    it('handleGroupMetadata stores secret from metadata', async () => {
+      const { handleGroupEvent, groups } = await import('./groups')
+
+      const secret = 'e'.repeat(64)
+      const groupId = 'test-group-secret-store'
+      const rumor = makeMetadataRumor(groupId, {
+        id: groupId,
+        name: 'Secret Store',
+        members: [MEMBER_B, MY_PUBKEY],
+        admins: [MEMBER_B],
+        secret,
+      })
+
+      handleGroupEvent(rumor, MEMBER_B)
+
+      const group = get(groups).get(groupId)
+      expect(group!.secret).toBe(secret)
+    })
+  })
 })
 
 // --- Helpers ---
 
-function makeMetadataRumor(groupId: string, metadata: { id: string, name: string, members: string[], admins: string[], description?: string, picture?: string }): Rumor {
+function makeMetadataRumor(groupId: string, metadata: { id: string, name: string, members: string[], admins: string[], description?: string, picture?: string, secret?: string }): Rumor {
   return {
     id: Math.random().toString(36),
     kind: 40,

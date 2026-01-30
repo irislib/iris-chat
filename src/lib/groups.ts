@@ -1,6 +1,22 @@
 import { writable, get } from 'svelte/store'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
-import { CHAT_MESSAGE_KIND, REACTION_KIND, TYPING_KIND, parseReaction } from 'nostr-double-ratchet'
+import {
+  CHAT_MESSAGE_KIND, REACTION_KIND, TYPING_KIND, parseReaction,
+  GROUP_METADATA_KIND,
+  type GroupData,
+  isGroupAdmin,
+  createGroupData,
+  buildGroupMetadataContent,
+  parseGroupMetadata,
+  validateMetadataUpdate,
+  validateMetadataCreation,
+  applyMetadataUpdate,
+  addGroupMember as libAddMember,
+  removeGroupMember as libRemoveMember,
+  updateGroupData,
+  addGroupAdmin as libAddAdmin,
+  removeGroupAdmin as libRemoveAdmin,
+} from 'nostr-double-ratchet'
 import type { Rumor } from 'nostr-double-ratchet'
 import type { VerifiedEvent } from 'nostr-tools'
 import { ndk, getPubkey } from './identity'
@@ -16,30 +32,13 @@ import {
   type StoredMessage
 } from './storage'
 import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
+import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
 
-export const GROUP_METADATA_KIND = 40
-
-export interface Group {
-  id: string
-  name: string
-  description?: string
-  picture?: string
-  members: string[]
-  admins: string[]
-  createdAt: number
-}
+export { GROUP_METADATA_KIND }
+export type Group = GroupData
 
 export interface GroupMessage extends ChatMessage {
   senderPubkey?: string
-}
-
-export interface GroupMetadata {
-  id: string
-  name: string
-  description?: string
-  picture?: string
-  members: string[]
-  admins: string[]
 }
 
 export const groups = writable<Map<string, Group>>(new Map())
@@ -53,9 +52,7 @@ export function setSaveSessionFn(fn: (session: ChatSession) => Promise<void>): v
   saveSessionToStorageFn = fn
 }
 
-export function isAdmin(group: Group, pubkey: string): boolean {
-  return group.admins.includes(pubkey)
-}
+export const isAdmin = isGroupAdmin
 
 function fanOutToMembers(groupId: string, partialEvent: { content: string, kind: number, tags: string[][] }, recipientOverride?: string[]): void {
   const currentGroups = get(groups)
@@ -106,17 +103,6 @@ function fanOutToMembers(groupId: string, partialEvent: { content: string, kind:
   }
 }
 
-function buildMetadataContent(group: Group): string {
-  const metadata: GroupMetadata = {
-    id: group.id,
-    name: group.name,
-    members: group.members,
-    admins: group.admins,
-    ...(group.description && { description: group.description }),
-    ...(group.picture && { picture: group.picture })
-  }
-  return JSON.stringify(metadata)
-}
 
 function saveGroupState(group: Group): void {
   const storedGroup: StoredGroup = {
@@ -126,7 +112,9 @@ function saveGroupState(group: Group): void {
     admins: group.admins,
     createdAt: group.createdAt,
     ...(group.description && { description: group.description }),
-    ...(group.picture && { picture: group.picture })
+    ...(group.picture && { picture: group.picture }),
+    ...(group.secret && { secret: group.secret }),
+    accepted: group.accepted
   }
   saveGroupToDb(storedGroup).catch(e => console.error('[groups] Failed to save group:', e))
 }
@@ -135,33 +123,26 @@ export function createGroup(name: string, memberPubkeys: string[]): Group {
   const myPubkey = getPubkey()
   if (!myPubkey) throw new Error('Not logged in')
 
-  const id = crypto.randomUUID()
-  const allMembers = [myPubkey, ...memberPubkeys.filter(p => p !== myPubkey)]
-
-  const group: Group = {
-    id,
-    name,
-    members: allMembers,
-    admins: [myPubkey],
-    createdAt: Date.now()
-  }
+  const group = createGroupData(name, myPubkey, memberPubkeys)
 
   groups.update(g => {
-    g.set(id, group)
+    g.set(group.id, group)
     return g
   })
   groupMessages.update(gm => {
-    gm.set(id, [])
+    gm.set(group.id, [])
     return gm
   })
 
   saveGroupState(group)
 
-  fanOutToMembers(id, {
-    content: buildMetadataContent(group),
+  fanOutToMembers(group.id, {
+    content: buildGroupMetadataContent(group),
     kind: GROUP_METADATA_KIND,
     tags: []
   })
+
+  setupGroupChannel(group)
 
   return group
 }
@@ -170,30 +151,23 @@ export function addGroupMember(groupId: string, pubkey: string): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const currentGroups = get(groups)
-  const group = currentGroups.get(groupId)
+  const group = get(groups).get(groupId)
   if (!group) return
-  if (!isAdmin(group, myPubkey)) return
-  if (group.members.includes(pubkey)) return
 
   // Verify we have a chat session with the new member
-  const currentChats = get(chats)
-  if (!currentChats.has(pubkey)) return
+  if (!get(chats).has(pubkey)) return
 
-  const updated: Group = {
-    ...group,
-    members: [...group.members, pubkey]
-  }
+  const updated = libAddMember(group, pubkey, myPubkey)
+  if (!updated) return
 
-  groups.update(g => {
-    g.set(groupId, updated)
-    return g
-  })
+  groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
-  // Fan out to all members including the new one
+  teardownGroupChannel(groupId)
+  setupGroupChannel(updated)
+
   fanOutToMembers(groupId, {
-    content: buildMetadataContent(updated),
+    content: buildGroupMetadataContent(updated),
     kind: GROUP_METADATA_KIND,
     tags: []
   }, updated.members)
@@ -203,56 +177,48 @@ export function removeGroupMember(groupId: string, pubkey: string): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const currentGroups = get(groups)
-  const group = currentGroups.get(groupId)
+  const group = get(groups).get(groupId)
   if (!group) return
-  if (!isAdmin(group, myPubkey)) return
-  if (!group.members.includes(pubkey)) return
-  // Can't remove yourself via this function
-  if (pubkey === myPubkey) return
 
-  const updated: Group = {
-    ...group,
-    members: group.members.filter(m => m !== pubkey),
-    admins: group.admins.filter(a => a !== pubkey)
-  }
+  const updated = libRemoveMember(group, pubkey, myPubkey)
+  if (!updated) return
 
-  groups.update(g => {
-    g.set(groupId, updated)
-    return g
-  })
+  groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
-  // Fan out to all members including the removed one so they learn of removal
+  teardownGroupChannel(groupId)
+  setupGroupChannel(updated)
+
+  // Remaining members get new secret
   fanOutToMembers(groupId, {
-    content: buildMetadataContent(updated),
+    content: buildGroupMetadataContent(updated),
     kind: GROUP_METADATA_KIND,
     tags: []
-  }, [...updated.members, pubkey])
+  }, updated.members)
+
+  // Removed member gets metadata WITHOUT secret
+  fanOutToMembers(groupId, {
+    content: buildGroupMetadataContent(updated, { excludeSecret: true }),
+    kind: GROUP_METADATA_KIND,
+    tags: []
+  }, [pubkey])
 }
 
 export function updateGroupInfo(groupId: string, updates: { name?: string, description?: string, picture?: string }): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const currentGroups = get(groups)
-  const group = currentGroups.get(groupId)
+  const group = get(groups).get(groupId)
   if (!group) return
-  if (!isAdmin(group, myPubkey)) return
 
-  const updated: Group = { ...group }
-  if (updates.name !== undefined) updated.name = updates.name
-  if (updates.description !== undefined) updated.description = updates.description
-  if (updates.picture !== undefined) updated.picture = updates.picture
+  const updated = updateGroupData(group, updates, myPubkey)
+  if (!updated) return
 
-  groups.update(g => {
-    g.set(groupId, updated)
-    return g
-  })
+  groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
   fanOutToMembers(groupId, {
-    content: buildMetadataContent(updated),
+    content: buildGroupMetadataContent(updated),
     kind: GROUP_METADATA_KIND,
     tags: []
   })
@@ -262,26 +228,17 @@ export function addGroupAdmin(groupId: string, pubkey: string): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const currentGroups = get(groups)
-  const group = currentGroups.get(groupId)
+  const group = get(groups).get(groupId)
   if (!group) return
-  if (!isAdmin(group, myPubkey)) return
-  if (!group.members.includes(pubkey)) return
-  if (group.admins.includes(pubkey)) return
 
-  const updated: Group = {
-    ...group,
-    admins: [...group.admins, pubkey]
-  }
+  const updated = libAddAdmin(group, pubkey, myPubkey)
+  if (!updated) return
 
-  groups.update(g => {
-    g.set(groupId, updated)
-    return g
-  })
+  groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
   fanOutToMembers(groupId, {
-    content: buildMetadataContent(updated),
+    content: buildGroupMetadataContent(updated),
     kind: GROUP_METADATA_KIND,
     tags: []
   })
@@ -291,27 +248,17 @@ export function removeGroupAdmin(groupId: string, pubkey: string): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const currentGroups = get(groups)
-  const group = currentGroups.get(groupId)
+  const group = get(groups).get(groupId)
   if (!group) return
-  if (!isAdmin(group, myPubkey)) return
-  if (!group.admins.includes(pubkey)) return
-  // Must keep at least one admin
-  if (group.admins.length <= 1) return
 
-  const updated: Group = {
-    ...group,
-    admins: group.admins.filter(a => a !== pubkey)
-  }
+  const updated = libRemoveAdmin(group, pubkey, myPubkey)
+  if (!updated) return
 
-  groups.update(g => {
-    g.set(groupId, updated)
-    return g
-  })
+  groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
   fanOutToMembers(groupId, {
-    content: buildMetadataContent(updated),
+    content: buildGroupMetadataContent(updated),
     kind: GROUP_METADATA_KIND,
     tags: []
   })
@@ -427,74 +374,55 @@ export function handleGroupEvent(rumor: Rumor, senderPubkey: string, _outerEvent
 }
 
 function handleGroupMetadata(rumor: Rumor, senderPubkey: string): void {
-  try {
-    const metadata = JSON.parse(rumor.content) as Partial<GroupMetadata>
-    const { id, name, members, admins } = metadata
-    if (!id || !name || !Array.isArray(members) || !Array.isArray(admins)) return
-    if (admins.length === 0) return
+  const metadata = parseGroupMetadata(rumor.content)
+  if (!metadata) return
 
-    const myPubkey = getPubkey()
-    if (!myPubkey) return
+  const myPubkey = getPubkey()
+  if (!myPubkey) return
 
-    const currentGroups = get(groups)
-    const existing = currentGroups.get(id)
+  const existing = get(groups).get(metadata.id)
 
-    if (existing) {
-      // Update from admin only
-      if (!isAdmin(existing, senderPubkey)) {
-        console.warn('[groups] Rejected metadata update from non-admin:', senderPubkey.slice(0, 8))
-        return
-      }
-
-      const updated: Group = {
-        ...existing,
-        name,
-        members,
-        admins,
-        description: metadata.description,
-        picture: metadata.picture
-      }
-
-      // If we were removed from the group, delete it locally
-      if (!members.includes(myPubkey)) {
-        deleteGroup(id)
-        return
-      }
-
-      groups.update(g => {
-        g.set(id, updated)
-        return g
-      })
-      saveGroupState(updated)
-    } else {
-      // New group - sender must be in admins list
-      if (!admins.includes(senderPubkey)) return
-      if (!members.includes(myPubkey)) return
-
-      const group: Group = {
-        id,
-        name,
-        members,
-        admins,
-        description: metadata.description,
-        picture: metadata.picture,
-        createdAt: rumor.created_at * 1000
-      }
-
-      groups.update(g => {
-        g.set(id, group)
-        return g
-      })
-      groupMessages.update(gm => {
-        if (!gm.has(id)) gm.set(id, [])
-        return gm
-      })
-      saveGroupState(group)
-
-      console.log('[groups] Joined group:', name, 'from', senderPubkey.slice(0, 8))
+  if (existing) {
+    const result = validateMetadataUpdate(existing, metadata, senderPubkey, myPubkey)
+    if (result === 'reject') {
+      console.warn('[groups] Rejected metadata update from non-admin:', senderPubkey.slice(0, 8))
+      return
     }
-  } catch (e) {
-    console.error('[groups] Failed to parse group metadata:', e)
+    if (result === 'removed') {
+      deleteGroup(metadata.id)
+      return
+    }
+
+    const secretChanged = metadata.secret && metadata.secret !== existing.secret
+    const updated = applyMetadataUpdate(existing, metadata)
+
+    groups.update(g => { g.set(metadata.id, updated); return g })
+    saveGroupState(updated)
+
+    if (secretChanged && updated.accepted) {
+      teardownGroupChannel(metadata.id)
+      setupGroupChannel(updated)
+    }
+  } else {
+    if (!validateMetadataCreation(metadata, senderPubkey, myPubkey)) return
+
+    const group: Group = {
+      id: metadata.id,
+      name: metadata.name,
+      members: metadata.members,
+      admins: metadata.admins,
+      description: metadata.description,
+      picture: metadata.picture,
+      createdAt: rumor.created_at * 1000,
+      secret: metadata.secret,
+      accepted: false
+    }
+
+    groups.update(g => { g.set(metadata.id, group); return g })
+    groupMessages.update(gm => { if (!gm.has(metadata.id)) gm.set(metadata.id, []); return gm })
+    saveGroupState(group)
+
+    console.log('[groups] Received group invitation:', metadata.name, 'from', senderPubkey.slice(0, 8))
   }
 }
 
@@ -593,7 +521,9 @@ export async function loadGroupsFromStorage(): Promise<void> {
         picture: stored.picture,
         members: stored.members,
         admins: stored.admins || [],
-        createdAt: stored.createdAt
+        createdAt: stored.createdAt,
+        secret: stored.secret,
+        accepted: stored.accepted
       }
 
       groups.update(g => {
@@ -618,6 +548,11 @@ export async function loadGroupsFromStorage(): Promise<void> {
         gm.set(group.id, messages)
         return gm
       })
+
+      // Only setup shared channel for accepted groups with a secret
+      if (group.accepted && group.secret) {
+        setupGroupChannel(group)
+      }
     }
   } catch (e) {
     console.error('[groups] Failed to load groups from storage:', e)
@@ -625,6 +560,8 @@ export async function loadGroupsFromStorage(): Promise<void> {
 }
 
 export async function deleteGroup(groupId: string): Promise<void> {
+  teardownGroupChannel(groupId)
+
   groups.update(g => {
     g.delete(groupId)
     return g
@@ -641,4 +578,22 @@ export async function deleteGroup(groupId: string): Promise<void> {
 
   await deleteGroupFromDb(groupId)
   await deleteMessagesForSession(`group:${groupId}`)
+}
+
+export function acceptGroupInvitation(groupId: string): void {
+  const currentGroups = get(groups)
+  const group = currentGroups.get(groupId)
+  if (!group) return
+
+  const updated: Group = { ...group, accepted: true }
+
+  groups.update(g => {
+    g.set(groupId, updated)
+    return g
+  })
+  saveGroupState(updated)
+
+  if (updated.secret) {
+    setupGroupChannel(updated)
+  }
 }
