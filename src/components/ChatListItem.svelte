@@ -41,7 +41,7 @@
     {#if $isTyping.get(chat.id)}
       <div class="text-sm text-primary">typing...</div>
     {:else if lastMessage}
-      <div class="text-sm text-gray-400 truncate flex items-center gap-0.5">
+      <div class="text-sm text-gray-400 truncate flex items-center gap-1.5">
         {#if lastMessage.isMine}
           {#if lastMessage.status === 'seen'}
             <span class="relative inline-block w-4 h-3 flex-shrink-0">
