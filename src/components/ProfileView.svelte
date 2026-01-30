@@ -6,6 +6,7 @@
   import { createProfileStore, getProfileName } from '../lib/profile'
   import { getAnimalName } from '../lib/animalNames'
   import { chats } from '../lib/chat'
+  import { generateProxyUrl } from '../lib/imgproxy'
 
   interface Props {
     pubkey: string
@@ -32,6 +33,17 @@
   // Profile picture modal
   let showPictureModal = $state(false)
   let profilePicture = $derived(profile?.picture)
+  let proxiedFullPicture = $state<string | null>(null)
+
+  $effect(() => {
+    const pic = profilePicture
+    proxiedFullPicture = null
+    if (pic) {
+      generateProxyUrl(pic, { width: 800 }).then(url => {
+        proxiedFullPicture = url
+      })
+    }
+  })
 
   function handleOpenChat() {
     onOpenChat(pubkey)
@@ -130,9 +142,9 @@
   </div>
 </div>
 
-{#if showPictureModal && profilePicture}
+{#if showPictureModal && (proxiedFullPicture || profilePicture)}
   <MediaModal
-    src={profilePicture}
+    src={proxiedFullPicture || profilePicture}
     nhash={null}
     filename={profileName || animalName}
     type="image"

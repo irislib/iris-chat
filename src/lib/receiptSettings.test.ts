@@ -1,42 +1,61 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { get } from 'svelte/store'
 
-// Mock localStorage
-const localStorageMock = (() => {
-  let store: Record<string, string> = {}
-  return {
-    getItem: vi.fn((key: string) => store[key] ?? null),
-    setItem: vi.fn((key: string, value: string) => { store[key] = value }),
-    removeItem: vi.fn((key: string) => { delete store[key] }),
-    clear: vi.fn(() => { store = {} }),
-  }
-})()
+const localStorageMock = {
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+  clear: vi.fn(),
+  key: vi.fn(),
+  length: 0,
+}
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock })
 
 describe('receiptSettings', () => {
   beforeEach(() => {
-    localStorageMock.clear()
     vi.resetModules()
+    localStorageMock.getItem.mockReset()
+    localStorageMock.setItem.mockReset()
   })
 
-  it('should default to sendReceipts: true', async () => {
+  it('should default to both receipts enabled', async () => {
     const { receiptSettings } = await import('./receiptSettings')
-    const { get } = await import('svelte/store')
-    expect(get(receiptSettings).sendReceipts).toBe(true)
+    const settings = get(receiptSettings)
+    expect(settings.sendDeliveryReceipts).toBe(true)
+    expect(settings.sendReadReceipts).toBe(true)
   })
 
-  it('should persist sendReceipts to localStorage', async () => {
-    const { setSendReceipts } = await import('./receiptSettings')
-    setSendReceipts(false)
+  it('should persist sendDeliveryReceipts to localStorage', async () => {
+    const { setSendDeliveryReceipts } = await import('./receiptSettings')
+    setSendDeliveryReceipts(false)
     expect(localStorageMock.setItem).toHaveBeenCalledWith(
       'iris-chat-receipts',
-      expect.stringContaining('"sendReceipts":false')
+      expect.stringContaining('"sendDeliveryReceipts":false')
     )
   })
 
-  it('should load persisted settings from localStorage', async () => {
+  it('should persist sendReadReceipts to localStorage', async () => {
+    const { setSendReadReceipts } = await import('./receiptSettings')
+    setSendReadReceipts(false)
+    expect(localStorageMock.setItem).toHaveBeenCalledWith(
+      'iris-chat-receipts',
+      expect.stringContaining('"sendReadReceipts":false')
+    )
+  })
+
+  it('should load saved settings from localStorage', async () => {
+    localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({ sendDeliveryReceipts: false, sendReadReceipts: true }))
+    const { receiptSettings } = await import('./receiptSettings')
+    const settings = get(receiptSettings)
+    expect(settings.sendDeliveryReceipts).toBe(false)
+    expect(settings.sendReadReceipts).toBe(true)
+  })
+
+  it('should migrate old single-toggle format', async () => {
     localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({ sendReceipts: false }))
     const { receiptSettings } = await import('./receiptSettings')
-    const { get } = await import('svelte/store')
-    expect(get(receiptSettings).sendReceipts).toBe(false)
+    const settings = get(receiptSettings)
+    expect(settings.sendDeliveryReceipts).toBe(false)
+    expect(settings.sendReadReceipts).toBe(false)
   })
 })

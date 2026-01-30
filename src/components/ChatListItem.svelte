@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChatSession } from '../lib/chat'
+  import { isTyping } from '../lib/typingState'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
 
@@ -37,7 +38,9 @@
         <span class="text-xs text-gray-500 flex-shrink-0">{formatTime(lastMessage.timestamp)}</span>
       {/if}
     </div>
-    {#if lastMessage}
+    {#if $isTyping.get(chat.id)}
+      <div class="text-sm text-primary">typing...</div>
+    {:else if lastMessage}
       <div class="text-sm text-gray-400 truncate flex items-center gap-0.5">
         {#if lastMessage.isMine}
           {#if lastMessage.status === 'seen'}

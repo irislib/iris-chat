@@ -106,6 +106,7 @@ import {
   updateInviteLabel as updateInviteLabelInDb,
   addInviteUsedBy as addInviteUsedByInDb,
   updateMessageStatus as updateMessageStatusInDb,
+  saveProcessedEvent,
   type StoredSession,
   type StoredMessage,
   type StoredInvite
@@ -113,6 +114,8 @@ import {
 import { updateDMSubscription } from './notifications'
 import { shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
 import { receiptSettings } from './receiptSettings'
+import { typingSettings } from './typingSettings'
+import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
 
 export interface ChatMessage {
   id: string
@@ -580,6 +583,7 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
 // Event kinds for inner Rumors
 const KIND_REACTION = 7
 const KIND_RECEIPT = 15
+const KIND_TYPING = 25
 
 // Subscribe to incoming messages for a session
 function subscribeToSession(chatSession: ChatSession) {
@@ -594,6 +598,9 @@ function subscribeToSession(chatSession: ChatSession) {
 
     // Dispatch on inner event kind
     if (rumor.kind === KIND_RECEIPT) {
+      if (outerEvent?.id) {
+        saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+      }
       const type = rumor.content as 'delivered' | 'seen'
       if (type !== 'delivered' && type !== 'seen') return
       const messageIds = rumor.tags
@@ -605,12 +612,29 @@ function subscribeToSession(chatSession: ChatSession) {
     }
 
     if (rumor.kind === KIND_REACTION) {
+      if (outerEvent?.id) {
+        saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
+      }
       const emoji = rumor.content
       const messageId = rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
       if (!emoji || !messageId) return
       handleIncomingReaction(currentSession, { messageId, emoji }, rumor.pubkey)
       return
     }
+
+    if (rumor.kind === KIND_TYPING) {
+      if (outerEvent?.id) {
+        saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+      }
+      const ageMs = Date.now() - rumor.created_at * 1000
+      if (ageMs < TYPING_EXPIRY_MS) {
+        setRemoteTyping(sessionId)
+      }
+      return
+    }
+
+    // Incoming message clears typing indicator
+    clearRemoteTyping(sessionId)
 
     // Extract reply tag if present
     const replyTag = rumor.tags?.find(
@@ -622,7 +646,7 @@ function subscribeToSession(chatSession: ChatSession) {
     const isMine = rumor.pubkey === myPubkey
 
     // Auto-set delivered status for incoming messages
-    const shouldAckDelivered = !isMine && get(receiptSettings).sendReceipts
+    const shouldAckDelivered = !isMine && get(receiptSettings).sendDeliveryReceipts
 
     // Use outer event ID for message ID - allows service worker to look up by push event ID
     const message: ChatMessage = {
@@ -767,7 +791,7 @@ function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messa
 
 // Send seen receipts for incoming messages - called from ChatView
 export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[]): void {
-  if (!get(receiptSettings).sendReceipts) return
+  if (!get(receiptSettings).sendReadReceipts) return
 
   // Get current state from store
   const currentChats = get(chats)
@@ -1080,6 +1104,23 @@ export async function loadChatsFromStorage(): Promise<void> {
   } catch (e) {
     console.error('Failed to load chats from storage:', e)
   }
+}
+
+// Send a typing indicator event
+export function sendTypingEvent(chatSession: ChatSession): void {
+  if (!get(typingSettings).sendTypingIndicators) return
+
+  const { event } = chatSession.session.sendEvent({
+    content: 'typing',
+    kind: KIND_TYPING,
+    tags: [],
+  })
+
+  const ndkInstance = get(ndk)
+  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
+  ndkPublishEvent.publish().catch(e => console.error('[chat] Failed to publish typing event:', e))
+
+  saveSessionToStorage(chatSession)
 }
 
 // Clear all chat data (for logout)

@@ -4,6 +4,7 @@ import { Session, type Rumor, deserializeSessionState, MESSAGE_EVENT_KIND, INVIT
 import type { VerifiedEvent } from 'nostr-tools'
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
+import { generateProxyUrl } from './lib/imgproxy'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -41,11 +42,20 @@ interface StoredInvite {
   createdAt: number
 }
 
+interface ProcessedEvent {
+  id: string
+  kind: number
+  chatId: string
+  content?: string
+  timestamp: number
+}
+
 class IrisChatDB extends Dexie {
   sessions!: Table<StoredSession, string>
   messages!: Table<StoredMessage, string>
   profiles!: Table<StoredProfile, string>
   invites!: Table<StoredInvite, string>
+  processedEvents!: Table<ProcessedEvent, string>
 
   constructor() {
     super('iris-chat')
@@ -60,6 +70,13 @@ class IrisChatDB extends Dexie {
       profiles: 'pubkey',
       invites: 'id'
     })
+    this.version(3).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp'
+    })
   }
 }
 
@@ -68,43 +85,59 @@ const db = new IrisChatDB()
 // Track currently open chat (only one can be open at a time)
 let currentOpenChatId: string | null = null
 
-// Get display name from profile, fallback to animal name
-async function getDisplayName(pubkey: string): Promise<string> {
+// Get display info from profile
+async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: string }> {
+  const fallbackIcon = '/iris-logo.png'
   try {
     const profile = await db.profiles.get(pubkey)
     if (profile) {
-      const name = profile.display_name || profile.name
-      if (name) return name
+      const name = profile.display_name || profile.name || getAnimalName(pubkey)
+      const icon = profile.picture
+        ? await generateProxyUrl(profile.picture, { width: 96, height: 96, square: true })
+        : fallbackIcon
+      return { name, icon }
     }
   } catch (err) {
     console.error('[sw] error fetching profile:', err)
   }
-  return getAnimalName(pubkey)
+  return { name: getAnimalName(pubkey), icon: fallbackIcon }
 }
+
+// Inner event kinds that should not trigger notifications
+const KIND_REACTION = 7
+const KIND_RECEIPT = 15
+const KIND_TYPING = 25
 
 interface DecryptResult {
   success: boolean
   content?: string
   chatId?: string
-  isReaction?: boolean
-  emoji?: string
-}
-
-// Check if content is a reaction payload
-function parseReaction(content: string): { emoji: string } | null {
-  try {
-    const parsed = JSON.parse(content)
-    if (parsed.type === 'reaction' && parsed.emoji) {
-      return { emoji: parsed.emoji }
-    }
-  } catch {
-    // Not JSON
-  }
-  return null
+  silent?: boolean
 }
 
 // Find session and decrypt message
 async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags: string[][]; [key: string]: unknown }): Promise<DecryptResult> {
+  // Check if main app already processed this event
+  if (eventData.id) {
+    try {
+      const processed = await db.processedEvents.get(eventData.id)
+      if (processed) {
+        if (processed.kind === KIND_TYPING || processed.kind === KIND_RECEIPT) {
+          return { success: true, chatId: processed.chatId, silent: true }
+        }
+        if (processed.kind === KIND_REACTION) {
+          return {
+            success: true,
+            content: `Reacted ${processed.content || ''}`,
+            chatId: processed.chatId,
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[sw] error checking processedEvents:', err)
+    }
+  }
+
   const sessions = await db.sessions.toArray()
 
   for (const storedSession of sessions) {
@@ -122,13 +155,10 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       if (outerId) {
         const storedMessage = await db.messages.get(outerId)
         if (storedMessage && !storedMessage.isMine) {
-          const reaction = parseReaction(storedMessage.content)
           return {
             success: true,
             content: storedMessage.content,
             chatId: storedSession.recipientPubkey,
-            isReaction: !!reaction,
-            emoji: reaction?.emoji
           }
         }
       }
@@ -161,17 +191,20 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       })
 
       if (innerEvent) {
-        const reaction = parseReaction(innerEvent.content)
+        // Suppress notifications for typing and receipts
+        const silent = innerEvent.kind === KIND_RECEIPT ||
+          innerEvent.kind === KIND_TYPING
         return {
           success: true,
-          content: innerEvent.content,
+          content: innerEvent.kind === KIND_REACTION
+            ? `Reacted ${innerEvent.content}`
+            : innerEvent.content,
           chatId: storedSession.recipientPubkey,
-          isReaction: !!reaction,
-          emoji: reaction?.emoji
+          silent,
         }
       }
 
-      // Fallback: show generic notification with sender name
+      // Decryption failed - show generic notification since it could be a real message
       return {
         success: false,
         chatId: storedSession.recipientPubkey
@@ -279,12 +312,12 @@ self.addEventListener('push', (event) => {
             return
           }
 
-          // Skip notifications for reactions
-          if (result.isReaction) {
+          // Skip notifications for reactions, receipts, typing, etc.
+          if (result.silent) {
             return
           }
 
-          const senderName = await getDisplayName(result.chatId)
+          const sender = await getSenderInfo(result.chatId)
           let body: string
           if (result.success && result.content) {
             body = result.content
@@ -293,9 +326,9 @@ self.addEventListener('push', (event) => {
           }
           const tag = `dm-${result.chatId}`
           console.log('[sw] showing notification with tag:', tag)
-          await self.registration.showNotification(senderName, {
+          await self.registration.showNotification(sender.name, {
             body,
-            icon: '/iris-logo.png',
+            icon: sender.icon,
             badge: '/iris-logo.png',
             tag,
             data: { chatId: result.chatId }

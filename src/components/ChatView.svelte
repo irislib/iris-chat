@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { sendMessage, sendReaction, sendSeenReceipts, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
+  import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
+  import { isTyping } from '../lib/typingState'
+  import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
@@ -38,6 +40,16 @@
   let isRecordingVoice = $state(false)
   let activeChatId = $state(chat.id)
   let replyingTo = $state<ChatMessage | null>(null)
+
+  // Throttled typing event sender - recreated per chat
+  let sendThrottledTyping = $derived(createTypingThrottle(() => sendTypingEvent(chat), 3000))
+
+  // Send typing event when user types
+  $effect(() => {
+    if (messageText.trim()) {
+      sendThrottledTyping()
+    }
+  })
 
   // Save draft for old chat and restore draft for new chat when switching
   $effect(() => {
@@ -248,9 +260,21 @@
     }
   })
 
-  // Auto-scroll to bottom when new messages arrive
+  // Track whether user is scrolled near the bottom
+  let isAtBottom = true
+
+  function handleMessagesScroll() {
+    if (!messagesContainer) return
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainer
+    isAtBottom = scrollHeight - scrollTop - clientHeight < 100
+  }
+
+  // Auto-scroll to bottom when new messages arrive or typing indicator appears
   $effect(() => {
-    if (messagesContainer && $currentChat?.messages.length) {
+    if (!messagesContainer) return
+    $currentChat?.messages.length
+    $isTyping.get(chat.id)
+    if (isAtBottom) {
       messagesContainer.scrollTop = messagesContainer.scrollHeight
     }
   })
@@ -342,6 +366,7 @@
   <!-- Messages - scrollable -->
   <div
     bind:this={messagesContainer}
+    onscroll={handleMessagesScroll}
     class="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-4 min-h-0"
   >
     <!-- Invite started system message -->
@@ -371,6 +396,16 @@
         {@const replyToMessage = message.replyTo ? messageMap.get(message.replyTo) ?? null : null}
         <MessageBubble {message} {isFirst} {isLast} {prevHasReactions} {hasReactions} {replyToMessage} onreact={handleReact} ondelete={handleDeleteMessage} onreply={handleReply} />
       {/each}
+    {/if}
+
+    {#if $isTyping.get(chat.id)}
+      <div class="flex items-end gap-2 mt-1">
+        <div class="bg-surface-light rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-1">
+          <span class="typing-dot"></span>
+          <span class="typing-dot" style="animation-delay: 0.15s"></span>
+          <span class="typing-dot" style="animation-delay: 0.3s"></span>
+        </div>
+      </div>
     {/if}
   </div>
 
@@ -531,3 +566,24 @@
     onclose={closeMediaModal}
   />
 {/if}
+
+<style>
+  .typing-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #9ca3af;
+    animation: typing-bounce 1.2s ease-in-out infinite;
+  }
+
+  @keyframes typing-bounce {
+    0%, 60%, 100% {
+      transform: translateY(0);
+      opacity: 0.4;
+    }
+    30% {
+      transform: translateY(-6px);
+      opacity: 1;
+    }
+  }
+</style>

@@ -41,11 +41,20 @@ export interface StoredInvite {
   usedBy?: string[]    // pubkeys of users who accepted this invite
 }
 
+export interface ProcessedEvent {
+  id: string           // outer event ID
+  kind: number         // inner event kind (7=reaction, 15=receipt, 25=typing)
+  chatId: string       // session/chat ID
+  content?: string     // e.g. emoji for reactions
+  timestamp: number
+}
+
 class IrisChatDB extends Dexie {
   sessions!: Table<StoredSession, string>
   messages!: Table<StoredMessage, string>
   profiles!: Table<StoredProfile, string>
   invites!: Table<StoredInvite, string>
+  processedEvents!: Table<ProcessedEvent, string>
 
   constructor() {
     super('iris-chat')
@@ -59,6 +68,13 @@ class IrisChatDB extends Dexie {
       messages: 'id, sessionId',
       profiles: 'pubkey',
       invites: 'id'
+    })
+    this.version(3).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp'
     })
   }
 }
@@ -139,12 +155,25 @@ export async function addInviteUsedBy(id: string, pubkey: string): Promise<void>
   }
 }
 
+// Processed event operations (for SW notification suppression)
+export async function saveProcessedEvent(event: ProcessedEvent): Promise<void> {
+  await db.processedEvents.put(event)
+  // Prune old entries (keep last 24h)
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  await db.processedEvents.where('timestamp').below(cutoff).delete()
+}
+
+export async function getProcessedEvent(id: string): Promise<ProcessedEvent | undefined> {
+  return db.processedEvents.get(id)
+}
+
 // Clear all data (for logout)
 export async function clearAllData(): Promise<void> {
   await Promise.all([
     db.sessions.clear(),
     db.messages.clear(),
     db.profiles.clear(),
-    db.invites.clear()
+    db.invites.clear(),
+    db.processedEvents.clear()
   ])
 }

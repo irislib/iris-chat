@@ -7,7 +7,8 @@
   import Name from './Name.svelte'
   import CopyButton from './CopyButton.svelte'
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
-  import { receiptSettings, setSendReceipts } from '../lib/receiptSettings'
+  import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
+  import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
 
   interface Props {
     onBack: () => void
@@ -425,22 +426,58 @@
       <!-- Privacy Section -->
       <div class="bg-surface rounded-lg p-4">
         <h2 class="font-medium mb-3">Privacy</h2>
-        <div class="flex items-center justify-between">
-          <div>
-            <span class="text-sm">Send read receipts</span>
-            <p class="text-xs text-gray-500 mt-0.5">Let others know when you've read their messages</p>
+        <div class="flex flex-col gap-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm">Send delivery receipts</span>
+              <p class="text-xs text-gray-500 mt-0.5">Let others know their message was delivered</p>
+            </div>
+            <button
+              class="w-10 h-5 rounded-full transition-colors relative {$receiptSettings.sendDeliveryReceipts ? 'bg-primary' : 'bg-gray-600'}"
+              onclick={() => setSendDeliveryReceipts(!$receiptSettings.sendDeliveryReceipts)}
+              role="switch"
+              aria-checked={$receiptSettings.sendDeliveryReceipts}
+              aria-label="Toggle delivery receipts"
+            >
+              <span
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$receiptSettings.sendDeliveryReceipts ? 'translate-x-5' : ''}"
+              ></span>
+            </button>
           </div>
-          <button
-            class="w-10 h-5 rounded-full transition-colors relative {$receiptSettings.sendReceipts ? 'bg-primary' : 'bg-gray-600'}"
-            onclick={() => setSendReceipts(!$receiptSettings.sendReceipts)}
-            role="switch"
-            aria-checked={$receiptSettings.sendReceipts}
-            aria-label="Toggle read receipts"
-          >
-            <span
-              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$receiptSettings.sendReceipts ? 'translate-x-5' : ''}"
-            ></span>
-          </button>
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm">Send read receipts</span>
+              <p class="text-xs text-gray-500 mt-0.5">Let others know when you've read their messages</p>
+            </div>
+            <button
+              class="w-10 h-5 rounded-full transition-colors relative {$receiptSettings.sendReadReceipts ? 'bg-primary' : 'bg-gray-600'}"
+              onclick={() => setSendReadReceipts(!$receiptSettings.sendReadReceipts)}
+              role="switch"
+              aria-checked={$receiptSettings.sendReadReceipts}
+              aria-label="Toggle read receipts"
+            >
+              <span
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$receiptSettings.sendReadReceipts ? 'translate-x-5' : ''}"
+              ></span>
+            </button>
+          </div>
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm">Send typing indicators</span>
+              <p class="text-xs text-gray-500 mt-0.5">Let others know when you're typing</p>
+            </div>
+            <button
+              class="w-10 h-5 rounded-full transition-colors relative {$typingSettings.sendTypingIndicators ? 'bg-primary' : 'bg-gray-600'}"
+              onclick={() => setSendTypingIndicators(!$typingSettings.sendTypingIndicators)}
+              role="switch"
+              aria-checked={$typingSettings.sendTypingIndicators}
+              aria-label="Toggle typing indicators"
+            >
+              <span
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$typingSettings.sendTypingIndicators ? 'translate-x-5' : ''}"
+              ></span>
+            </button>
+          </div>
         </div>
       </div>
 
