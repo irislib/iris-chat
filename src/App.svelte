@@ -8,9 +8,13 @@
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import InstallPrompt from './components/InstallPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback } from './lib/chat'
+  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, saveSessionToStorage } from './lib/chat'
   import type { ChatSession } from './lib/chat'
+  import { loadGroupsFromStorage, groups, groupMessages, currentGroupId, setSaveSessionFn, type Group } from './lib/groups'
   import { get } from 'svelte/store'
+  import CreateGroup from './components/CreateGroup.svelte'
+  import GroupChatView from './components/GroupChatView.svelte'
+  import GroupDetailsView from './components/GroupDetailsView.svelte'
 
   // Send message to service worker
   function postToServiceWorker(message: object) {
@@ -22,11 +26,12 @@
   }
 
   // View routing
-  type View = 'chat' | 'settings' | 'profile'
+  type View = 'chat' | 'settings' | 'profile' | 'createGroup' | 'groupDetails'
 
   let loggedIn = $state(false)
   let initializing = $state(true)
   let selectedChat = $state<ChatSession | null>(null)
+  let selectedGroupId = $state<string | null>(null)
   let currentView = $state<View>('chat')
   let profilePubkey = $state<string | null>(null)
   // Mobile: which panel to show - 'sidebar' or 'main'
@@ -40,11 +45,18 @@
   })
 
   // Parse view from URL hash
-  function getViewFromHash(): { view: View; profilePubkey?: string } {
+  function getViewFromHash(): { view: View; profilePubkey?: string; groupId?: string } {
     const hash = window.location.hash
     if (hash === '#settings') return { view: 'settings' }
     if (hash.startsWith('#profile-')) {
       return { view: 'profile', profilePubkey: hash.slice(9) }
+    }
+    if (hash === '#create-group') return { view: 'createGroup' }
+    if (hash.startsWith('#group-details-')) {
+      return { view: 'groupDetails', groupId: hash.slice(15) }
+    }
+    if (hash.startsWith('#group-')) {
+      return { view: 'chat', groupId: hash.slice(7) }
     }
     return { view: 'chat' }
   }
@@ -57,14 +69,20 @@
   }
 
   // Navigate to a view with history
-  function navigateTo(view: View, push = true, pubkey?: string) {
+  function navigateTo(view: View, push = true, pubkey?: string, groupId?: string) {
     currentView = view
     if (view === 'profile' && pubkey) {
       profilePubkey = pubkey
     }
-    const hash = view === 'settings' ? '#settings' : view === 'profile' && pubkey ? `#profile-${pubkey}` : ''
+    let hash = ''
+    if (view === 'settings') hash = '#settings'
+    else if (view === 'profile' && pubkey) hash = `#profile-${pubkey}`
+    else if (view === 'createGroup') hash = '#create-group'
+    else if (view === 'groupDetails' && groupId) hash = `#group-details-${groupId}`
+    else if (view === 'chat' && groupId) hash = `#group-${groupId}`
+
     if (push) {
-      history.pushState({ view, pubkey }, '', hash || window.location.pathname)
+      history.pushState({ view, pubkey, groupId }, '', hash || window.location.pathname)
     } else {
       setHashSilently(hash)
     }
@@ -116,6 +134,11 @@
         mobileView = 'main'
       } else if (hashState.view === 'settings') {
         mobileView = 'main'
+      } else if (hashState.groupId) {
+        selectedGroupId = hashState.groupId
+        selectedChat = null
+        currentChat.set(null)
+        mobileView = 'main'
       }
     }
 
@@ -126,7 +149,18 @@
       if (hashState.view === 'profile' && hashState.profilePubkey) {
         profilePubkey = hashState.profilePubkey
         mobileView = 'main'
+      } else if (hashState.groupId && hashState.view === 'chat') {
+        selectedGroupId = hashState.groupId
+        selectedChat = null
+        currentChat.set(null)
+        mobileView = 'main'
+      } else if (hashState.view === 'groupDetails' && hashState.groupId) {
+        selectedGroupId = hashState.groupId
+        mobileView = 'main'
+      } else if (hashState.view === 'createGroup') {
+        mobileView = 'main'
       } else {
+        selectedGroupId = null
         mobileView = hashState.view === 'settings' ? 'main' : 'sidebar'
       }
     }
@@ -173,11 +207,18 @@
       // Load saved chats from IndexedDB
       await loadChatsFromStorage()
 
+      // Wire up groups -> chat session saving
+      setSaveSessionFn(saveSessionToStorage)
+
+      // Load groups from IndexedDB
+      await loadGroupsFromStorage()
+
       // Set callback for invite acceptance (works for both loaded and new invites)
       setInviteAcceptedCallback((chatSession) => {
         selectedChat = chatSession
         currentChat.set(chatSession)
         currentView = 'chat'
+        selectedGroupId = null
         mobileView = 'main'
         // Tell service worker this chat is now open
         postToServiceWorker({ type: 'CHAT_OPENED', chatId: chatSession.id })
@@ -240,11 +281,18 @@
     // Load saved chats from IndexedDB
     await loadChatsFromStorage()
 
+    // Wire up groups -> chat session saving
+    setSaveSessionFn(saveSessionToStorage)
+
+    // Load groups from IndexedDB
+    await loadGroupsFromStorage()
+
     // Set callback for invite acceptance (works for both loaded and new invites)
     setInviteAcceptedCallback((chatSession) => {
       selectedChat = chatSession
       currentChat.set(chatSession)
       currentView = 'chat'
+      selectedGroupId = null
       mobileView = 'main'
       // Tell service worker this chat is now open
       postToServiceWorker({ type: 'CHAT_OPENED', chatId: chatSession.id })
@@ -256,9 +304,47 @@
     loggedIn = true
   }
 
+  function handleSelectGroup(groupId: string) {
+    selectedGroupId = groupId
+    selectedChat = null
+    currentChat.set(null)
+    navigateTo('chat', true, undefined, groupId)
+    mobileView = 'main'
+  }
+
+  function handleNewGroup() {
+    navigateTo('createGroup')
+    mobileView = 'main'
+  }
+
+  function handleGroupCreated(group: Group) {
+    selectedGroupId = group.id
+    selectedChat = null
+    currentChat.set(null)
+    navigateTo('chat', true, undefined, group.id)
+    mobileView = 'main'
+  }
+
+  function handleGroupDetails() {
+    if (selectedGroupId) {
+      navigateTo('groupDetails', true, undefined, selectedGroupId)
+    }
+  }
+
+  function handleGroupDetailsBack() {
+    history.back()
+  }
+
+  function handleGroupDeleted() {
+    selectedGroupId = null
+    navigateTo('chat')
+    mobileView = 'sidebar'
+  }
+
   function handleSelectChat(chat: ChatSession) {
     selectedChat = chat
     currentChat.set(chat)
+    selectedGroupId = null
     if (currentView !== 'chat') {
       navigateTo('chat')
     }
@@ -294,6 +380,7 @@
   function handleBack() {
     selectedChat = null
     currentChat.set(null)
+    selectedGroupId = null
     // Tell service worker no chat is open
     postToServiceWorker({ type: 'CHAT_OPENED', chatId: null })
     if (currentView !== 'chat') {
@@ -338,6 +425,7 @@
     await clearChatData()
     loggedIn = false
     selectedChat = null
+    selectedGroupId = null
     navigateTo('chat', false)
     mobileView = 'sidebar'
   }
@@ -386,7 +474,9 @@
         ">
           <Sidebar
             selectedChatId={selectedChat?.id || null}
+            {selectedGroupId}
             onSelectChat={handleSelectChat}
+            onSelectGroup={handleSelectGroup}
             onNewChat={handleNewChat}
             onSettings={handleSettings}
           />
@@ -405,6 +495,25 @@
               onBack={handleProfileBack}
               onOpenChat={handleOpenChatFromProfile}
             />
+          {:else if currentView === 'createGroup'}
+            <CreateGroup
+              onBack={handleBack}
+              onGroupCreated={handleGroupCreated}
+            />
+          {:else if currentView === 'groupDetails' && selectedGroupId && $groups.get(selectedGroupId)}
+            <GroupDetailsView
+              group={$groups.get(selectedGroupId)!}
+              onBack={handleGroupDetailsBack}
+              onDeleted={handleGroupDeleted}
+              onViewProfile={navigateToProfile}
+            />
+          {:else if selectedGroupId && $groups.get(selectedGroupId)}
+            <GroupChatView
+              group={$groups.get(selectedGroupId)!}
+              onleave={handleBack}
+              showBackButton={mobileView === 'main'}
+              onViewDetails={handleGroupDetails}
+            />
           {:else}
             <MainContent
               chat={selectedChat}
@@ -412,6 +521,7 @@
               onBack={handleBack}
               showBackButton={mobileView === 'main'}
               onViewProfile={navigateToProfile}
+              onCreateGroup={handleNewGroup}
             />
           {/if}
         </div>

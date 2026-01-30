@@ -23,6 +23,17 @@ export interface StoredMessage {
   replyTo?: string
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: 'delivered' | 'seen'
+  senderPubkey?: string  // pubkey of sender (for group messages)
+}
+
+export interface StoredGroup {
+  id: string
+  name: string
+  description?: string
+  picture?: string
+  members: string[]  // pubkeys of group members
+  admins: string[]   // pubkeys of admins
+  createdAt: number
 }
 
 export interface StoredProfile {
@@ -55,6 +66,7 @@ class IrisChatDB extends Dexie {
   profiles!: Table<StoredProfile, string>
   invites!: Table<StoredInvite, string>
   processedEvents!: Table<ProcessedEvent, string>
+  groups!: Table<StoredGroup, string>
 
   constructor() {
     super('iris-chat')
@@ -75,6 +87,14 @@ class IrisChatDB extends Dexie {
       profiles: 'pubkey',
       invites: 'id',
       processedEvents: 'id, timestamp'
+    })
+    this.version(4).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp',
+      groups: 'id'
     })
   }
 }
@@ -167,6 +187,19 @@ export async function getProcessedEvent(id: string): Promise<ProcessedEvent | un
   return db.processedEvents.get(id)
 }
 
+// Group operations
+export async function saveGroup(group: StoredGroup): Promise<void> {
+  await db.groups.put(group)
+}
+
+export async function getAllGroups(): Promise<StoredGroup[]> {
+  return db.groups.toArray()
+}
+
+export async function deleteGroupFromDb(id: string): Promise<void> {
+  await db.groups.delete(id)
+}
+
 // Clear all data (for logout)
 export async function clearAllData(): Promise<void> {
   await Promise.all([
@@ -174,6 +207,7 @@ export async function clearAllData(): Promise<void> {
     db.messages.clear(),
     db.profiles.clear(),
     db.invites.clear(),
-    db.processedEvents.clear()
+    db.processedEvents.clear(),
+    db.groups.clear()
   ])
 }

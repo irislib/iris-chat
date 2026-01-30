@@ -112,6 +112,7 @@ import {
   type StoredInvite
 } from './storage'
 import { updateDMSubscription } from './notifications'
+import { handleGroupEvent } from './groups'
 import { shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
@@ -125,6 +126,7 @@ export interface ChatMessage {
   replyTo?: string  // ID of the message being replied to
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: MessageStatus
+  senderPubkey?: string  // pubkey of sender (for group messages)
 }
 
 export interface ChatSession {
@@ -591,6 +593,15 @@ function subscribeToSession(chatSession: ChatSession) {
     const currentSession = currentChats.get(sessionId)
     if (!currentSession) return
 
+    // Route group events to group handler
+    const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
+    if (groupTag) {
+      handleGroupEvent(rumor, chatSession.recipientPubkey, outerEvent)
+      // Save session state since decryption may have rotated keys
+      saveSessionToStorage(currentSession)
+      return
+    }
+
     // Dispatch on inner event kind
     if (rumor.kind === RECEIPT_KIND) {
       if (outerEvent?.id) {
@@ -997,7 +1008,7 @@ export function deleteChat(chatSession: ChatSession): void {
 }
 
 // Storage helpers
-async function saveSessionToStorage(chatSession: ChatSession): Promise<void> {
+export async function saveSessionToStorage(chatSession: ChatSession): Promise<void> {
   try {
     const storedSession: StoredSession = {
       id: chatSession.id,

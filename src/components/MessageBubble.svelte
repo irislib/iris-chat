@@ -5,6 +5,7 @@
   import { FILE_LINK_REGEX, parseFileLink } from '../lib/hashtree'
   import FileAttachment from './FileAttachment.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
+  import Name from './Name.svelte'
 
   interface Props {
     message: ChatMessage
@@ -14,13 +15,14 @@
     hasReactions?: boolean
     showSenderName?: boolean
     senderName?: string
+    senderPubkey?: string
     replyToMessage?: ChatMessage | null
     onreact?: (messageId: string, emoji: string) => Promise<void>
     ondelete?: (messageId: string) => void
     onreply?: (message: ChatMessage) => void
   }
 
-  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, replyToMessage = null, onreact, ondelete, onreply }: Props = $props()
+  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, senderPubkey, replyToMessage = null, onreact, ondelete, onreply }: Props = $props()
 
   function handleReply() {
     onreply?.(message)
@@ -167,9 +169,15 @@
 </script>
 
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'}" id="msg-{message.id}">
-  {#if isFirst && showSenderName && senderName}
+  {#if isFirst && showSenderName && (senderName || senderPubkey)}
     <div class="flex items-center gap-2 mb-1 {message.isMine ? 'justify-end' : ''}">
-      <span class="text-xs text-gray-400 font-medium">{senderName}</span>
+      <span class="text-xs text-gray-400 font-medium">
+        {#if senderPubkey}
+          <Name pubkey={senderPubkey} />
+        {:else}
+          {senderName}
+        {/if}
+      </span>
     </div>
   {/if}
   <div class="group flex min-w-0 {message.isMine ? 'justify-end' : ''}">

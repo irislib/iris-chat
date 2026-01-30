@@ -1,30 +1,47 @@
 <script lang="ts">
   import { identity } from '../lib/identity'
   import { chats, type ChatSession } from '../lib/chat'
+  import { groups, groupMessages } from '../lib/groups'
   import { relayStore } from '../lib/relayStore'
   import Avatar from './Avatar.svelte'
   import ChatListItem from './ChatListItem.svelte'
+  import GroupChatListItem from './GroupChatListItem.svelte'
   import ConnectivityIndicator from './ConnectivityIndicator.svelte'
 
   interface Props {
     selectedChatId: string | null
+    selectedGroupId: string | null
     onSelectChat: (chat: ChatSession) => void
+    onSelectGroup: (groupId: string) => void
     onNewChat: () => void
     onSettings: () => void
   }
 
-  let { selectedChatId, onSelectChat, onNewChat, onSettings }: Props = $props()
+  let { selectedChatId, selectedGroupId, onSelectChat, onSelectGroup, onNewChat, onSettings }: Props = $props()
 
   let showConnectivity = $derived($relayStore.showConnectivity)
 
-  // Sorted chats by most recent
-  let sortedChats = $derived(
-    Array.from($chats.values()).sort((a, b) => {
-      const aTime = a.messages[a.messages.length - 1]?.timestamp || 0
-      const bTime = b.messages[b.messages.length - 1]?.timestamp || 0
-      return bTime - aTime
-    })
-  )
+  // Unified sorted items: DMs and groups merged by last message time
+  type SidebarItem =
+    | { type: 'dm'; chat: ChatSession; lastTime: number }
+    | { type: 'group'; groupId: string; lastTime: number }
+
+  let sortedItems = $derived.by(() => {
+    const items: SidebarItem[] = []
+
+    for (const chat of $chats.values()) {
+      const lastTime = chat.messages[chat.messages.length - 1]?.timestamp || 0
+      items.push({ type: 'dm', chat, lastTime })
+    }
+
+    for (const [groupId, group] of $groups.entries()) {
+      const msgs = $groupMessages.get(groupId) || []
+      const lastTime = msgs[msgs.length - 1]?.timestamp || group.createdAt || 0
+      items.push({ type: 'group', groupId, lastTime })
+    }
+
+    return items.sort((a, b) => b.lastTime - a.lastTime)
+  })
 </script>
 
 <div class="h-full flex flex-col bg-surface border-r border-surface-lighter">
@@ -66,11 +83,20 @@
 
   <!-- Chat List -->
   <div class="flex-1 overflow-y-auto overscroll-contain">
-    {#if sortedChats.length > 0}
-      {#each sortedChats as chat (chat.id)}
-        <div class="{selectedChatId === chat.id ? 'bg-surface-light' : ''}">
-          <ChatListItem {chat} onopen={() => onSelectChat(chat)} />
-        </div>
+    {#if sortedItems.length > 0}
+      {#each sortedItems as item (item.type === 'dm' ? item.chat.id : item.groupId)}
+        {#if item.type === 'dm'}
+          <div class="{selectedChatId === item.chat.id ? 'bg-surface-light' : ''}">
+            <ChatListItem chat={item.chat} onopen={() => onSelectChat(item.chat)} />
+          </div>
+        {:else}
+          {@const group = $groups.get(item.groupId)}
+          {#if group}
+            <div class="{selectedGroupId === item.groupId ? 'bg-surface-light' : ''}">
+              <GroupChatListItem {group} messages={$groupMessages.get(item.groupId) || []} onopen={() => onSelectGroup(item.groupId)} />
+            </div>
+          {/if}
+        {/if}
       {/each}
     {:else}
       <div class="text-center py-8 px-4">

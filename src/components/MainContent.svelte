@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type ChatSession } from '../lib/chat'
+  import { type ChatSession, chats } from '../lib/chat'
   import ChatView from './ChatView.svelte'
   import NewChat from './NewChat.svelte'
   import JoinChat from './JoinChat.svelte'
@@ -10,9 +10,12 @@
     onBack: () => void
     showBackButton: boolean
     onViewProfile?: (pubkey: string) => void
+    onCreateGroup?: () => void
   }
 
-  let { chat, onChatJoined, onBack, showBackButton, onViewProfile }: Props = $props()
+  let { chat, onChatJoined, onBack, showBackButton, onViewProfile, onCreateGroup }: Props = $props()
+
+  let hasChats = $derived($chats.size > 0)
 </script>
 
 <div class="flex-1 flex flex-col min-h-0">
@@ -40,6 +43,21 @@
           <div class="flex flex-wrap justify-center gap-6">
             <NewChat onjoin={onChatJoined} />
             <JoinChat onjoin={onChatJoined} />
+            {#if hasChats && onCreateGroup}
+              <div class="w-full max-w-md p-6 bg-surface rounded-2xl shadow-xl overflow-hidden">
+                <h2 class="text-2xl font-bold text-white mb-4 text-center">Create Group</h2>
+                <p class="text-gray-400 text-center text-sm mb-4">
+                  Start a group chat with your existing contacts
+                </p>
+                <button
+                  class="btn-primary w-full flex items-center justify-center gap-2"
+                  onclick={onCreateGroup}
+                >
+                  <span class="i-carbon-group"></span>
+                  Create Group
+                </button>
+              </div>
+            {/if}
           </div>
         </div>
       </div>
