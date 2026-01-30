@@ -40,6 +40,14 @@
 
   let showEmojiPicker = $state(false)
   let showMenu = $state(false)
+  let openUpward = $state(true)
+
+  function checkDirection(e: MouseEvent) {
+    const button = (e.currentTarget as HTMLElement)
+    const rect = button.getBoundingClientRect()
+    // Need ~120px above for menu, ~50px for emoji picker; use 120 as safe threshold
+    openUpward = rect.top > 120
+  }
 
   const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
 
@@ -180,13 +188,13 @@
           <div class="relative">
             <button
               class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-              onclick={() => showMenu = !showMenu}
+              onclick={(e) => { checkDirection(e); showMenu = !showMenu }}
               aria-label="Message menu"
             >
               <span class="i-carbon-overflow-menu-vertical text-sm"></span>
             </button>
             {#if showMenu}
-              <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+              <div class="absolute right-0 {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
                 <button
                   class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
                   onclick={handleCopy}
@@ -208,13 +216,13 @@
             <div class="relative">
               <button
                 class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                onclick={() => showEmojiPicker = !showEmojiPicker}
+                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker }}
                 aria-label="Add reaction"
               >
                 <span class="i-carbon-face-add text-sm"></span>
               </button>
               {#if showEmojiPicker}
-                <div class="absolute right-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
+                <div class="absolute right-0 {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
                   {#each quickEmojis as emoji}
                     <button
                       class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
@@ -315,13 +323,13 @@
             <div class="relative">
               <button
                 class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                onclick={() => showEmojiPicker = !showEmojiPicker}
+                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker }}
                 aria-label="Add reaction"
               >
                 <span class="i-carbon-face-add text-sm"></span>
               </button>
               {#if showEmojiPicker}
-                <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
+                <div class="absolute left-0 {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
                   {#each quickEmojis as emoji}
                     <button
                       class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
@@ -337,13 +345,13 @@
           <div class="relative">
             <button
               class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-              onclick={() => showMenu = !showMenu}
+              onclick={(e) => { checkDirection(e); showMenu = !showMenu }}
               aria-label="Message menu"
             >
               <span class="i-carbon-overflow-menu-vertical text-sm"></span>
             </button>
             {#if showMenu}
-              <div class="absolute left-0 bottom-full mb-1 z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+              <div class="absolute left-0 {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
                 <button
                   class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
                   onclick={handleCopy}
