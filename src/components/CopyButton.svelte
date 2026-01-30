@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { copyToClipboard } from '../lib/utils'
+
   interface Props {
     text: string
     label?: string
@@ -16,12 +18,9 @@
   }
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text)
+    if (await copyToClipboard(text)) {
       copied = true
       setTimeout(() => copied = false, 2000)
-    } catch (e) {
-      console.error('Failed to copy:', e)
     }
   }
 </script>

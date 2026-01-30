@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getInviteUrl, type Invite } from '../lib/chat'
+  import { copyToClipboard } from '../lib/utils'
   import QRCode from './QRCode.svelte'
   import QRScanner from './QRScanner.svelte'
 
@@ -16,12 +17,9 @@
   let inviteUrl = $derived(getInviteUrl(invite))
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(inviteUrl)
+    if (await copyToClipboard(inviteUrl)) {
       copied = true
       setTimeout(() => copied = false, 2000)
-    } catch (e) {
-      console.error('Failed to copy:', e)
     }
   }
 

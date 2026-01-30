@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { getMediaUrl, getMimeType } from '../lib/hashtree'
+  import { getErrorMessage } from '../lib/utils'
 
   interface Props {
     src: string | null
@@ -12,7 +13,9 @@
 
   let { src, nhash, filename, type, onclose }: Props = $props()
 
+  // svelte-ignore state_referenced_locally — initial values; mediaSrc/loading are managed by loadMedia()
   let mediaSrc = $state<string | null>(src)
+  // svelte-ignore state_referenced_locally
   let loading = $state(!src && !!nhash)
   let error = $state<string | null>(null)
 
@@ -38,7 +41,7 @@
       const mimeType = getMimeType(filename)
       mediaSrc = await getMediaUrl(nhash, mimeType)
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load'
+      error = getErrorMessage(e, 'Failed to load')
     } finally {
       loading = false
     }

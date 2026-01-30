@@ -9,6 +9,7 @@
     getMimeType,
   } from '../lib/hashtree'
   import { openMediaModal, openMediaModalWithNhash } from '../lib/mediaModal'
+  import { getErrorMessage } from '../lib/utils'
 
   interface Props {
     nhash: string
@@ -52,7 +53,7 @@
     try {
       mediaUrl = await getMediaUrl(nhash, mimeType)
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load'
+      error = getErrorMessage(e, 'Failed to load')
     } finally {
       loading = false
     }

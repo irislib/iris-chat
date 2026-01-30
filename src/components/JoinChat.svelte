@@ -1,5 +1,6 @@
 <script lang="ts">
   import { parseInviteFromUrl, parseInviteFromHash, acceptInvite, type ChatSession } from '../lib/chat'
+  import { getErrorMessage } from '../lib/utils'
   import QRScanner from './QRScanner.svelte'
 
   interface Props {
@@ -31,7 +32,7 @@
       }
       onjoin(new CustomEvent('join', { detail: { chat: session } }))
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to join chat'
+      error = getErrorMessage(e, 'Failed to join chat')
       console.error('Failed to join chat:', e)
     } finally {
       joining = false
@@ -61,7 +62,7 @@
         history.replaceState(null, '', window.location.pathname)
         onjoin(new CustomEvent('join', { detail: { chat: session } }))
       }).catch(e => {
-        error = e instanceof Error ? e.message : 'Failed to join chat'
+        error = getErrorMessage(e, 'Failed to join chat')
         console.error('Failed to join from URL:', e)
       })
     }

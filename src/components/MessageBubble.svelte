@@ -4,6 +4,7 @@
   import type { ChatMessage } from '../lib/chat'
   import { FILE_LINK_REGEX, parseFileLink } from '../lib/hashtree'
   import FileAttachment from './FileAttachment.svelte'
+  import StatusIndicator from './StatusIndicator.svelte'
 
   interface Props {
     message: ChatMessage
@@ -242,14 +243,13 @@
             <div class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden">
               <!-- Reply preview -->
               {#if replyToMessage}
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div
-                  class="text-xs px-3 py-1.5 mx-2 mt-2 border-l-2 rounded-sm cursor-pointer overflow-hidden {message.isMine ? 'border-white/40 bg-white/10 text-white/70' : 'border-primary/60 bg-primary/10 text-gray-300'}"
+                <button
+                  class="text-xs text-left w-full px-3 py-1.5 mx-2 mt-2 border-l-2 rounded-sm cursor-pointer overflow-hidden {message.isMine ? 'border-white/40 bg-white/10 text-white/70' : 'border-primary/60 bg-primary/10 text-gray-300'}"
                   onclick={() => scrollToMessage(replyToMessage.id)}
                 >
                   <div class="font-semibold mb-0.5">{replyToMessage.isMine ? 'You' : 'Them'}</div>
                   <div class="truncate">{replyToMessage.content}</div>
-                </div>
+                </button>
               {/if}
               <!-- Content + time (inline for short messages, wraps for long) -->
               <div class="flex flex-wrap items-end gap-x-2 px-3 {htmlContent ? 'pt-1.5' : 'pt-0.5'} pb-1">
@@ -262,23 +262,7 @@
                 <div class="flex items-center gap-1 ml-auto">
                   <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
                   {#if message.isMine}
-                    {#if message.status === 'seen'}
-                      <span class="relative inline-block w-4 h-3">
-                        <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-[#7dd3fc]"></span>
-                        <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#6366f1] check-outline-size"></span>
-                        <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-[#7dd3fc]"></span>
-                      </span>
-                    {:else if message.status === 'delivered'}
-                      <span class="relative inline-block w-4 h-3">
-                        <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-white/60"></span>
-                        <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#6366f1] check-outline-size"></span>
-                        <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-white/60"></span>
-                      </span>
-                    {:else}
-                      <span class="relative inline-block w-4 h-3 text-white/60">
-                        <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
-                      </span>
-                    {/if}
+                    <StatusIndicator status={message.status} variant="bubble" />
                   {/if}
                 </div>
               </div>
@@ -296,23 +280,7 @@
           <div class="flex items-center justify-end gap-1 mt-0.5 mr-1">
             <span class="text-[10px] text-gray-500">{formatTime(message.timestamp)}</span>
             {#if message.isMine}
-              {#if message.status === 'seen'}
-                <span class="relative inline-block w-4 h-3">
-                  <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-primary"></span>
-                  <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
-                  <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-primary"></span>
-                </span>
-              {:else if message.status === 'delivered'}
-                <span class="relative inline-block w-4 h-3">
-                  <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-gray-500"></span>
-                  <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
-                  <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-gray-500"></span>
-                </span>
-              {:else}
-                <span class="relative inline-block w-4 h-3 text-gray-500">
-                  <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
-                </span>
-              {/if}
+              <StatusIndicator status={message.status} />
             {/if}
           </div>
         {/if}
@@ -419,13 +387,6 @@
 {/if}
 
 <style>
-  /* Slightly larger dark checkmark behind the front one to simulate an outline */
-  .check-outline-size {
-    font-size: 14px;
-    margin-top: -1px;
-    margin-left: -1px;
-  }
-
   /* Highlight animation for scrolling to replied message */
   :global(.highlight-message) {
     animation: highlight-flash 2s ease-out;

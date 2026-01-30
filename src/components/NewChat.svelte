@@ -9,6 +9,7 @@
     type ChatSession,
     type ActiveInvite
   } from '../lib/chat'
+  import { getErrorMessage } from '../lib/utils'
   import QRCode from './QRCode.svelte'
   import Name from './Name.svelte'
   import CopyButton from './CopyButton.svelte'
@@ -53,7 +54,7 @@
       await createAndSaveInvite(defaultLabel)
     } catch (e) {
       console.error('Failed to create invite:', e)
-      createError = e instanceof Error ? e.message : 'Failed to create invite'
+      createError = getErrorMessage(e, 'Failed to create invite')
     } finally {
       creating = false
     }

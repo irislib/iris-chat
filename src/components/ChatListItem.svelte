@@ -3,6 +3,7 @@
   import { isTyping } from '../lib/typingState'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
+  import StatusIndicator from './StatusIndicator.svelte'
 
   interface Props {
     chat: ChatSession
@@ -43,23 +44,7 @@
     {:else if lastMessage}
       <div class="text-sm text-gray-400 truncate flex items-center gap-1.5">
         {#if lastMessage.isMine}
-          {#if lastMessage.status === 'seen'}
-            <span class="relative inline-block w-4 h-3 flex-shrink-0">
-              <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-primary"></span>
-              <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
-              <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-primary"></span>
-            </span>
-          {:else if lastMessage.status === 'delivered'}
-            <span class="relative inline-block w-4 h-3 flex-shrink-0">
-              <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-gray-500"></span>
-              <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
-              <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-gray-500"></span>
-            </span>
-          {:else}
-            <span class="relative inline-block w-4 h-3 text-gray-500 flex-shrink-0">
-              <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
-            </span>
-          {/if}
+          <StatusIndicator status={lastMessage.status} />
         {/if}
         <span class="truncate">{lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}</span>
       </div>
@@ -69,10 +54,3 @@
   </div>
 </button>
 
-<style>
-  .check-outline-size {
-    font-size: 14px;
-    margin-top: -1px;
-    margin-left: -1px;
-  }
-</style>

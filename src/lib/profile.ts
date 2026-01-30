@@ -122,7 +122,7 @@ function notifyListeners(pubkey: string, profile: Profile) {
   }
 }
 
-async function fetchProfile(pubkey: string): Promise<void> {
+async function fetchProfile(pubkey: string, retryCount = 0): Promise<void> {
   if (pendingFetches.has(pubkey)) return
 
   pendingFetches.add(pubkey)
@@ -151,6 +151,9 @@ async function fetchProfile(pubkey: string): Promise<void> {
       } catch (e) {
         console.error('[profile] JSON parse error', e)
       }
+    } else if (retryCount < 3 && !profileCache.has(pubkey)) {
+      // Profile not on relay yet, retry with backoff
+      setTimeout(() => fetchProfile(pubkey, retryCount + 1), 2000 * (retryCount + 1))
     }
   } catch (e) {
     console.error('[profile] fetch error', e)

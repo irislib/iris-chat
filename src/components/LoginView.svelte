@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity } from '../lib/identity'
   import { parseInviteFromHash } from '../lib/chat'
+  import { getErrorMessage } from '../lib/utils'
 
   interface Props {
     onlogin: () => void
@@ -31,7 +32,7 @@
       await loginWithNip07(displayName || null)
       onlogin()
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to login with extension'
+      error = getErrorMessage(e, 'Failed to login with extension')
     } finally {
       loading = false
     }
@@ -45,7 +46,7 @@
       await loginWithPrivkey(privkey, displayName || null)
       onlogin()
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to generate identity'
+      error = getErrorMessage(e, 'Failed to generate identity')
     } finally {
       loading = false
     }

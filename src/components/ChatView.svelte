@@ -5,6 +5,7 @@
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
+  import { getErrorMessage } from '../lib/utils'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
@@ -31,6 +32,7 @@
     error: string | null
   }
 
+  // svelte-ignore state_referenced_locally — initial values; the $effect below handles chat switching
   let messageText = $state(getDraft(chat.id))
   let messagesContainer = $state<HTMLDivElement | null>(null)
   let inputRef = $state<HTMLTextAreaElement | null>(null)
@@ -38,6 +40,7 @@
   let showMenu = $state(false)
   let pendingAttachment = $state<PendingAttachment | null>(null)
   let isRecordingVoice = $state(false)
+  // svelte-ignore state_referenced_locally
   let activeChatId = $state(chat.id)
   let replyingTo = $state<ChatMessage | null>(null)
 
@@ -180,7 +183,7 @@
         pendingAttachment = {
           ...pendingAttachment,
           uploading: false,
-          error: e instanceof Error ? e.message : 'Upload failed',
+          error: getErrorMessage(e, 'Upload failed'),
         }
       }
     }
@@ -248,7 +251,7 @@
         pendingAttachment = {
           ...pendingAttachment,
           uploading: false,
-          error: e instanceof Error ? e.message : 'Upload failed',
+          error: getErrorMessage(e, 'Upload failed'),
         }
       }
     }

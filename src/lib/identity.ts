@@ -157,7 +157,7 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     // Publish kind 0 profile event to relays
     const ndkUser = ndkInstance.getUser({ pubkey: user.pubkey })
     ndkUser.profile = { name: displayName, displayName: displayName }
-    ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
+    await ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
   }
 
   saveIdentity(privkeyHex)
@@ -188,7 +188,7 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     // Publish kind 0 profile event to relays
     const ndkUser = ndkInstance.getUser({ pubkey: user.pubkey })
     ndkUser.profile = { name: displayName, displayName: displayName }
-    ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
+    await ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
   }
 
   // Save marker to remember NIP-07 login

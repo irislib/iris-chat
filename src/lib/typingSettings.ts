@@ -1,31 +1,16 @@
-import { writable } from 'svelte/store'
+import { createPersistedSettings } from './createSettings'
 
 export interface TypingSettings {
   sendTypingIndicators: boolean
 }
 
-const STORAGE_KEY = 'iris-chat-typing'
+const { store, update } = createPersistedSettings<TypingSettings>(
+  'iris-chat-typing',
+  { sendTypingIndicators: true },
+)
 
-function loadSettings(): TypingSettings {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
-      return JSON.parse(stored)
-    }
-  } catch {}
-  return { sendTypingIndicators: true }
-}
-
-function save(settings: TypingSettings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
-}
-
-export const typingSettings = writable<TypingSettings>(loadSettings())
+export const typingSettings = store
 
 export function setSendTypingIndicators(value: boolean): void {
-  typingSettings.update(s => {
-    const updated = { ...s, sendTypingIndicators: value }
-    save(updated)
-    return updated
-  })
+  update({ sendTypingIndicators: value })
 }
