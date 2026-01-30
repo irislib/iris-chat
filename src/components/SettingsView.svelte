@@ -7,6 +7,7 @@
   import Name from './Name.svelte'
   import CopyButton from './CopyButton.svelte'
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
+  import { receiptSettings, setSendReceipts } from '../lib/receiptSettings'
 
   interface Props {
     onBack: () => void
@@ -416,6 +417,28 @@
           >
             <span
               class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {showConnectivity ? 'translate-x-5' : ''}"
+            ></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Privacy Section -->
+      <div class="bg-surface rounded-lg p-4">
+        <h2 class="font-medium mb-3">Privacy</h2>
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="text-sm">Send read receipts</span>
+            <p class="text-xs text-gray-500 mt-0.5">Let others know when you've read their messages</p>
+          </div>
+          <button
+            class="w-10 h-5 rounded-full transition-colors relative {$receiptSettings.sendReceipts ? 'bg-primary' : 'bg-gray-600'}"
+            onclick={() => setSendReceipts(!$receiptSettings.sendReceipts)}
+            role="switch"
+            aria-checked={$receiptSettings.sendReceipts}
+            aria-label="Toggle read receipts"
+          >
+            <span
+              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$receiptSettings.sendReceipts ? 'translate-x-5' : ''}"
             ></span>
           </button>
         </div>

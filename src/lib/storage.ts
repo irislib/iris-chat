@@ -22,6 +22,7 @@ export interface StoredMessage {
   isMine: boolean
   replyTo?: string
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
+  status?: 'delivered' | 'seen'
 }
 
 export interface StoredProfile {
@@ -96,6 +97,10 @@ export async function getMessageById(id: string): Promise<StoredMessage | undefi
 
 export async function deleteMessage(id: string): Promise<void> {
   await db.messages.delete(id)
+}
+
+export async function updateMessageStatus(id: string, status: 'delivered' | 'seen'): Promise<void> {
+  await db.messages.update(id, { status })
 }
 
 // Profile operations

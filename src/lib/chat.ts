@@ -105,11 +105,14 @@ import {
   deleteInvite as deleteInviteFromDb,
   updateInviteLabel as updateInviteLabelInDb,
   addInviteUsedBy as addInviteUsedByInDb,
+  updateMessageStatus as updateMessageStatusInDb,
   type StoredSession,
   type StoredMessage,
   type StoredInvite
 } from './storage'
 import { updateDMSubscription } from './notifications'
+import { shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
+import { receiptSettings } from './receiptSettings'
 
 export interface ChatMessage {
   id: string
@@ -118,6 +121,7 @@ export interface ChatMessage {
   isMine: boolean
   replyTo?: string  // ID of the message being replied to
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
+  status?: MessageStatus
 }
 
 export interface ChatSession {
@@ -573,24 +577,9 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
   })
 }
 
-// Reaction message format
-interface ReactionPayload {
-  type: 'reaction'
-  messageId: string
-  emoji: string
-}
-
-function isReactionPayload(content: string): ReactionPayload | null {
-  try {
-    const parsed = JSON.parse(content)
-    if (parsed.type === 'reaction' && parsed.messageId && parsed.emoji) {
-      return parsed as ReactionPayload
-    }
-  } catch {
-    // Not JSON, regular message
-  }
-  return null
-}
+// Event kinds for inner Rumors
+const KIND_REACTION = 7
+const KIND_RECEIPT = 15
 
 // Subscribe to incoming messages for a session
 function subscribeToSession(chatSession: ChatSession) {
@@ -603,10 +592,23 @@ function subscribeToSession(chatSession: ChatSession) {
     const currentSession = currentChats.get(sessionId)
     if (!currentSession) return
 
-    // Check if this is a reaction
-    const reactionPayload = isReactionPayload(rumor.content)
-    if (reactionPayload) {
-      handleIncomingReaction(currentSession, reactionPayload, rumor.pubkey)
+    // Dispatch on inner event kind
+    if (rumor.kind === KIND_RECEIPT) {
+      const type = rumor.content as 'delivered' | 'seen'
+      if (type !== 'delivered' && type !== 'seen') return
+      const messageIds = rumor.tags
+        ?.filter((t: string[]) => t[0] === 'e')
+        .map((t: string[]) => t[1]) || []
+      if (messageIds.length === 0) return
+      handleIncomingReceipt(currentSession, { type, messageIds })
+      return
+    }
+
+    if (rumor.kind === KIND_REACTION) {
+      const emoji = rumor.content
+      const messageId = rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
+      if (!emoji || !messageId) return
+      handleIncomingReaction(currentSession, { messageId, emoji }, rumor.pubkey)
       return
     }
 
@@ -617,13 +619,19 @@ function subscribeToSession(chatSession: ChatSession) {
       (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
     )?.[1]
 
+    const isMine = rumor.pubkey === myPubkey
+
+    // Auto-set delivered status for incoming messages
+    const shouldAckDelivered = !isMine && get(receiptSettings).sendReceipts
+
     // Use outer event ID for message ID - allows service worker to look up by push event ID
     const message: ChatMessage = {
       id: outerEvent?.id || rumor.id,
       content: rumor.content,
       timestamp: rumor.created_at * 1000,
-      isMine: rumor.pubkey === myPubkey,
+      isMine,
       ...(replyTag && { replyTo: replyTag }),
+      ...(shouldAckDelivered && { status: 'delivered' as const }),
     }
 
     // Check if message already exists
@@ -648,13 +656,18 @@ function subscribeToSession(chatSession: ChatSession) {
     saveMessageToStorage(sessionId, message)
     saveSessionToStorage(updatedSession)
 
+    // Send delivered receipt
+    if (shouldAckDelivered) {
+      sendReceipt(updatedSession, 'delivered', [message.id])
+    }
+
     // Update notification subscription (debounced) since keys may have rotated
     updateDMSubscription()
   })
 }
 
 // Handle incoming reaction
-function handleIncomingReaction(chatSession: ChatSession, reaction: ReactionPayload, fromPubkey: string) {
+function handleIncomingReaction(chatSession: ChatSession, reaction: { messageId: string, emoji: string }, fromPubkey: string) {
   const messageIndex = chatSession.messages.findIndex(m => m.id === reaction.messageId)
   if (messageIndex === -1) return
 
@@ -698,6 +711,98 @@ function handleIncomingReaction(chatSession: ChatSession, reaction: ReactionPayl
   // Save updated message to IndexedDB
   saveMessageToStorage(chatSession.id, updatedMessage)
   saveSessionToStorage(chatSession)
+}
+
+// Handle incoming receipt - updates status on own messages
+function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload) {
+  let changed = false
+  const updatedMessages = [...chatSession.messages]
+
+  for (const messageId of receipt.messageIds) {
+    const index = updatedMessages.findIndex(m => m.id === messageId && m.isMine)
+    if (index === -1) continue
+
+    const message = updatedMessages[index]
+    if (!shouldAdvanceStatus(message.status, receipt.type)) continue
+
+    updatedMessages[index] = { ...message, status: receipt.type }
+    changed = true
+
+    // Persist to IndexedDB
+    updateMessageStatusInDb(messageId, receipt.type)
+  }
+
+  if (!changed) return
+
+  // Update store
+  chats.update(c => {
+    c.set(chatSession.id, { ...chatSession, messages: updatedMessages })
+    return c
+  })
+
+  // Update current chat if it's this one
+  const current = get(currentChat)
+  if (current?.id === chatSession.id) {
+    currentChat.set({ ...chatSession, messages: updatedMessages })
+  }
+}
+
+// Send a receipt via the double ratchet session
+function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
+  if (messageIds.length === 0) return
+
+  const { event } = chatSession.session.sendEvent({
+    content: type,
+    kind: KIND_RECEIPT,
+    tags: messageIds.map(id => ['e', id]),
+  })
+
+  const ndkInstance = get(ndk)
+  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
+  ndkPublishEvent.publish().catch(e => console.error('[chat] Failed to publish receipt:', e))
+
+  // Save session state since keys may have rotated
+  saveSessionToStorage(chatSession)
+}
+
+// Send seen receipts for incoming messages - called from ChatView
+export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[]): void {
+  if (!get(receiptSettings).sendReceipts) return
+
+  // Get current state from store
+  const currentChats = get(chats)
+  const currentSession = currentChats.get(chatSession.id)
+  if (!currentSession) return
+
+  // Filter to only messages we haven't already acked as seen
+  const toAck = messageIds.filter(id => {
+    const msg = currentSession.messages.find(m => m.id === id)
+    return msg && msg.status !== 'seen'
+  })
+  if (toAck.length === 0) return
+
+  // Update status on messages
+  const updatedMessages = currentSession.messages.map(m => {
+    if (toAck.includes(m.id)) {
+      const updated = { ...m, status: 'seen' as const }
+      updateMessageStatusInDb(m.id, 'seen')
+      return updated
+    }
+    return m
+  })
+
+  const updatedSession = { ...currentSession, messages: updatedMessages }
+  chats.update(c => {
+    c.set(chatSession.id, updatedSession)
+    return c
+  })
+
+  const current = get(currentChat)
+  if (current?.id === chatSession.id) {
+    currentChat.set(updatedSession)
+  }
+
+  sendReceipt(updatedSession, 'seen', toAck)
 }
 
 // Send a message
@@ -753,13 +858,11 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
 
 // Send a reaction to a message
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
-  const payload: ReactionPayload = {
-    type: 'reaction',
-    messageId,
-    emoji
-  }
-
-  const { event } = chatSession.session.send(JSON.stringify(payload))
+  const { event } = chatSession.session.sendEvent({
+    content: emoji,
+    kind: KIND_REACTION,
+    tags: [['e', messageId]],
+  })
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -912,7 +1015,8 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       timestamp: message.timestamp,
       isMine: message.isMine,
       ...(message.replyTo && { replyTo: message.replyTo }),
-      reactions
+      reactions,
+      status: message.status
     }
     await saveMessageToDb(storedMessage)
   } catch (e) {
@@ -945,7 +1049,8 @@ export async function loadChatsFromStorage(): Promise<void> {
             timestamp: m.timestamp,
             isMine: m.isMine,
             ...(m.replyTo && { replyTo: m.replyTo }),
-            reactions: m.reactions
+            reactions: m.reactions,
+            status: m.status
           }))
           .sort((a, b) => a.timestamp - b.timestamp)
 

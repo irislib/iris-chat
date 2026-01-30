@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { sendMessage, sendReaction, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
+  import { sendMessage, sendReaction, sendSeenReceipts, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
@@ -260,6 +260,15 @@
     chat.id
     if (inputRef) {
       inputRef.focus()
+    }
+  })
+
+  // Send seen receipts for incoming messages when chat is open
+  $effect(() => {
+    const msgs = $currentChat?.messages || chat.messages
+    const unseenIncoming = msgs.filter(m => !m.isMine && m.status !== 'seen')
+    if (unseenIncoming.length > 0) {
+      sendSeenReceipts(chat, unseenIncoming.map(m => m.id))
     }
   })
 

@@ -261,6 +261,29 @@
           {/each}
         </div>
 
+        <!-- Status indicator for own messages (last in group only) -->
+        {#if message.isMine && isLast}
+          <div class="flex justify-end mt-0.5 mr-1">
+            {#if message.status === 'seen'}
+              <span class="relative inline-block w-4 h-3">
+                <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-primary"></span>
+                <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
+                <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-primary"></span>
+              </span>
+            {:else if message.status === 'delivered'}
+              <span class="relative inline-block w-4 h-3">
+                <span class="i-carbon-checkmark text-xs absolute top-0 left-0 text-gray-500"></span>
+                <span class="i-carbon-checkmark absolute top-0 left-[5px] text-[#0a0a0a] check-outline-size"></span>
+                <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] text-gray-500"></span>
+              </span>
+            {:else}
+              <span class="relative inline-block w-4 h-3 text-gray-500">
+                <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
+              </span>
+            {/if}
+          </div>
+        {/if}
+
         <!-- Reactions display - positioned to overlap bottom of message -->
         {#if message.reactions && Object.keys(message.reactions).length > 0}
           <div class="absolute -bottom-4 right-2 flex gap-1">
@@ -361,6 +384,13 @@
 {/if}
 
 <style>
+  /* Slightly larger dark checkmark behind the front one to simulate an outline */
+  .check-outline-size {
+    font-size: 14px;
+    margin-top: -1px;
+    margin-left: -1px;
+  }
+
   /* Highlight animation for scrolling to replied message */
   :global(.highlight-message) {
     animation: highlight-flash 2s ease-out;
