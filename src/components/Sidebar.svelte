@@ -92,7 +92,7 @@
         {:else}
           {@const group = $groups.get(item.groupId)}
           {#if group}
-            <div class="{selectedGroupId === item.groupId ? 'bg-surface-light' : ''}">
+            <div class="{selectedGroupId === item.groupId ? 'bg-surface-light' : ''} {group.accepted !== true ? 'opacity-60' : ''}">
               <GroupChatListItem {group} messages={$groupMessages.get(item.groupId) || []} onopen={() => onSelectGroup(item.groupId)} />
             </div>
           {/if}

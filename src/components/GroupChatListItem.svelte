@@ -37,9 +37,14 @@
   <div class="flex-1 min-w-0 leading-tight">
     <div class="flex items-center justify-between gap-2">
       <span class="font-medium text-sm truncate">{group.name}</span>
-      {#if lastMessage}
-        <span class="text-xs text-gray-500 flex-shrink-0">{formatTime(lastMessage.timestamp)}</span>
-      {/if}
+      <div class="flex items-center gap-1.5 flex-shrink-0">
+        {#if group.accepted !== true}
+          <span class="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">invite</span>
+        {/if}
+        {#if lastMessage}
+          <span class="text-xs text-gray-500">{formatTime(lastMessage.timestamp)}</span>
+        {/if}
+      </div>
     </div>
     {#if $isTyping.get(`group:${group.id}`)}
       <div class="text-sm text-primary">typing...</div>

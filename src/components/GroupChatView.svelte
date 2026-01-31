@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, groupMessages, currentGroupId, type Group, type GroupMessage } from '../lib/groups'
+  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, groupMessages, currentGroupId, type Group, type GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
@@ -356,6 +356,28 @@
       onclick={() => showMenu = false}
       aria-label="Close menu"
     ></button>
+  {/if}
+
+  <!-- Invite banner for unaccepted groups -->
+  {#if group.accepted !== true}
+    <div class="px-4 py-3 bg-primary/10 border-b border-primary/20 flex items-center gap-3 flex-shrink-0">
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-medium">You've been invited to <strong>{group.name}</strong></p>
+        <p class="text-xs text-gray-400 mt-0.5">Accept to join and exchange messages</p>
+      </div>
+      <button
+        class="btn-primary px-4 py-2 text-sm flex-shrink-0"
+        onclick={() => acceptGroupInvitation(group.id)}
+      >
+        Accept
+      </button>
+      <button
+        class="px-4 py-2 text-sm text-gray-400 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors flex-shrink-0"
+        onclick={handleDelete}
+      >
+        Decline
+      </button>
+    </div>
   {/if}
 
   <!-- Messages - scrollable -->

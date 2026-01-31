@@ -2,7 +2,8 @@
   import { groups, deleteGroup, isAdmin, addGroupMember, removeGroupMember, updateGroupInfo, addGroupAdmin, removeGroupAdmin, type Group } from '../lib/groups'
   import { chats } from '../lib/chat'
   import { getPubkey } from '../lib/identity'
-  import { uploadFile, getMediaUrl } from '../lib/hashtree'
+  import { uploadFile, getMediaUrl, parseFileLink, isImageFile } from '../lib/hashtree'
+  import { openMediaModal } from '../lib/mediaModal'
   import { getErrorMessage } from '../lib/utils'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
@@ -133,23 +134,39 @@
         accept="image/*"
         onchange={handlePictureSelect}
       />
-      <button
-        class="relative mb-3 group/pic"
-        onclick={() => amAdmin && fileInputRef?.click()}
-        disabled={!amAdmin || uploadingPicture}
-        aria-label="Change group picture"
-      >
-        <GroupAvatar picture={group.picture} size={80} />
+      <div class="relative mb-3 group/pic">
+        <button
+          onclick={() => {
+            if (!group.picture) return
+            const stripped = group.picture.replace(/^nhash:\/\//, '')
+            const parsed = parseFileLink(stripped)
+            if (parsed && isImageFile(parsed.filename)) {
+              getMediaUrl(parsed.nhash, 'image/*').then(url => {
+                openMediaModal(url, parsed.filename, 'image')
+              })
+            }
+          }}
+          disabled={!group.picture}
+          aria-label="View group picture"
+          class="cursor-pointer"
+        >
+          <GroupAvatar picture={group.picture} size={80} />
+        </button>
         {#if amAdmin}
-          <div class="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center opacity-0 group-hover/pic:opacity-100 transition-opacity">
+          <button
+            class="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-surface-light border border-surface-lighter flex items-center justify-center text-gray-400 hover:text-white hover:bg-primary transition-colors"
+            onclick={() => fileInputRef?.click()}
+            disabled={uploadingPicture}
+            aria-label="Change group picture"
+          >
             {#if uploadingPicture}
-              <div class="text-white text-sm font-medium">{uploadProgress}%</div>
+              <span class="text-xs font-medium">{uploadProgress}%</span>
             {:else}
-              <span class="i-carbon-camera text-xl text-white"></span>
+              <span class="i-carbon-camera text-sm"></span>
             {/if}
-          </div>
+          </button>
         {/if}
-      </button>
+      </div>
       {#if pictureError}
         <p class="text-xs text-red-400 mb-2">{pictureError}</p>
       {/if}

@@ -585,8 +585,8 @@
         </div>
       </div>
 
-      <!-- Source Code -->
-      <div class="bg-surface rounded-lg p-4">
+      <!-- Source Code & Releases -->
+      <div class="bg-surface rounded-lg p-4 space-y-3">
         <a
           href="https://files.iris.to/#/npub1xndmdgymsf4a34rzr7346vp8qcptxf75pjqweh8naa8rklgxpfqqmfjtce/iris-chat"
           target="_blank"
@@ -595,6 +595,15 @@
         >
           <span class="i-carbon-code text-lg"></span>
           View Source Code
+        </a>
+        <a
+          href="https://github.com/irislib/iris-chat/releases"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center gap-2 text-primary hover:underline"
+        >
+          <span class="i-carbon-download text-lg"></span>
+          Download Latest Release
         </a>
       </div>
 
