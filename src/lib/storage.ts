@@ -34,6 +34,8 @@ export interface StoredGroup {
   members: string[]  // pubkeys of group members
   admins: string[]   // pubkeys of admins
   createdAt: number
+  secret?: string     // 32-byte hex group secret for shared channel
+  accepted?: boolean  // whether user has accepted the group invitation
 }
 
 export interface StoredProfile {

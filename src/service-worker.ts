@@ -1,12 +1,13 @@
 /// <reference lib="webworker" />
 import { precacheAndRoute } from 'workbox-precaching'
-import { Session, type Rumor, deserializeSessionState, MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet'
-import type { VerifiedEvent } from 'nostr-tools'
+import { Session, type Rumor, type NostrSubscribe, deserializeSessionState, MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet'
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'
 
 declare let self: ServiceWorkerGlobalScope
+
+type NostrEvent = Parameters<Parameters<NostrSubscribe>[1]>[0]
 
 // Precache assets
 precacheAndRoute(self.__WB_MANIFEST)
@@ -164,12 +165,12 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       }
 
       // Slow path: try to decrypt using Session class
-      const eventForSession: VerifiedEvent = {
-        ...eventData as unknown as VerifiedEvent,
+      const eventForSession: NostrEvent = {
+        ...eventData as unknown as NostrEvent,
         tags: eventData.tags.filter(([key]) => key === 'header'),
       }
 
-      let deliverToSession: ((event: VerifiedEvent) => void) | undefined
+      let deliverToSession: ((event: NostrEvent) => void) | undefined
       const session = new Session((_, onEvent) => {
         deliverToSession = onEvent
         return () => { deliverToSession = undefined }

@@ -1,6 +1,6 @@
 import { createPersistedSettings } from './createSettings'
 
-export interface TypingSettings {
+export interface TypingSettings extends Record<string, unknown> {
   sendTypingIndicators: boolean
 }
 

@@ -21,7 +21,7 @@ function urlSafeBase64(bytes: Uint8Array): string {
   return btoa(binString).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-function hexToBytes(hex: string): Uint8Array {
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(hex.length / 2)
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
@@ -29,7 +29,7 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes
 }
 
-function concatBytes(...arrays: Uint8Array[]): Uint8Array {
+function concatBytes(...arrays: Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer> {
   const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0)
   const result = new Uint8Array(totalLength)
   let offset = 0

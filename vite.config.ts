@@ -26,6 +26,15 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(process.env.npm_package_version),
     'import.meta.env.VITE_BUILD_TIME': JSON.stringify(new Date().toISOString()),
   },
+  build: {
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      onwarn(warning, warn) {
+        if (warning.code === 'EVAL' && warning.id?.includes('tseep')) return
+        warn(warning)
+      },
+    },
+  },
   server: {
     allowedHosts: ['mayhem2.iris.to'],
   },

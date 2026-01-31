@@ -1,6 +1,6 @@
 import { createPersistedSettings } from './createSettings'
 
-export interface ReceiptSettings {
+export interface ReceiptSettings extends Record<string, unknown> {
   sendDeliveryReceipts: boolean
   sendReadReceipts: boolean
 }

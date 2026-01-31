@@ -4,6 +4,7 @@ import {
   CHAT_MESSAGE_KIND, REACTION_KIND, TYPING_KIND, parseReaction,
   GROUP_METADATA_KIND,
   type GroupData,
+  type EventCallback,
   isGroupAdmin,
   createGroupData,
   buildGroupMetadataContent,
@@ -18,7 +19,6 @@ import {
   removeGroupAdmin as libRemoveAdmin,
 } from 'nostr-double-ratchet'
 import type { Rumor } from 'nostr-double-ratchet'
-import type { VerifiedEvent } from 'nostr-tools'
 import { ndk, getPubkey } from './identity'
 import { chats, type ChatMessage, type ChatSession } from './chat'
 import {
@@ -36,6 +36,8 @@ import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
 
 export { GROUP_METADATA_KIND }
 export type Group = GroupData
+
+type OuterEvent = Parameters<EventCallback>[1]
 
 export interface GroupMessage extends ChatMessage {
   senderPubkey?: string
@@ -340,7 +342,7 @@ export function sendGroupTypingEvent(groupId: string): void {
   })
 }
 
-export function handleGroupEvent(rumor: Rumor, senderPubkey: string, _outerEvent?: VerifiedEvent): void {
+export function handleGroupEvent(rumor: Rumor, senderPubkey: string, _outerEvent?: OuterEvent): void {
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (!groupTag) return
   const groupId = groupTag[1]
@@ -457,7 +459,7 @@ function handleGroupMessage(groupId: string, rumor: Rumor, senderPubkey: string)
 }
 
 function handleGroupReaction(groupId: string, rumor: Rumor, fromPubkey: string): void {
-  const parsed = parseReaction(rumor.content)
+  const parsed = parseReaction(rumor)
   const emoji = parsed?.emoji ?? rumor.content
   const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
   if (!emoji || !messageId) return

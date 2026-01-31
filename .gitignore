@@ -22,6 +22,7 @@ dist-ssr
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+.vitest-localstorage*
 
 # Environment
 .env

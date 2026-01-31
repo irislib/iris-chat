@@ -1,10 +1,23 @@
 import { writable, get } from 'svelte/store'
-import { Invite, Session, type Rumor, REACTION_KIND, RECEIPT_KIND, TYPING_KIND, CHAT_MESSAGE_KIND, parseReaction } from 'nostr-double-ratchet'
+import {
+  Invite,
+  Session,
+  type Rumor,
+  type NostrSubscribe,
+  type EventCallback,
+  type EncryptFunction,
+  type DecryptFunction,
+  REACTION_KIND,
+  RECEIPT_KIND,
+  TYPING_KIND,
+  CHAT_MESSAGE_KIND,
+  parseReaction,
+} from 'nostr-double-ratchet'
 export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
-import type { VerifiedEvent, Filter } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
-import type { EncryptFunction, DecryptFunction } from 'nostr-double-ratchet'
+
+type OuterEvent = Parameters<EventCallback>[1]
 
 // Get private key bytes OR null for NIP-07
 function getPrivkeyBytesOrNull(): Uint8Array | null {
@@ -155,15 +168,15 @@ let isInitialized = false
 let invitesInitialized = false
 
 // Create a nostr subscribe function using NDK
-function createNostrSubscribe() {
+function createNostrSubscribe(): NostrSubscribe {
   const ndkInstance = get(ndk)
 
-  return (filter: Filter, callback: (event: VerifiedEvent) => void) => {
+  return (filter, callback) => {
     const seenIds = new Set<string>()
     const sub = ndkInstance.subscribe(filter, { closeOnEose: false })
 
     sub.on('event', (ndkEvent) => {
-      const event = ndkEvent.rawEvent() as VerifiedEvent
+      const event = ndkEvent.rawEvent() as Parameters<typeof callback>[0]
       if (seenIds.has(event.id)) return
       seenIds.add(event.id)
       callback(event)
@@ -587,7 +600,7 @@ function subscribeToSession(chatSession: ChatSession) {
   const myPubkey = getPubkey()
   const sessionId = chatSession.id
 
-  chatSession.session.onEvent((rumor: Rumor, outerEvent?: VerifiedEvent) => {
+  chatSession.session.onEvent((rumor: Rumor, outerEvent?: OuterEvent) => {
     // Get current state from store (not the captured reference which may be stale)
     const currentChats = get(chats)
     const currentSession = currentChats.get(sessionId)
@@ -621,7 +634,7 @@ function subscribeToSession(chatSession: ChatSession) {
       if (outerEvent?.id) {
         saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
       }
-      const parsed = parseReaction(rumor.content)
+      const parsed = parseReaction(rumor)
       const emoji = parsed?.emoji ?? rumor.content // fallback for old plain-emoji format
       const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
       if (!emoji || !messageId) return

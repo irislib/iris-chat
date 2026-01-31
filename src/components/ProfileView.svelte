@@ -144,7 +144,7 @@
 
 {#if showPictureModal && (proxiedFullPicture || profilePicture)}
   <MediaModal
-    src={proxiedFullPicture || profilePicture}
+    src={(proxiedFullPicture || profilePicture) ?? null}
     nhash={null}
     filename={profileName || animalName}
     type="image"
