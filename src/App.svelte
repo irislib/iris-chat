@@ -204,14 +204,16 @@
     const isLoggedIn = await autoLogin()
 
     if (isLoggedIn) {
-      // Load saved chats from IndexedDB
-      await loadChatsFromStorage()
-
-      // Wire up groups -> chat session saving
+      // Wire up groups -> chat session saving (before loading anything)
       setSaveSessionFn(saveSessionToStorage)
 
-      // Load groups from IndexedDB
+      // Load groups FIRST so group events have somewhere to land
+      // (chat sessions subscribe to relays on load — group messages arriving
+      //  before the groups store is populated are silently dropped)
       await loadGroupsFromStorage()
+
+      // Load saved chats from IndexedDB (creates relay subscriptions)
+      await loadChatsFromStorage()
 
       // Set callback for invite acceptance (works for both loaded and new invites)
       setInviteAcceptedCallback((chatSession) => {
@@ -278,14 +280,14 @@
   })
 
   async function handleLogin() {
-    // Load saved chats from IndexedDB
-    await loadChatsFromStorage()
-
-    // Wire up groups -> chat session saving
+    // Wire up groups -> chat session saving (before loading anything)
     setSaveSessionFn(saveSessionToStorage)
 
-    // Load groups from IndexedDB
+    // Load groups FIRST (same reason as onMount — avoid race condition)
     await loadGroupsFromStorage()
+
+    // Load saved chats from IndexedDB (creates relay subscriptions)
+    await loadChatsFromStorage()
 
     // Set callback for invite acceptance (works for both loaded and new invites)
     setInviteAcceptedCallback((chatSession) => {
