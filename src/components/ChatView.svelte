@@ -273,6 +273,11 @@
     isAtBottom = scrollHeight - scrollTop - clientHeight < 100
   }
 
+  function scrollToBottom() {
+    if (!messagesContainer) return
+    messagesContainer.scrollTo({ top: messagesContainer.scrollHeight, behavior: 'smooth' })
+  }
+
   // Auto-scroll to bottom when new messages arrive or typing indicator appears
   $effect(() => {
     if (!messagesContainer) return
@@ -423,6 +428,19 @@
       </div>
     {/if}
   </div>
+
+  <!-- Scroll to bottom button -->
+  {#if !isAtBottom}
+    <div class="relative flex-shrink-0">
+      <button
+        class="absolute -top-12 right-4 w-10 h-10 rounded-full bg-surface-light border border-surface-lighter shadow-lg flex items-center justify-center text-gray-300 hover:text-white hover:bg-surface transition-all z-20"
+        onclick={scrollToBottom}
+        aria-label="Scroll to bottom"
+      >
+        <span class="i-carbon-chevron-down text-xl"></span>
+      </button>
+    </div>
+  {/if}
 
   <!-- Input - flex-shrink-0 keeps it at bottom -->
   <div class="border-t border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
