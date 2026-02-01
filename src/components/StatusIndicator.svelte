@@ -20,9 +20,10 @@
     <span class="i-carbon-checkmark absolute top-0 left-[5px] {outlineColor} check-outline-size"></span>
     <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] {checkColor}"></span>
   </span>
-{:else if status}
-  <span class="relative inline-block w-4 h-3 {variant === 'bubble' ? 'text-white/60' : 'text-gray-500'} flex-shrink-0">
-    <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px]"></span>
+{:else}
+  <!-- Reserve space to prevent layout shift when status arrives -->
+  <span class="relative inline-block w-4 h-3 flex-shrink-0 {status ? '' : 'invisible'}">
+    <span class="i-carbon-checkmark text-xs absolute top-0 left-[5px] {variant === 'bubble' ? 'text-white/60' : 'text-gray-500'}"></span>
   </span>
 {/if}
 
