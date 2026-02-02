@@ -310,11 +310,15 @@ self.addEventListener('push', (event) => {
         if (result.chatId) {
           // Skip notification if this specific chat is already open
           if (await isChatOpen(result.chatId)) {
+            await showSilentNotification()
             return
           }
 
-          // Skip notifications for reactions, receipts, typing, etc.
+          // Suppress notifications for typing, receipts, etc.
+          // Must still show+close a notification to satisfy browser push requirements
+          // (otherwise Chrome shows "updated in the background")
           if (result.silent) {
+            await showSilentNotification()
             return
           }
 
@@ -350,6 +354,16 @@ self.addEventListener('push', (event) => {
 
   event.waitUntil(handlePush())
 })
+
+async function showSilentNotification() {
+  // Show and immediately close a notification to satisfy browser push event requirements
+  // (browsers require showNotification to be called for every push, otherwise they
+  //  show a default "updated in the background" notification)
+  const tag = 'silent-event'
+  await self.registration.showNotification('', { tag, silent: true })
+  const notifications = await self.registration.getNotifications({ tag })
+  notifications.forEach(n => n.close())
+}
 
 async function showFallbackNotification() {
   await self.registration.showNotification('iris chat', {
