@@ -34,19 +34,21 @@
 
   <div class="flex-1 min-w-0 leading-tight">
     <div class="flex items-center justify-between gap-2">
-      <span class="font-medium text-sm"><Name pubkey={chat.recipientPubkey} /></span>
-      {#if lastMessage}
-        <span class="text-xs text-gray-500 flex-shrink-0">{formatTime(lastMessage.timestamp)}</span>
-      {/if}
+      <span class="font-medium text-sm truncate"><Name pubkey={chat.recipientPubkey} /></span>
+      <div class="flex flex-col items-end flex-shrink-0 gap-0.5">
+        {#if lastMessage}
+          <span class="text-xs text-gray-500">{formatTime(lastMessage.timestamp)}</span>
+          {#if lastMessage.isMine}
+            <StatusIndicator status={lastMessage.status} />
+          {/if}
+        {/if}
+      </div>
     </div>
     {#if $isTyping.get(chat.id)}
       <div class="text-sm text-primary">typing...</div>
     {:else if lastMessage}
-      <div class="text-sm text-gray-400 truncate flex items-center gap-1.5">
-        {#if lastMessage.isMine}
-          <StatusIndicator status={lastMessage.status} />
-        {/if}
-        <span class="truncate">{lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}</span>
+      <div class="text-sm text-gray-400 truncate">
+        {lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}
       </div>
     {:else}
       <div class="text-sm text-gray-500 italic">No messages yet</div>

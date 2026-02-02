@@ -3,7 +3,8 @@
   import { chats } from '../lib/chat'
   import { getPubkey } from '../lib/identity'
   import { uploadFile, getMediaUrl, parseFileLink, isImageFile } from '../lib/hashtree'
-  import { openMediaModal } from '../lib/mediaModal'
+  import { mediaModal, openMediaModal, closeMediaModal } from '../lib/mediaModal'
+  import MediaModal from './MediaModal.svelte'
   import { getErrorMessage } from '../lib/utils'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
@@ -310,3 +311,13 @@
     </div>
   </div>
 </div>
+
+{#if $mediaModal.open}
+  <MediaModal
+    src={$mediaModal.src}
+    nhash={$mediaModal.nhash}
+    filename={$mediaModal.filename}
+    type={$mediaModal.type}
+    onclose={closeMediaModal}
+  />
+{/if}
