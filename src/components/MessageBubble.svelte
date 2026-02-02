@@ -72,9 +72,17 @@
   }
 
   // Configure marked for GFM (GitHub Flavored Markdown)
+  const renderer = new marked.Renderer()
+  const originalLinkRenderer = renderer.link.bind(renderer)
+  renderer.link = function (token) {
+    const html = originalLinkRenderer(token)
+    // Add target="_blank" and rel="noopener noreferrer" to all links
+    return html.replace('<a ', '<a target="_blank" rel="noopener noreferrer" ')
+  }
   marked.setOptions({
     gfm: true,
     breaks: true, // Convert \n to <br>
+    renderer,
   })
 
   // Extract file links from content

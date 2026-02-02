@@ -47,6 +47,37 @@ export const groups = writable<Map<string, Group>>(new Map())
 export const groupMessages = writable<Map<string, GroupMessage[]>>(new Map())
 export const currentGroupId = writable<string | null>(null)
 
+// Queue for group events that arrive before the group's metadata
+// (e.g., message arrives before creation event due to network reordering)
+const pendingGroupEvents = new Map<string, Array<{ rumor: Rumor, senderPubkey: string }>>()
+const MAX_PENDING_PER_GROUP = 50
+const PENDING_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
+
+function queuePendingEvent(groupId: string, rumor: Rumor, senderPubkey: string): void {
+  let queue = pendingGroupEvents.get(groupId)
+  if (!queue) {
+    queue = []
+    pendingGroupEvents.set(groupId, queue)
+  }
+  if (queue.length < MAX_PENDING_PER_GROUP) {
+    queue.push({ rumor, senderPubkey })
+  }
+}
+
+function flushPendingEvents(groupId: string): void {
+  const queue = pendingGroupEvents.get(groupId)
+  if (!queue || queue.length === 0) return
+  pendingGroupEvents.delete(groupId)
+
+  const now = Date.now()
+  for (const { rumor, senderPubkey } of queue) {
+    // Skip stale events
+    if (now - rumor.created_at * 1000 > PENDING_MAX_AGE_MS) continue
+    // Re-dispatch through handleGroupEvent (group now exists in store)
+    handleGroupEvent(rumor, senderPubkey)
+  }
+}
+
 // Save session state after fan-out rotates keys - imported dynamically to avoid circular deps
 let saveSessionToStorageFn: ((session: ChatSession) => Promise<void>) | null = null
 
@@ -353,7 +384,13 @@ export function handleGroupEvent(rumor: Rumor, senderPubkey: string, _outerEvent
   }
 
   const currentGroups = get(groups)
-  if (!currentGroups.has(groupId)) return
+  if (!currentGroups.has(groupId)) {
+    // Queue event — metadata may arrive later (network reordering)
+    if (rumor.kind === CHAT_MESSAGE_KIND || rumor.kind === REACTION_KIND) {
+      queuePendingEvent(groupId, rumor, senderPubkey)
+    }
+    return
+  }
 
   if (rumor.kind === TYPING_KIND) {
     const ageMs = Date.now() - rumor.created_at * 1000
@@ -425,6 +462,9 @@ function handleGroupMetadata(rumor: Rumor, senderPubkey: string): void {
     saveGroupState(group)
 
     console.log('[groups] Received group invitation:', metadata.name, 'from', senderPubkey.slice(0, 8))
+
+    // Flush any messages that arrived before this metadata
+    flushPendingEvents(metadata.id)
   }
 }
 
@@ -555,6 +595,9 @@ export async function loadGroupsFromStorage(): Promise<void> {
       if (group.accepted && group.secret) {
         setupGroupChannel(group)
       }
+
+      // Flush any events that arrived before this group was loaded
+      flushPendingEvents(group.id)
     }
   } catch (e) {
     console.error('[groups] Failed to load groups from storage:', e)

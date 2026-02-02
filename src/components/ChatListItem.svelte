@@ -43,10 +43,10 @@
       <div class="text-sm text-primary">typing...</div>
     {:else if lastMessage}
       <div class="text-sm text-gray-400 truncate flex items-center gap-1.5">
+        <span class="truncate">{lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}</span>
         {#if lastMessage.isMine}
           <StatusIndicator status={lastMessage.status} />
         {/if}
-        <span class="truncate">{lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}</span>
       </div>
     {:else}
       <div class="text-sm text-gray-500 italic">No messages yet</div>
