@@ -207,21 +207,20 @@ export async function autoLogin(displayName: string | null = null): Promise<bool
     }
 
     if (storedValue === 'nip07') {
-      // Try to re-authenticate with NIP-07 extension
+      // Wait for NIP-07 extension to inject window.nostr
+      for (let i = 0; i < 10; i++) {
+        if (hasNip07()) break
+        await new Promise((r) => setTimeout(r, 200))
+      }
       if (hasNip07()) {
         try {
           await loginWithNip07(displayName)
           return true
         } catch {
-          // Extension may have been removed or user denied access
-          clearStoredIdentity()
           return false
         }
-      } else {
-        // Extension no longer available
-        clearStoredIdentity()
-        return false
       }
+      return false
     } else {
       // It's a privkey
       await loginWithPrivkey(storedValue, displayName)
