@@ -317,8 +317,8 @@
     >
       <GroupAvatar picture={group.picture} size={40} />
       <div class="flex-1 min-w-0 text-left">
-        <p class="font-medium truncate">{group.name}</p>
-        <p class="text-xs text-gray-500">{group.members.length} members</p>
+        <span class="font-medium truncate block">{group.name}</span>
+        <span class="text-xs text-gray-500 block">{group.members.length} members</span>
       </div>
     </button>
 
