@@ -46,11 +46,11 @@
 
   // Auto-join when valid link is pasted
   $effect(() => {
-    if (linkInput.trim() && linkInput.includes('#')) {
-      const invite = parseInviteFromUrl(linkInput.trim())
-      if (invite) {
-        joinWithUrl(linkInput.trim())
-      }
+    const trimmed = linkInput.trim()
+    if (!trimmed) return
+    const invite = parseInviteFromUrl(trimmed)
+    if (invite) {
+      joinWithUrl(trimmed)
     }
   })
 

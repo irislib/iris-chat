@@ -9,6 +9,9 @@
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
+  import { devices } from '../lib/devices'
+  import { registerDevice, revokeDevice } from '../lib/privateChats'
+  import { getErrorMessage } from '../lib/utils'
 
   interface Props {
     onBack: () => void
@@ -46,6 +49,17 @@
   let subscriptions = $state<Record<string, NotificationSubscription>>({})
   let loadingSubscriptions = $state(false)
   let showPrivateKey = $state(false)
+  let registeringDevice = $state(false)
+  let deviceError = $state('')
+
+  // Device state
+  let deviceState = $state($devices)
+  $effect(() => {
+    const unsubscribe = devices.subscribe((value) => {
+      deviceState = value
+    })
+    return unsubscribe
+  })
 
   // Relay settings
   let editingRelays = $state(false)
@@ -84,6 +98,32 @@
   function resetRelays() {
     relayStore.resetToDefaults()
     editingRelays = false
+  }
+
+  async function handleRegisterDevice() {
+    if (registeringDevice) return
+    registeringDevice = true
+    deviceError = ''
+    try {
+      await registerDevice()
+    } catch (e) {
+      deviceError = getErrorMessage(e, 'Failed to register device')
+    } finally {
+      registeringDevice = false
+    }
+  }
+
+  async function handleRevokeDevice(identityPubkey: string) {
+    if (registeringDevice) return
+    registeringDevice = true
+    deviceError = ''
+    try {
+      await revokeDevice(identityPubkey)
+    } catch (e) {
+      deviceError = getErrorMessage(e, 'Failed to revoke device')
+    } finally {
+      registeringDevice = false
+    }
   }
 
   // Get npub for public key
@@ -346,6 +386,54 @@
               Logout
             </button>
           </div>
+        </div>
+      {/if}
+
+      <!-- Devices Section -->
+      {#if $identity}
+        <div class="bg-surface rounded-lg p-4">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h2 class="font-medium">Devices</h2>
+              <p class="text-sm text-gray-400 mt-1">Manage devices authorized for multi-device sync</p>
+            </div>
+          </div>
+
+          {#if deviceError}
+            <div class="p-2 mb-3 rounded text-sm bg-red-900/30 text-red-400">{deviceError}</div>
+          {/if}
+
+          {#if !deviceState.isCurrentDeviceRegistered}
+            <button
+              class="btn-primary w-full flex items-center justify-center gap-2"
+              onclick={handleRegisterDevice}
+              disabled={registeringDevice}
+            >
+              {registeringDevice ? 'Registering...' : 'Register this device'}
+            </button>
+            <p class="text-xs text-gray-500 mt-2">
+              Registering enables multi-device message sync.
+            </p>
+          {:else}
+            <div class="space-y-2">
+              {#each deviceState.registeredDevices as device}
+                <div class="flex items-center justify-between gap-2 p-2 bg-surface-light rounded">
+                  <span class="text-xs font-mono text-gray-300">{truncatePubkey(device.identityPubkey)}</span>
+                  {#if device.identityPubkey === deviceState.identityPubkey}
+                    <span class="text-xs text-primary">This device</span>
+                  {:else}
+                    <button
+                      class="text-xs text-red-400 hover:text-red-300"
+                      onclick={() => handleRevokeDevice(device.identityPubkey)}
+                      disabled={registeringDevice}
+                    >
+                      Revoke
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
 
@@ -714,17 +802,15 @@
         <h2 class="font-medium mb-3">About iris chat</h2>
         <div class="text-sm text-gray-400 space-y-3">
           <p>
-            Single-device encrypted chat that just works &mdash; because it's simple. Uses the
+            Encrypted chat powered by the
             <a href="https://en.wikipedia.org/wiki/Double_Ratchet_Algorithm" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">double ratchet algorithm</a>
             for end-to-end encryption.
           </p>
           <p>
-            Your encryption keys are stored only on this device.
+            Your main key stays on this device. Multi-device sync uses per-device identities to relay messages safely.
           </p>
           <p class="text-gray-500">
-            Looking for multi-device support?
-            <a href="https://iris.to" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">iris.to</a>
-            has it in the works &mdash; reliably relaying messages to every device is tricky to get right.
+            Multi-device is now supported. Register each device to enable syncing across them.
           </p>
           <div class="pt-3 border-t border-surface-lighter space-y-1 text-xs text-gray-500">
             <div class="flex justify-between">

@@ -8,10 +8,11 @@ export { serializeSessionState, deserializeSessionState } from 'nostr-double-rat
 export interface StoredSession {
   id: string
   recipientPubkey: string
-  sessionState: string // JSON-serialized session state (hex encoded by nostr-double-ratchet)
+  sessionState?: string // JSON-serialized session state (hex encoded by nostr-double-ratchet)
   createdAt: number
   inviteId?: string      // ID of the invite that started this chat
   inviteLabel?: string   // Label of the invite that started this chat
+  mode?: 'legacy' | 'manager'
 }
 
 export interface StoredMessage {
@@ -48,7 +49,7 @@ export interface StoredProfile {
 
 export interface StoredInvite {
   id: string           // unique id
-  inviteData: string   // serialized Invite object
+  inviteData: string   // serialized invite payload (legacy or pubkey link)
   label?: string       // optional user label
   createdAt: number
   usedBy?: string[]    // pubkeys of users who accepted this invite
@@ -69,6 +70,7 @@ class IrisChatDB extends Dexie {
   invites!: Table<StoredInvite, string>
   processedEvents!: Table<ProcessedEvent, string>
   groups!: Table<StoredGroup, string>
+  sessionManager!: Table<{ key: string; value: unknown }, string>
 
   constructor() {
     super('iris-chat')
@@ -97,6 +99,15 @@ class IrisChatDB extends Dexie {
       invites: 'id',
       processedEvents: 'id, timestamp',
       groups: 'id'
+    })
+    this.version(5).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp',
+      groups: 'id',
+      sessionManager: 'key'
     })
   }
 }
@@ -210,6 +221,32 @@ export async function clearAllData(): Promise<void> {
     db.profiles.clear(),
     db.invites.clear(),
     db.processedEvents.clear(),
-    db.groups.clear()
+    db.groups.clear(),
+    db.sessionManager.clear()
   ])
+}
+
+// SessionManager key-value storage operations
+export async function getSessionManagerValue<T = unknown>(key: string): Promise<T | undefined> {
+  const record = await db.sessionManager.get(key)
+  return record?.value as T | undefined
+}
+
+export async function putSessionManagerValue<T = unknown>(key: string, value: T): Promise<void> {
+  await db.sessionManager.put({ key, value })
+}
+
+export async function deleteSessionManagerValue(key: string): Promise<void> {
+  await db.sessionManager.delete(key)
+}
+
+export async function listSessionManagerKeys(prefix = ''): Promise<string[]> {
+  if (!prefix) {
+    const all = await db.sessionManager.toArray()
+    return all.map((item) => item.key)
+  }
+  const all = await db.sessionManager
+    .filter((item) => item.key.startsWith(prefix))
+    .toArray()
+  return all.map((item) => item.key)
 }

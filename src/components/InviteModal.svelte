@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { getInviteUrl, type Invite } from '../lib/chat'
+  import { getInviteUrl, type ChatInvite } from '../lib/chat'
   import { copyToClipboard } from '../lib/utils'
   import QRCode from './QRCode.svelte'
   import QRScanner from './QRScanner.svelte'
 
   interface Props {
-    invite: Invite
+    invite: ChatInvite
     onclose: () => void
   }
 

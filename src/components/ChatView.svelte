@@ -265,7 +265,7 @@
   })
 
   // Track whether user is scrolled near the bottom
-  let isAtBottom = true
+  let isAtBottom = $state(true)
 
   function handleMessagesScroll() {
     if (!messagesContainer) return

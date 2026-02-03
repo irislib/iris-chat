@@ -257,7 +257,7 @@
     }
   })
 
-  let isAtBottom = true
+  let isAtBottom = $state(true)
 
   function handleMessagesScroll() {
     if (!messagesContainer) return

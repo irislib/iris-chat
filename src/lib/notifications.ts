@@ -4,6 +4,7 @@ import { identity, ndk } from './identity'
 import { notificationSettings } from './notificationStore'
 import { chats, getInviteEphemeralPubkeys } from './chat'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { getSessionManager } from './privateChats'
 
 // NIP-98 HTTP Authentication event (KIND 27235)
 const KIND_HTTP_AUTH = 27235
@@ -224,7 +225,7 @@ function getSessionAuthors(): string[] {
   const authors: string[] = []
 
   for (const [, chat] of chatMap) {
-    if (chat.session) {
+    if (chat.mode === 'legacy' && chat.session) {
       const state = chat.session.state
       if (state) {
         if (state.theirCurrentNostrPublicKey) {
@@ -232,6 +233,28 @@ function getSessionAuthors(): string[] {
         }
         if (state.theirNextNostrPublicKey) {
           authors.push(state.theirNextNostrPublicKey)
+        }
+      }
+    }
+  }
+
+  const manager = getSessionManager()
+  if (manager) {
+    const userRecords = manager.getUserRecords()
+    for (const record of userRecords.values()) {
+      for (const device of record.devices.values()) {
+        const sessions = [
+          ...(device.activeSession ? [device.activeSession] : []),
+          ...device.inactiveSessions,
+        ]
+        for (const session of sessions) {
+          const state = session.state
+          if (state.theirCurrentNostrPublicKey) {
+            authors.push(state.theirCurrentNostrPublicKey)
+          }
+          if (state.theirNextNostrPublicKey) {
+            authors.push(state.theirNextNostrPublicKey)
+          }
         }
       }
     }

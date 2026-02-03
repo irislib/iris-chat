@@ -21,6 +21,8 @@ import {
 import type { Rumor } from 'nostr-double-ratchet'
 import { ndk, getPubkey } from './identity'
 import { chats, type ChatMessage, type ChatSession } from './chat'
+import { getSessionManager } from './privateChats'
+import { getEventHash } from 'nostr-tools'
 import {
   saveGroup as saveGroupToDb,
   getAllGroups,
@@ -87,6 +89,36 @@ export function setSaveSessionFn(fn: (session: ChatSession) => Promise<void>): v
 
 export const isAdmin = isGroupAdmin
 
+function buildGroupRumor(
+  recipientPubkey: string,
+  partialEvent: { content: string; kind: number; tags: string[][] }
+): Rumor {
+  const myPubkey = getPubkey()
+  if (!myPubkey) {
+    throw new Error('Not logged in')
+  }
+
+  const now = Date.now()
+  const tags = [...partialEvent.tags]
+  if (!tags.some((t) => t[0] === 'p' && t[1] === recipientPubkey)) {
+    tags.unshift(['p', recipientPubkey])
+  }
+  if (!tags.some((t) => t[0] === 'ms')) {
+    tags.push(['ms', String(now)])
+  }
+
+  const rumor: Rumor = {
+    content: partialEvent.content,
+    kind: partialEvent.kind,
+    created_at: Math.floor(now / 1000),
+    tags,
+    pubkey: myPubkey,
+    id: '',
+  }
+  rumor.id = getEventHash(rumor)
+  return rumor
+}
+
 function fanOutToMembers(groupId: string, partialEvent: { content: string, kind: number, tags: string[][] }, recipientOverride?: string[]): void {
   const currentGroups = get(groups)
   const group = currentGroups.get(groupId)
@@ -97,6 +129,7 @@ function fanOutToMembers(groupId: string, partialEvent: { content: string, kind:
 
   const currentChats = get(chats)
   const ndkInstance = get(ndk)
+  const manager = getSessionManager()
   const now = Math.floor(Date.now() / 1000)
 
   const tags = [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]]
@@ -106,29 +139,32 @@ function fanOutToMembers(groupId: string, partialEvent: { content: string, kind:
     if (memberPubkey === myPubkey) continue
 
     const chatSession = currentChats.get(memberPubkey)
-    if (!chatSession) {
-      console.warn('[groups] No chat session for member:', memberPubkey.slice(0, 8))
-      continue
-    }
 
     try {
-      const { event } = chatSession.session.sendEvent({
-        content: partialEvent.content,
-        kind: partialEvent.kind,
-        tags,
-        pubkey: myPubkey,
-        created_at: now
-      })
+      if (chatSession?.mode === 'legacy' && chatSession.session) {
+        const { event } = chatSession.session.sendEvent({
+          content: partialEvent.content,
+          kind: partialEvent.kind,
+          tags,
+          pubkey: myPubkey,
+          created_at: now
+        })
 
-      const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-      ndkPublishEvent.publish().catch(e =>
-        console.error('[groups] Failed to publish to', memberPubkey.slice(0, 8), e)
-      )
-
-      if (saveSessionToStorageFn) {
-        saveSessionToStorageFn(chatSession).catch(e =>
-          console.error('[groups] Failed to save session:', e)
+        const ndkPublishEvent = new NDKEvent(ndkInstance, event)
+        ndkPublishEvent.publish().catch(e =>
+          console.error('[groups] Failed to publish to', memberPubkey.slice(0, 8), e)
         )
+
+        if (saveSessionToStorageFn) {
+          saveSessionToStorageFn(chatSession).catch(e =>
+            console.error('[groups] Failed to save session:', e)
+          )
+        }
+      } else if (manager) {
+        const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
+        manager.sendEvent(memberPubkey, rumor).catch(() => {})
+      } else {
+        console.warn('[groups] No session manager for member:', memberPubkey.slice(0, 8))
       }
     } catch (e) {
       console.error('[groups] Failed to send to member:', memberPubkey.slice(0, 8), e)

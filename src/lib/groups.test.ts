@@ -30,9 +30,9 @@ vi.mock('./chat', () => {
     })
   })
   const chatMap = new Map()
-  chatMap.set(MEMBER_B, { id: MEMBER_B, recipientPubkey: MEMBER_B, session: mockSession(MEMBER_B), messages: [] })
-  chatMap.set(MEMBER_C, { id: MEMBER_C, recipientPubkey: MEMBER_C, session: mockSession(MEMBER_C), messages: [] })
-  chatMap.set(NON_MEMBER, { id: NON_MEMBER, recipientPubkey: NON_MEMBER, session: mockSession(NON_MEMBER), messages: [] })
+  chatMap.set(MEMBER_B, { id: MEMBER_B, recipientPubkey: MEMBER_B, session: mockSession(MEMBER_B), messages: [], mode: 'legacy' })
+  chatMap.set(MEMBER_C, { id: MEMBER_C, recipientPubkey: MEMBER_C, session: mockSession(MEMBER_C), messages: [], mode: 'legacy' })
+  chatMap.set(NON_MEMBER, { id: NON_MEMBER, recipientPubkey: NON_MEMBER, session: mockSession(NON_MEMBER), messages: [], mode: 'legacy' })
 
   return {
     chats: writable(chatMap),
@@ -48,9 +48,12 @@ vi.mock('@nostr-dev-kit/ndk', () => ({
 }))
 
 vi.mock('nostr-double-ratchet', async () => {
-  const actual = await vi.importActual('nostr-double-ratchet')
+  const actual = await import('nostr-double-ratchet/dist/nostr-double-ratchet.es.js')
   return {
-    ...actual as object,
+    ...(actual as object),
+    isGroupAdmin: (group: { admins?: string[] }, pubkey: string) => {
+      return Array.isArray(group.admins) && group.admins.includes(pubkey)
+    },
     parseReaction: (content: string) => ({ emoji: content, isRemoval: content === '-' }),
   }
 })

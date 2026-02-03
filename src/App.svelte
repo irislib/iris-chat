@@ -8,10 +8,11 @@
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import InstallPrompt from './components/InstallPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, saveSessionToStorage } from './lib/chat'
+  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, saveSessionToStorage, initSessionManagerEvents } from './lib/chat'
   import type { ChatSession } from './lib/chat'
   import { loadGroupsFromStorage, groups, groupMessages, currentGroupId, setSaveSessionFn, type Group } from './lib/groups'
   import { get } from 'svelte/store'
+  import { initMultiDevice, resetManagers } from './lib/privateChats'
   import CreateGroup from './components/CreateGroup.svelte'
   import GroupChatView from './components/GroupChatView.svelte'
   import GroupDetailsView from './components/GroupDetailsView.svelte'
@@ -204,6 +205,11 @@
     const isLoggedIn = await autoLogin()
 
     if (isLoggedIn) {
+      const currentIdentity = get(identity)
+      if (currentIdentity?.pubkey) {
+        await initMultiDevice(currentIdentity.pubkey)
+        initSessionManagerEvents()
+      }
       // Wire up groups -> chat session saving (before loading anything)
       setSaveSessionFn(saveSessionToStorage)
 
@@ -280,6 +286,11 @@
   })
 
   async function handleLogin() {
+    const currentIdentity = get(identity)
+    if (currentIdentity?.pubkey) {
+      await initMultiDevice(currentIdentity.pubkey)
+      initSessionManagerEvents()
+    }
     // Wire up groups -> chat session saving (before loading anything)
     setSaveSessionFn(saveSessionToStorage)
 
@@ -425,6 +436,7 @@
     logout()
     leaveChat()
     await clearChatData()
+    resetManagers()
     loggedIn = false
     selectedChat = null
     selectedGroupId = null

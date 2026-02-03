@@ -15,7 +15,9 @@ import {
 } from 'nostr-double-ratchet'
 export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { getEventHash, nip19 } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
+import { getSessionManager } from './privateChats'
 
 type OuterEvent = Parameters<EventCallback>[1]
 
@@ -145,16 +147,21 @@ export interface ChatMessage {
 export interface ChatSession {
   id: string
   recipientPubkey: string
-  session: Session
+  mode: 'legacy' | 'manager'
+  session?: Session
   messages: ChatMessage[]
   invite?: Invite
   inviteId?: string      // ID of the invite that started this chat
   inviteLabel?: string   // Label of the invite that started this chat
 }
 
+export type ChatInvite =
+  | { type: 'pubkey'; pubkey: string }
+  | { type: 'legacy'; invite: Invite }
+
 export interface ActiveInvite {
   id: string
-  invite: Invite
+  invite: ChatInvite
   label?: string
   createdAt: number
   usedBy?: string[]
@@ -186,17 +193,25 @@ function createNostrSubscribe(): NostrSubscribe {
   }
 }
 
-// Create a new invite that can be shared
-export function createInvite(): Invite {
+let sessionManagerSubscribed = false
+
+export function initSessionManagerEvents(): void {
+  if (sessionManagerSubscribed) return
+  const manager = getSessionManager()
+  if (!manager) return
+  sessionManagerSubscribed = true
+  manager.onEvent((rumor, from) => {
+    handleManagerEvent(rumor, from).catch((e) =>
+      console.error('[chat] Failed to handle SessionManager event:', e)
+    )
+  })
+}
+
+// Create a new invite (chat link) that can be shared
+export function createInvite(): ChatInvite {
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
-
-  // For NIP-07 users, verify nip44 support is available (needed for invite listening)
-  if (isNip07Login() && !window.nostr?.nip44) {
-    throw new Error('Your extension does not support NIP-44 encryption')
-  }
-
-  return Invite.createNew(pubkey)
+  return { type: 'pubkey', pubkey }
 }
 
 // Get the base URL for invite links
@@ -212,41 +227,92 @@ function getInviteBaseUrl(): string {
 }
 
 // Get invite URL
-export function getInviteUrl(invite: Invite): string {
-  return invite.getUrl(getInviteBaseUrl())
+export function getInviteUrl(invite: ChatInvite): string {
+  if (invite.type === 'pubkey') {
+    const url = new URL(getInviteBaseUrl())
+    url.hash = nip19.npubEncode(invite.pubkey)
+    return url.toString()
+  }
+  return invite.invite.getUrl(getInviteBaseUrl())
 }
 
-// Parse invite from URL hash
-export function parseInviteFromHash(): Invite | null {
-  const hash = window.location.hash
-  if (!hash || hash.length < 2) return null
+function parseInviteHash(hash: string): ChatInvite | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash
+  if (!raw) return null
 
+  // NIP-19 links (npub or nprofile)
+  if (raw.startsWith('npub') || raw.startsWith('nprofile')) {
+    try {
+      const decoded = nip19.decode(raw)
+      if (decoded.type === 'npub') {
+        return { type: 'pubkey', pubkey: decoded.data as string }
+      }
+      if (decoded.type === 'nprofile') {
+        const data = decoded.data as { pubkey: string }
+        return { type: 'pubkey', pubkey: data.pubkey }
+      }
+    } catch {
+      return null
+    }
+  }
+
+  // Legacy JSON invite format
   try {
-    const url = window.location.href
-    return Invite.fromUrl(url)
+    const url = `${getInviteBaseUrl()}#${raw}`
+    return { type: 'legacy', invite: Invite.fromUrl(url) }
   } catch {
     return null
   }
 }
 
+// Parse invite from URL hash
+export function parseInviteFromHash(): ChatInvite | null {
+  const hash = window.location.hash
+  if (!hash || hash.length < 2) return null
+  return parseInviteHash(hash)
+}
+
 // Parse invite from a pasted URL
-export function parseInviteFromUrl(url: string): Invite | null {
+export function parseInviteFromUrl(url: string): ChatInvite | null {
   console.log('[chat] parseInviteFromUrl input:', url)
   try {
-    return Invite.fromUrl(url)
+    const trimmed = url.trim()
+    if (trimmed.startsWith('npub') || trimmed.startsWith('nprofile')) {
+      return parseInviteHash(`#${trimmed}`)
+    }
+    if (trimmed.startsWith('nostr:')) {
+      const raw = trimmed.replace('nostr:', '')
+      return parseInviteHash(`#${raw}`)
+    }
+    const parsed = new URL(url)
+    return parseInviteHash(parsed.hash)
   } catch {
     return null
   }
 }
 
 // Serialize invite for storage
-export function serializeInvite(invite: Invite): string {
-  return invite.serialize()
+export function serializeInvite(invite: ChatInvite): string {
+  if (invite.type === 'pubkey') {
+    return JSON.stringify({ type: 'pubkey', pubkey: invite.pubkey })
+  }
+  return invite.invite.serialize()
 }
 
 // Deserialize invite from storage
-export function deserializeInvite(data: string): Invite {
-  return Invite.deserialize(data)
+export function deserializeInvite(data: string): ChatInvite {
+  try {
+    const parsed = JSON.parse(data)
+    if (parsed?.type === 'pubkey' && typeof parsed.pubkey === 'string') {
+      return { type: 'pubkey', pubkey: parsed.pubkey }
+    }
+    if (parsed?.type === 'legacy' && typeof parsed.data === 'string') {
+      return { type: 'legacy', invite: Invite.deserialize(parsed.data) }
+    }
+  } catch {
+    // fall back to legacy invite
+  }
+  return { type: 'legacy', invite: Invite.deserialize(data) }
 }
 
 // Callback for when an invite is accepted
@@ -263,12 +329,7 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
 
-  // For NIP-07 users, verify nip44 support is available (needed for invite listening)
-  if (isNip07Login() && !window.nostr?.nip44) {
-    throw new Error('Your extension does not support NIP-44 encryption')
-  }
-
-  const invite = Invite.createNew(pubkey)
+  const invite = createInvite()
   const id = crypto.randomUUID()
 
   // Save to IndexedDB
@@ -281,36 +342,7 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
   }
   await saveInviteToDb(storedInvite)
 
-  // Start listening for acceptance
-  const currentLabel = label
-  const unsubscribe = listenForInviteAcceptance(invite, async (chatSession) => {
-    // Track who used this invite
-    await addInviteUsedByInDb(id, chatSession.recipientPubkey)
-
-    // Update invites store with the new usedBy
-    invites.update(i => {
-      const current = i.get(id)
-      if (current) {
-        const usedBy = current.usedBy || []
-        if (!usedBy.includes(chatSession.recipientPubkey)) {
-          i.set(id, { ...current, usedBy: [...usedBy, chatSession.recipientPubkey] })
-        }
-      }
-      return i
-    })
-
-    // Store invite info in chat session
-    chatSession.inviteId = id
-    chatSession.inviteLabel = currentLabel
-
-    // Update notification subscription
-    updateDMSubscription()
-
-    // Trigger navigation callback
-    if (inviteAcceptedCallback) {
-      inviteAcceptedCallback(chatSession)
-    }
-  })
+  const unsubscribe = () => {}
 
   const activeInvite: ActiveInvite = {
     id,
@@ -378,13 +410,6 @@ export async function loadAndMonitorInvites(): Promise<void> {
     return
   }
 
-  // Check decryptor availability early (for listen())
-  const decryptor = getDecryptor()
-  if (!decryptor) {
-    console.error('[chat] Cannot load invites - no decryptor available')
-    return
-  }
-
   try {
     const storedInvites = await getAllInvites()
     console.log('[chat] Found', storedInvites.length, 'stored invites to monitor')
@@ -397,36 +422,44 @@ export async function loadAndMonitorInvites(): Promise<void> {
 
         console.log('[chat] Setting up listener for invite:', inviteId, inviteLabel)
 
-        // Start listening for acceptance
-        const unsubscribe = listenForInviteAcceptance(invite, async (chatSession) => {
-          console.log('[chat] Invite', inviteId, 'accepted, calling callback')
-          // Track who used this invite
-          await addInviteUsedByInDb(inviteId, chatSession.recipientPubkey)
+        let unsubscribe = () => {}
+        if (invite.type === 'legacy') {
+          const decryptor = getDecryptor()
+          if (!decryptor) {
+            console.error('[chat] Cannot load legacy invites - no decryptor available')
+          } else {
+            // Start listening for acceptance
+            unsubscribe = listenForInviteAcceptance(invite.invite, async (chatSession) => {
+              console.log('[chat] Invite', inviteId, 'accepted, calling callback')
+              // Track who used this invite
+              await addInviteUsedByInDb(inviteId, chatSession.recipientPubkey)
 
-          // Update invites store with the new usedBy
-          invites.update(i => {
-            const current = i.get(inviteId)
-            if (current) {
-              const usedBy = current.usedBy || []
-              if (!usedBy.includes(chatSession.recipientPubkey)) {
-                i.set(inviteId, { ...current, usedBy: [...usedBy, chatSession.recipientPubkey] })
+              // Update invites store with the new usedBy
+              invites.update(i => {
+                const current = i.get(inviteId)
+                if (current) {
+                  const usedBy = current.usedBy || []
+                  if (!usedBy.includes(chatSession.recipientPubkey)) {
+                    i.set(inviteId, { ...current, usedBy: [...usedBy, chatSession.recipientPubkey] })
+                  }
+                }
+                return i
+              })
+
+              // Store invite info in chat session
+              chatSession.inviteId = inviteId
+              chatSession.inviteLabel = inviteLabel
+
+              // Update notification subscription
+              updateDMSubscription()
+
+              // Trigger navigation callback
+              if (inviteAcceptedCallback) {
+                inviteAcceptedCallback(chatSession)
               }
-            }
-            return i
-          })
-
-          // Store invite info in chat session
-          chatSession.inviteId = inviteId
-          chatSession.inviteLabel = inviteLabel
-
-          // Update notification subscription
-          updateDMSubscription()
-
-          // Trigger navigation callback
-          if (inviteAcceptedCallback) {
-            inviteAcceptedCallback(chatSession)
+            })
           }
-        })
+        }
 
         console.log('[chat] Listener set up for invite:', inviteId)
 
@@ -462,19 +495,85 @@ export function getInviteEphemeralPubkeys(): string[] {
   const pubkeys: string[] = []
 
   for (const [, activeInvite] of currentInvites) {
-    // Get the ephemeral pubkey from the invite that responses will be sent to
-    if (activeInvite.invite.inviterEphemeralPublicKey) {
-      pubkeys.push(activeInvite.invite.inviterEphemeralPublicKey)
+    if (activeInvite.invite.type === 'legacy') {
+      // Get the ephemeral pubkey from the invite that responses will be sent to
+      if (activeInvite.invite.invite.inviterEphemeralPublicKey) {
+        pubkeys.push(activeInvite.invite.invite.inviterEphemeralPublicKey)
+      }
     }
   }
 
   return pubkeys
 }
 
-// Accept an invite and create a session
-export async function acceptInvite(invite: Invite): Promise<ChatSession> {
-  const pubkey = getPubkey()
+async function ensureManagerChat(recipientPubkey: string): Promise<ChatSession> {
+  const existing = get(chats).get(recipientPubkey)
+  if (existing) return existing
 
+  const storedMessages = await getMessagesForSession(recipientPubkey)
+  const messages: ChatMessage[] = storedMessages
+    .map((m) => ({
+      id: m.id,
+      content: m.content,
+      timestamp: m.timestamp,
+      isMine: m.isMine,
+      ...(m.replyTo && { replyTo: m.replyTo }),
+      reactions: m.reactions,
+      status: m.status,
+      senderPubkey: m.senderPubkey,
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp)
+
+  const chatSession: ChatSession = {
+    id: recipientPubkey,
+    recipientPubkey,
+    mode: 'manager',
+    messages,
+  }
+
+  chats.update((c) => {
+    c.set(chatSession.id, chatSession)
+    return c
+  })
+
+  await saveSessionToStorage(chatSession)
+  updateDMSubscription()
+
+  return chatSession
+}
+
+async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<void> {
+  const myPubkey = getPubkey()
+  if (!myPubkey) return
+
+  const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
+  if (groupTag) {
+    handleGroupEvent(rumor, fromPubkey)
+    return
+  }
+
+  let chatId = fromPubkey
+
+  if (fromPubkey === myPubkey) {
+    const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p' && t[1] !== myPubkey)
+    if (pTag) {
+      chatId = pTag[1]
+    } else {
+      return
+    }
+  }
+
+  const chatSession = await ensureManagerChat(chatId)
+  handleIncomingRumor(chatSession, rumor, undefined)
+}
+
+// Accept an invite and create a session
+export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
+  if (invite.type === 'pubkey') {
+    return ensureManagerChat(invite.pubkey)
+  }
+
+  const pubkey = getPubkey()
   if (!pubkey) {
     throw new Error('Not logged in')
   }
@@ -495,18 +594,27 @@ export async function acceptInvite(invite: Invite): Promise<ChatSession> {
 
   // Debug: log invite values before accept
   console.log('[chat] acceptInvite - invite values:', {
-    inviter: invite.inviter,
-    inviterEphemeralPublicKey: invite.inviterEphemeralPublicKey,
-    sharedSecret: invite.sharedSecret,
-    inviterEphemeralPublicKeyLength: invite.inviterEphemeralPublicKey?.length,
-    inviterEphemeralPublicKeyValid: /^[0-9a-f]{64}$/i.test(invite.inviterEphemeralPublicKey || ''),
+    inviter: invite.invite.inviter,
+    inviterEphemeralPublicKey: invite.invite.inviterEphemeralPublicKey,
+    sharedSecret: invite.invite.sharedSecret,
+    inviterEphemeralPublicKeyLength: invite.invite.inviterEphemeralPublicKey?.length,
+    inviterEphemeralPublicKeyValid: /^[0-9a-f]{64}$/i.test(invite.invite.inviterEphemeralPublicKey || ''),
   })
 
-  const { session, event } = await invite.accept(nostrSubscribe, pubkey, encryptor)
+  const manager = getSessionManager()
+  const deviceId = manager?.getDeviceId?.() || pubkey
+
+  const { session, event } = await invite.invite.accept(
+    nostrSubscribe,
+    deviceId,
+    encryptor,
+    pubkey
+  )
 
   const chatSession: ChatSession = {
-    id: invite.inviter,
-    recipientPubkey: invite.inviter,
+    id: invite.invite.inviter,
+    recipientPubkey: invite.invite.inviter,
+    mode: 'legacy',
     session,
     messages: [],
   }
@@ -571,6 +679,7 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
     const chatSession: ChatSession = {
       id: identity,
       recipientPubkey: identity,
+      mode: 'legacy',
       session,
       messages: [],
       invite,
@@ -595,118 +704,123 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
   })
 }
 
-// Subscribe to incoming messages for a session
-function subscribeToSession(chatSession: ChatSession) {
+function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?: OuterEvent) {
   const myPubkey = getPubkey()
   const sessionId = chatSession.id
 
-  chatSession.session.onEvent((rumor: Rumor, outerEvent?: OuterEvent) => {
-    // Get current state from store (not the captured reference which may be stale)
-    const currentChats = get(chats)
-    const currentSession = currentChats.get(sessionId)
-    if (!currentSession) return
+  // Get current state from store (not the captured reference which may be stale)
+  const currentChats = get(chats)
+  const currentSession = currentChats.get(sessionId)
+  if (!currentSession) return
 
-    // Route group events to group handler
-    const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
-    if (groupTag) {
-      handleGroupEvent(rumor, chatSession.recipientPubkey, outerEvent)
-      // Save session state since decryption may have rotated keys
+  // Route group events to group handler
+  const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
+  if (groupTag) {
+    handleGroupEvent(rumor, chatSession.recipientPubkey, outerEvent)
+    if (currentSession.mode === 'legacy') {
       saveSessionToStorage(currentSession)
-      return
     }
+    return
+  }
 
-    // Dispatch on inner event kind
-    if (rumor.kind === RECEIPT_KIND) {
-      if (outerEvent?.id) {
-        saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
-      }
-      const type = rumor.content as 'delivered' | 'seen'
-      if (type !== 'delivered' && type !== 'seen') return
-      const messageIds = rumor.tags
-        ?.filter((t: string[]) => t[0] === 'e')
-        .map((t: string[]) => t[1]) || []
-      if (messageIds.length === 0) return
-      handleIncomingReceipt(currentSession, { type, messageIds })
-      return
+  const processedId = outerEvent?.id || rumor.id
+
+  // Dispatch on inner event kind
+  if (rumor.kind === RECEIPT_KIND) {
+    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+    const type = rumor.content as 'delivered' | 'seen'
+    if (type !== 'delivered' && type !== 'seen') return
+    const messageIds = rumor.tags
+      ?.filter((t: string[]) => t[0] === 'e')
+      .map((t: string[]) => t[1]) || []
+    if (messageIds.length === 0) return
+    handleIncomingReceipt(currentSession, { type, messageIds })
+    return
+  }
+
+  if (rumor.kind === REACTION_KIND) {
+    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
+    const parsed = parseReaction(rumor)
+    const emoji = parsed?.emoji ?? rumor.content // fallback for old plain-emoji format
+    const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
+    if (!emoji || !messageId) return
+    handleIncomingReaction(currentSession, { messageId, emoji }, rumor.pubkey)
+    return
+  }
+
+  if (rumor.kind === TYPING_KIND) {
+    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+    const ageMs = Date.now() - rumor.created_at * 1000
+    if (ageMs < TYPING_EXPIRY_MS) {
+      setRemoteTyping(sessionId, rumor.created_at)
     }
+    return
+  }
 
-    if (rumor.kind === REACTION_KIND) {
-      if (outerEvent?.id) {
-        saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
-      }
-      const parsed = parseReaction(rumor)
-      const emoji = parsed?.emoji ?? rumor.content // fallback for old plain-emoji format
-      const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
-      if (!emoji || !messageId) return
-      handleIncomingReaction(currentSession, { messageId, emoji }, rumor.pubkey)
-      return
-    }
+  // Incoming message clears typing indicator
+  clearRemoteTyping(sessionId, rumor.created_at)
 
-    if (rumor.kind === TYPING_KIND) {
-      if (outerEvent?.id) {
-        saveProcessedEvent({ id: outerEvent.id, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
-      }
-      const ageMs = Date.now() - rumor.created_at * 1000
-      if (ageMs < TYPING_EXPIRY_MS) {
-        setRemoteTyping(sessionId, rumor.created_at)
-      }
-      return
-    }
+  // Extract reply tag if present
+  const replyTag = rumor.tags?.find(
+    (tag: string[]) => tag[0] === 'e' && tag[3] === 'reply'
+  )?.[1] || rumor.tags?.find(
+    (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
+  )?.[1]
 
-    // Incoming message clears typing indicator
-    clearRemoteTyping(sessionId, rumor.created_at)
+  const isMine = rumor.pubkey === myPubkey
 
-    // Extract reply tag if present
-    const replyTag = rumor.tags?.find(
-      (tag: string[]) => tag[0] === 'e' && tag[3] === 'reply'
-    )?.[1] || rumor.tags?.find(
-      (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
-    )?.[1]
+  // Auto-set delivered status for incoming messages
+  const shouldAckDelivered = !isMine && get(receiptSettings).sendDeliveryReceipts
 
-    const isMine = rumor.pubkey === myPubkey
+  const message: ChatMessage = {
+    id: processedId,
+    content: rumor.content,
+    timestamp: rumor.created_at * 1000,
+    isMine,
+    ...(replyTag && { replyTo: replyTag }),
+    ...(shouldAckDelivered && { status: 'delivered' as const }),
+  }
 
-    // Auto-set delivered status for incoming messages
-    const shouldAckDelivered = !isMine && get(receiptSettings).sendDeliveryReceipts
+  // Check if message already exists
+  if (currentSession.messages.some((m) => m.id === message.id)) return
 
-    // Use outer event ID for message ID - allows service worker to look up by push event ID
-    const message: ChatMessage = {
-      id: outerEvent?.id || rumor.id,
-      content: rumor.content,
-      timestamp: rumor.created_at * 1000,
-      isMine,
-      ...(replyTag && { replyTo: replyTag }),
-      ...(shouldAckDelivered && { status: 'delivered' as const }),
-    }
+  const updatedMessages = [...currentSession.messages, message].sort((a, b) => a.timestamp - b.timestamp)
+  const updatedSession = { ...currentSession, messages: updatedMessages }
 
-    // Check if message already exists
-    if (currentSession.messages.some(m => m.id === message.id)) return
+  // Update store
+  chats.update((c) => {
+    c.set(sessionId, updatedSession)
+    return c
+  })
 
-    const updatedMessages = [...currentSession.messages, message].sort((a, b) => a.timestamp - b.timestamp)
-    const updatedSession = { ...currentSession, messages: updatedMessages }
+  // Update current chat if it's this one
+  const current = get(currentChat)
+  if (current?.id === sessionId) {
+    currentChat.set(updatedSession)
+  }
 
-    // Update store
-    chats.update(c => {
-      c.set(sessionId, updatedSession)
-      return c
-    })
-
-    // Update current chat if it's this one
-    const current = get(currentChat)
-    if (current?.id === sessionId) {
-      currentChat.set(updatedSession)
-    }
-
-    // Save message and updated session state to IndexedDB
-    saveMessageToStorage(sessionId, message)
+  // Save message and updated session state to IndexedDB
+  saveMessageToStorage(sessionId, message)
+  if (updatedSession.mode === 'legacy') {
     saveSessionToStorage(updatedSession)
+  } else {
+    saveSessionToStorage(updatedSession)
+  }
 
-    // Send delivered receipt
-    if (shouldAckDelivered) {
-      sendReceipt(updatedSession, 'delivered', [message.id])
-    }
+  // Send delivered receipt
+  if (shouldAckDelivered) {
+    sendReceipt(updatedSession, 'delivered', [message.id])
+  }
 
-    // Update notification subscription (debounced) since keys may have rotated
-    updateDMSubscription()
+  // Update notification subscription (debounced) since keys may have rotated
+  updateDMSubscription()
+}
+
+// Subscribe to incoming messages for a session
+function subscribeToSession(chatSession: ChatSession) {
+  if (!chatSession.session) return
+  chatSession.session.onEvent((rumor: Rumor, outerEvent?: OuterEvent) => {
+    handleIncomingRumor(chatSession, rumor, outerEvent)
   })
 }
 
@@ -791,10 +905,53 @@ function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload
   }
 }
 
+function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Rumor {
+  const myPubkey = getPubkey()
+  if (!myPubkey) {
+    throw new Error('Not logged in')
+  }
+
+  const now = Date.now()
+  const tags = [...(partial.tags || [])]
+
+  if (!tags.some((t) => t[0] === 'p' && t[1] === recipientPubkey)) {
+    tags.unshift(['p', recipientPubkey])
+  }
+
+  if (!tags.some((t) => t[0] === 'ms')) {
+    tags.push(['ms', String(now)])
+  }
+
+  const rumor: Rumor = {
+    content: partial.content || '',
+    kind: partial.kind || CHAT_MESSAGE_KIND,
+    created_at: partial.created_at || Math.floor(now / 1000),
+    tags,
+    pubkey: myPubkey,
+    id: '',
+  }
+
+  rumor.id = getEventHash(rumor)
+  return rumor
+}
+
 // Send a receipt via the double ratchet session
 function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
   if (messageIds.length === 0) return
 
+  if (chatSession.mode === 'manager') {
+    const manager = getSessionManager()
+    if (!manager) return
+    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
+      content: type,
+      kind: RECEIPT_KIND,
+      tags: messageIds.map((id) => ['e', id]),
+    })
+    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+    return
+  }
+
+  if (!chatSession.session) return
   const { event } = chatSession.session.sendReceipt(type, messageIds)
 
   const ndkInstance = get(ndk)
@@ -852,9 +1009,28 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     tags.push(['e', replyTo, '', 'reply'])
   }
 
-  const { event } = tags.length > 0
-    ? chatSession.session.sendEvent({ content: text, kind: CHAT_MESSAGE_KIND, tags })
-    : chatSession.session.send(text)
+  let messageId = ''
+  let publishEvent: NDKEvent | null = null
+
+  if (chatSession.mode === 'manager') {
+    const manager = getSessionManager()
+    if (!manager) return
+    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
+      content: text,
+      kind: CHAT_MESSAGE_KIND,
+      tags,
+    })
+    messageId = rumor.id
+    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+  } else {
+    if (!chatSession.session) return
+    const { event } = tags.length > 0
+      ? chatSession.session.sendEvent({ content: text, kind: CHAT_MESSAGE_KIND, tags })
+      : chatSession.session.send(text)
+    messageId = event.id
+    const ndkInstance = get(ndk)
+    publishEvent = new NDKEvent(ndkInstance, event)
+  }
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -863,7 +1039,7 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
 
   // Add message optimistically - use outer event ID for service worker lookup
   const message: ChatMessage = {
-    id: event.id,
+    id: messageId,
     content: text,
     timestamp: Date.now(),
     isMine: true,
@@ -891,14 +1067,29 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   // Update notification subscription (debounced) since keys may have rotated
   updateDMSubscription()
 
-  const ndkInstance = get(ndk)
-  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-  ndkPublishEvent.publish()
+  if (publishEvent) {
+    publishEvent.publish()
+  }
 }
 
 // Send a reaction to a message
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
-  const { event } = chatSession.session.sendReaction(messageId, emoji)
+  if (chatSession.mode === 'manager') {
+    const manager = getSessionManager()
+    if (!manager) return
+    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
+      content: emoji,
+      kind: REACTION_KIND,
+      tags: [['e', messageId]],
+    })
+    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+  } else {
+    if (!chatSession.session) return
+    const { event } = chatSession.session.sendReaction(messageId, emoji)
+    const ndkInstance = get(ndk)
+    const ndkPublishEvent = new NDKEvent(ndkInstance, event)
+    await ndkPublishEvent.publish()
+  }
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -952,10 +1143,7 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
     await saveSessionToStorage(updatedSession)
   }
 
-  // Publish the encrypted event
-  const ndkInstance = get(ndk)
-  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-  await ndkPublishEvent.publish()
+  // No further action for manager mode (event already published)
 }
 
 // Delete a single message locally
@@ -988,7 +1176,7 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
 export function leaveChat(): void {
   const current = get(currentChat)
   if (current) {
-    current.session.close()
+    current.session?.close()
   }
   currentChat.set(null)
   // Clear URL hash
@@ -998,7 +1186,12 @@ export function leaveChat(): void {
 // Delete a chat completely
 export function deleteChat(chatSession: ChatSession): void {
   // Close the session
-  chatSession.session.close()
+  if (chatSession.mode === 'legacy') {
+    chatSession.session?.close()
+  } else {
+    const manager = getSessionManager()
+    manager?.deleteUser(chatSession.recipientPubkey).catch(() => {})
+  }
 
   // Remove from store
   chats.update(c => {
@@ -1026,10 +1219,13 @@ export async function saveSessionToStorage(chatSession: ChatSession): Promise<vo
     const storedSession: StoredSession = {
       id: chatSession.id,
       recipientPubkey: chatSession.recipientPubkey,
-      sessionState: serializeSessionState(chatSession.session.state),
+      sessionState: chatSession.mode === 'legacy' && chatSession.session
+        ? serializeSessionState(chatSession.session.state)
+        : undefined,
       createdAt: Date.now(),
       inviteId: chatSession.inviteId,
-      inviteLabel: chatSession.inviteLabel
+      inviteLabel: chatSession.inviteLabel,
+      mode: chatSession.mode,
     }
     await saveSessionToDb(storedSession)
   } catch (e) {
@@ -1052,7 +1248,8 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       isMine: message.isMine,
       ...(message.replyTo && { replyTo: message.replyTo }),
       reactions,
-      status: message.status
+      status: message.status,
+      ...(message.senderPubkey && { senderPubkey: message.senderPubkey })
     }
     await saveMessageToDb(storedMessage)
   } catch (e) {
@@ -1067,16 +1264,10 @@ export async function loadChatsFromStorage(): Promise<void> {
   try {
     const storedSessions = await getAllSessions()
     const nostrSubscribe = createNostrSubscribe()
+    initSessionManagerEvents()
 
     for (const stored of storedSessions) {
       try {
-        // Deserialize the session state
-        const sessionState = deserializeSessionState(stored.sessionState)
-
-        // Create a new Session with the restored state
-        const session = new Session(nostrSubscribe, sessionState as never)
-
-        // Load messages for this session
         const storedMessages = await getMessagesForSession(stored.id)
         const messages: ChatMessage[] = storedMessages
           .map(m => ({
@@ -1086,21 +1277,39 @@ export async function loadChatsFromStorage(): Promise<void> {
             isMine: m.isMine,
             ...(m.replyTo && { replyTo: m.replyTo }),
             reactions: m.reactions,
-            status: m.status
+            status: m.status,
+            senderPubkey: m.senderPubkey
           }))
           .sort((a, b) => a.timestamp - b.timestamp)
 
-        const chatSession: ChatSession = {
-          id: stored.id,
-          recipientPubkey: stored.recipientPubkey,
-          session,
-          messages,
-          inviteId: stored.inviteId,
-          inviteLabel: stored.inviteLabel
-        }
+        let chatSession: ChatSession
+        if (stored.sessionState) {
+          // Deserialize the session state
+          const sessionState = deserializeSessionState(stored.sessionState)
+          const session = new Session(nostrSubscribe, sessionState as never)
 
-        // Subscribe to incoming messages
-        subscribeToSession(chatSession)
+          chatSession = {
+            id: stored.id,
+            recipientPubkey: stored.recipientPubkey,
+            mode: 'legacy',
+            session,
+            messages,
+            inviteId: stored.inviteId,
+            inviteLabel: stored.inviteLabel,
+          }
+
+          // Subscribe to incoming messages
+          subscribeToSession(chatSession)
+        } else {
+          chatSession = {
+            id: stored.id,
+            recipientPubkey: stored.recipientPubkey,
+            mode: stored.mode === 'legacy' ? 'legacy' : 'manager',
+            messages,
+            inviteId: stored.inviteId,
+            inviteLabel: stored.inviteLabel,
+          }
+        }
 
         // Add to chats store
         chats.update(c => {
@@ -1122,6 +1331,19 @@ export async function loadChatsFromStorage(): Promise<void> {
 export function sendTypingEvent(chatSession: ChatSession): void {
   if (!get(typingSettings).sendTypingIndicators) return
 
+  if (chatSession.mode === 'manager') {
+    const manager = getSessionManager()
+    if (!manager) return
+    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
+      content: 'typing',
+      kind: TYPING_KIND,
+      tags: [],
+    })
+    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+    return
+  }
+
+  if (!chatSession.session) return
   const { event } = chatSession.session.sendTyping()
 
   const ndkInstance = get(ndk)
@@ -1146,6 +1368,7 @@ export async function clearChatData(): Promise<void> {
     invites.set(new Map())
     isInitialized = false
     invitesInitialized = false
+    sessionManagerSubscribed = false
   } catch (e) {
     console.error('Failed to clear chat data:', e)
   }

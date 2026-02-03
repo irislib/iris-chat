@@ -170,6 +170,7 @@ async function acceptGroupMemberInvite(inviteUrl: string, memberPubkey: string, 
     const chatSession: ChatSession = {
       id: memberPubkey,
       recipientPubkey: memberPubkey,
+      mode: 'legacy',
       session,
       messages: []
     }
@@ -223,6 +224,7 @@ function listenForGroupInviteAcceptance(invite: Invite, groupId: string): void {
     const chatSession: ChatSession = {
       id: identity,
       recipientPubkey: identity,
+      mode: 'legacy',
       session,
       messages: []
     }

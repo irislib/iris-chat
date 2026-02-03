@@ -16,7 +16,7 @@ precacheAndRoute(self.__WB_MANIFEST)
 interface StoredSession {
   id: string
   recipientPubkey: string
-  sessionState: string
+  sessionState?: string
   createdAt: number
 }
 
@@ -51,12 +51,36 @@ interface ProcessedEvent {
   timestamp: number
 }
 
+interface SessionManagerRecord {
+  key: string
+  value: unknown
+}
+
+interface StoredSessionEntry {
+  name: string
+  state: string
+}
+
+interface StoredDeviceRecord {
+  deviceId: string
+  activeSession: StoredSessionEntry | null
+  inactiveSessions: StoredSessionEntry[]
+  createdAt: number
+}
+
+interface StoredUserRecord {
+  publicKey: string
+  devices: StoredDeviceRecord[]
+  knownDeviceIdentities?: string[]
+}
+
 class IrisChatDB extends Dexie {
   sessions!: Table<StoredSession, string>
   messages!: Table<StoredMessage, string>
   profiles!: Table<StoredProfile, string>
   invites!: Table<StoredInvite, string>
   processedEvents!: Table<ProcessedEvent, string>
+  sessionManager!: Table<SessionManagerRecord, string>
 
   constructor() {
     super('iris-chat')
@@ -78,6 +102,23 @@ class IrisChatDB extends Dexie {
       invites: 'id',
       processedEvents: 'id, timestamp'
     })
+    this.version(4).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp',
+      groups: 'id'
+    })
+    this.version(5).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp',
+      groups: 'id',
+      sessionManager: 'key'
+    })
   }
 }
 
@@ -85,6 +126,42 @@ const db = new IrisChatDB()
 
 // Track currently open chat (only one can be open at a time)
 let currentOpenChatId: string | null = null
+
+async function getOwnerPubkeyFromSessionManager(): Promise<string | null> {
+  try {
+    const record = await db.sessionManager.get('v1/device-manager/owner-pubkey')
+    if (record?.value && typeof record.value === 'string') {
+      return record.value
+    }
+  } catch {
+    // ignore
+  }
+  return null
+}
+
+async function getSessionManagerStates(): Promise<string[]> {
+  const states: string[] = []
+  try {
+    const records = await db.sessionManager
+      .filter((record) => record.key.startsWith('v1/user/'))
+      .toArray()
+    for (const record of records) {
+      const data = record.value as StoredUserRecord | undefined
+      if (!data?.devices) continue
+      for (const device of data.devices) {
+        if (device.activeSession?.state) {
+          states.push(device.activeSession.state)
+        }
+        for (const inactive of device.inactiveSessions || []) {
+          if (inactive.state) states.push(inactive.state)
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[sw] error reading SessionManager states:', err)
+  }
+  return states
+}
 
 // Get display info from profile
 async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: string }> {
@@ -118,7 +195,7 @@ interface DecryptResult {
 
 // Find session and decrypt message
 async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags: string[][]; [key: string]: unknown }): Promise<DecryptResult> {
-  // Check if main app already processed this event
+  // Check if main app already processed this event (outer id)
   if (eventData.id) {
     try {
       const processed = await db.processedEvents.get(eventData.id)
@@ -139,11 +216,24 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
     }
   }
 
-  const sessions = await db.sessions.toArray()
+  const ownerPubkey = await getOwnerPubkeyFromSessionManager()
 
+  const sessionEntries: Array<{ chatId?: string; stateJson: string }> = []
+  const sessions = await db.sessions.toArray()
   for (const storedSession of sessions) {
+    if (storedSession.sessionState) {
+      sessionEntries.push({ chatId: storedSession.recipientPubkey, stateJson: storedSession.sessionState })
+    }
+  }
+
+  const managerStates = await getSessionManagerStates()
+  for (const stateJson of managerStates) {
+    sessionEntries.push({ stateJson })
+  }
+
+  for (const entry of sessionEntries) {
     try {
-      const state = deserializeSessionState(storedSession.sessionState)
+      const state = deserializeSessionState(entry.stateJson)
 
       // Check if this message is from this session's peer
       if (state.theirCurrentNostrPublicKey !== eventData.pubkey &&
@@ -153,13 +243,13 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
 
       // Fast path: check if main app already decrypted and saved this message
       const outerId = eventData.id
-      if (outerId) {
+      if (entry.chatId && outerId) {
         const storedMessage = await db.messages.get(outerId)
         if (storedMessage && !storedMessage.isMine) {
           return {
             success: true,
             content: storedMessage.content,
-            chatId: storedSession.recipientPubkey,
+            chatId: entry.chatId,
           }
         }
       }
@@ -192,23 +282,50 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       })
 
       if (innerEvent) {
+        const innerId = innerEvent.id
+        const processedInner = await db.processedEvents.get(innerId)
+        if (processedInner) {
+          if (processedInner.kind === KIND_TYPING || processedInner.kind === KIND_RECEIPT) {
+            return { success: true, chatId: processedInner.chatId, silent: true }
+          }
+          if (processedInner.kind === KIND_REACTION) {
+            return {
+              success: true,
+              content: `Reacted ${processedInner.content || ''}`,
+              chatId: processedInner.chatId,
+            }
+          }
+        }
+
+        const storedInnerMessage = await db.messages.get(innerId)
+        if (storedInnerMessage && !storedInnerMessage.isMine) {
+          return {
+            success: true,
+            content: storedInnerMessage.content,
+            chatId: entry.chatId || storedInnerMessage.sessionId,
+          }
+        }
+
+        const pTag = innerEvent.tags?.find((t) => t[0] === 'p')?.[1]
+        let chatId = entry.chatId
+        if (!chatId) {
+          if (ownerPubkey && innerEvent.pubkey === ownerPubkey && pTag) {
+            chatId = pTag
+          } else {
+            chatId = innerEvent.pubkey || pTag
+          }
+        }
+
         // Suppress notifications for typing and receipts
-        const silent = innerEvent.kind === KIND_RECEIPT ||
-          innerEvent.kind === KIND_TYPING
+        const silent = innerEvent.kind === KIND_RECEIPT || innerEvent.kind === KIND_TYPING
         return {
           success: true,
           content: innerEvent.kind === KIND_REACTION
             ? `Reacted ${innerEvent.content}`
             : innerEvent.content,
-          chatId: storedSession.recipientPubkey,
+          chatId,
           silent,
         }
-      }
-
-      // Decryption failed - show generic notification since it could be a real message
-      return {
-        success: false,
-        chatId: storedSession.recipientPubkey
       }
     } catch (err) {
       console.error('[sw] decrypt error:', err)
