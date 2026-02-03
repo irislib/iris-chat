@@ -7,6 +7,7 @@ import {
   type EventCallback,
   type EncryptFunction,
   type DecryptFunction,
+  type SessionManager,
   REACTION_KIND,
   RECEIPT_KIND,
   TYPING_KIND,
@@ -17,7 +18,7 @@ export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getEventHash, nip19 } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
-import { getSessionManager } from './privateChats'
+import { getSessionManager, waitForSessionManager, ensureDeviceRegistered } from './privateChats'
 
 type OuterEvent = Parameters<EventCallback>[1]
 
@@ -173,6 +174,7 @@ export const currentChat = writable<ChatSession | null>(null)
 export const invites = writable<Map<string, ActiveInvite>>(new Map())
 let isInitialized = false
 let invitesInitialized = false
+let sessionManagerPoller: ReturnType<typeof setInterval> | null = null
 
 // Create a nostr subscribe function using NDK
 function createNostrSubscribe(): NostrSubscribe {
@@ -194,6 +196,18 @@ function createNostrSubscribe(): NostrSubscribe {
 }
 
 let sessionManagerSubscribed = false
+const pendingAutoOpenChats = new Set<string>()
+const autoOpenedChats = new Set<string>()
+
+function triggerAutoOpen(chatSession: ChatSession): void {
+  if (autoOpenedChats.has(chatSession.id)) return
+  if (inviteAcceptedCallback) {
+    autoOpenedChats.add(chatSession.id)
+    inviteAcceptedCallback(chatSession)
+    return
+  }
+  pendingAutoOpenChats.add(chatSession.id)
+}
 
 export function initSessionManagerEvents(): void {
   if (sessionManagerSubscribed) return
@@ -205,6 +219,30 @@ export function initSessionManagerEvents(): void {
       console.error('[chat] Failed to handle SessionManager event:', e)
     )
   })
+  if (!sessionManagerPoller) {
+    sessionManagerPoller = setInterval(() => syncManagerChats(manager), 500)
+    syncManagerChats(manager)
+  }
+}
+
+function syncManagerChats(manager: SessionManager): void {
+  const myPubkey = getPubkey()
+  if (!myPubkey) return
+
+  const currentChats = get(chats)
+  for (const [pubkey, record] of manager.getUserRecords()) {
+    if (pubkey === myPubkey) continue
+    if (currentChats.has(pubkey)) continue
+
+    const hasSession = Array.from(record.devices.values()).some((device) =>
+      Boolean(device.activeSession) || device.inactiveSessions.length > 0
+    )
+    if (!hasSession) continue
+
+    ensureManagerChat(pubkey).catch((e) =>
+      console.error('[chat] Failed to sync manager chat:', e)
+    )
+  }
 }
 
 // Create a new invite (chat link) that can be shared
@@ -322,6 +360,15 @@ let inviteAcceptedCallback: ((session: ChatSession) => void) | null = null
 export function setInviteAcceptedCallback(callback: (session: ChatSession) => void): void {
   console.log('[chat] setInviteAcceptedCallback called')
   inviteAcceptedCallback = callback
+  if (pendingAutoOpenChats.size === 0) return
+  const chatMap = get(chats)
+  for (const chatId of pendingAutoOpenChats) {
+    const chatSession = chatMap.get(chatId)
+    if (!chatSession) continue
+    autoOpenedChats.add(chatId)
+    inviteAcceptedCallback(chatSession)
+  }
+  pendingAutoOpenChats.clear()
 }
 
 // Create a new invite and save to storage
@@ -563,14 +610,29 @@ async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<voi
     }
   }
 
+  const existing = get(chats).get(chatId)
   const chatSession = await ensureManagerChat(chatId)
+
+  const shouldAutoOpen =
+    fromPubkey !== myPubkey &&
+    rumor.kind === CHAT_MESSAGE_KIND &&
+    (!existing || existing.messages.length === 0)
+
+  if (shouldAutoOpen) {
+    triggerAutoOpen(chatSession)
+  }
   handleIncomingRumor(chatSession, rumor, undefined)
 }
 
 // Accept an invite and create a session
 export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   if (invite.type === 'pubkey') {
-    return ensureManagerChat(invite.pubkey)
+    const existing = get(chats).get(invite.pubkey)
+    const chatSession = await ensureManagerChat(invite.pubkey)
+    if (!existing) {
+      await ensureDeviceRegistered().catch(() => {})
+    }
+    return chatSession
   }
 
   const pubkey = getPubkey()
@@ -1369,6 +1431,12 @@ export async function clearChatData(): Promise<void> {
     isInitialized = false
     invitesInitialized = false
     sessionManagerSubscribed = false
+    if (sessionManagerPoller) {
+      clearInterval(sessionManagerPoller)
+      sessionManagerPoller = null
+    }
+    pendingAutoOpenChats.clear()
+    autoOpenedChats.clear()
   } catch (e) {
     console.error('Failed to clear chat data:', e)
   }

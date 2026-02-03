@@ -27,6 +27,18 @@ async function registerDevice(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Back' }).click()
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+async function openChatFromList(page: import('@playwright/test').Page, message: string): Promise<void> {
+  const listItem = page
+    .getByRole('button', { name: new RegExp(escapeRegExp(message)) })
+    .first()
+  await expect(listItem).toBeVisible({ timeout: 30000 })
+  await listItem.click()
+}
+
 test('syncs outgoing messages to another device', async ({ browser, testRelayUrl }) => {
   const ownerPrivkey = generateSecretKey()
   const ownerPrivkeyHex = toHex(ownerPrivkey)
@@ -76,10 +88,16 @@ test('syncs outgoing messages to another device', async ({ browser, testRelayUrl
     await page1.getByRole('button', { name: 'Send' }).click()
 
     // Device 2 should see the message appear via multi-device sync
-    await expect(page2.getByText('Hello from device 1')).toBeVisible({ timeout: 20000 })
+    await openChatFromList(page2, 'Hello from device 1')
+    await expect(
+      page2.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello from device 1' }).first()
+    ).toBeVisible({ timeout: 20000 })
 
     // Sanity: user2 should receive the message too
-    await expect(page3.getByText('Hello from device 1')).toBeVisible({ timeout: 20000 })
+    await openChatFromList(page3, 'Hello from device 1')
+    await expect(
+      page3.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello from device 1' }).first()
+    ).toBeVisible({ timeout: 20000 })
 
     // Ensure user2 pubkey is still the chat target (uses new link format)
     expect(user2Pubkey).toBeTruthy()

@@ -45,12 +45,18 @@
   let showMenu = $state(false)
   let openUpward = $state(true)
   let openLeft = $state(false)
+  let menuButton = $state<HTMLButtonElement | null>(null)
+  let menuContent = $state<HTMLDivElement | null>(null)
+  let emojiButton = $state<HTMLButtonElement | null>(null)
+  let emojiContent = $state<HTMLDivElement | null>(null)
 
   function checkDirection(e: MouseEvent) {
     const button = (e.currentTarget as HTMLElement)
     const rect = button.getBoundingClientRect()
-    // Need ~120px above for menu, ~50px for emoji picker; use 120 as safe threshold
-    openUpward = rect.top > 120
+    const spaceAbove = rect.top
+    const spaceBelow = window.innerHeight - rect.bottom
+    // Prefer opening toward the roomier side, require a minimum buffer above
+    openUpward = spaceAbove > 180 && spaceAbove >= spaceBelow
     // Need ~220px for emoji picker row, ~140px for menu; use 220 as safe threshold
     openLeft = (window.innerWidth - rect.right) < 220
   }
@@ -58,7 +64,24 @@
   const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(message.content)
+    try {
+      await navigator.clipboard.writeText(message.content)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = message.content
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      try {
+        document.execCommand('copy')
+      } catch {
+        // ignore
+      } finally {
+        document.body.removeChild(textarea)
+      }
+    }
     showMenu = false
   }
 
@@ -148,6 +171,24 @@
     }
   })
 
+  function handleDocumentPointerDown(event: MouseEvent) {
+    const target = event.target as Node
+    if (showMenu) {
+      const insideMenu = menuContent?.contains(target) || menuButton?.contains(target)
+      if (!insideMenu) showMenu = false
+    }
+    if (showEmojiPicker) {
+      const insideEmoji = emojiContent?.contains(target) || emojiButton?.contains(target)
+      if (!insideEmoji) showEmojiPicker = false
+    }
+  }
+
+  $effect(() => {
+    if (!showEmojiPicker && !showMenu) return
+    document.addEventListener('mousedown', handleDocumentPointerDown)
+    return () => document.removeEventListener('mousedown', handleDocumentPointerDown)
+  })
+
   function formatTime(timestamp: number): string {
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
@@ -176,7 +217,7 @@
   let actionsVisible = $derived(showEmojiPicker || showMenu)
 </script>
 
-<div class="{styleFirst ? 'mt-3' : 'mt-0.5'}" id="msg-{message.id}">
+<div class="{styleFirst ? 'mt-3' : 'mt-0.5'} {actionsVisible ? 'relative z-50' : ''}" id="msg-{message.id}">
   {#if isFirst && showSenderName && (senderName || senderPubkey)}
     <div class="flex items-center gap-2 mb-1 {message.isMine ? 'justify-end' : ''}">
       <span class="text-xs text-gray-400 font-medium">
@@ -205,13 +246,17 @@
           <div class="relative">
             <button
               class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+              bind:this={menuButton}
               onclick={(e) => { checkDirection(e); showMenu = !showMenu }}
               aria-label="Message menu"
             >
               <span class="i-carbon-overflow-menu-vertical text-sm"></span>
             </button>
             {#if showMenu}
-              <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+              <div
+                class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32"
+                bind:this={menuContent}
+              >
                 <button
                   class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
                   onclick={handleCopy}
@@ -233,13 +278,17 @@
             <div class="relative">
               <button
                 class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                bind:this={emojiButton}
                 onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker }}
                 aria-label="Add reaction"
               >
                 <span class="i-carbon-face-add text-sm"></span>
               </button>
               {#if showEmojiPicker}
-                <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
+                <div
+                  class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl"
+                  bind:this={emojiContent}
+                >
                   {#each quickEmojis as emoji}
                     <button
                       class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
@@ -335,19 +384,23 @@
           {/if}
           {#if onreact}
             <div class="relative">
-              <button
-                class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker }}
-                aria-label="Add reaction"
+            <button
+              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+              bind:this={emojiButton}
+              onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker }}
+              aria-label="Add reaction"
+            >
+              <span class="i-carbon-face-add text-sm"></span>
+            </button>
+            {#if showEmojiPicker}
+              <div
+                class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl"
+                bind:this={emojiContent}
               >
-                <span class="i-carbon-face-add text-sm"></span>
-              </button>
-              {#if showEmojiPicker}
-                <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-full px-2 py-1 flex gap-1 shadow-xl">
-                  {#each quickEmojis as emoji}
-                    <button
-                      class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
-                      onclick={() => handleReact(emoji)}
+                {#each quickEmojis as emoji}
+                  <button
+                    class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+                    onclick={() => handleReact(emoji)}
                     >
                       {emoji}
                     </button>
@@ -359,13 +412,17 @@
           <div class="relative">
             <button
               class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+              bind:this={menuButton}
               onclick={(e) => { checkDirection(e); showMenu = !showMenu }}
               aria-label="Message menu"
             >
               <span class="i-carbon-overflow-menu-vertical text-sm"></span>
             </button>
             {#if showMenu}
-              <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32">
+              <div
+                class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32"
+                bind:this={menuContent}
+              >
                 <button
                   class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
                   onclick={handleCopy}
@@ -388,22 +445,6 @@
     </div>
   </div>
 </div>
-
-<!-- Click outside to close emoji picker or menu -->
-{#if showEmojiPicker}
-  <button
-    class="fixed inset-0 z-20 bg-transparent border-none cursor-default"
-    onclick={closePicker}
-    aria-label="Close picker"
-  ></button>
-{/if}
-{#if showMenu}
-  <button
-    class="fixed inset-0 z-20 bg-transparent border-none cursor-default"
-    onclick={closeMenu}
-    aria-label="Close menu"
-  ></button>
-{/if}
 
 <style>
   /* Highlight animation for scrolling to replied message */

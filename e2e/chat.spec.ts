@@ -31,9 +31,60 @@ async function getInviteUrl(page: Page): Promise<string> {
 async function setupUserWithInvite(page: Page): Promise<string> {
   await page.goto('/')
   await page.getByRole('button', { name: 'Go' }).click()
+  await registerDevice(page)
   await page.getByRole('button', { name: 'New Chat' }).click()
   // Invite is auto-created, just get the URL
   return getInviteUrl(page)
+}
+
+async function registerDevice(page: Page): Promise<void> {
+  const settingsButton = page.getByRole('button', { name: 'Settings' })
+  if (await settingsButton.count()) {
+    await settingsButton.click()
+    const registerButton = page.getByRole('button', { name: 'Register this device' })
+    if (await registerButton.count()) {
+      await expect(registerButton).toBeVisible({ timeout: 10000 })
+      await registerButton.click()
+      await expect(registerButton).not.toBeVisible({ timeout: 20000 })
+    }
+    await page.getByRole('button', { name: 'Back' }).click()
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+async function openChatFromList(page: Page, message: string): Promise<void> {
+  const listItem = page
+    .getByRole('button', { name: new RegExp(escapeRegExp(message)) })
+    .first()
+  await expect(listItem).toBeVisible({ timeout: 30000 })
+  await listItem.click()
+}
+
+async function joinViaPasteAndSync(inviter: Page, joiner: Page, inviteUrl: string, message: string): Promise<void> {
+  await registerDevice(inviter)
+  await registerDevice(joiner)
+  await joiner.getByPlaceholder('Paste invite link').fill(inviteUrl)
+  await expect(joiner.getByPlaceholder('Type a message...')).toBeVisible()
+  await joiner.getByPlaceholder('Type a message...').fill(message)
+  await joiner.getByRole('button', { name: 'Send' }).click()
+  await openChatFromList(inviter, message)
+  await expect(inviter.locator('.max-w-\\[85\\%\\]').filter({ hasText: message })).toBeVisible()
+}
+
+async function joinViaUrlAndSync(inviter: Page, joiner: Page, inviteUrl: string, message: string): Promise<void> {
+  await joiner.goto(inviteUrl)
+  await expect(joiner.getByRole('button', { name: 'Join Chat' })).toBeVisible()
+  await joiner.getByRole('button', { name: 'Join Chat' }).click()
+  await registerDevice(inviter)
+  await registerDevice(joiner)
+  await expect(joiner.getByPlaceholder('Type a message...')).toBeVisible()
+  await joiner.getByPlaceholder('Type a message...').fill(message)
+  await joiner.getByRole('button', { name: 'Send' }).click()
+  await openChatFromList(inviter, message)
+  await expect(inviter.locator('.max-w-\\[85\\%\\]').filter({ hasText: message })).toBeVisible()
 }
 
 // Helper to create a context configured to use the test relay
@@ -55,6 +106,9 @@ test.describe('iris chat', () => {
       const page3 = await context3.newPage()
 
       try {
+        const firstMessage = 'First ping'
+        const secondMessage = 'Second ping'
+
         // Setup: User 1 creates first chat (invite auto-created)
         const inviteUrl1 = await setupUserWithInvite(page1)
 
@@ -62,18 +116,12 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl1)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl1, firstMessage)
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         // Input should be focused when chat opens
         const input = page1.getByPlaceholder('Type a message...')
         await expect(input).toBeFocused()
-
-        // User 2 sends a message so chat has content
-        await page2.getByPlaceholder('Type a message...').fill('Hello')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello' })).toBeVisible()
 
         // User 1 goes back to sidebar
         await page1.getByRole('button', { name: 'Back' }).click()
@@ -88,8 +136,7 @@ test.describe('iris chat', () => {
         await page3.goto('/')
         await page3.getByRole('button', { name: 'Go' }).click()
         await page3.getByRole('button', { name: 'New Chat' }).click()
-        await page3.getByPlaceholder('Paste invite link').fill(inviteUrl2)
-
+        await joinViaPasteAndSync(page1, page3, inviteUrl2, secondMessage)
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         // Input should be focused when second chat opens
@@ -97,7 +144,7 @@ test.describe('iris chat', () => {
 
         // Go back and click on first chat
         await page1.getByRole('button', { name: 'Back' }).click()
-        await page1.locator('button').filter({ hasText: 'Hello' }).click()
+        await openChatFromList(page1, firstMessage)
 
         // Input should be focused when switching to first chat
         await expect(page1.getByPlaceholder('Type a message...')).toBeFocused()
@@ -125,15 +172,8 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
-        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello there')
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends first to establish connection
-        await page2.getByPlaceholder('Type a message...').fill('Hello there')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello there' })).toBeVisible()
 
         // User 2 sends their own message
         await page2.getByPlaceholder('Type a message...').fill('My own message')
@@ -176,8 +216,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         const input = page1.getByPlaceholder('Type a message...')
@@ -214,9 +253,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
-        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
 
         // User 2 sends first to establish connection
@@ -262,14 +299,8 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl1)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl1, 'Chat one')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message so chat appears in sidebar
-        await page2.getByPlaceholder('Type a message...').fill('Chat one')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Chat one' })).toBeVisible()
 
         // User 1 types a draft in chat 1 (but does NOT send)
         await page1.getByPlaceholder('Type a message...').fill('Draft for chat one')
@@ -284,14 +315,8 @@ test.describe('iris chat', () => {
         await page3.goto('/')
         await page3.getByRole('button', { name: 'Go' }).click()
         await page3.getByRole('button', { name: 'New Chat' }).click()
-        await page3.getByPlaceholder('Paste invite link').fill(inviteUrl2)
-
+        await joinViaPasteAndSync(page1, page3, inviteUrl2, 'Chat two')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 3 sends a message so chat 2 appears in sidebar
-        await page3.getByPlaceholder('Type a message...').fill('Chat two')
-        await page3.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Chat two' })).toBeVisible()
 
         // User 1 types a draft in chat 2
         await page1.getByPlaceholder('Type a message...').fill('Draft for chat two')
@@ -394,14 +419,8 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // Send a message so chat has content
-        await page2.getByPlaceholder('Type a message...').fill('Hello')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello' })).toBeVisible()
 
         // Click the menu button in header
         await page1.getByRole('button', { name: 'Chat menu' }).click()
@@ -437,15 +456,9 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'First message')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends two messages
-        await page2.getByPlaceholder('Type a message...').fill('First message')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'First message' })).toBeVisible()
 
         await page2.getByPlaceholder('Type a message...').fill('Second message')
         await page2.getByRole('button', { name: 'Send' }).click()
@@ -493,15 +506,9 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Copy this text')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('Copy this text')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Copy this text' })).toBeVisible()
 
         // User 1 hovers over message to reveal menu
         const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Copy this text' })
@@ -513,9 +520,11 @@ test.describe('iris chat', () => {
         // Click copy option (use exact match to avoid sidebar copy button)
         await page1.getByRole('button', { name: 'Copy', exact: true }).click()
 
-        // Verify clipboard contains the message text
-        const clipboardText = await page1.evaluate(() => navigator.clipboard.readText())
-        expect(clipboardText).toBe('Copy this text')
+        // Verify clipboard contains the message text (clipboard writes can be async)
+        await expect.poll(
+          () => page1.evaluate(() => navigator.clipboard.readText()),
+          { timeout: 5000 }
+        ).toBe('Copy this text')
       } finally {
         await context1.close()
         await context2.close()
@@ -541,8 +550,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
 
@@ -585,8 +593,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         // Send image link
@@ -626,8 +633,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         // Send image link
@@ -667,8 +673,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         // Send image link
@@ -710,8 +715,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         // Attachment button should be visible
@@ -739,8 +743,7 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
 
@@ -778,14 +781,8 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'React to this!')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('React to this!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
 
         // User 1 adds a reaction
         const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
@@ -835,15 +832,9 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'React to this!')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('React to this!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
 
         // User 1 adds a reaction
         const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
@@ -879,15 +870,9 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'React to this!')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('React to this!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
 
         // User 1 hovers over the message to reveal reaction button
         const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
@@ -924,15 +909,9 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'React to this!')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('React to this!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })).toBeVisible()
 
         // User 1 reacts with heart
         const messageBubble = page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'React to this!' })
@@ -977,16 +956,9 @@ test.describe('iris chat', () => {
         await page2.getByPlaceholder('Name').fill('Bob')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
-        // Both in chat view
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hi!')
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message to establish connection
-        await page2.getByPlaceholder('Type a message...').fill('Hi!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hi!' })).toBeVisible()
 
         // User 1 clicks on avatar/name button in header to view profile
         // The button wraps both avatar and name in the header
@@ -1034,14 +1006,8 @@ test.describe('iris chat', () => {
         await page2.getByPlaceholder('Name').fill('Bob')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Test')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // Send message to establish connection
-        await page2.getByPlaceholder('Type a message...').fill('Test')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Test' })).toBeVisible()
 
         // Go to profile page
         await page1.locator('header').getByText('Bob').click()
@@ -1078,15 +1044,9 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello!')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('Hello!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello!' })).toBeVisible()
 
         // "Today" separator should be visible above the message
         await expect(page1.locator('.day-separator').filter({ hasText: 'Today' })).toBeVisible()
@@ -1114,16 +1074,11 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'First')
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
 
         // Send multiple messages
-        await page2.getByPlaceholder('Type a message...').fill('First')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'First' })).toBeVisible()
-
         await page2.getByPlaceholder('Type a message...').fill('Second')
         await page2.getByRole('button', { name: 'Send' }).click()
         await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Second' })).toBeVisible()
@@ -1153,20 +1108,10 @@ test.describe('iris chat', () => {
         // User 1: Login and create invite (auto-created)
         const inviteUrl = await setupUserWithInvite(page1)
 
-        // User 2: Navigate to invite URL first (will need to login)
-        await page2.goto(inviteUrl)
-
-        // Should show login page first (button says "Join Chat" when invite in URL)
-        await expect(page2.getByRole('button', { name: 'Join Chat' })).toBeVisible()
-        await page2.getByRole('button', { name: 'Join Chat' }).click()
-
-        // After login, JoinChat component auto-joins from URL hash
+        // User 2: Navigate to invite URL first (will need to login) and join
+        await joinViaUrlAndSync(page1, page2, inviteUrl, 'Hello from User 2!')
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('Hello from User 2!')
-        await page2.getByRole('button', { name: 'Send' }).click()
 
         // Both users should see the message in chat bubbles
         await expect(page2.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello from User 2!' })).toBeVisible()
@@ -1201,16 +1146,10 @@ test.describe('iris chat', () => {
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
 
-        // Paste the link in the Join Chat input
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
-        // User 2 should be in chat view (auto-joins on valid paste)
+        // Paste the link in the Join Chat input and join
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello via paste!')
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message
-        await page2.getByPlaceholder('Type a message...').fill('Hello via paste!')
-        await page2.getByRole('button', { name: 'Send' }).click()
 
         // Both users should see the message
         await expect(page2.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello via paste!' })).toBeVisible()
@@ -1244,16 +1183,9 @@ test.describe('iris chat', () => {
         await page2.goto('/')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
-        // Both in chat view
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello!')
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends first message to establish connection
-        await page2.getByPlaceholder('Type a message...').fill('Hello!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hello!' })).toBeVisible()
 
         // User 1 sends message before reload
         await page1.getByPlaceholder('Type a message...').fill('Before reload')
@@ -1323,16 +1255,9 @@ test.describe('iris chat', () => {
         await page2.getByPlaceholder('Name').fill('Bob')
         await page2.getByRole('button', { name: 'Go' }).click()
         await page2.getByRole('button', { name: 'New Chat' }).click()
-        await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
-
-        // Both in chat view
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hi!')
         await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 2 sends a message to establish connection
-        await page2.getByPlaceholder('Type a message...').fill('Hi!')
-        await page2.getByRole('button', { name: 'Send' }).click()
-        await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'Hi!' })).toBeVisible()
 
         // User 1 should see "Bob" in chat header
         await expect(page1.locator('header').getByText('Bob')).toBeVisible()

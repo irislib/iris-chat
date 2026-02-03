@@ -1,5 +1,13 @@
 import { test, expect, useTestRelay } from './fixtures'
 
+async function openChatFromList(page: import('@playwright/test').Page, message: string): Promise<void> {
+  const listItem = page
+    .getByRole('button', { name: new RegExp(message) })
+    .first()
+  await expect(listItem).toBeVisible({ timeout: 30000 })
+  await listItem.click()
+}
+
 test.describe('Message overflow', () => {
   test('long text and reply previews should not overflow container', async ({ browser, testRelayUrl }) => {
     const context1 = await browser.newContext()
@@ -28,7 +36,15 @@ test.describe('Message overflow', () => {
       await page2.getByRole('button', { name: 'New Chat' }).click()
       await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
+      await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+      // Send a warmup message so the chat appears in the inviter's list
+      const warmup = 'Warmup message'
+      await page2.getByPlaceholder('Type a message...').fill(warmup)
+      await page2.getByRole('button', { name: 'Send' }).click()
+      await openChatFromList(page1, warmup)
       await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+
       await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
 
       const viewportSize = page1.viewportSize()!

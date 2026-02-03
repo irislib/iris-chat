@@ -9,6 +9,7 @@ import {
   type NostrSubscribe,
   type NostrPublish,
 } from 'nostr-double-ratchet'
+import { finalizeEvent } from 'nostr-tools'
 import { ndk } from './identity'
 import { devices } from './devices'
 import { DexieStorageAdapter } from './sessionManagerStorage'
@@ -140,6 +141,12 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
       console.warn('[privateChats] Auto-registration failed:', e)
     }
   }
+
+  try {
+    await republishInvite()
+  } catch (e) {
+    console.warn('[privateChats] Republish invite failed:', e)
+  }
 }
 
 export const hasLocalAppKeys = (): boolean => {
@@ -151,6 +158,11 @@ export const hasLocalAppKeys = (): boolean => {
 export const registerDevice = async (): Promise<void> => {
   if (!delegateManager || !appKeysManager) {
     throw new Error('Managers not initialized')
+  }
+
+  const ndkInstance = getNDK()
+  if (ndkInstance.pool.connectedRelays().length === 0) {
+    await ndkInstance.pool.connect(5000)
   }
 
   const ownerPubkey = delegateManager.getOwnerPublicKey()
@@ -172,6 +184,37 @@ export const registerDevice = async (): Promise<void> => {
 
   devices.setHasLocalAppKeys(true)
   devices.setRegisteredDevices(appKeysManager.getOwnDevices(), Math.floor(Date.now() / 1000))
+}
+
+export const ensureDeviceRegistered = async (): Promise<void> => {
+  if (!delegateManager || !appKeysManager) {
+    await Promise.all([initAppKeysManager(), initDelegateManager()])
+  }
+
+  if (!delegateManager || !appKeysManager) {
+    throw new Error('Managers not initialized')
+  }
+
+  const ownerPubkey = delegateManager.getOwnerPublicKey()
+  if (!ownerPubkey) {
+    throw new Error('Owner pubkey not available')
+  }
+
+  const state = get(devices)
+  if (!state.isCurrentDeviceRegistered) {
+    await registerDevice()
+  } else {
+    const ndkInstance = getNDK()
+    if (ndkInstance.pool.connectedRelays().length === 0) {
+      await ndkInstance.pool.connect(5000)
+    }
+    await appKeysManager.publish().catch(() => {})
+  }
+
+  const nostrSubscribe = createSubscribe(getNDK())
+  await AppKeys.waitFor(ownerPubkey, nostrSubscribe, 4000).catch(() => null)
+
+  await republishInvite().catch(() => {})
 }
 
 export const revokeDevice = async (identityPubkey: string): Promise<void> => {
@@ -257,6 +300,28 @@ export const getInviteDetails = () => {
     deviceId: invite.deviceId || delegateManager.getIdentityPublicKey(),
     createdAt: invite.createdAt,
   }
+}
+
+export const republishInvite = async (): Promise<void> => {
+  if (!delegateManager) {
+    throw new Error('DelegateManager not initialized')
+  }
+
+  const invite = delegateManager.getInvite()
+  if (!invite) {
+    throw new Error('No invite available')
+  }
+
+  const unsignedEvent = invite.getEvent()
+  const signedEvent = finalizeEvent(unsignedEvent, delegateManager.getIdentityKey())
+
+  const ndkInstance = getNDK()
+  if (ndkInstance.pool.connectedRelays().length === 0) {
+    await ndkInstance.pool.connect(5000)
+  }
+
+  const event = new NDKEvent(ndkInstance, signedEvent)
+  await event.publish()
 }
 
 export const getRegisteredDevices = (): DeviceEntry[] => {

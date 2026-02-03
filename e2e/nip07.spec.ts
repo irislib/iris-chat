@@ -228,8 +228,14 @@ test.describe('NIP-07 Login', () => {
     // Click New Chat
     await page.getByRole('button', { name: 'New Chat' }).click()
 
-    // Click Create Invite to trigger the error
-    await page.getByRole('button', { name: 'Create Invite' }).click()
+    // Create a legacy invite link to trigger NIP-44 encryption error
+    const legacyInvitePayload = {
+      inviter: publicKey,
+      ephemeralKey: 'a'.repeat(64),
+      sharedSecret: 'b'.repeat(64),
+    }
+    const legacyInviteUrl = `http://localhost:4173/#${encodeURIComponent(JSON.stringify(legacyInvitePayload))}`
+    await page.getByPlaceholder('Paste invite link').fill(legacyInviteUrl)
 
     // Should show NIP-44 error message
     await expect(page.locator('text=does not support NIP-44')).toBeVisible({ timeout: 5000 })
