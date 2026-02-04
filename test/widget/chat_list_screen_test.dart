@@ -1,11 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/chat_provider.dart';
+import 'package:iris_chat/config/providers/connectivity_provider.dart';
 import 'package:iris_chat/config/providers/invite_provider.dart';
+import 'package:iris_chat/config/providers/nostr_provider.dart';
+import 'package:iris_chat/core/services/session_manager_service.dart';
+import 'package:iris_chat/core/services/connectivity_service.dart';
+import 'package:iris_chat/core/services/profile_service.dart';
 import 'package:iris_chat/features/chat/data/datasources/session_local_datasource.dart';
 import 'package:iris_chat/features/chat/domain/models/session.dart';
 import 'package:iris_chat/features/chat/presentation/screens/chat_list_screen.dart';
 import 'package:iris_chat/features/invite/data/datasources/invite_local_datasource.dart';
+import 'package:iris_chat/shared/utils/animal_names.dart';
 import 'package:mocktail/mocktail.dart';
 
 import '../test_helpers.dart';
@@ -14,14 +20,22 @@ class MockSessionLocalDatasource extends Mock
     implements SessionLocalDatasource {}
 
 class MockInviteLocalDatasource extends Mock implements InviteLocalDatasource {}
+class MockSessionManagerService extends Mock implements SessionManagerService {}
+class MockProfileService extends Mock implements ProfileService {}
 
 void main() {
   late MockSessionLocalDatasource mockSessionDatasource;
   late MockInviteLocalDatasource mockInviteDatasource;
+  late MockSessionManagerService mockSessionManagerService;
+  late MockProfileService mockProfileService;
 
   setUp(() {
     mockSessionDatasource = MockSessionLocalDatasource();
     mockInviteDatasource = MockInviteLocalDatasource();
+    mockSessionManagerService = MockSessionManagerService();
+    mockProfileService = MockProfileService();
+    when(() => mockProfileService.fetchProfiles(any())).thenAnswer((_) async {});
+    when(() => mockProfileService.getProfile(any())).thenAnswer((_) async => null);
   });
 
   setUpAll(() {
@@ -49,17 +63,24 @@ void main() {
       overrides: [
         sessionDatasourceProvider.overrideWithValue(mockSessionDatasource),
         inviteDatasourceProvider.overrideWithValue(mockInviteDatasource),
+        messageSubscriptionProvider
+            .overrideWithValue(mockSessionManagerService),
+        profileServiceProvider.overrideWithValue(mockProfileService),
+        connectivityStatusProvider.overrideWith(
+          (_) => Stream.value(ConnectivityStatus.online),
+        ),
+        queuedMessageCountProvider.overrideWithValue(0),
       ],
     );
   }
 
   group('ChatListScreen', () {
     group('app bar', () {
-      testWidgets('shows Chats title', (tester) async {
+      testWidgets('shows Iris title', (tester) async {
         await tester.pumpWidget(buildChatListScreen());
         await tester.pumpAndSettle();
 
-        expect(find.text('Chats'), findsOneWidget);
+        expect(find.text('Iris'), findsOneWidget);
       });
 
       testWidgets('shows settings icon button', (tester) async {
@@ -68,34 +89,21 @@ void main() {
 
         expect(find.byIcon(Icons.settings), findsOneWidget);
       });
+
+      testWidgets('shows add icon button', (tester) async {
+        await tester.pumpWidget(buildChatListScreen());
+        await tester.pumpAndSettle();
+
+        expect(find.byIcon(Icons.add), findsOneWidget);
+      });
     });
 
     group('empty state', () {
-      testWidgets('shows empty state when no sessions', (tester) async {
+      testWidgets('shows no list items when no sessions', (tester) async {
         await tester.pumpWidget(buildChatListScreen(sessions: []));
         await tester.pumpAndSettle();
 
-        expect(find.text('No conversations yet'), findsOneWidget);
-        expect(
-          find.text(
-              'Start a new chat by creating an invite or scanning one from a friend.'),
-          findsOneWidget,
-        );
-      });
-
-      testWidgets('shows chat bubble icon in empty state', (tester) async {
-        await tester.pumpWidget(buildChatListScreen(sessions: []));
-        await tester.pumpAndSettle();
-
-        expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
-      });
-
-      testWidgets('shows start new chat button in empty state',
-          (tester) async {
-        await tester.pumpWidget(buildChatListScreen(sessions: []));
-        await tester.pumpAndSettle();
-
-        expect(find.text('Start a new chat'), findsOneWidget);
+        expect(find.byType(ListTile), findsNothing);
       });
     });
 
@@ -194,7 +202,7 @@ void main() {
         expect(find.text('0'), findsNothing);
       });
 
-      testWidgets('shows formatted pubkey when no recipient name',
+      testWidgets('shows animal name when no recipient name',
           (tester) async {
         final sessions = [
           ChatSession(
@@ -207,43 +215,10 @@ void main() {
         await tester.pumpWidget(buildChatListScreen(sessions: sessions));
         await tester.pumpAndSettle();
 
-        // Should show truncated pubkey
-        expect(find.textContaining('abcd12'), findsOneWidget);
-      });
-    });
-
-    group('floating action button', () {
-      testWidgets('shows FAB with add icon', (tester) async {
-        await tester.pumpWidget(buildChatListScreen());
-        await tester.pumpAndSettle();
-
-        expect(find.byType(FloatingActionButton), findsOneWidget);
-        // There may be multiple add icons (FAB and empty state button)
-        expect(find.byIcon(Icons.add), findsAtLeastNWidgets(1));
-      });
-
-      testWidgets('shows bottom sheet when FAB tapped', (tester) async {
-        await tester.pumpWidget(buildChatListScreen());
-        await tester.pumpAndSettle();
-
-        await tester.tap(find.byType(FloatingActionButton));
-        await tester.pumpAndSettle();
-
-        expect(find.text('Create Invite'), findsOneWidget);
-        expect(find.text('Scan Invite'), findsOneWidget);
-      });
-
-      testWidgets('bottom sheet shows correct options', (tester) async {
-        await tester.pumpWidget(buildChatListScreen());
-        await tester.pumpAndSettle();
-
-        await tester.tap(find.byType(FloatingActionButton));
-        await tester.pumpAndSettle();
-
-        expect(find.text('Share a link or QR code'), findsOneWidget);
-        expect(find.text('Scan a QR code or paste a link'), findsOneWidget);
-        expect(find.byIcon(Icons.qr_code), findsOneWidget);
-        expect(find.byIcon(Icons.qr_code_scanner), findsOneWidget);
+        expect(
+          find.text(getAnimalName(sessions.first.recipientPubkeyHex)),
+          findsOneWidget,
+        );
       });
     });
 

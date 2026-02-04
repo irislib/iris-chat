@@ -3,10 +3,9 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-import '../../core/ffi/ndr_ffi.dart';
 import '../../core/services/database_service.dart';
 import '../../core/services/error_service.dart';
-import '../../core/services/nostr_service.dart';
+import '../../core/services/session_manager_service.dart';
 import '../../core/services/profile_service.dart';
 import '../../features/chat/data/datasources/message_local_datasource.dart';
 import '../../features/chat/data/datasources/session_local_datasource.dart';
@@ -199,15 +198,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
   ChatNotifier(
     this._messageDatasource,
     this._sessionDatasource,
-    this._nostrService,
+    this._sessionManagerService,
   ) : super(const ChatState());
 
   final MessageLocalDatasource _messageDatasource;
   final SessionLocalDatasource _sessionDatasource;
-  final NostrService _nostrService;
-
-  // Cache of session handles for sending/receiving
-  final Map<String, SessionHandle> _sessionHandles = {};
+  final SessionManagerService _sessionManagerService;
 
   /// Load messages for a session.
   Future<void> loadMessages(String sessionId, {int limit = 50}) async {
@@ -315,9 +311,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> _sendMessageInternal(ChatMessage message) async {
     try {
-      // Get or restore the session handle
-      final handle = await _getSessionHandle(message.sessionId);
-      if (handle == null) {
+      final session = await _sessionDatasource.getSession(message.sessionId);
+      if (session == null) {
         throw const AppError(
           type: AppErrorType.sessionExpired,
           message: 'Session not found. Please start a new conversation.',
@@ -325,37 +320,24 @@ class ChatNotifier extends StateNotifier<ChatState> {
         );
       }
 
-      // Check if can send
-      final canSend = await handle.canSend();
-      if (!canSend) {
-        throw const AppError(
-          type: AppErrorType.sessionExpired,
-          message: 'Session is not ready. Please wait for the connection.',
-          isRetryable: true,
-        );
-      }
-
-      // Encrypt and get event
-      final sendResult = await handle.sendText(message.text);
-
-      // Update session state
-      final newState = await handle.stateJson();
-      await _sessionDatasource.saveSessionState(message.sessionId, newState);
-
-      // Publish to Nostr with retry logic for network failures
-      await ErrorService.withRetry(
-        operation: () => _nostrService.publishEvent(sendResult.outerEventJson),
-        maxAttempts: 3,
-        initialDelay: const Duration(seconds: 1),
+      // Send via session manager (publishes through pubsub bridge)
+      final eventIds = await _sessionManagerService.sendText(
+        recipientPubkeyHex: session.recipientPubkeyHex,
+        text: message.text,
       );
 
-      // Parse event ID
-      final eventData = jsonDecode(sendResult.outerEventJson) as Map<String, dynamic>;
-      final eventId = eventData['id'] as String;
+      // Update session state from manager
+      final newState =
+          await _sessionManagerService.getActiveSessionState(session.recipientPubkeyHex);
+      if (newState != null) {
+        await _sessionDatasource.saveSessionState(message.sessionId, newState);
+      }
+
+      final eventId = eventIds.isNotEmpty ? eventIds.first : null;
 
       // Update message with success
       final sentMessage = message.copyWith(
-        status: MessageStatus.sent,
+        status: eventId != null ? MessageStatus.sent : MessageStatus.pending,
         eventId: eventId,
       );
       await updateMessage(sentMessage);
@@ -373,51 +355,56 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
   }
 
-  /// Receive a message from Nostr.
-  Future<void> receiveMessage(String sessionId, String eventJson, {String? senderPubkey}) async {
+  /// Receive a decrypted message from the session manager.
+  Future<void> receiveDecryptedMessage(
+    String senderPubkeyHex,
+    String content, {
+    String? eventId,
+    int? createdAt,
+  }) async {
     try {
-      // Check if already have this message
-      final eventData = jsonDecode(eventJson) as Map<String, dynamic>;
-      final eventId = eventData['id'] as String;
-
-      if (await _messageDatasource.messageExists(eventId)) {
-        return; // Already have this message
-      }
-
-      // Get or restore the session handle
-      final handle = await _getSessionHandle(sessionId);
-      if (handle == null) {
+      if (eventId != null && await _messageDatasource.messageExists(eventId)) {
         return;
       }
 
-      // Decrypt
-      final decryptResult = await handle.decryptEvent(eventJson);
+      // Find or create session by recipient pubkey
+      final existingSession =
+          await _sessionDatasource.getSessionByRecipient(senderPubkeyHex);
+      final sessionId = existingSession?.id ?? senderPubkeyHex;
 
-      // Update session state
-      final newState = await handle.stateJson();
-      await _sessionDatasource.saveSessionState(sessionId, newState);
+      if (existingSession == null) {
+        final session = ChatSession(
+          id: sessionId,
+          recipientPubkeyHex: senderPubkeyHex,
+          createdAt: DateTime.now(),
+          isInitiator: false,
+        );
+        await _sessionDatasource.saveSession(session);
+      }
 
       // Check if this is a reaction
-      final reactionPayload = parseReactionPayload(decryptResult.plaintext);
-      if (reactionPayload != null && senderPubkey != null) {
+      final reactionPayload = parseReactionPayload(content);
+      if (reactionPayload != null) {
         handleIncomingReaction(
           sessionId,
           reactionPayload['messageId'] as String,
           reactionPayload['emoji'] as String,
-          senderPubkey,
+          senderPubkeyHex,
         );
         return;
       }
 
-      // Parse timestamp
-      final createdAt = eventData['created_at'] as int;
-      final timestamp = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
+      final timestamp = createdAt != null
+          ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000)
+          : DateTime.now();
 
       // Create message
+      final resolvedEventId =
+          eventId ?? DateTime.now().microsecondsSinceEpoch.toString();
       final message = ChatMessage.incoming(
         sessionId: sessionId,
-        text: decryptResult.plaintext,
-        eventId: eventId,
+        text: content,
+        eventId: resolvedEventId,
         timestamp: timestamp,
       );
 
@@ -486,9 +473,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
       // Use eventId for the reaction - this is what iris-chat expects
       final reactionMessageId = message.eventId ?? message.id;
 
-      final handle = await _getSessionHandle(sessionId);
-      if (handle == null) return;
-
       // Send reaction as JSON payload
       final payload = jsonEncode({
         'type': 'reaction',
@@ -496,14 +480,26 @@ class ChatNotifier extends StateNotifier<ChatState> {
         'emoji': emoji,
       });
 
-      final sendResult = await handle.sendText(payload);
+      final session = await _sessionDatasource.getSession(sessionId);
+      if (session == null) {
+        throw const AppError(
+          type: AppErrorType.sessionExpired,
+          message: 'Session not found. Please start a new conversation.',
+          isRetryable: false,
+        );
+      }
 
-      // Update session state
-      final newState = await handle.stateJson();
-      await _sessionDatasource.saveSessionState(sessionId, newState);
+      await _sessionManagerService.sendText(
+        recipientPubkeyHex: session.recipientPubkeyHex,
+        text: payload,
+      );
 
-      // Publish to Nostr
-      await _nostrService.publishEvent(sendResult.outerEventJson);
+      // Update session state from manager
+      final newState =
+          await _sessionManagerService.getActiveSessionState(session.recipientPubkeyHex);
+      if (newState != null) {
+        await _sessionDatasource.saveSessionState(sessionId, newState);
+      }
 
       // Update reaction optimistically (use internal ID for state management)
       _applyReaction(sessionId, messageId, emoji, myPubkey);
@@ -589,29 +585,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
   }
 
-  /// Get or restore a session handle.
-  Future<SessionHandle?> _getSessionHandle(String sessionId) async {
-    if (_sessionHandles.containsKey(sessionId)) {
-      return _sessionHandles[sessionId];
-    }
-
-    final stateJson = await _sessionDatasource.getSessionState(sessionId);
-    if (stateJson == null) return null;
-
-    try {
-      final handle = await NdrFfi.sessionFromStateJson(stateJson);
-      _sessionHandles[sessionId] = handle;
-      return handle;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// Cache a session handle.
-  void cacheSessionHandle(String sessionId, SessionHandle handle) {
-    _sessionHandles[sessionId] = handle;
-  }
-
   /// Clear error state.
   void clearError() {
     state = state.copyWith(error: null);
@@ -656,8 +629,8 @@ final sessionStateProvider =
 final chatStateProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   final messageDatasource = ref.watch(messageDatasourceProvider);
   final sessionDatasource = ref.watch(sessionDatasourceProvider);
-  final nostrService = ref.watch(nostrServiceProvider);
-  return ChatNotifier(messageDatasource, sessionDatasource, nostrService);
+  final sessionManagerService = ref.watch(sessionManagerServiceProvider);
+  return ChatNotifier(messageDatasource, sessionDatasource, sessionManagerService);
 });
 
 /// Provider for messages in a specific session.

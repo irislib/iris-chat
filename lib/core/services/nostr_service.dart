@@ -334,6 +334,44 @@ class NostrService {
     return subscriptionId;
   }
 
+  /// Subscribe to events using a provided subscription id.
+  String subscribeWithId(String subscriptionId, NostrFilter filter) {
+    if (_disposed) {
+      throw StateError('NostrService has been disposed');
+    }
+
+    final message = jsonEncode(['REQ', subscriptionId, filter.toJson()]);
+
+    var successCount = 0;
+
+    for (final entry in _connections.entries) {
+      try {
+        entry.value.sink.add(message);
+        _activeSubscriptions[entry.key]?.add(subscriptionId);
+        successCount++;
+      } catch (e) {
+        Logger.error(
+          'Failed to subscribe on relay',
+          category: LogCategory.nostr,
+          error: e,
+          data: {'relay': entry.key},
+        );
+      }
+    }
+
+    Logger.info(
+      'Subscription created (custom id)',
+      category: LogCategory.nostr,
+      data: {
+        'subscriptionId': subscriptionId,
+        'relayCount': successCount,
+        'filter': filter.toJson(),
+      },
+    );
+
+    return subscriptionId;
+  }
+
   /// Close a subscription.
   void closeSubscription(String subscriptionId) {
     if (_disposed) return;
@@ -529,6 +567,20 @@ class NostrFilter {
     if (until != null) json['until'] = until;
     if (limit != null) json['limit'] = limit;
     return json;
+  }
+
+  factory NostrFilter.fromJson(Map<String, dynamic> json) {
+    return NostrFilter(
+      ids: (json['ids'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      authors:
+          (json['authors'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      kinds: (json['kinds'] as List<dynamic>?)?.map((e) => e as int).toList(),
+      eTags: (json['#e'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      pTags: (json['#p'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      since: json['since'] as int?,
+      until: json['until'] as int?,
+      limit: json['limit'] as int?,
+    );
   }
 }
 

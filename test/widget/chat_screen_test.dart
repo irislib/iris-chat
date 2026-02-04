@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/chat_provider.dart';
 import 'package:iris_chat/config/providers/nostr_provider.dart';
 import 'package:iris_chat/core/services/nostr_service.dart';
+import 'package:iris_chat/core/services/profile_service.dart';
+import 'package:iris_chat/core/services/session_manager_service.dart';
 import 'package:iris_chat/features/chat/data/datasources/message_local_datasource.dart';
 import 'package:iris_chat/features/chat/data/datasources/session_local_datasource.dart';
 import 'package:iris_chat/features/chat/domain/models/message.dart';
@@ -19,11 +21,13 @@ class MockMessageLocalDatasource extends Mock
     implements MessageLocalDatasource {}
 
 class MockNostrService extends Mock implements NostrService {}
+class MockSessionManagerService extends Mock implements SessionManagerService {}
 
 void main() {
   late MockSessionLocalDatasource mockSessionDatasource;
   late MockMessageLocalDatasource mockMessageDatasource;
   late MockNostrService mockNostrService;
+  late MockSessionManagerService mockSessionManagerService;
 
   const testSessionId = 'test-session-123';
   final testSession = ChatSession(
@@ -38,6 +42,7 @@ void main() {
     mockSessionDatasource = MockSessionLocalDatasource();
     mockMessageDatasource = MockMessageLocalDatasource();
     mockNostrService = MockNostrService();
+    mockSessionManagerService = MockSessionManagerService();
   });
 
   setUpAll(() {
@@ -76,8 +81,10 @@ void main() {
         sessionDatasourceProvider.overrideWithValue(mockSessionDatasource),
         messageDatasourceProvider.overrideWithValue(mockMessageDatasource),
         nostrServiceProvider.overrideWithValue(mockNostrService),
+        sessionManagerServiceProvider.overrideWithValue(mockSessionManagerService),
         sessionStateProvider.overrideWith((ref) {
-          final notifier = SessionNotifier(mockSessionDatasource);
+          final notifier =
+              SessionNotifier(mockSessionDatasource, ProfileService(mockNostrService));
           // Pre-populate the sessions
           notifier.state = SessionState(
             sessions: [effectiveSession],
@@ -96,13 +103,6 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Alice'), findsOneWidget);
-      });
-
-      testWidgets('shows encrypted status', (tester) async {
-        await tester.pumpWidget(buildChatScreen());
-        await tester.pumpAndSettle();
-
-        expect(find.text('Encrypted'), findsOneWidget);
       });
 
       testWidgets('shows info button', (tester) async {

@@ -43,7 +43,10 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
     if (_initialLoadDone && !isLoading && sessions.isEmpty && !_redirected) {
       _redirected = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        context.go('/chats/new');
+        final router = GoRouter.maybeOf(context);
+        if (router != null) {
+          router.go('/chats/new');
+        }
       });
     }
 

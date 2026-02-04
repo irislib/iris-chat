@@ -22,6 +22,7 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
     // Handle storage
     private val inviteHandles = ConcurrentHashMap<String, InviteHandle>()
     private val sessionHandles = ConcurrentHashMap<String, SessionHandle>()
+    private val sessionManagerHandles = ConcurrentHashMap<String, SessionManagerHandle>()
     private val nextHandleId = AtomicLong(1)
 
     private fun generateHandleId(): String = nextHandleId.getAndIncrement().toString()
@@ -38,6 +39,8 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
         sessionHandles.values.forEach { it.close() }
         inviteHandles.clear()
         sessionHandles.clear()
+        sessionManagerHandles.values.forEach { it.close() }
+        sessionManagerHandles.clear()
     }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
@@ -65,6 +68,18 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
                 "sessionStateJson" -> handleSessionStateJson(call, result)
                 "sessionIsDrMessage" -> handleSessionIsDrMessage(call, result)
                 "sessionDispose" -> handleSessionDispose(call, result)
+                "sessionManagerNew" -> handleSessionManagerNew(call, result)
+                "sessionManagerNewWithStoragePath" -> handleSessionManagerNewWithStoragePath(call, result)
+                "sessionManagerInit" -> handleSessionManagerInit(call, result)
+                "sessionManagerSendText" -> handleSessionManagerSendText(call, result)
+                "sessionManagerImportSessionState" -> handleSessionManagerImportSessionState(call, result)
+                "sessionManagerGetActiveSessionState" -> handleSessionManagerGetActiveSessionState(call, result)
+                "sessionManagerProcessEvent" -> handleSessionManagerProcessEvent(call, result)
+                "sessionManagerDrainEvents" -> handleSessionManagerDrainEvents(call, result)
+                "sessionManagerGetDeviceId" -> handleSessionManagerGetDeviceId(call, result)
+                "sessionManagerGetOurPubkeyHex" -> handleSessionManagerGetOurPubkeyHex(call, result)
+                "sessionManagerGetTotalSessions" -> handleSessionManagerGetTotalSessions(call, result)
+                "sessionManagerDispose" -> handleSessionManagerDispose(call, result)
                 else -> result.notImplemented()
             }
         } catch (e: IllegalArgumentException) {
@@ -326,6 +341,160 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
         val id = call.argument<String>("id")
             ?: throw IllegalArgumentException("Missing id")
         sessionHandles.remove(id)?.close()
+        result.success(null)
+    }
+
+    // MARK: - Session Manager
+
+    private fun handleSessionManagerNew(call: MethodCall, result: Result) {
+        val ourPubkeyHex = call.argument<String>("ourPubkeyHex")
+            ?: throw IllegalArgumentException("Missing ourPubkeyHex")
+        val ourIdentityPrivkeyHex = call.argument<String>("ourIdentityPrivkeyHex")
+            ?: throw IllegalArgumentException("Missing ourIdentityPrivkeyHex")
+        val deviceId = call.argument<String>("deviceId")
+            ?: throw IllegalArgumentException("Missing deviceId")
+
+        val manager = SessionManagerHandle(ourPubkeyHex, ourIdentityPrivkeyHex, deviceId)
+        val id = generateHandleId()
+        sessionManagerHandles[id] = manager
+        result.success(mapOf("id" to id))
+    }
+
+    private fun handleSessionManagerNewWithStoragePath(call: MethodCall, result: Result) {
+        val ourPubkeyHex = call.argument<String>("ourPubkeyHex")
+            ?: throw IllegalArgumentException("Missing ourPubkeyHex")
+        val ourIdentityPrivkeyHex = call.argument<String>("ourIdentityPrivkeyHex")
+            ?: throw IllegalArgumentException("Missing ourIdentityPrivkeyHex")
+        val deviceId = call.argument<String>("deviceId")
+            ?: throw IllegalArgumentException("Missing deviceId")
+        val storagePath = call.argument<String>("storagePath")
+            ?: throw IllegalArgumentException("Missing storagePath")
+
+        val manager = SessionManagerHandle.newWithStoragePath(
+            ourPubkeyHex,
+            ourIdentityPrivkeyHex,
+            deviceId,
+            storagePath,
+        )
+        val id = generateHandleId()
+        sessionManagerHandles[id] = manager
+        result.success(mapOf("id" to id))
+    }
+
+    private fun handleSessionManagerInit(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        manager.init()
+        result.success(null)
+    }
+
+    private fun handleSessionManagerSendText(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val recipientPubkeyHex = call.argument<String>("recipientPubkeyHex")
+            ?: throw IllegalArgumentException("Missing recipientPubkeyHex")
+        val text = call.argument<String>("text")
+            ?: throw IllegalArgumentException("Missing text")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        val eventIds = manager.sendText(recipientPubkeyHex, text)
+        result.success(eventIds)
+    }
+
+    private fun handleSessionManagerImportSessionState(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val peerPubkeyHex = call.argument<String>("peerPubkeyHex")
+            ?: throw IllegalArgumentException("Missing peerPubkeyHex")
+        val stateJson = call.argument<String>("stateJson")
+            ?: throw IllegalArgumentException("Missing stateJson")
+        val deviceId = call.argument<String>("deviceId")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        manager.importSessionState(peerPubkeyHex, stateJson, deviceId)
+        result.success(null)
+    }
+
+    private fun handleSessionManagerGetActiveSessionState(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val peerPubkeyHex = call.argument<String>("peerPubkeyHex")
+            ?: throw IllegalArgumentException("Missing peerPubkeyHex")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        val stateJson = manager.getActiveSessionState(peerPubkeyHex)
+        result.success(stateJson)
+    }
+
+    private fun handleSessionManagerProcessEvent(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val eventJson = call.argument<String>("eventJson")
+            ?: throw IllegalArgumentException("Missing eventJson")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        manager.processEvent(eventJson)
+        result.success(null)
+    }
+
+    private fun handleSessionManagerDrainEvents(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        val events = manager.drainEvents().map { event ->
+            mapOf(
+                "kind" to event.kind,
+                "subid" to event.subid,
+                "filterJson" to event.filterJson,
+                "eventJson" to event.eventJson,
+                "senderPubkeyHex" to event.senderPubkeyHex,
+                "content" to event.content,
+                "eventId" to event.eventId,
+            )
+        }
+        result.success(events)
+    }
+
+    private fun handleSessionManagerGetDeviceId(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        result.success(manager.getDeviceId())
+    }
+
+    private fun handleSessionManagerGetOurPubkeyHex(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        result.success(manager.getOurPubkeyHex())
+    }
+
+    private fun handleSessionManagerGetTotalSessions(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        result.success(manager.getTotalSessions().toLong())
+    }
+
+    private fun handleSessionManagerDispose(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        sessionManagerHandles.remove(id)?.close()
         result.success(null)
     }
 }

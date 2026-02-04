@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:iris_chat/features/chat/domain/models/session.dart';
+import 'package:iris_chat/shared/utils/animal_names.dart';
 
 void main() {
   group('ChatSession', () {
@@ -16,24 +17,30 @@ void main() {
         expect(session.displayName, 'Alice');
       });
 
-      test('returns formatted pubkey when no name', () {
+      test('returns animal name when no name', () {
         final session = ChatSession(
           id: 'session-1',
           recipientPubkeyHex: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
           createdAt: DateTime.now(),
         );
 
-        expect(session.displayName, 'a1b2c3...f6a1b2');
+        expect(
+          session.displayName,
+          getAnimalName(session.recipientPubkeyHex),
+        );
       });
 
-      test('returns full pubkey if too short', () {
+      test('returns animal name even if pubkey is short', () {
         final session = ChatSession(
           id: 'session-1',
           recipientPubkeyHex: 'short',
           createdAt: DateTime.now(),
         );
 
-        expect(session.displayName, 'short');
+        expect(
+          session.displayName,
+          getAnimalName(session.recipientPubkeyHex),
+        );
       });
     });
 

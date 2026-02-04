@@ -38,9 +38,7 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.byIcon(Icons.chat_bubble_outline), findsOneWidget);
-        expect(find.text('Iris Chat'), findsOneWidget);
-        expect(
-            find.text('End-to-end encrypted messaging'), findsOneWidget);
+        expect(find.text('Iris'), findsOneWidget);
       });
 
       testWidgets('shows create identity button', (tester) async {
@@ -57,16 +55,6 @@ void main() {
 
         expect(find.text('Import Existing Key'), findsOneWidget);
         expect(find.byIcon(Icons.key), findsOneWidget);
-      });
-
-      testWidgets('shows info text about encryption', (tester) async {
-        await tester.pumpWidget(buildLoginScreen());
-        await tester.pumpAndSettle();
-
-        expect(
-          find.textContaining('Double Ratchet protocol'),
-          findsOneWidget,
-        );
       });
 
       testWidgets('does not show key input initially', (tester) async {

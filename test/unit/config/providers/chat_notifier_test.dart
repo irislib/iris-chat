@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/chat_provider.dart';
-import 'package:iris_chat/core/services/nostr_service.dart';
+import 'package:iris_chat/core/services/session_manager_service.dart';
 import 'package:iris_chat/features/chat/data/datasources/message_local_datasource.dart';
 import 'package:iris_chat/features/chat/data/datasources/session_local_datasource.dart';
 import 'package:iris_chat/features/chat/domain/models/message.dart';
@@ -12,22 +12,22 @@ class MockMessageLocalDatasource extends Mock
 class MockSessionLocalDatasource extends Mock
     implements SessionLocalDatasource {}
 
-class MockNostrService extends Mock implements NostrService {}
+class MockSessionManagerService extends Mock implements SessionManagerService {}
 
 void main() {
   late ChatNotifier notifier;
   late MockMessageLocalDatasource mockMessageDatasource;
   late MockSessionLocalDatasource mockSessionDatasource;
-  late MockNostrService mockNostrService;
+  late MockSessionManagerService mockSessionManagerService;
 
   setUp(() {
     mockMessageDatasource = MockMessageLocalDatasource();
     mockSessionDatasource = MockSessionLocalDatasource();
-    mockNostrService = MockNostrService();
+    mockSessionManagerService = MockSessionManagerService();
     notifier = ChatNotifier(
       mockMessageDatasource,
       mockSessionDatasource,
-      mockNostrService,
+      mockSessionManagerService,
     );
   });
 

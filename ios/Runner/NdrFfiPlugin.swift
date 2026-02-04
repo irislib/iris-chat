@@ -23,6 +23,7 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
     // These will hold InviteHandle and SessionHandle instances once UniFFI is integrated
     private var inviteHandles: [String: Any] = [:]
     private var sessionHandles: [String: Any] = [:]
+    private var sessionManagerHandles: [String: Any] = [:]
     private var nextHandleId: UInt64 = 1
 
     private func generateHandleId() -> String {
@@ -51,6 +52,7 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         // }
         inviteHandles.removeAll()
         sessionHandles.removeAll()
+        sessionManagerHandles.removeAll()
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -100,6 +102,30 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
                 try handleSessionIsDrMessage(call: call, result: result)
             case "sessionDispose":
                 try handleSessionDispose(call: call, result: result)
+            case "sessionManagerNew":
+                try handleSessionManagerNew(call: call, result: result)
+            case "sessionManagerNewWithStoragePath":
+                try handleSessionManagerNewWithStoragePath(call: call, result: result)
+            case "sessionManagerInit":
+                try handleSessionManagerInit(call: call, result: result)
+            case "sessionManagerSendText":
+                try handleSessionManagerSendText(call: call, result: result)
+            case "sessionManagerImportSessionState":
+                try handleSessionManagerImportSessionState(call: call, result: result)
+            case "sessionManagerGetActiveSessionState":
+                try handleSessionManagerGetActiveSessionState(call: call, result: result)
+            case "sessionManagerProcessEvent":
+                try handleSessionManagerProcessEvent(call: call, result: result)
+            case "sessionManagerDrainEvents":
+                try handleSessionManagerDrainEvents(call: call, result: result)
+            case "sessionManagerGetDeviceId":
+                try handleSessionManagerGetDeviceId(call: call, result: result)
+            case "sessionManagerGetOurPubkeyHex":
+                try handleSessionManagerGetOurPubkeyHex(call: call, result: result)
+            case "sessionManagerGetTotalSessions":
+                try handleSessionManagerGetTotalSessions(call: call, result: result)
+            case "sessionManagerDispose":
+                try handleSessionManagerDispose(call: call, result: result)
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -613,7 +639,6 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         _ = eventJson // Silence unused variable warning
 
         if NDR_FFI_ENABLED {
-            // Uncomment when UniFFI bindings are integrated:
             // guard let session = sessionHandles[id] as? SessionHandle else {
             //     throw NdrPluginError.handleNotFound("Session handle not found: \(id)")
             // }
@@ -633,9 +658,299 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw NdrPluginError.invalidArguments("Missing id")
         }
 
-        // When UniFFI is integrated:
-        // (sessionHandles[id] as? SessionHandle)?.close()
+        // When UniFFI is integrated, removing the handle releases it via deinit.
         sessionHandles.removeValue(forKey: id)
+        result(nil)
+    }
+
+    // MARK: - Session Manager
+
+    private func handleSessionManagerNew(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let ourPubkeyHex = args["ourPubkeyHex"] as? String,
+              let ourIdentityPrivkeyHex = args["ourIdentityPrivkeyHex"] as? String,
+              let deviceId = args["deviceId"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing required arguments")
+        }
+        _ = (ourPubkeyHex, ourIdentityPrivkeyHex, deviceId)
+
+        if NDR_FFI_ENABLED {
+            // do {
+            //     let manager = try SessionManagerHandle(
+            //         ourPubkeyHex: ourPubkeyHex,
+            //         ourIdentityPrivkeyHex: ourIdentityPrivkeyHex,
+            //         deviceId: deviceId
+            //     )
+            //     let id = generateHandleId()
+            //     sessionManagerHandles[id] = manager
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerNewWithStoragePath(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let ourPubkeyHex = args["ourPubkeyHex"] as? String,
+              let ourIdentityPrivkeyHex = args["ourIdentityPrivkeyHex"] as? String,
+              let deviceId = args["deviceId"] as? String,
+              let storagePath = args["storagePath"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing required arguments")
+        }
+        _ = (ourPubkeyHex, ourIdentityPrivkeyHex, deviceId, storagePath)
+
+        if NDR_FFI_ENABLED {
+            // do {
+            //     let manager = try SessionManagerHandle.newWithStoragePath(
+            //         ourPubkeyHex: ourPubkeyHex,
+            //         ourIdentityPrivkeyHex: ourIdentityPrivkeyHex,
+            //         deviceId: deviceId,
+            //         storagePath: storagePath
+            //     )
+            //     let id = generateHandleId()
+            //     sessionManagerHandles[id] = manager
+            //     result(["id": id])
+            // } catch {
+            //     throw NdrPluginError.ndrError(error.localizedDescription)
+            // }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerInit(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing id")
+        }
+        _ = id
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // try manager.init()
+            // result(nil)
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerSendText(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let recipientPubkeyHex = args["recipientPubkeyHex"] as? String,
+              let text = args["text"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing required arguments")
+        }
+        _ = (id, recipientPubkeyHex, text)
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // let eventIds = try manager.sendText(
+            //     recipientPubkeyHex: recipientPubkeyHex,
+            //     text: text
+            // )
+            // result(eventIds)
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerImportSessionState(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let peerPubkeyHex = args["peerPubkeyHex"] as? String,
+              let stateJson = args["stateJson"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing required arguments")
+        }
+        let deviceId = args["deviceId"] as? String
+        _ = (id, peerPubkeyHex, stateJson, deviceId)
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // try manager.importSessionState(
+            //     peerPubkeyHex: peerPubkeyHex,
+            //     stateJson: stateJson,
+            //     deviceId: deviceId
+            // )
+            // result(nil)
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerGetActiveSessionState(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let peerPubkeyHex = args["peerPubkeyHex"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing required arguments")
+        }
+        _ = (id, peerPubkeyHex)
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // let stateJson = try manager.getActiveSessionState(peerPubkeyHex: peerPubkeyHex)
+            // result(stateJson)
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerProcessEvent(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let eventJson = args["eventJson"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing required arguments")
+        }
+        _ = (id, eventJson)
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // try manager.processEvent(eventJson: eventJson)
+            // result(nil)
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerDrainEvents(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing id")
+        }
+        _ = id
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // let events = try manager.drainEvents().map { event in
+            //     return [
+            //         "kind": event.kind,
+            //         "subid": event.subid as Any,
+            //         "filterJson": event.filterJson as Any,
+            //         "eventJson": event.eventJson as Any,
+            //         "senderPubkeyHex": event.senderPubkeyHex as Any,
+            //         "content": event.content as Any,
+            //         "eventId": event.eventId as Any,
+            //     ]
+            // }
+            // result(events)
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerGetDeviceId(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing id")
+        }
+        _ = id
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // result(manager.getDeviceId())
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerGetOurPubkeyHex(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing id")
+        }
+        _ = id
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // result(manager.getOurPubkeyHex())
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerGetTotalSessions(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing id")
+        }
+        _ = id
+
+        if NDR_FFI_ENABLED {
+            // guard let manager = sessionManagerHandles[id] as? SessionManagerHandle else {
+            //     throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            // }
+            // result(Int64(manager.getTotalSessions()))
+            guard sessionManagerHandles[id] != nil else {
+                throw NdrPluginError.handleNotFound("SessionManager handle not found: \(id)")
+            }
+            result(notImplementedError())
+        } else {
+            result(notImplementedError())
+        }
+    }
+
+    private func handleSessionManagerDispose(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw NdrPluginError.invalidArguments("Missing id")
+        }
+        _ = id
+
+        // When UniFFI is integrated, removing the handle releases it via deinit.
+        sessionManagerHandles.removeValue(forKey: id)
         result(nil)
     }
 

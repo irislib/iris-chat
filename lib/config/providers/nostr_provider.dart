@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/nostr_service.dart';
 import '../../core/services/profile_service.dart';
-import '../../features/chat/data/datasources/message_subscription.dart';
+import '../../core/services/session_manager_service.dart';
+import 'auth_provider.dart';
 import 'chat_provider.dart';
 import 'invite_provider.dart';
 
@@ -21,32 +23,63 @@ final nostrServiceProvider = Provider<NostrService>((ref) {
   return service;
 });
 
-/// Provider for message subscription.
-final messageSubscriptionProvider = Provider<MessageSubscription>((ref) {
+/// Provider for session manager service.
+final sessionManagerServiceProvider = Provider<SessionManagerService>((ref) {
   final nostrService = ref.watch(nostrServiceProvider);
   final sessionDatasource = ref.watch(sessionDatasourceProvider);
+  final authRepository = ref.watch(authRepositoryProvider);
+
+  final service =
+      SessionManagerService(nostrService, sessionDatasource, authRepository);
+
+  service.start();
+
+  ref.onDispose(service.dispose);
+
+  return service;
+});
+
+/// Provider for message subscription (backwards-compatible alias).
+final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
+  final service = ref.watch(sessionManagerServiceProvider);
+  final nostrService = ref.watch(nostrServiceProvider);
   final inviteDatasource = ref.watch(inviteDatasourceProvider);
 
-  final subscription = MessageSubscription(
-    nostrService,
-    sessionDatasource,
-    inviteDatasource,
-  );
+  final sub = service.decryptedMessages.listen((message) {
+    ref.read(chatStateProvider.notifier).receiveDecryptedMessage(
+          message.senderPubkeyHex,
+          message.content,
+          eventId: message.eventId,
+          createdAt: message.createdAt,
+        );
+  });
 
-  // Set up message handler
-  subscription.onMessage = ref.read(chatStateProvider.notifier).receiveMessage;
+  final inviteSub = nostrService.events.listen((event) async {
+    if (event.kind != 1059) return;
+    final inviteEphemeralPubkey = event.getTagValue('p');
+    if (inviteEphemeralPubkey == null) return;
 
-  // Set up invite response handler
-  subscription.onInviteResponse =
-      ref.read(inviteStateProvider.notifier).handleInviteResponse;
+    final invites = await inviteDatasource.getActiveInvites();
+    for (final invite in invites) {
+      if (invite.serializedState == null) continue;
+      try {
+        final state =
+            jsonDecode(invite.serializedState!) as Map<String, dynamic>;
+        final ephemeralPubkey = state['inviterEphemeralPublicKey'] as String?;
+        if (ephemeralPubkey == inviteEphemeralPubkey) {
+          ref
+              .read(inviteStateProvider.notifier)
+              .handleInviteResponse(invite.id, jsonEncode(event.toJson()));
+          return;
+        }
+      } catch (_) {}
+    }
+  });
 
-  // Start listening
-  subscription.startListening();
+  ref.onDispose(sub.cancel);
+  ref.onDispose(inviteSub.cancel);
 
-  // Stop on disposal
-  ref.onDispose(subscription.stopListening);
-
-  return subscription;
+  return service;
 });
 
 /// Provider for connection status.

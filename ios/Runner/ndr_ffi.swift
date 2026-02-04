@@ -53,6 +53,35 @@ public struct InviteAcceptResult {
     public let responseEventJson: String
 }
 
+/// Event emitted by SessionManager for external publish/subscribe handling.
+public struct PubSubEvent {
+    public let kind: String
+    public let subid: String?
+    public let filterJson: String?
+    public let eventJson: String?
+    public let senderPubkeyHex: String?
+    public let content: String?
+    public let eventId: String?
+
+    public init(
+        kind: String,
+        subid: String?,
+        filterJson: String?,
+        eventJson: String?,
+        senderPubkeyHex: String?,
+        content: String?,
+        eventId: String?
+    ) {
+        self.kind = kind
+        self.subid = subid
+        self.filterJson = filterJson
+        self.eventJson = eventJson
+        self.senderPubkeyHex = senderPubkeyHex
+        self.content = content
+        self.eventId = eventId
+    }
+}
+
 // MARK: - Top-level Functions
 
 /// Get the version of the ndr-ffi library
@@ -222,6 +251,111 @@ public class SessionHandle {
 
     /// Check if an event is a double-ratchet message
     public func isDrMessage(eventJson: String) -> Bool {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Close and release the handle
+    public func close() {
+        // Placeholder - will be implemented by UniFFI
+        // In the real implementation, this releases the Rust object
+    }
+}
+
+// MARK: - SessionManagerHandle
+
+/// Handle to a session manager in the Rust library
+public class SessionManagerHandle {
+    // Internal pointer/handle to Rust object
+    private var handle: UInt64 = 0
+
+    private init(handle: UInt64) {
+        self.handle = handle
+    }
+
+    deinit {
+        // Cleanup handled by close()
+    }
+
+    /// Create a new session manager with an internal event queue
+    public convenience init(
+        ourPubkeyHex: String,
+        ourIdentityPrivkeyHex: String,
+        deviceId: String
+    ) throws {
+        self.init(handle: 0)
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Create a new session manager with file-backed storage
+    public static func newWithStoragePath(
+        ourPubkeyHex: String,
+        ourIdentityPrivkeyHex: String,
+        deviceId: String,
+        storagePath: String
+    ) throws -> SessionManagerHandle {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Initialize the session manager (loads state, creates invite, subscribes)
+    public func `init`() throws {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Send a text message to a recipient
+    public func sendText(
+        recipientPubkeyHex: String,
+        text: String
+    ) throws -> [String] {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Import a session state for a peer
+    public func importSessionState(
+        peerPubkeyHex: String,
+        stateJson: String,
+        deviceId: String?
+    ) throws {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Export the active session state for a peer
+    public func getActiveSessionState(peerPubkeyHex: String) throws -> String? {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Process a received Nostr event JSON
+    public func processEvent(eventJson: String) throws {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Drain pending pubsub events from the internal queue
+    public func drainEvents() throws -> [PubSubEvent] {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Get the device id used by this session manager
+    public func getDeviceId() -> String {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Get our public key as hex
+    public func getOurPubkeyHex() -> String {
+        // Placeholder - will be implemented by UniFFI
+        fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
+    }
+
+    /// Get total active sessions
+    public func getTotalSessions() -> UInt64 {
         // Placeholder - will be implemented by UniFFI
         fatalError("UniFFI bindings not integrated. Build ndr-ffi and replace this file.")
     }

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/chat_provider.dart';
+import 'package:iris_chat/core/services/profile_service.dart';
 import 'package:iris_chat/features/chat/data/datasources/session_local_datasource.dart';
 import 'package:iris_chat/features/chat/domain/models/message.dart';
 import 'package:iris_chat/features/chat/domain/models/session.dart';
@@ -8,9 +9,12 @@ import 'package:mocktail/mocktail.dart';
 class MockSessionLocalDatasource extends Mock
     implements SessionLocalDatasource {}
 
+class MockProfileService extends Mock implements ProfileService {}
+
 void main() {
   late SessionNotifier notifier;
   late MockSessionLocalDatasource mockDatasource;
+  late MockProfileService mockProfileService;
 
   setUpAll(() {
     registerFallbackValue(ChatSession(
@@ -23,7 +27,10 @@ void main() {
 
   setUp(() {
     mockDatasource = MockSessionLocalDatasource();
-    notifier = SessionNotifier(mockDatasource);
+    mockProfileService = MockProfileService();
+    when(() => mockProfileService.fetchProfiles(any())).thenAnswer((_) async {});
+    when(() => mockProfileService.getProfile(any())).thenAnswer((_) async => null);
+    notifier = SessionNotifier(mockDatasource, mockProfileService);
   });
 
   group('SessionNotifier', () {

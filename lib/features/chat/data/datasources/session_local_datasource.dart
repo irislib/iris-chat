@@ -34,6 +34,19 @@ class SessionLocalDatasource {
     return _sessionFromMap(maps.first);
   }
 
+  /// Get a session by recipient pubkey.
+  Future<ChatSession?> getSessionByRecipient(String recipientPubkeyHex) async {
+    final db = await _db;
+    final maps = await db.query(
+      'sessions',
+      where: 'recipient_pubkey_hex = ?',
+      whereArgs: [recipientPubkeyHex],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return _sessionFromMap(maps.first);
+  }
+
   /// Insert or update a session.
   Future<void> saveSession(ChatSession session) async {
     final db = await _db;

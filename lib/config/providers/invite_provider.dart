@@ -129,12 +129,19 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
       await sessionNotifier.addSession(session);
 
+      // Import session into the session manager (so it can subscribe/decrypt)
+      final sessionManager = _ref.read(sessionManagerServiceProvider);
+      await sessionManager.importSessionState(
+        peerPubkeyHex: inviterPubkey,
+        stateJson: sessionState,
+      );
+
       // Publish response event to Nostr relays
       final nostrService = _ref.read(nostrServiceProvider);
       await nostrService.publishEvent(acceptResult.responseEventJson);
 
       // Refresh subscription to listen for messages from the new session
-      await _ref.read(messageSubscriptionProvider).refreshSubscription();
+      await sessionManager.refreshSubscription();
 
       state = state.copyWith(isAccepting: false);
       return session.id;
@@ -245,6 +252,14 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
       await sessionNotifier.addSession(session);
 
+      // Import session into the session manager (so it can subscribe/decrypt)
+      final sessionManager = _ref.read(sessionManagerServiceProvider);
+      await sessionManager.importSessionState(
+        peerPubkeyHex: result.inviteePubkeyHex,
+        stateJson: sessionState,
+        deviceId: result.deviceId,
+      );
+
       // Mark invite as used
       await _datasource.markUsed(inviteId, result.inviteePubkeyHex);
 
@@ -259,7 +274,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
       );
 
       // Refresh message subscription to include new session
-      await _ref.read(messageSubscriptionProvider).refreshSubscription();
+      await sessionManager.refreshSubscription();
 
       Logger.info(
         'Invite response processed, session created',

@@ -226,6 +226,27 @@ class NdrFfi {
       rethrow;
     }
   }
+
+  /// Create a new SessionManager handle.
+  static Future<SessionManagerHandle> createSessionManager({
+    required String ourPubkeyHex,
+    required String ourIdentityPrivkeyHex,
+    required String deviceId,
+    String? storagePath,
+  }) async {
+    final method =
+        storagePath == null ? 'sessionManagerNew' : 'sessionManagerNewWithStoragePath';
+    final result = await _channel.invokeMethod<Map>(method, {
+      'ourPubkeyHex': ourPubkeyHex,
+      'ourIdentityPrivkeyHex': ourIdentityPrivkeyHex,
+      'deviceId': deviceId,
+      if (storagePath != null) 'storagePath': storagePath,
+    });
+    if (result == null) {
+      throw NdrException.sessionNotReady('Failed to create session manager');
+    }
+    return SessionManagerHandle._fromMap(Map<String, dynamic>.from(result));
+  }
 }
 
 /// Handle to an invite in native code.
@@ -524,6 +545,117 @@ class SessionHandle {
   Future<void> dispose() async {
     Logger.sessionEvent('Disposing session', sessionId: _id);
     await _channel.invokeMethod<void>('sessionDispose', {'id': _id});
+  }
+}
+
+/// Handle to a session manager in native code.
+class SessionManagerHandle {
+  SessionManagerHandle._(this._id);
+
+  factory SessionManagerHandle._fromMap(Map<String, dynamic> map) {
+    return SessionManagerHandle._(map['id'] as String);
+  }
+
+  final String _id;
+
+  static const _channel = MethodChannel('to.iris.chat/ndr_ffi');
+
+  /// Unique identifier for this session manager handle.
+  String get id => _id;
+
+  /// Initialize the session manager (loads state, creates invite, subscribes).
+  Future<void> init() async {
+    await _channel.invokeMethod<void>('sessionManagerInit', {
+      'id': _id,
+    });
+  }
+
+  /// Send a text message to a recipient.
+  Future<List<String>> sendText({
+    required String recipientPubkeyHex,
+    required String text,
+  }) async {
+    final result = await _channel.invokeMethod<List>('sessionManagerSendText', {
+      'id': _id,
+      'recipientPubkeyHex': recipientPubkeyHex,
+      'text': text,
+    });
+    if (result == null) {
+      return [];
+    }
+    return result.map((e) => e.toString()).toList();
+  }
+
+  /// Import a session state for a peer.
+  Future<void> importSessionState({
+    required String peerPubkeyHex,
+    required String stateJson,
+    String? deviceId,
+  }) async {
+    await _channel.invokeMethod<void>('sessionManagerImportSessionState', {
+      'id': _id,
+      'peerPubkeyHex': peerPubkeyHex,
+      'stateJson': stateJson,
+      'deviceId': deviceId,
+    });
+  }
+
+  /// Export the active session state for a peer.
+  Future<String?> getActiveSessionState(String peerPubkeyHex) async {
+    final result =
+        await _channel.invokeMethod<String>('sessionManagerGetActiveSessionState', {
+      'id': _id,
+      'peerPubkeyHex': peerPubkeyHex,
+    });
+    return result;
+  }
+
+  /// Process a received Nostr event JSON.
+  Future<void> processEvent(String eventJson) async {
+    await _channel.invokeMethod<void>('sessionManagerProcessEvent', {
+      'id': _id,
+      'eventJson': eventJson,
+    });
+  }
+
+  /// Drain pending pubsub events from the native queue.
+  Future<List<PubSubEvent>> drainEvents() async {
+    final result = await _channel.invokeMethod<List>('sessionManagerDrainEvents', {
+      'id': _id,
+    });
+    if (result == null) return [];
+    return result
+        .map((e) => PubSubEvent.fromMap(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Get the device id used by this session manager.
+  Future<String> getDeviceId() async {
+    final result = await _channel.invokeMethod<String>('sessionManagerGetDeviceId', {
+      'id': _id,
+    });
+    return result ?? '';
+  }
+
+  /// Get our public key as hex.
+  Future<String> getOurPubkeyHex() async {
+    final result = await _channel.invokeMethod<String>('sessionManagerGetOurPubkeyHex', {
+      'id': _id,
+    });
+    return result ?? '';
+  }
+
+  /// Get total active sessions.
+  Future<int> getTotalSessions() async {
+    final result = await _channel.invokeMethod<int>('sessionManagerGetTotalSessions', {
+      'id': _id,
+    });
+    return result ?? 0;
+  }
+
+  /// Dispose of the native session manager handle.
+  Future<void> dispose() async {
+    await _channel.invokeMethod<void>('sessionManagerDispose', {'id': _id});
   }
 }
 
