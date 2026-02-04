@@ -123,7 +123,7 @@ void main() {
 
       testWidgets('shows add icon button', (tester) async {
         await tester.pumpWidget(buildChatListScreen());
-        await tester.pumpAndSettle();
+        await tester.pump();
 
         expect(find.byIcon(Icons.add), findsOneWidget);
       });
