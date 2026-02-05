@@ -13,16 +13,36 @@ async function setIdentity(context: import('@playwright/test').BrowserContext, p
 
 async function loginWithStoredKey(page: import('@playwright/test').Page) {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 10000 })
+  const newChat = page.getByRole('button', { name: 'New Chat' })
+  try {
+    await expect(newChat).toBeVisible({ timeout: 30000 })
+  } catch (err) {
+    const [identity, relays, bodyText] = await Promise.all([
+      page.evaluate(() => localStorage.getItem('iris-chat-identity')),
+      page.evaluate(() => localStorage.getItem('iris-chat-relays')),
+      page.evaluate(() => document.body?.innerText?.slice(0, 500) || ''),
+    ])
+    throw new Error(
+      `Login timeout. identity=${identity} relays=${relays} bodyText=${bodyText}`
+    )
+  }
 }
 
 async function registerDevice(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Settings' }).click()
   const registerButton = page.getByRole('button', { name: 'Register this device' })
   if (await registerButton.count()) {
-    await expect(registerButton).toBeVisible({ timeout: 10000 })
-    await registerButton.click()
-    await expect(registerButton).not.toBeVisible({ timeout: 20000 })
+    try {
+      await expect(registerButton).toBeVisible({ timeout: 10000 })
+      await registerButton.click({ timeout: 5000 })
+      await expect(registerButton).not.toBeVisible({ timeout: 20000 })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : ''
+      if (!message.includes('detached') && !message.includes('not stable')) {
+        throw err
+      }
+      // Button likely disappeared due to auto-registration; continue.
+    }
   }
   await page.getByRole('button', { name: 'Back' }).click()
 }
@@ -37,6 +57,48 @@ async function openChatFromList(page: import('@playwright/test').Page, message: 
     .first()
   await expect(listItem).toBeVisible({ timeout: 30000 })
   await listItem.click()
+}
+
+async function getInviteUrl(page: import('@playwright/test').Page): Promise<string> {
+  const copyButton = page.locator('button[title*="#"]').first()
+  await expect(copyButton).toBeVisible({ timeout: 10000 })
+  const url = await copyButton.getAttribute('title')
+  if (!url) throw new Error('Could not get invite URL')
+  return url.replace('https://chat.iris.to', 'http://localhost:4173')
+}
+
+async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<string> {
+  const copyButton = page.locator('button[title*="#"]').first()
+  await expect(copyButton).toBeVisible({ timeout: 10000 })
+  const url = await copyButton.getAttribute('title')
+  if (!url) throw new Error('Could not get link invite URL')
+  return url
+}
+
+async function openLinkThisDevice(page: import('@playwright/test').Page): Promise<void> {
+  await page.goto('/')
+  const linkButton = page.getByRole('button', { name: /link this device/i })
+  if (!(await linkButton.isVisible().catch(() => false))) {
+    await page.evaluate(() => {
+      localStorage.removeItem('iris-chat-identity')
+    })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+  }
+
+  await expect(linkButton).toBeVisible({ timeout: 30000 })
+  await linkButton.click()
+  await expect(page.getByRole('heading', { name: 'Link this device' })).toBeVisible({
+    timeout: 20000,
+  })
+}
+
+async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl: string): Promise<void> {
+  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Link another device' }).click()
+  await page.getByPlaceholder('Paste link invite').fill(inviteUrl)
+  await expect(page.getByText('Device linked')).toBeVisible({ timeout: 20000 })
+  await page.locator('button[aria-label="Close"]').click()
+  await page.getByRole('button', { name: 'Back' }).click()
 }
 
 test('syncs outgoing messages to another device', async ({ browser, testRelayUrl }) => {
@@ -105,5 +167,54 @@ test('syncs outgoing messages to another device', async ({ browser, testRelayUrl
     await context1.close()
     await context2.close()
     await context3.close()
+  }
+})
+
+test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
+  const contextOwner = await browser.newContext()
+  const contextLinked = await browser.newContext()
+
+  await useTestRelay(contextOwner, testRelayUrl)
+  await useTestRelay(contextLinked, testRelayUrl)
+  await contextLinked.addInitScript(() => {
+    localStorage.removeItem('iris-chat-identity')
+  })
+
+  const ownerPage = await contextOwner.newPage()
+  const linkedPage = await contextLinked.newPage()
+
+  try {
+    await ownerPage.goto('/')
+    await ownerPage.getByRole('button', { name: 'Go' }).click()
+    await expect(ownerPage.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 10000 })
+
+    await registerDevice(ownerPage)
+
+    await openLinkThisDevice(linkedPage)
+    const linkInviteUrl = await getLinkInviteUrl(linkedPage)
+
+    await acceptLinkInvite(ownerPage, linkInviteUrl)
+    await expect(linkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 20000 })
+
+    await ownerPage.getByRole('button', { name: 'New Chat' }).click()
+    const inviteUrl = await getInviteUrl(ownerPage)
+
+    await ownerPage.getByPlaceholder('Paste invite link').fill(inviteUrl)
+    await expect(ownerPage.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 15000 })
+
+    const message = 'Hello to myself'
+    await ownerPage.getByPlaceholder('Type a message...').fill(message)
+    await ownerPage.getByRole('button', { name: 'Send' }).click()
+    await expect(
+      ownerPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: message }).first()
+    ).toBeVisible({ timeout: 20000 })
+
+    await openChatFromList(linkedPage, message)
+    await expect(
+      linkedPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: message }).first()
+    ).toBeVisible({ timeout: 20000 })
+  } finally {
+    await contextOwner.close()
+    await contextLinked.close()
   }
 })

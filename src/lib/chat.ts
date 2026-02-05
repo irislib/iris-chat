@@ -286,8 +286,40 @@ function parseInviteHash(hash: string): ChatInvite | null {
       if (!data || typeof data !== 'object') return null
       return {
         purpose: typeof data.purpose === 'string' ? data.purpose : undefined,
-        owner: typeof data.owner === 'string' ? data.owner : undefined,
+        owner:
+          typeof data.owner === 'string'
+            ? data.owner
+            : typeof data.ownerPubkey === 'string'
+              ? data.ownerPubkey
+              : undefined,
       }
+    } catch {
+      return null
+    }
+  }
+
+  const normalizeInvitePayload = (payload: string): string | null => {
+    try {
+      const decoded = decodeURIComponent(payload)
+      const data = JSON.parse(decoded) as Record<string, unknown>
+      if (!data || typeof data !== 'object') return null
+
+      if (
+        typeof data.inviterEphemeralPublicKey === 'string' &&
+        typeof data.ephemeralKey !== 'string'
+      ) {
+        data.ephemeralKey = data.inviterEphemeralPublicKey
+      }
+
+      if (
+        typeof data.inviter !== 'string' ||
+        typeof data.ephemeralKey !== 'string' ||
+        typeof data.sharedSecret !== 'string'
+      ) {
+        return null
+      }
+
+      return JSON.stringify(data)
     } catch {
       return null
     }
@@ -310,19 +342,31 @@ function parseInviteHash(hash: string): ChatInvite | null {
   }
 
   // Legacy JSON invite format
-  try {
-    const url = `${getInviteBaseUrl()}#${raw}`
-    const invite = Invite.fromUrl(url)
-    const payload = parseInvitePayload(raw)
+  const applyPayloadMeta = (invite: Invite, payloadRaw: string) => {
+    const payload = parseInvitePayload(payloadRaw)
     if (payload?.purpose) {
       ;(invite as Invite & { purpose?: string }).purpose = payload.purpose
     }
     if (payload?.owner) {
       ;(invite as Invite & { ownerPubkey?: string }).ownerPubkey = payload.owner
     }
-    return { type: 'legacy', invite }
+    return invite
+  }
+
+  try {
+    const url = `${getInviteBaseUrl()}#${raw}`
+    const invite = Invite.fromUrl(url)
+    return { type: 'legacy', invite: applyPayloadMeta(invite, raw) }
   } catch {
-    return null
+    const normalizedPayload = normalizeInvitePayload(raw)
+    if (!normalizedPayload) return null
+    try {
+      const url = `${getInviteBaseUrl()}#${encodeURIComponent(normalizedPayload)}`
+      const invite = Invite.fromUrl(url)
+      return { type: 'legacy', invite: applyPayloadMeta(invite, raw) }
+    } catch {
+      return null
+    }
   }
 }
 
@@ -698,15 +742,6 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
 
   const nostrSubscribe = createNostrSubscribe()
 
-  // Debug: log invite values before accept
-  console.log('[chat] acceptInvite - invite values:', {
-    inviter: invite.invite.inviter,
-    inviterEphemeralPublicKey: invite.invite.inviterEphemeralPublicKey,
-    sharedSecret: invite.invite.sharedSecret,
-    inviterEphemeralPublicKeyLength: invite.invite.inviterEphemeralPublicKey?.length,
-    inviterEphemeralPublicKeyValid: /^[0-9a-f]{64}$/i.test(invite.invite.inviterEphemeralPublicKey || ''),
-  })
-
   const manager = getSessionManager()
   const deviceId = manager?.getDeviceId?.() || pubkey
 
@@ -751,7 +786,6 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
 
 // Listen for invite acceptance and create session
 export function listenForInviteAcceptance(invite: Invite, onSession: (session: ChatSession) => void): () => void {
-  console.log('[chat] listenForInviteAcceptance called')
   const decryptor = getDecryptor()
   if (!decryptor) {
     console.error('[chat] No decryptor available for invite listening')
@@ -767,14 +801,7 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
 
   const nostrSubscribe = createNostrSubscribe()
 
-  console.log('[chat] Starting invite listener for ephemeral key:', invite.inviterEphemeralPublicKey)
-  console.log('[chat] Decryptor type:', typeof decryptor === 'function' ? 'DecryptFunction' : 'Uint8Array')
-  console.log('[chat] Invite has inviterEphemeralPublicKey:', !!invite.inviterEphemeralPublicKey)
-  console.log('[chat] Invite has inviterEphemeralPrivateKey:', !!invite.inviterEphemeralPrivateKey)
-
   return invite.listen(decryptor, nostrSubscribe, (session, identity) => {
-    console.log('[chat] >>> INVITE CALLBACK FIRED! Session created for:', identity)
-
     // Check if we already have a session with this identity (e.g., loaded from storage)
     const existingChats = get(chats)
     if (existingChats.has(identity)) {

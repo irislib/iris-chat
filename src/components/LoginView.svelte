@@ -143,8 +143,8 @@
       </div>
 
       {#if linkInviteUrl}
-        <div class="w-full max-w-full">
-          <CopyButton text={linkInviteUrl} maxLength={32} className="w-full max-w-full" />
+        <div class="w-full max-w-full min-w-0 overflow-hidden">
+          <CopyButton text={linkInviteUrl} maxLength={32} className="w-full max-w-full min-w-0" />
         </div>
       {/if}
 

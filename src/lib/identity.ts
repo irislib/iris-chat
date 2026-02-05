@@ -175,12 +175,25 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
 }
 
 export async function loginWithNip07(displayName: string | null = null): Promise<void> {
+  // Wait briefly for NIP-07 injection (handles slow extension/mocked environments)
+  for (let i = 0; i < 10; i++) {
+    if (hasNip07()) break
+    await new Promise((r) => setTimeout(r, 200))
+  }
   if (!window.nostr) {
     throw new Error('No NIP-07 extension found')
   }
 
-  const signer = new NDKNip07Signer()
-  const user = await signer.user()
+  const signer = new NDKNip07Signer(5000)
+  let user = await signer.user().catch(async (err) => {
+    const pubkey = await window.nostr?.getPublicKey?.()
+    if (!pubkey) throw err
+    // Fallback: manually seed signer state for mocked NIP-07 environments
+    ;(signer as unknown as { _pubkey?: string })._pubkey = pubkey
+    const ndkUser = ndkInstance.getUser({ pubkey })
+    ;(signer as unknown as { _user?: typeof ndkUser })._user = ndkUser
+    return ndkUser
+  })
 
   // Set signer on existing NDK instance
   ndkInstance.signer = signer

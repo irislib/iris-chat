@@ -207,9 +207,11 @@
     if (isLoggedIn) {
       const currentIdentity = get(identity)
       if (currentIdentity?.pubkey) {
-        await initMultiDevice(currentIdentity.pubkey)
-        initSessionManagerEvents()
+        void initMultiDevice(currentIdentity.pubkey)
+          .then(() => initSessionManagerEvents())
+          .catch((e) => console.error('[app] initMultiDevice failed:', e))
       }
+
       // Wire up groups -> chat session saving (before loading anything)
       setSaveSessionFn(saveSessionToStorage)
 
@@ -288,9 +290,13 @@
   async function handleLogin() {
     const currentIdentity = get(identity)
     if (currentIdentity?.pubkey) {
-      await initMultiDevice(currentIdentity.pubkey)
-      initSessionManagerEvents()
+      void initMultiDevice(currentIdentity.pubkey)
+        .then(() => initSessionManagerEvents())
+        .catch((e) => console.error('[app] initMultiDevice failed:', e))
     }
+
+    loggedIn = true
+
     // Wire up groups -> chat session saving (before loading anything)
     setSaveSessionFn(saveSessionToStorage)
 
@@ -313,8 +319,6 @@
 
     // Load and monitor saved invites
     await loadAndMonitorInvites()
-
-    loggedIn = true
   }
 
   function handleSelectGroup(groupId: string) {

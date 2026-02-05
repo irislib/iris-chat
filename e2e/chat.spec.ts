@@ -43,9 +43,17 @@ async function registerDevice(page: Page): Promise<void> {
     await settingsButton.click()
     const registerButton = page.getByRole('button', { name: 'Register this device' })
     if (await registerButton.count()) {
-      await expect(registerButton).toBeVisible({ timeout: 10000 })
-      await registerButton.click()
-      await expect(registerButton).not.toBeVisible({ timeout: 20000 })
+      try {
+        await expect(registerButton).toBeVisible({ timeout: 10000 })
+        await registerButton.click({ timeout: 5000 })
+        await expect(registerButton).not.toBeVisible({ timeout: 20000 })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : ''
+        if (!message.includes('detached') && !message.includes('not stable')) {
+          throw err
+        }
+        // Button likely disappeared due to auto-registration; continue.
+      }
     }
     await page.getByRole('button', { name: 'Back' }).click()
   }

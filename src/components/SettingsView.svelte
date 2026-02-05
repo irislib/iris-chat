@@ -583,6 +583,7 @@
                   if (linkInviteStatus === 'error') {
                     linkInviteStatus = 'idle'
                     linkInviteError = ''
+                    linkInviteLastAutoAttempt = ''
                   }
                 }}
                 disabled={linkInviteStatus === 'accepting'}

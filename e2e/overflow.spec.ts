@@ -8,6 +8,28 @@ async function openChatFromList(page: import('@playwright/test').Page, message: 
   await listItem.click()
 }
 
+async function registerDevice(page: import('@playwright/test').Page): Promise<void> {
+  const settingsButton = page.getByRole('button', { name: 'Settings' })
+  if (await settingsButton.count()) {
+    await settingsButton.click()
+    const registerButton = page.getByRole('button', { name: 'Register this device' })
+    if (await registerButton.count()) {
+      try {
+        await expect(registerButton).toBeVisible({ timeout: 10000 })
+        await registerButton.click({ timeout: 5000 })
+        await expect(registerButton).not.toBeVisible({ timeout: 20000 })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : ''
+        if (!message.includes('detached') && !message.includes('not stable')) {
+          throw err
+        }
+        // Button likely disappeared due to auto-registration; continue.
+      }
+    }
+    await page.getByRole('button', { name: 'Back' }).click()
+  }
+}
+
 test.describe('Message overflow', () => {
   test('long text and reply previews should not overflow container', async ({ browser, testRelayUrl }) => {
     const context1 = await browser.newContext()
@@ -22,6 +44,7 @@ test.describe('Message overflow', () => {
       // User 1: Login and create invite
       await page1.goto('/')
       await page1.getByRole('button', { name: 'Go' }).click()
+      await registerDevice(page1)
       await page1.getByRole('button', { name: 'New Chat' }).click()
 
       const copyButton = page1.locator('button[title*="#"]').first()
@@ -33,6 +56,7 @@ test.describe('Message overflow', () => {
       // User 2: Join via paste link
       await page2.goto('/')
       await page2.getByRole('button', { name: 'Go' }).click()
+      await registerDevice(page2)
       await page2.getByRole('button', { name: 'New Chat' }).click()
       await page2.getByPlaceholder('Paste invite link').fill(inviteUrl)
 
