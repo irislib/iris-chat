@@ -17,8 +17,8 @@ import {
   updateGroupData,
   addGroupAdmin as libAddAdmin,
   removeGroupAdmin as libRemoveAdmin,
-} from 'nostr-double-ratchet'
-import type { Rumor } from 'nostr-double-ratchet'
+} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+import type { Rumor } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
 import { ndk, getPubkey } from './identity'
 import { chats, type ChatMessage, type ChatSession } from './chat'
 import { getSessionManager } from './privateChats'

@@ -11,7 +11,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run",
     "test:watch": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs",
-    "test:e2e": "playwright test",
+    "test:e2e": "env -u NO_COLOR playwright test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

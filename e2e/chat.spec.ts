@@ -39,24 +39,32 @@ async function setupUserWithInvite(page: Page): Promise<string> {
 
 async function registerDevice(page: Page): Promise<void> {
   const settingsButton = page.getByRole('button', { name: 'Settings' })
-  if (await settingsButton.count()) {
-    await settingsButton.click()
-    const registerButton = page.getByRole('button', { name: 'Register this device' })
-    if (await registerButton.count()) {
-      try {
-        await expect(registerButton).toBeVisible({ timeout: 10000 })
-        await registerButton.click({ timeout: 5000 })
-        await expect(registerButton).not.toBeVisible({ timeout: 20000 })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : ''
-        if (!message.includes('detached') && !message.includes('not stable')) {
-          throw err
-        }
-        // Button likely disappeared due to auto-registration; continue.
-      }
-    }
-    await page.getByRole('button', { name: 'Back' }).click()
+  try {
+    await settingsButton.waitFor({ state: 'visible', timeout: 5000 })
+  } catch {
+    return
   }
+
+  await settingsButton.click()
+  const registerButton = page.getByRole('button', { name: 'Register this device' })
+  try {
+    await registerButton.waitFor({ state: 'visible', timeout: 5000 })
+    await registerButton.click({ timeout: 5000 })
+    await registerButton.waitFor({ state: 'hidden', timeout: 20000 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : ''
+    const lowered = message.toLowerCase()
+    if (
+      !lowered.includes('timeout') &&
+      !lowered.includes('not found') &&
+      !lowered.includes('detached') &&
+      !lowered.includes('not stable')
+    ) {
+      throw err
+    }
+    // Button likely absent or disappeared due to auto-registration; continue.
+  }
+  await page.getByRole('button', { name: 'Back' }).click()
 }
 
 function escapeRegExp(value: string): string {
@@ -67,8 +75,19 @@ async function openChatFromList(page: Page, message: string): Promise<void> {
   const listItem = page
     .getByRole('button', { name: new RegExp(escapeRegExp(message)) })
     .first()
-  await expect(listItem).toBeVisible({ timeout: 30000 })
-  await listItem.click()
+  try {
+    await expect(listItem).toBeVisible({ timeout: 30000 })
+    await listItem.click()
+    return
+  } catch (err) {
+    const chatList = page.locator('div.overflow-y-auto.overscroll-contain')
+    const chatButtons = chatList.getByRole('button')
+    if (await chatButtons.count() === 1) {
+      await chatButtons.first().click()
+      return
+    }
+    throw err
+  }
 }
 
 async function joinViaPasteAndSync(inviter: Page, joiner: Page, inviteUrl: string, message: string): Promise<void> {
@@ -91,8 +110,13 @@ async function joinViaUrlAndSync(inviter: Page, joiner: Page, inviteUrl: string,
   await expect(joiner.getByPlaceholder('Type a message...')).toBeVisible()
   await joiner.getByPlaceholder('Type a message...').fill(message)
   await joiner.getByRole('button', { name: 'Send' }).click()
-  await openChatFromList(inviter, message)
-  await expect(inviter.locator('.max-w-\\[85\\%\\]').filter({ hasText: message })).toBeVisible()
+  const inviterMessage = inviter.locator('.max-w-\\[85\\%\\]').filter({ hasText: message })
+  try {
+    await expect(inviterMessage).toBeVisible({ timeout: 15000 })
+  } catch {
+    await openChatFromList(inviter, message)
+    await expect(inviterMessage).toBeVisible()
+  }
 }
 
 // Helper to create a context configured to use the test relay

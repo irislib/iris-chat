@@ -6,7 +6,7 @@ import {
   SHARED_CHANNEL_KIND,
   type Rumor,
   type NostrSubscribe,
-} from 'nostr-double-ratchet'
+} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { NDKSubscription } from '@nostr-dev-kit/ndk'
 import type { Filter } from 'nostr-tools'

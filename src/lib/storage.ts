@@ -3,7 +3,7 @@
 import Dexie, { type Table } from 'dexie'
 
 // Re-export serialization functions from nostr-double-ratchet
-export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet'
+export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
 
 export interface StoredSession {
   id: string

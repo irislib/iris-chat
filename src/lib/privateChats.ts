@@ -11,7 +11,7 @@ import {
   type NostrSubscribe,
   type NostrPublish,
   decryptInviteResponse,
-} from 'nostr-double-ratchet'
+} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
 import { finalizeEvent } from 'nostr-tools'
 import { ndk, identity, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
@@ -162,6 +162,19 @@ export const initSessionManager = async (ownerPubkey: string): Promise<void> => 
 }
 
 export const waitForSessionManager = async (): Promise<SessionManager> => {
+  // In some flows (e.g. "Join Chat" from URL right after login), callers may try to
+  // send via SessionManager before initMultiDevice() has finished. Make this helper
+  // resilient by lazily initializing the SessionManager when possible.
+  if (!sessionManagerInitPromise || !sessionManager) {
+    if (!delegateManager) {
+      await initDelegateManager()
+    }
+    const ownerPubkey = delegateManager?.getOwnerPublicKey() || get(identity)?.pubkey
+    if (ownerPubkey) {
+      await initSessionManager(ownerPubkey)
+    }
+  }
+
   if (sessionManagerInitPromise) await sessionManagerInitPromise
   if (!sessionManager) throw new Error('SessionManager not initialized')
   return sessionManager
@@ -211,17 +224,23 @@ export const registerDevice = async (): Promise<void> => {
     throw new Error('Linked devices cannot register other devices')
   }
   if (!delegateManager || !appKeysManager) {
+    await Promise.all([initAppKeysManager(), initDelegateManager()])
+  }
+  if (!delegateManager || !appKeysManager) {
     throw new Error('Managers not initialized')
+  }
+
+  const ownerPubkey = delegateManager.getOwnerPublicKey() || get(identity)?.pubkey
+  if (!ownerPubkey) {
+    throw new Error('Owner pubkey not available')
+  }
+  if (!delegateManager.getOwnerPublicKey()) {
+    await delegateManager.activate(ownerPubkey)
   }
 
   const ndkInstance = getNDK()
   if (ndkInstance.pool.connectedRelays().length === 0) {
     await ndkInstance.pool.connect(5000)
-  }
-
-  const ownerPubkey = delegateManager.getOwnerPublicKey()
-  if (!ownerPubkey) {
-    throw new Error('Owner pubkey not available')
   }
 
   const baseKeys = await resolveBaseAppKeys(ownerPubkey)
@@ -360,9 +379,12 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
     throw new Error('Managers not initialized')
   }
 
-  const ownerPubkey = delegateManager.getOwnerPublicKey()
+  const ownerPubkey = delegateManager.getOwnerPublicKey() || get(identity)?.pubkey
   if (!ownerPubkey) {
     throw new Error('Owner pubkey not available')
+  }
+  if (!delegateManager.getOwnerPublicKey()) {
+    await delegateManager.activate(ownerPubkey)
   }
 
   const state = get(devices)

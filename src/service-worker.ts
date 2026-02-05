@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { precacheAndRoute } from 'workbox-precaching'
-import { Session, type Rumor, type NostrSubscribe, deserializeSessionState, MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet'
+import { Session, type Rumor, type NostrSubscribe, deserializeSessionState, MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'

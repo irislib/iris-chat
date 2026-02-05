@@ -13,8 +13,8 @@ import {
   CHAT_MESSAGE_KIND,
   parseReaction,
   isTyping,
-} from 'nostr-double-ratchet'
-export type { Invite } from 'nostr-double-ratchet'
+} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+export type { Invite } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getEventHash, nip19 } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
@@ -279,13 +279,19 @@ function parseInviteHash(hash: string): ChatInvite | null {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash
   if (!raw) return null
 
-  const parseInvitePayload = (payload: string): { purpose?: string; owner?: string } | null => {
+  type InvitePurpose = 'link' | 'chat'
+  const parseInvitePayload = (
+    payload: string
+  ): { purpose?: InvitePurpose; owner?: string } | null => {
     try {
       const decoded = decodeURIComponent(payload)
       const data = JSON.parse(decoded) as Record<string, unknown>
       if (!data || typeof data !== 'object') return null
       return {
-        purpose: typeof data.purpose === 'string' ? data.purpose : undefined,
+        purpose:
+          data.purpose === 'link' || data.purpose === 'chat'
+            ? (data.purpose as InvitePurpose)
+            : undefined,
         owner:
           typeof data.owner === 'string'
             ? data.owner
@@ -345,7 +351,7 @@ function parseInviteHash(hash: string): ChatInvite | null {
   const applyPayloadMeta = (invite: Invite, payloadRaw: string) => {
     const payload = parseInvitePayload(payloadRaw)
     if (payload?.purpose) {
-      ;(invite as Invite & { purpose?: string }).purpose = payload.purpose
+      invite.purpose = payload.purpose
     }
     if (payload?.owner) {
       ;(invite as Invite & { ownerPubkey?: string }).ownerPubkey = payload.owner
@@ -718,7 +724,18 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     const existing = get(chats).get(invite.pubkey)
     const chatSession = await ensureManagerChat(invite.pubkey)
     if (!existing) {
-      await ensureDeviceRegistered().catch(() => {})
+      // Device registration/AppKeys publishing is important for reliable multi-device messaging.
+      // For NIP-07, registration can be slow/fail in mocked/limited environments, so don't block
+      // UI navigation on it.
+      if (isNip07Login()) {
+        void ensureDeviceRegistered().catch((e) =>
+          console.warn('[chat] ensureDeviceRegistered failed during acceptInvite:', e)
+        )
+      } else {
+        await ensureDeviceRegistered().catch((e) =>
+          console.warn('[chat] ensureDeviceRegistered failed during acceptInvite:', e)
+        )
+      }
     }
     return chatSession
   }
@@ -1070,8 +1087,13 @@ function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messa
 
   if (chatSession.mode === 'manager') {
     const manager = getSessionManager()
-    if (!manager) return
-    manager.sendReceipt(chatSession.recipientPubkey, type, messageIds).catch(() => {})
+    if (manager) {
+      manager.sendReceipt(chatSession.recipientPubkey, type, messageIds).catch(() => {})
+    } else {
+      waitForSessionManager()
+        .then((ready) => ready.sendReceipt(chatSession.recipientPubkey, type, messageIds))
+        .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
+    }
     return
   }
 
@@ -1137,15 +1159,20 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   let publishEvent: NDKEvent | null = null
 
   if (chatSession.mode === 'manager') {
-    const manager = getSessionManager()
-    if (!manager) return
     const rumor = buildManagerRumor(chatSession.recipientPubkey, {
       content: text,
       kind: CHAT_MESSAGE_KIND,
       tags,
     })
     messageId = rumor.id
-    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+    const manager = getSessionManager()
+    if (manager) {
+      manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+    } else {
+      waitForSessionManager()
+        .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
+        .catch((e) => console.error('[chat] SessionManager not ready for send:', e))
+    }
   } else {
     if (!chatSession.session) return
     const { event } = tags.length > 0
@@ -1457,8 +1484,13 @@ export function sendTypingEvent(chatSession: ChatSession): void {
 
   if (chatSession.mode === 'manager') {
     const manager = getSessionManager()
-    if (!manager) return
-    manager.sendTyping(chatSession.recipientPubkey).catch(() => {})
+    if (manager) {
+      manager.sendTyping(chatSession.recipientPubkey).catch(() => {})
+    } else {
+      waitForSessionManager()
+        .then((ready) => ready.sendTyping(chatSession.recipientPubkey))
+        .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
+    }
     return
   }
 

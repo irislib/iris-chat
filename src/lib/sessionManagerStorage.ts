@@ -1,4 +1,4 @@
-import type { StorageAdapter } from 'nostr-double-ratchet'
+import type { StorageAdapter } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
 import {
   getSessionManagerValue,
   putSessionManagerValue,
