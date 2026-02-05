@@ -276,7 +276,9 @@ export function getInviteUrl(invite: ChatInvite): string {
 }
 
 function parseInviteHash(hash: string): ChatInvite | null {
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash
+  let raw = hash.startsWith('#') ? hash.slice(1) : hash
+  // Some environments/libraries produce hashes like "#/npub..." (hash-routing style).
+  raw = raw.replace(/^\/+/, '')
   if (!raw) return null
 
   type InvitePurpose = 'link' | 'chat'
@@ -725,17 +727,10 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     const chatSession = await ensureManagerChat(invite.pubkey)
     if (!existing) {
       // Device registration/AppKeys publishing is important for reliable multi-device messaging.
-      // For NIP-07, registration can be slow/fail in mocked/limited environments, so don't block
-      // UI navigation on it.
-      if (isNip07Login()) {
-        void ensureDeviceRegistered().catch((e) =>
-          console.warn('[chat] ensureDeviceRegistered failed during acceptInvite:', e)
-        )
-      } else {
-        await ensureDeviceRegistered().catch((e) =>
-          console.warn('[chat] ensureDeviceRegistered failed during acceptInvite:', e)
-        )
-      }
+      // Don't block UI navigation on it: joining should be instant; registration can be slow.
+      void ensureDeviceRegistered().catch((e) =>
+        console.warn('[chat] ensureDeviceRegistered failed during acceptInvite:', e)
+      )
     }
     return chatSession
   }
