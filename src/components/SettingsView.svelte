@@ -628,7 +628,7 @@
                 bind:value={linkInviteInput}
                 placeholder="Paste link invite"
                 class="input-field"
-                on:input={() => {
+                oninput={() => {
                   if (linkInviteStatus === 'error') {
                     linkInviteStatus = 'idle'
                     linkInviteError = ''
