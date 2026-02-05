@@ -522,7 +522,7 @@
                 class="btn-secondary w-full flex items-center justify-center gap-2"
                 onclick={handleOpenLinkInvite}
               >
-                <span class="i-carbon-link"></span>
+                <span class="i-carbon-qr-code"></span>
                 Link another device
               </button>
               <p class="text-xs text-gray-500 mt-2">
