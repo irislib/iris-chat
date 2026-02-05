@@ -224,7 +224,7 @@
           onclick={() => mode = 'link'}
           disabled={loading}
         >
-          <span class="i-carbon-link"></span>
+          <span class="i-carbon-qr-code"></span>
           Link this device
         </button>
       </div>
