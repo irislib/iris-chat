@@ -5,9 +5,10 @@
     text: string
     label?: string
     maxLength?: number
+    className?: string
   }
 
-  let { text, label, maxLength = 32 }: Props = $props()
+  let { text, label, maxLength = 32, className = '' }: Props = $props()
 
   let copied = $state(false)
 
@@ -26,7 +27,7 @@
 </script>
 
 <button
-  class="btn-secondary flex-1 min-w-0 flex items-center justify-center gap-2 text-sm py-2 {label ? '' : 'font-mono'} overflow-hidden relative"
+  class="btn-secondary flex-1 min-w-0 flex items-center justify-center gap-2 text-sm py-2 {label ? '' : 'font-mono'} overflow-hidden relative {className}"
   onclick={handleCopy}
   title={text}
 >

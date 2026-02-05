@@ -144,7 +144,7 @@
       </div>
 
       {#if linkInviteUrl}
-        <CopyButton text={linkInviteUrl} maxLength={48} />
+        <CopyButton text={linkInviteUrl} maxLength={48} className="w-full" />
       {/if}
 
       {#if linkInviteStatus === 'waiting'}
