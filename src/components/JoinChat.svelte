@@ -20,6 +20,10 @@
       error = 'Invalid invite link'
       return
     }
+    if (invite.type === 'legacy' && invite.invite.purpose === 'link') {
+      error = 'This link is for device linking'
+      return
+    }
 
     joining = true
     error = ''
@@ -58,6 +62,9 @@
   $effect(() => {
     const hashInvite = parseInviteFromHash()
     if (hashInvite) {
+      if (hashInvite.type === 'legacy' && hashInvite.invite.purpose === 'link') {
+        return
+      }
       acceptInvite(hashInvite).then(session => {
         history.replaceState(null, '', window.location.pathname)
         onjoin(new CustomEvent('join', { detail: { chat: session } }))

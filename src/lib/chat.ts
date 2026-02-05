@@ -278,6 +278,20 @@ function parseInviteHash(hash: string): ChatInvite | null {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash
   if (!raw) return null
 
+  const parseInvitePayload = (payload: string): { purpose?: string; owner?: string } | null => {
+    try {
+      const decoded = decodeURIComponent(payload)
+      const data = JSON.parse(decoded) as Record<string, unknown>
+      if (!data || typeof data !== 'object') return null
+      return {
+        purpose: typeof data.purpose === 'string' ? data.purpose : undefined,
+        owner: typeof data.owner === 'string' ? data.owner : undefined,
+      }
+    } catch {
+      return null
+    }
+  }
+
   // NIP-19 links (npub or nprofile)
   if (raw.startsWith('npub') || raw.startsWith('nprofile')) {
     try {
@@ -297,7 +311,15 @@ function parseInviteHash(hash: string): ChatInvite | null {
   // Legacy JSON invite format
   try {
     const url = `${getInviteBaseUrl()}#${raw}`
-    return { type: 'legacy', invite: Invite.fromUrl(url) }
+    const invite = Invite.fromUrl(url)
+    const payload = parseInvitePayload(raw)
+    if (payload?.purpose) {
+      ;(invite as Invite & { purpose?: string }).purpose = payload.purpose
+    }
+    if (payload?.owner) {
+      ;(invite as Invite & { ownerPubkey?: string }).ownerPubkey = payload.owner
+    }
+    return { type: 'legacy', invite }
   } catch {
     return null
   }
@@ -589,7 +611,7 @@ async function ensureManagerChat(recipientPubkey: string): Promise<ChatSession> 
   return chatSession
 }
 
-async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<void> {
+export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<void> {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
@@ -602,11 +624,12 @@ async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<voi
   let chatId = fromPubkey
 
   if (fromPubkey === myPubkey) {
-    const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p' && t[1] !== myPubkey)
-    if (pTag) {
+    const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')
+    if (pTag && pTag[1] && pTag[1] !== myPubkey) {
       chatId = pTag[1]
     } else {
-      return
+      // Self-message (p-tag is us or missing): route to self chat
+      chatId = myPubkey
     }
   }
 

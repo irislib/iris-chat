@@ -19,12 +19,14 @@ export function hexToBytes(hex: string): Uint8Array {
 
 export interface Identity {
   pubkey: string
-  signer: NDKPrivateKeySigner | NDKNip07Signer
+  signer?: NDKPrivateKeySigner | NDKNip07Signer
   displayName: string | null
   isNip07: boolean
+  isLinkedDevice?: boolean
 }
 
 const IDENTITY_STORAGE_KEY = 'iris-chat-identity'
+const LINKED_IDENTITY_PREFIX = 'link:'
 
 export const identity = writable<Identity | null>(null)
 
@@ -128,6 +130,14 @@ export function saveIdentity(privkeyHex: string): void {
   }
 }
 
+export function saveLinkedIdentity(ownerPubkey: string): void {
+  try {
+    localStorage.setItem(IDENTITY_STORAGE_KEY, `${LINKED_IDENTITY_PREFIX}${ownerPubkey}`)
+  } catch {
+    console.warn('Failed to save linked identity to localStorage')
+  }
+}
+
 export function clearStoredIdentity(): void {
   try {
     localStorage.removeItem(IDENTITY_STORAGE_KEY)
@@ -148,6 +158,7 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     signer,
     displayName,
     isNip07: false,
+    isLinkedDevice: false,
   })
 
   // Save local profile and publish to Nostr
@@ -179,6 +190,7 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     signer,
     displayName,
     isNip07: true,
+    isLinkedDevice: false,
   })
 
   // Save local profile and publish to Nostr if name provided
@@ -195,6 +207,20 @@ export async function loginWithNip07(displayName: string | null = null): Promise
   saveIdentity('nip07')
 }
 
+export async function loginLinkedDevice(ownerPubkey: string, displayName: string | null = null): Promise<void> {
+  ndkInstance.signer = undefined
+
+  identity.set({
+    pubkey: ownerPubkey,
+    signer: undefined,
+    displayName,
+    isNip07: false,
+    isLinkedDevice: true,
+  })
+
+  saveLinkedIdentity(ownerPubkey)
+}
+
 export async function autoLogin(displayName: string | null = null): Promise<boolean> {
   // Check for stored identity (user's own identity, NOT from URL hash)
   // URL hash contains meeting nsec, not user identity
@@ -204,6 +230,15 @@ export async function autoLogin(displayName: string | null = null): Promise<bool
     if (!displayName) {
       const localProfile = getLocalProfile()
       displayName = localProfile?.display_name || localProfile?.name || null
+    }
+
+    if (storedValue.startsWith(LINKED_IDENTITY_PREFIX)) {
+      const ownerPubkey = storedValue.slice(LINKED_IDENTITY_PREFIX.length)
+      if (ownerPubkey && ownerPubkey.length === 64) {
+        await loginLinkedDevice(ownerPubkey, displayName)
+        return true
+      }
+      return false
     }
 
     if (storedValue === 'nip07') {
@@ -245,7 +280,7 @@ export function hasNip07(): boolean {
 // Get the private key hex from current identity (only works for non-NIP07)
 export function getPrivkeyHex(): string | null {
   const currentIdentity = get(identity)
-  if (!currentIdentity || currentIdentity.isNip07) return null
+  if (!currentIdentity || currentIdentity.isNip07 || !currentIdentity.signer) return null
 
   const signer = currentIdentity.signer as NDKPrivateKeySigner
   return signer.privateKey || null
@@ -266,6 +301,11 @@ export function getPubkey(): string | null {
 export function isNip07Login(): boolean {
   const currentIdentity = get(identity)
   return currentIdentity?.isNip07 ?? false
+}
+
+export function isLinkedDeviceLogin(): boolean {
+  const currentIdentity = get(identity)
+  return currentIdentity?.isLinkedDevice ?? false
 }
 
 // Window.nostr type is provided by nostr-tools/nip07

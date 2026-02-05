@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity, loginLinkedDevice } from '../lib/identity'
   import { parseInviteFromHash } from '../lib/chat'
-  import { createLinkInvite, listenForLinkInviteAcceptance } from '../lib/privateChats'
+  import { buildLinkInviteUrl, createLinkInvite, listenForLinkInviteAcceptance } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
   import QRCode from './QRCode.svelte'
   import CopyButton from './CopyButton.svelte'
@@ -81,7 +81,7 @@
     linkInviteError = ''
     try {
       const invite = await createLinkInvite()
-      linkInviteUrl = invite.getUrl(getLinkInviteBaseUrl())
+      linkInviteUrl = buildLinkInviteUrl(invite, getLinkInviteBaseUrl())
 
       linkInviteUnsub?.()
       linkInviteUnsub = listenForLinkInviteAcceptance(invite, async (ownerPubkey) => {

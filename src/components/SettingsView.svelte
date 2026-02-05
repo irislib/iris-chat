@@ -58,6 +58,7 @@
   let linkInviteStatus = $state<'idle' | 'accepting' | 'linked' | 'error'>('idle')
   let linkInviteError = $state('')
   let linkInviteShowScanner = $state(false)
+  let linkInviteLastAutoAttempt = $state('')
 
   // Device state
   let deviceState = $state($devices)
@@ -100,6 +101,23 @@
 
   const LINK_INVITE_ROOT = 'https://iris.to'
 
+  function parseInvitePayload(url: string): { purpose?: string; owner?: string } | null {
+    try {
+      const parsed = new URL(url)
+      const rawHash = parsed.hash.slice(1)
+      if (!rawHash) return null
+      const decoded = decodeURIComponent(rawHash)
+      const data = JSON.parse(decoded) as Record<string, unknown>
+      if (!data || typeof data !== 'object') return null
+      return {
+        purpose: typeof data.purpose === 'string' ? data.purpose : undefined,
+        owner: typeof data.owner === 'string' ? data.owner : undefined,
+      }
+    } catch {
+      return null
+    }
+  }
+
   function parseLinkInvite(input: string, ownerPubkey: string): Invite | null {
     const trimmed = input.trim()
     if (!trimmed) return null
@@ -118,12 +136,10 @@
 
     for (const url of candidates) {
       try {
+        const payload = parseInvitePayload(url)
+        if (payload?.purpose && payload.purpose !== 'link') continue
+        if (payload?.owner && payload.owner !== ownerPubkey) continue
         const invite = Invite.fromUrl(url)
-        const isLink = invite.purpose === 'link' || !!invite.ownerPubkey
-        if (!isLink) continue
-        if (invite.ownerPubkey && invite.ownerPubkey !== ownerPubkey) {
-          continue
-        }
         return invite
       } catch {
         // try next
@@ -173,6 +189,7 @@
     linkInviteShowScanner = false
     linkInviteStatus = 'idle'
     linkInviteError = ''
+    linkInviteLastAutoAttempt = ''
   }
 
   function closeLinkInviteModal() {
@@ -219,6 +236,20 @@
     linkInviteInput = data
     void handleAcceptLinkInvite(data)
   }
+
+  $effect(() => {
+    if (!linkInviteModalOpen) return
+    if (!$identity?.pubkey) return
+    if (!linkInviteInput) return
+    if (linkInviteStatus !== 'idle') return
+    if (linkInviteInput === linkInviteLastAutoAttempt) return
+
+    const invite = parseLinkInvite(linkInviteInput, $identity.pubkey)
+    if (!invite) return
+
+    linkInviteLastAutoAttempt = linkInviteInput
+    void handleAcceptLinkInvite(linkInviteInput)
+  })
 
   // Get npub for public key
   const npub = $derived($identity?.pubkey ? nip19.npubEncode($identity.pubkey) : null)
@@ -597,6 +628,12 @@
                 bind:value={linkInviteInput}
                 placeholder="Paste link invite"
                 class="input-field"
+                on:input={() => {
+                  if (linkInviteStatus === 'error') {
+                    linkInviteStatus = 'idle'
+                    linkInviteError = ''
+                  }
+                }}
                 disabled={linkInviteStatus === 'accepting'}
               />
               <div class="space-y-3 mt-4">

@@ -37,8 +37,8 @@
     <span>Copied</span>
   </span>
   <!-- Default state (maintains button width) -->
-  <span class="flex items-center justify-center gap-2 transition-opacity {copied ? 'opacity-0' : 'opacity-100'}">
+  <span class="flex items-center justify-center gap-2 min-w-0 transition-opacity {copied ? 'opacity-0' : 'opacity-100'}">
     <span class="i-carbon-copy flex-shrink-0"></span>
-    <span class="truncate">{label || truncateMiddle(text, maxLength)}</span>
+    <span class="truncate min-w-0">{label || truncateMiddle(text, maxLength)}</span>
   </span>
 </button>
