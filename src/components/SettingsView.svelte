@@ -6,12 +6,14 @@
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import CopyButton from './CopyButton.svelte'
+  import QRScanner from './QRScanner.svelte'
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
   import { devices } from '../lib/devices'
-  import { registerDevice, revokeDevice } from '../lib/privateChats'
+  import { acceptLinkInvite, registerDevice, registerLinkedDevice, revokeDevice } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
+  import { Invite } from 'nostr-double-ratchet'
 
   interface Props {
     onBack: () => void
@@ -51,6 +53,11 @@
   let showPrivateKey = $state(false)
   let registeringDevice = $state(false)
   let deviceError = $state('')
+  let linkInviteModalOpen = $state(false)
+  let linkInviteInput = $state('')
+  let linkInviteStatus = $state<'idle' | 'accepting' | 'linked' | 'error'>('idle')
+  let linkInviteError = $state('')
+  let linkInviteShowScanner = $state(false)
 
   // Device state
   let deviceState = $state($devices)
@@ -91,6 +98,41 @@
     newRelayUrl = ''
   }
 
+  const LINK_INVITE_ROOT = 'https://iris.to'
+
+  function parseLinkInvite(input: string, ownerPubkey: string): Invite | null {
+    const trimmed = input.trim()
+    if (!trimmed) return null
+
+    const candidates: string[] = []
+    if (trimmed.includes('://')) {
+      candidates.push(trimmed)
+    }
+    if (trimmed.startsWith('#')) {
+      candidates.push(`${LINK_INVITE_ROOT}${trimmed}`)
+    }
+    if (!trimmed.includes('://')) {
+      const hash = trimmed.startsWith('{') ? encodeURIComponent(trimmed) : trimmed
+      candidates.push(`${LINK_INVITE_ROOT}#${hash.replace(/^#/, '')}`)
+    }
+
+    for (const url of candidates) {
+      try {
+        const invite = Invite.fromUrl(url)
+        const isLink = invite.purpose === 'link' || !!invite.ownerPubkey
+        if (!isLink) continue
+        if (invite.ownerPubkey && invite.ownerPubkey !== ownerPubkey) {
+          continue
+        }
+        return invite
+      } catch {
+        // try next
+      }
+    }
+
+    return null
+  }
+
   function removeRelay(url: string) {
     relayStore.removeRelay(url)
   }
@@ -126,8 +168,61 @@
     }
   }
 
+  function resetLinkInviteState() {
+    linkInviteInput = ''
+    linkInviteShowScanner = false
+    linkInviteStatus = 'idle'
+    linkInviteError = ''
+  }
+
+  function closeLinkInviteModal() {
+    linkInviteModalOpen = false
+    resetLinkInviteState()
+  }
+
+  function handleOpenLinkInvite() {
+    if (!$identity?.pubkey) return
+    resetLinkInviteState()
+    linkInviteModalOpen = true
+  }
+
+  async function handleAcceptLinkInvite(raw: string) {
+    if (!$identity?.pubkey) return
+    const invite = parseLinkInvite(raw, $identity.pubkey)
+    if (!invite) {
+      linkInviteError = 'Invalid link invite'
+      return
+    }
+
+    linkInviteStatus = 'accepting'
+    linkInviteError = ''
+
+    try {
+      await acceptLinkInvite(invite)
+
+      const identityPubkey = invite.inviter
+      const alreadyRegistered = deviceState.registeredDevices.some(
+        (d) => d.identityPubkey === identityPubkey
+      )
+      if (!alreadyRegistered) {
+        await registerLinkedDevice(identityPubkey)
+      }
+      linkInviteStatus = 'linked'
+    } catch (e) {
+      linkInviteStatus = 'error'
+      linkInviteError = getErrorMessage(e, 'Failed to link device')
+    }
+  }
+
+  function handleLinkInviteScan(data: string) {
+    linkInviteShowScanner = false
+    linkInviteInput = data
+    void handleAcceptLinkInvite(data)
+  }
+
   // Get npub for public key
   const npub = $derived($identity?.pubkey ? nip19.npubEncode($identity.pubkey) : null)
+  const isLinkedDevice = $derived($identity?.isLinkedDevice ?? false)
 
   // Get nsec for secret key
   const nsec = $derived.by(() => {
@@ -403,7 +498,11 @@
             <div class="p-2 mb-3 rounded text-sm bg-red-900/30 text-red-400">{deviceError}</div>
           {/if}
 
-          {#if !deviceState.isCurrentDeviceRegistered}
+          {#if isLinkedDevice}
+            <p class="text-xs text-gray-400">
+              This is a linked device. Manage devices on your main client.
+            </p>
+          {:else if !deviceState.isCurrentDeviceRegistered}
             <button
               class="btn-primary w-full flex items-center justify-center gap-2"
               onclick={handleRegisterDevice}
@@ -434,6 +533,97 @@
               {/each}
             </div>
           {/if}
+
+          {#if !isLinkedDevice}
+            <div class="mt-4 pt-4 border-t border-surface-lighter">
+              <button
+                class="btn-secondary w-full flex items-center justify-center gap-2"
+                onclick={handleOpenLinkInvite}
+              >
+                <span class="i-carbon-link"></span>
+                Link another device
+              </button>
+              <p class="text-xs text-gray-500 mt-2">
+                Paste or scan the link from your new device.
+              </p>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Link Device Modal -->
+      {#if linkInviteModalOpen}
+        <div
+          class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <button
+            class="absolute inset-0 cursor-default border-none bg-transparent"
+            onclick={closeLinkInviteModal}
+            aria-label="Close modal"
+          ></button>
+
+          <div class="bg-surface rounded-2xl p-8 max-w-lg w-full relative z-10">
+            <div class="flex justify-between items-center mb-6">
+              <h3 class="text-xl font-semibold text-white">Link another device</h3>
+              <button
+                class="btn-ghost p-2"
+                onclick={closeLinkInviteModal}
+                aria-label="Close"
+              >
+                <span class="i-carbon-close text-xl"></span>
+              </button>
+            </div>
+
+            <p class="text-gray-400 text-center mb-4">
+              Paste or scan the link shown on your new device.
+            </p>
+
+            {#if linkInviteShowScanner}
+              <div class="aspect-square rounded-lg overflow-hidden mb-4">
+                <QRScanner onresult={handleLinkInviteScan} />
+              </div>
+              <button
+                class="btn-secondary w-full flex items-center justify-center gap-2"
+                onclick={() => linkInviteShowScanner = false}
+              >
+                <span class="i-carbon-text-link"></span>
+                Paste Link Instead
+              </button>
+            {:else}
+              <input
+                type="text"
+                bind:value={linkInviteInput}
+                placeholder="Paste link invite"
+                class="input-field"
+                disabled={linkInviteStatus === 'accepting'}
+              />
+              <div class="space-y-3 mt-4">
+                <button
+                  class="btn-primary w-full flex items-center justify-center gap-2"
+                  onclick={() => handleAcceptLinkInvite(linkInviteInput)}
+                  disabled={linkInviteStatus === 'accepting'}
+                >
+                  <span class="i-carbon-link"></span>
+                  {linkInviteStatus === 'accepting' ? 'Linking...' : 'Link Device'}
+                </button>
+                <button
+                  class="btn-secondary w-full flex items-center justify-center gap-2"
+                  onclick={() => linkInviteShowScanner = true}
+                >
+                  <span class="i-carbon-qr-code"></span>
+                  Scan QR Code
+                </button>
+              </div>
+            {/if}
+
+            {#if linkInviteStatus === 'linked'}
+              <p class="text-sm text-green-400 mt-4 text-center">Device linked</p>
+            {:else if linkInviteStatus === 'error'}
+              <p class="text-sm text-red-400 mt-4 text-center">{linkInviteError}</p>
+            {/if}
+          </div>
         </div>
       {/if}
 

@@ -5,12 +5,15 @@ import {
   DelegateManager,
   SessionManager,
   AppKeys,
+  Invite,
+  INVITE_RESPONSE_KIND,
   type DeviceEntry,
   type NostrSubscribe,
   type NostrPublish,
+  decryptInviteResponse,
 } from 'nostr-double-ratchet'
 import { finalizeEvent } from 'nostr-tools'
-import { ndk } from './identity'
+import { ndk, identity, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 
@@ -134,7 +137,7 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
   startAppKeysSubscription(ownerPubkey)
 
   const deviceState = get(devices)
-  if (!deviceState.hasLocalAppKeys && !deviceState.isCurrentDeviceRegistered) {
+  if (!isLinkedDeviceLogin() && !deviceState.hasLocalAppKeys && !deviceState.isCurrentDeviceRegistered) {
     try {
       await registerDevice()
     } catch (e) {
@@ -156,6 +159,9 @@ export const hasLocalAppKeys = (): boolean => {
 }
 
 export const registerDevice = async (): Promise<void> => {
+  if (isLinkedDeviceLogin()) {
+    throw new Error('Linked devices cannot register other devices')
+  }
   if (!delegateManager || !appKeysManager) {
     throw new Error('Managers not initialized')
   }
@@ -186,7 +192,107 @@ export const registerDevice = async (): Promise<void> => {
   devices.setRegisteredDevices(appKeysManager.getOwnDevices(), Math.floor(Date.now() / 1000))
 }
 
+/**
+ * Register a specific device identity in AppKeys.
+ * Used when linking a new device via private link invite.
+ */
+export const registerLinkedDevice = async (identityPubkey: string): Promise<void> => {
+  if (isLinkedDeviceLogin()) {
+    throw new Error('Linked devices cannot register other devices')
+  }
+  if (!appKeysManager) {
+    throw new Error('AppKeysManager not initialized')
+  }
+
+  const ownerPubkey = get(identity)?.pubkey
+  if (!ownerPubkey) {
+    throw new Error('Owner pubkey not available')
+  }
+
+  const ndkInstance = getNDK()
+  if (ndkInstance.pool.connectedRelays().length === 0) {
+    await ndkInstance.pool.connect(5000)
+  }
+
+  const nostrSubscribe = createSubscribe(getNDK())
+  const existingKeys = await AppKeys.waitFor(ownerPubkey, nostrSubscribe, 2000)
+  if (existingKeys) {
+    await appKeysManager.setAppKeys(existingKeys)
+  }
+
+  appKeysManager.addDevice({ identityPubkey })
+  await appKeysManager.publish()
+
+  devices.setHasLocalAppKeys(true)
+  devices.setRegisteredDevices(appKeysManager.getOwnDevices(), Math.floor(Date.now() / 1000))
+}
+
+/**
+ * Create a private link invite for this device.
+ */
+export const createLinkInvite = async (): Promise<Invite> => {
+  await initDelegateManager()
+  if (!delegateManager) {
+    throw new Error('DelegateManager not initialized')
+  }
+  const devicePubkey = delegateManager.getIdentityPublicKey()
+  return Invite.createNew(devicePubkey, undefined, undefined, {
+    purpose: 'link',
+  })
+}
+
+/**
+ * Listen for acceptance of a link invite.
+ */
+export const listenForLinkInviteAcceptance = (
+  invite: Invite,
+  onAccepted: (ownerPubkey: string) => void
+): (() => void) => {
+  if (!delegateManager) {
+    throw new Error('DelegateManager not initialized')
+  }
+  if (!invite.inviterEphemeralPrivateKey) {
+    throw new Error('Invite missing ephemeral private key')
+  }
+
+  const inviterPrivateKey = delegateManager.getIdentityKey()
+  const ndkInstance = getNDK()
+  const subscribe = createSubscribe(ndkInstance)
+
+  return subscribe(
+    {
+      kinds: [INVITE_RESPONSE_KIND],
+      '#p': [invite.inviterEphemeralPublicKey],
+    } as NDKFilter,
+    async (event) => {
+      try {
+        if (invite.maxUses && invite.usedBy.length >= invite.maxUses) {
+          return
+        }
+
+        const decrypted = await decryptInviteResponse({
+          envelopeContent: event.content,
+          envelopeSenderPubkey: event.pubkey,
+          inviterEphemeralPrivateKey: invite.inviterEphemeralPrivateKey!,
+          inviterPrivateKey,
+          sharedSecret: invite.sharedSecret,
+        })
+
+        invite.usedBy.push(decrypted.inviteeIdentity)
+
+        const ownerPubkey = decrypted.ownerPublicKey || decrypted.inviteeIdentity
+        onAccepted(ownerPubkey)
+      } catch {
+        // ignore invalid responses
+      }
+    }
+  )
+}
+
 export const ensureDeviceRegistered = async (): Promise<void> => {
+  if (isLinkedDeviceLogin()) {
+    return
+  }
   if (!delegateManager || !appKeysManager) {
     await Promise.all([initAppKeysManager(), initDelegateManager()])
   }
@@ -326,4 +432,42 @@ export const republishInvite = async (): Promise<void> => {
 
 export const getRegisteredDevices = (): DeviceEntry[] => {
   return appKeysManager?.getOwnDevices() || []
+}
+
+// Accept a link invite as the owner and publish the response event.
+export const acceptLinkInvite = async (invite: Invite): Promise<void> => {
+  if (isLinkedDeviceLogin()) {
+    throw new Error('Linked devices cannot accept link invites')
+  }
+
+  const currentIdentity = get(identity)
+  if (!currentIdentity?.pubkey) {
+    throw new Error('Owner pubkey not available')
+  }
+
+  const ndkInstance = getNDK()
+  if (ndkInstance.pool.connectedRelays().length === 0) {
+    await ndkInstance.pool.connect(5000)
+  }
+
+  const signer = currentIdentity.signer ?? ndkInstance.signer
+  if (!signer) {
+    throw new Error('No signer available to accept link invite')
+  }
+
+  const encrypt = async (plaintext: string, pubkey: string) => {
+    const user = ndkInstance.getUser({ pubkey })
+    return signer.encrypt(user, plaintext, 'nip44')
+  }
+
+  const nostrSubscribe = createSubscribe(ndkInstance)
+  const { event } = await invite.accept(
+    nostrSubscribe,
+    currentIdentity.pubkey,
+    encrypt,
+    currentIdentity.pubkey
+  )
+
+  const ndkEvent = new NDKEvent(ndkInstance, event)
+  await ndkEvent.publish()
 }
