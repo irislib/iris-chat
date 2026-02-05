@@ -27,7 +27,7 @@
 </script>
 
 <button
-  class="btn-secondary flex-1 min-w-0 flex items-center justify-center gap-2 text-sm py-2 {label ? '' : 'font-mono'} overflow-hidden relative {className}"
+  class="btn-secondary flex-1 min-w-0 max-w-full flex items-center justify-center gap-2 text-sm py-2 {label ? '' : 'font-mono'} overflow-hidden relative {className}"
   onclick={handleCopy}
   title={text}
 >

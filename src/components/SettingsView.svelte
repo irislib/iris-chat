@@ -11,9 +11,9 @@
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
   import { devices } from '../lib/devices'
+  import { parseLinkInviteInput } from '../lib/linkInvites'
   import { acceptLinkInvite, registerDevice, registerLinkedDevice, revokeDevice } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
-  import { Invite } from 'nostr-double-ratchet'
 
   interface Props {
     onBack: () => void
@@ -99,56 +99,6 @@
     newRelayUrl = ''
   }
 
-  const LINK_INVITE_ROOT = 'https://iris.to'
-
-  function parseInvitePayload(url: string): { purpose?: string; owner?: string } | null {
-    try {
-      const parsed = new URL(url)
-      const rawHash = parsed.hash.slice(1)
-      if (!rawHash) return null
-      const decoded = decodeURIComponent(rawHash)
-      const data = JSON.parse(decoded) as Record<string, unknown>
-      if (!data || typeof data !== 'object') return null
-      return {
-        purpose: typeof data.purpose === 'string' ? data.purpose : undefined,
-        owner: typeof data.owner === 'string' ? data.owner : undefined,
-      }
-    } catch {
-      return null
-    }
-  }
-
-  function parseLinkInvite(input: string, ownerPubkey: string): Invite | null {
-    const trimmed = input.trim()
-    if (!trimmed) return null
-
-    const candidates: string[] = []
-    if (trimmed.includes('://')) {
-      candidates.push(trimmed)
-    }
-    if (trimmed.startsWith('#')) {
-      candidates.push(`${LINK_INVITE_ROOT}${trimmed}`)
-    }
-    if (!trimmed.includes('://')) {
-      const hash = trimmed.startsWith('{') ? encodeURIComponent(trimmed) : trimmed
-      candidates.push(`${LINK_INVITE_ROOT}#${hash.replace(/^#/, '')}`)
-    }
-
-    for (const url of candidates) {
-      try {
-        const payload = parseInvitePayload(url)
-        if (payload?.purpose && payload.purpose !== 'link') continue
-        if (payload?.owner && payload.owner !== ownerPubkey) continue
-        const invite = Invite.fromUrl(url)
-        return invite
-      } catch {
-        // try next
-      }
-    }
-
-    return null
-  }
-
   function removeRelay(url: string) {
     relayStore.removeRelay(url)
   }
@@ -205,9 +155,10 @@
 
   async function handleAcceptLinkInvite(raw: string) {
     if (!$identity?.pubkey) return
-    const invite = parseLinkInvite(raw, $identity.pubkey)
+    const invite = parseLinkInviteInput(raw, $identity.pubkey)
     if (!invite) {
       linkInviteError = 'Invalid link invite'
+      linkInviteStatus = 'error'
       return
     }
 
@@ -244,7 +195,7 @@
     if (linkInviteStatus !== 'idle') return
     if (linkInviteInput === linkInviteLastAutoAttempt) return
 
-    const invite = parseLinkInvite(linkInviteInput, $identity.pubkey)
+    const invite = parseLinkInviteInput(linkInviteInput, $identity.pubkey)
     if (!invite) return
 
     linkInviteLastAutoAttempt = linkInviteInput
@@ -636,23 +587,16 @@
                 }}
                 disabled={linkInviteStatus === 'accepting'}
               />
-              <div class="space-y-3 mt-4">
-                <button
-                  class="btn-primary w-full flex items-center justify-center gap-2"
-                  onclick={() => handleAcceptLinkInvite(linkInviteInput)}
-                  disabled={linkInviteStatus === 'accepting'}
-                >
-                  <span class="i-carbon-link"></span>
-                  {linkInviteStatus === 'accepting' ? 'Linking...' : 'Link Device'}
-                </button>
-                <button
-                  class="btn-secondary w-full flex items-center justify-center gap-2"
-                  onclick={() => linkInviteShowScanner = true}
-                >
-                  <span class="i-carbon-qr-code"></span>
-                  Scan QR Code
-                </button>
-              </div>
+              {#if linkInviteStatus === 'accepting'}
+                <p class="text-sm text-gray-400 mt-3 text-center">Linking...</p>
+              {/if}
+              <button
+                class="btn-secondary w-full flex items-center justify-center gap-2 mt-4"
+                onclick={() => linkInviteShowScanner = true}
+              >
+                <span class="i-carbon-qr-code"></span>
+                Scan QR Code
+              </button>
             {/if}
 
             {#if linkInviteStatus === 'linked'}

@@ -18,6 +18,7 @@ export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getEventHash, nip19 } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
+import { devices } from './devices'
 import { getSessionManager, waitForSessionManager, ensureDeviceRegistered } from './privateChats'
 
 type OuterEvent = Parameters<EventCallback>[1]
@@ -617,19 +618,33 @@ async function ensureManagerChat(recipientPubkey: string): Promise<ChatSession> 
   return chatSession
 }
 
+function resolveManagerSender(fromPubkey: string, myPubkey: string | null): string {
+  if (!myPubkey) return fromPubkey
+  if (fromPubkey === myPubkey) return fromPubkey
+
+  const deviceState = get(devices)
+  const isOwnDevice =
+    deviceState.identityPubkey === fromPubkey ||
+    deviceState.registeredDevices.some((device) => device.identityPubkey === fromPubkey)
+
+  return isOwnDevice ? myPubkey : fromPubkey
+}
+
 export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<void> {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
+  const effectiveFromPubkey = resolveManagerSender(fromPubkey, myPubkey)
+
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
-    handleGroupEvent(rumor, fromPubkey)
+    handleGroupEvent(rumor, effectiveFromPubkey)
     return
   }
 
-  let chatId = fromPubkey
+  let chatId = effectiveFromPubkey
 
-  if (fromPubkey === myPubkey) {
+  if (effectiveFromPubkey === myPubkey) {
     const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')
     if (pTag && pTag[1] && pTag[1] !== myPubkey) {
       chatId = pTag[1]
@@ -643,7 +658,7 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
   const chatSession = await ensureManagerChat(chatId)
 
   const shouldAutoOpen =
-    fromPubkey !== myPubkey &&
+    effectiveFromPubkey !== myPubkey &&
     rumor.kind === CHAT_MESSAGE_KIND &&
     (!existing || existing.messages.length === 0)
 

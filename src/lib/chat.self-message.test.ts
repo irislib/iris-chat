@@ -71,9 +71,11 @@ vi.mock('./receipts', () => ({
 }))
 
 import {handleManagerEvent, chats} from './chat'
+import {devices} from './devices'
 
 beforeEach(() => {
   chats.set(new Map())
+  devices.reset()
 })
 
 describe('handleManagerEvent', () => {
@@ -95,5 +97,30 @@ describe('handleManagerEvent', () => {
     expect(selfChat).toBeTruthy()
     expect(selfChat?.messages).toHaveLength(1)
     expect(selfChat?.messages[0].content).toBe('hello self')
+  })
+
+  it('routes own-device manager messages to self chat', async () => {
+    devices.setIdentityPubkey('d'.repeat(64))
+    devices.setRegisteredDevices([
+      { identityPubkey: 'b'.repeat(64), createdAt: Math.floor(Date.now() / 1000) },
+    ])
+
+    const rumor = {
+      id: 'msg-2',
+      pubkey: 'b'.repeat(64),
+      content: 'hello from device',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', MY_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, 'b'.repeat(64))
+
+    const chatMap = get(chats)
+    const selfChat = chatMap.get(MY_PUBKEY)
+
+    expect(selfChat).toBeTruthy()
+    expect(selfChat?.messages).toHaveLength(1)
+    expect(selfChat?.messages[0].content).toBe('hello from device')
   })
 })

@@ -27,6 +27,54 @@ let sessionManagerInitPromise: Promise<void> | null = null
 
 let appKeysSubscriptionCleanup: (() => void) | null = null
 
+const APP_KEYS_FETCH_TIMEOUT_MS = 8000
+const APP_KEYS_FAST_TIMEOUT_MS = 2000
+
+const cloneAppKeys = (appKeys: AppKeys): AppKeys => new AppKeys(appKeys.getAllDevices())
+
+const resolveBaseAppKeys = async (
+  ownerPubkey: string,
+  timeoutMs: number = APP_KEYS_FETCH_TIMEOUT_MS
+): Promise<AppKeys> => {
+  const nostrSubscribe = createSubscribe(getNDK())
+  try {
+    const existingKeys = await AppKeys.waitFor(
+      ownerPubkey,
+      nostrSubscribe,
+      APP_KEYS_FAST_TIMEOUT_MS
+    )
+    if (existingKeys) {
+      return existingKeys
+    }
+  } catch {
+    // ignore fetch errors, fall back to local sources
+  }
+
+  const localKeys = appKeysManager?.getAppKeys()
+  if (localKeys && localKeys.getAllDevices().length > 0) {
+    return cloneAppKeys(localKeys)
+  }
+
+  const { registeredDevices } = get(devices)
+  if (registeredDevices.length > 0) {
+    return new AppKeys(registeredDevices)
+  }
+
+  if (timeoutMs > APP_KEYS_FAST_TIMEOUT_MS) {
+    try {
+      const remaining = Math.max(timeoutMs - APP_KEYS_FAST_TIMEOUT_MS, 0)
+      const existingKeys = await AppKeys.waitFor(ownerPubkey, nostrSubscribe, remaining)
+      if (existingKeys) {
+        return existingKeys
+      }
+    } catch {
+      // ignore fetch errors
+    }
+  }
+
+  return new AppKeys()
+}
+
 const createSubscribe = (ndkInstance: ReturnType<typeof getNDK>): NostrSubscribe => {
   return (filter, onEvent) => {
     const subscription = ndkInstance.subscribe(filter, { closeOnEose: false })
@@ -176,13 +224,8 @@ export const registerDevice = async (): Promise<void> => {
     throw new Error('Owner pubkey not available')
   }
 
-  // Fetch existing AppKeys from relay first to avoid overwriting
-  const nostrSubscribe = createSubscribe(getNDK())
-  const existingKeys = await AppKeys.waitFor(ownerPubkey, nostrSubscribe, 2000)
-
-  if (existingKeys) {
-    await appKeysManager.setAppKeys(existingKeys)
-  }
+  const baseKeys = await resolveBaseAppKeys(ownerPubkey)
+  await appKeysManager.setAppKeys(baseKeys)
 
   const payload = delegateManager.getRegistrationPayload()
   appKeysManager.addDevice(payload)
@@ -214,11 +257,8 @@ export const registerLinkedDevice = async (identityPubkey: string): Promise<void
     await ndkInstance.pool.connect(5000)
   }
 
-  const nostrSubscribe = createSubscribe(getNDK())
-  const existingKeys = await AppKeys.waitFor(ownerPubkey, nostrSubscribe, 2000)
-  if (existingKeys) {
-    await appKeysManager.setAppKeys(existingKeys)
-  }
+  const baseKeys = await resolveBaseAppKeys(ownerPubkey)
+  await appKeysManager.setAppKeys(baseKeys)
 
   appKeysManager.addDevice({ identityPubkey })
   await appKeysManager.publish()
@@ -413,18 +453,6 @@ export const resetManagers = (): void => {
   sessionManagerInitPromise = null
   appKeysSubscriptionCleanup = null
   devices.reset()
-}
-
-export const getInviteDetails = () => {
-  if (!delegateManager) return null
-  const invite = delegateManager.getInvite()
-  if (!invite) return null
-  return {
-    ephemeralPublicKey: invite.inviterEphemeralPublicKey,
-    sharedSecret: invite.sharedSecret,
-    deviceId: invite.deviceId || delegateManager.getIdentityPublicKey(),
-    createdAt: invite.createdAt,
-  }
 }
 
 export const republishInvite = async (): Promise<void> => {
