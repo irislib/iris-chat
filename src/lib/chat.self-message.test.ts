@@ -68,6 +68,7 @@ vi.mock('./typingSettings', () => {
 
 vi.mock('./receipts', () => ({
   shouldAdvanceStatus: vi.fn(() => false),
+  parseReceipt: vi.fn(() => null),
 }))
 
 import {handleManagerEvent, chats} from './chat'

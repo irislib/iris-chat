@@ -10,9 +10,9 @@ import {
   type SessionManager,
   REACTION_KIND,
   RECEIPT_KIND,
-  TYPING_KIND,
   CHAT_MESSAGE_KIND,
   parseReaction,
+  isTyping,
 } from 'nostr-double-ratchet'
 export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
@@ -130,7 +130,7 @@ import {
 } from './storage'
 import { updateDMSubscription } from './notifications'
 import { handleGroupEvent } from './groups'
-import { shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
+import { parseReceipt, shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
 import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
@@ -861,13 +861,9 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
   // Dispatch on inner event kind
   if (rumor.kind === RECEIPT_KIND) {
     saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
-    const type = rumor.content as 'delivered' | 'seen'
-    if (type !== 'delivered' && type !== 'seen') return
-    const messageIds = rumor.tags
-      ?.filter((t: string[]) => t[0] === 'e')
-      .map((t: string[]) => t[1]) || []
-    if (messageIds.length === 0) return
-    handleIncomingReceipt(currentSession, { type, messageIds })
+    const receipt = parseReceipt(rumor)
+    if (!receipt) return
+    handleIncomingReceipt(currentSession, receipt)
     return
   }
 
@@ -881,7 +877,7 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
     return
   }
 
-  if (rumor.kind === TYPING_KIND) {
+  if (isTyping(rumor)) {
     saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
     const ageMs = Date.now() - rumor.created_at * 1000
     if (ageMs < TYPING_EXPIRY_MS) {
@@ -1075,12 +1071,7 @@ function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messa
   if (chatSession.mode === 'manager') {
     const manager = getSessionManager()
     if (!manager) return
-    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
-      content: type,
-      kind: RECEIPT_KIND,
-      tags: messageIds.map((id) => ['e', id]),
-    })
-    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+    manager.sendReceipt(chatSession.recipientPubkey, type, messageIds).catch(() => {})
     return
   }
 
@@ -1467,12 +1458,7 @@ export function sendTypingEvent(chatSession: ChatSession): void {
   if (chatSession.mode === 'manager') {
     const manager = getSessionManager()
     if (!manager) return
-    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
-      content: 'typing',
-      kind: TYPING_KIND,
-      tags: [],
-    })
-    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+    manager.sendTyping(chatSession.recipientPubkey).catch(() => {})
     return
   }
 

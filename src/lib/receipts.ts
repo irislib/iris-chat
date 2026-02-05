@@ -1,20 +1,12 @@
-export type MessageStatus = 'delivered' | 'seen'
+import {
+  parseReceipt as parseReceiptInner,
+  shouldAdvanceReceiptStatus,
+  type ReceiptPayload as NdrReceiptPayload,
+  type ReceiptType,
+} from 'nostr-double-ratchet'
 
-export interface ReceiptPayload {
-  type: 'delivered' | 'seen'
-  messageIds: string[]
-}
+export type MessageStatus = ReceiptType
+export type ReceiptPayload = NdrReceiptPayload
 
-const STATUS_ORDER: Record<string, number> = {
-  delivered: 1,
-  seen: 2,
-}
-
-export function shouldAdvanceStatus(
-  current: MessageStatus | undefined,
-  incoming: MessageStatus
-): boolean {
-  const currentOrder = current ? STATUS_ORDER[current] ?? 0 : 0
-  const incomingOrder = STATUS_ORDER[incoming] ?? 0
-  return incomingOrder > currentOrder
-}
+export const parseReceipt = parseReceiptInner
+export const shouldAdvanceStatus = shouldAdvanceReceiptStatus

@@ -36,8 +36,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: ^0.0.53
-        version: 0.0.53(typescript@5.9.3)
+        specifier: ^0.0.54
+        version: link:../nostr-double-ratchet/ts
       nostr-tools:
         specifier: ^2.19.3
         version: 2.20.0(typescript@5.9.3)
@@ -1853,6 +1853,7 @@ packages:
   glob@11.1.0:
     resolution: {integrity: sha512-vuNwKSaKiqm7g0THUBu2x7ckSs3XJLXE+2ssL7/MfTGPLLcrJQ/4Uq1CjPTtO5cCIiRxqvN6Twy1qOwhL0Xjcw==}
     engines: {node: 20 || >=22}
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
     hasBin: true
 
   globals@11.12.0:
@@ -2221,9 +2222,6 @@ packages:
 
   node-releases@2.0.27:
     resolution: {integrity: sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA==}
-
-  nostr-double-ratchet@0.0.53:
-    resolution: {integrity: sha512-wrbcmvamPuAIKuI837SGK5ellJvDFPCtzoCVfuLYKdLlFZFGovHDFpbXqBhLCcC1sI83gA2HUEuI/BeRmnsv9g==}
 
   nostr-tools@2.20.0:
     resolution: {integrity: sha512-Kq/2lMyeOdGvpDsYH2an8HP4H0aFCqwKythhTzxfgZTVv4L3NOgrJw2SxH8jkWlH8xPhWxGfN6lFtC+EAa2qYQ==}
@@ -5364,12 +5362,6 @@ snapshots:
   node-fetch-native@1.6.7: {}
 
   node-releases@2.0.27: {}
-
-  nostr-double-ratchet@0.0.53(typescript@5.9.3):
-    dependencies:
-      nostr-tools: 2.20.0(typescript@5.9.3)
-    transitivePeerDependencies:
-      - typescript
 
   nostr-tools@2.20.0(typescript@5.9.3):
     dependencies:
