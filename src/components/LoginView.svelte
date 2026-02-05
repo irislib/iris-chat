@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity, loginLinkedDevice } from '../lib/identity'
-  import { parseInviteFromHash } from '../lib/chat'
+  import { isLinkInvite, parseInviteFromHash } from '../lib/chat'
   import { buildLinkInviteUrl, createLinkInvite, listenForLinkInviteAcceptance } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
   import QRCode from './QRCode.svelte'
@@ -20,8 +20,7 @@
 
   const supportsNip07 = hasNip07()
   const inviteFromUrl = parseInviteFromHash()
-  const isLinkInviteInUrl =
-    inviteFromUrl?.type === 'legacy' && inviteFromUrl.invite.purpose === 'link'
+  const isLinkInviteInUrl = isLinkInvite(inviteFromUrl)
   const hasInviteInUrl = !!inviteFromUrl && !isLinkInviteInUrl
   let mode = $state<'login' | 'link'>('login')
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseInviteFromUrl, parseInviteFromHash, acceptInvite, type ChatSession } from '../lib/chat'
+  import { parseInviteFromUrl, parseInviteFromHash, acceptInvite, type ChatSession, isLinkInvite } from '../lib/chat'
   import { getErrorMessage } from '../lib/utils'
   import QRScanner from './QRScanner.svelte'
 
@@ -20,7 +20,7 @@
       error = 'Invalid invite link'
       return
     }
-    if (invite.type === 'legacy' && invite.invite.purpose === 'link') {
+    if (isLinkInvite(invite)) {
       error = 'This link is for device linking'
       return
     }
@@ -62,7 +62,7 @@
   $effect(() => {
     const hashInvite = parseInviteFromHash()
     if (hashInvite) {
-      if (hashInvite.type === 'legacy' && hashInvite.invite.purpose === 'link') {
+      if (isLinkInvite(hashInvite)) {
         return
       }
       acceptInvite(hashInvite).then(session => {

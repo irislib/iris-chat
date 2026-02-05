@@ -351,6 +351,12 @@ export function parseInviteFromUrl(url: string): ChatInvite | null {
   }
 }
 
+export function isLinkInvite(invite: ChatInvite | null | undefined): boolean {
+  if (!invite || invite.type !== 'legacy') return false
+  const withPurpose = invite.invite as Invite & { purpose?: string }
+  return withPurpose.purpose === 'link'
+}
+
 // Serialize invite for storage
 export function serializeInvite(invite: ChatInvite): string {
   if (invite.type === 'pubkey') {
