@@ -607,7 +607,7 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         guard let manager = sessionManagerHandles[id] else {
             throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
         }
-        try manager.init()
+        try manager.`init`()
         result(nil)
     }
 
