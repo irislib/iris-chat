@@ -26,6 +26,7 @@ let delegateInitPromise: Promise<void> | null = null
 let sessionManagerInitPromise: Promise<void> | null = null
 
 let appKeysSubscriptionCleanup: (() => void) | null = null
+let rotateInvitePromise: Promise<void> | null = null
 
 const APP_KEYS_FETCH_TIMEOUT_MS = 8000
 const APP_KEYS_FAST_TIMEOUT_MS = 2000
@@ -511,6 +512,30 @@ export const republishInvite = async (): Promise<void> => {
 
   const event = new NDKEvent(ndkInstance, signedEvent)
   await event.publish()
+}
+
+export const rotateDeviceInvite = async (): Promise<void> => {
+  if (rotateInvitePromise) return rotateInvitePromise
+
+  rotateInvitePromise = (async () => {
+    if (!delegateManager) {
+      await initDelegateManager()
+    }
+    if (!delegateManager) {
+      throw new Error('DelegateManager not initialized')
+    }
+
+    const ndkInstance = getNDK()
+    if (ndkInstance.pool.connectedRelays().length === 0) {
+      await ndkInstance.pool.connect(5000)
+    }
+
+    await delegateManager.rotateInvite()
+  })().finally(() => {
+    rotateInvitePromise = null
+  })
+
+  return rotateInvitePromise
 }
 
 export const getRegisteredDevices = (): DeviceEntry[] => {

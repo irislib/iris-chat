@@ -19,7 +19,7 @@ import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getEventHash, nip19 } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
 import { devices } from './devices'
-import { getSessionManager, waitForSessionManager, ensureDeviceRegistered } from './privateChats'
+import { getSessionManager, waitForSessionManager, ensureDeviceRegistered, rotateDeviceInvite } from './privateChats'
 
 type OuterEvent = Parameters<EventCallback>[1]
 
@@ -724,13 +724,19 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
   const existing = get(chats).get(chatId)
   const chatSession = await ensureManagerChat(chatId)
 
+  const isEmptyChat = (existing ? existing.messages.length : chatSession.messages.length) === 0
   const shouldAutoOpen =
     effectiveFromPubkey !== myPubkey &&
     rumor.kind === CHAT_MESSAGE_KIND &&
-    (!existing || existing.messages.length === 0)
+    isEmptyChat
 
   if (shouldAutoOpen) {
     triggerAutoOpen(chatSession)
+    // Rotate our published device invite after the first successful inbound session
+    // so subsequent new chats can establish their own sessions reliably.
+    void rotateDeviceInvite().catch((e) =>
+      console.warn('[chat] rotateDeviceInvite failed:', e)
+    )
   }
   handleIncomingRumor(chatSession, rumor, undefined)
 }
