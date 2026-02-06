@@ -7,6 +7,7 @@ import '../../../../config/providers/chat_provider.dart';
 import '../../../../shared/utils/formatters.dart';
 import '../../domain/models/message.dart';
 import '../../domain/models/session.dart';
+import '../widgets/message_input.dart';
 
 /// Estimated height for a typical message bubble.
 /// Used for ListView performance optimization.
@@ -180,7 +181,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
 
           // Message input
-          _MessageInput(
+          MessageInput(
             controller: _messageController,
             onSend: _sendMessage,
             onChanged: (text) {
@@ -626,72 +627,6 @@ class _StatusIcon extends StatelessWidget {
       case MessageStatus.failed:
         return Icon(Icons.error_outline, size: _iconSize, color: theme.colorScheme.error);
     }
-  }
-}
-
-class _MessageInput extends StatelessWidget {
-  const _MessageInput({
-    required this.controller,
-    required this.onSend,
-    this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final VoidCallback onSend;
-  final ValueChanged<String>? onChanged;
-
-  static const _inputBorderRadius = BorderRadius.all(Radius.circular(24));
-  static const _contentPadding = EdgeInsets.symmetric(horizontal: 16, vertical: 10);
-  static const _spacing = SizedBox(width: 8);
-  static const _sendIcon = Icon(Icons.send);
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Container(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 8,
-        top: 8,
-        bottom: MediaQuery.paddingOf(context).bottom + 8,
-      ),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(
-          top: BorderSide(color: theme.colorScheme.outlineVariant),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              decoration: InputDecoration(
-                hintText: 'Message',
-                border: const OutlineInputBorder(
-                  borderRadius: _inputBorderRadius,
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: theme.colorScheme.surfaceContainerHighest,
-                contentPadding: _contentPadding,
-              ),
-              textCapitalization: TextCapitalization.sentences,
-              minLines: 1,
-              maxLines: 5,
-              onChanged: onChanged,
-              onSubmitted: (_) => onSend(),
-            ),
-          ),
-          _spacing,
-          IconButton.filled(
-            onPressed: onSend,
-            icon: _sendIcon,
-          ),
-        ],
-      ),
-    );
   }
 }
 

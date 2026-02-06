@@ -257,8 +257,8 @@ class SessionManagerService {
         if (event.subid != null && event.filterJson != null) {
           final filterMap =
               jsonDecode(event.filterJson!) as Map<String, dynamic>;
-          final filter = NostrFilter.fromJson(filterMap);
-          _nostrService.subscribeWithId(event.subid!, filter);
+          // Preserve unknown tag filters like `#d` and `#l`.
+          _nostrService.subscribeWithIdRaw(event.subid!, filterMap);
         }
         break;
       case 'unsubscribe':

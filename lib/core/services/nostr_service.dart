@@ -14,6 +14,16 @@ class NostrService {
   final Map<String, WebSocketChannel> _connections = {};
   final Map<String, StreamSubscription<dynamic>> _relaySubscriptions = {};
   final Map<String, Set<String>> _activeSubscriptions = {};
+  // Desired subscriptions keyed by subscription id. These are replayed on (re)connect so
+  // the app keeps receiving events after reconnects, and so subscriptions issued before
+  // the websocket is connected aren't lost.
+  final Map<String, Map<String, dynamic>> _subscriptionFilters = {};
+
+  // Best-effort queue for publishes attempted while disconnected.
+  // This is intentionally small; events are content-addressed and can be re-sent.
+  final List<String> _pendingPublishes = <String>[];
+  static const int _maxPendingPublishes = 200;
+
   final _eventController = StreamController<NostrEvent>.broadcast();
   final _connectionController = StreamController<RelayConnectionEvent>.broadcast();
 
@@ -80,6 +90,10 @@ class NostrService {
         status: RelayStatus.connected,
       ));
 
+      // Replay known subscriptions and queued publishes.
+      _resubscribeRelay(url);
+      await _flushPendingPublishes();
+
       Logger.info(
         'Connected to relay',
         category: LogCategory.nostr,
@@ -130,6 +144,7 @@ class NostrService {
 
             _eventController.add(event);
           }
+          break;
         case 'OK':
           if (message.length >= 3) {
             final eventId = message[1] as String;
@@ -146,6 +161,7 @@ class NostrService {
               },
             );
           }
+          break;
         case 'EOSE':
           if (message.length >= 2) {
             final subscriptionId = message[1] as String;
@@ -155,6 +171,7 @@ class NostrService {
               data: {'relay': relay, 'subscriptionId': subscriptionId},
             );
           }
+          break;
         case 'NOTICE':
           if (message.length >= 2) {
             final notice = message[1] as String;
@@ -164,6 +181,7 @@ class NostrService {
               data: {'relay': relay, 'notice': notice},
             );
           }
+          break;
         case 'CLOSED':
           if (message.length >= 2) {
             final subscriptionId = message[1] as String;
@@ -174,6 +192,7 @@ class NostrService {
               data: {'relay': relay, 'subscriptionId': subscriptionId},
             );
           }
+          break;
       }
     } catch (e, st) {
       Logger.error(
@@ -265,6 +284,16 @@ class NostrService {
       throw StateError('NostrService has been disposed');
     }
 
+    if (_connections.isEmpty) {
+      _enqueuePendingPublish(eventJson);
+      Logger.warning(
+        'No relay connections; queued event for later publish',
+        category: LogCategory.nostr,
+        data: {'queuedCount': _pendingPublishes.length},
+      );
+      return;
+    }
+
     final message = jsonEncode(['EVENT', jsonDecode(eventJson)]);
     var successCount = 0;
     var failCount = 0;
@@ -291,6 +320,7 @@ class NostrService {
     );
 
     if (successCount == 0 && _connections.isNotEmpty) {
+      _enqueuePendingPublish(eventJson);
       throw const NostrException('Failed to publish event to any relay');
     }
   }
@@ -302,35 +332,7 @@ class NostrService {
     }
 
     final subscriptionId = _generateSubscriptionId();
-    final message = jsonEncode(['REQ', subscriptionId, filter.toJson()]);
-
-    var successCount = 0;
-
-    for (final entry in _connections.entries) {
-      try {
-        entry.value.sink.add(message);
-        _activeSubscriptions[entry.key]?.add(subscriptionId);
-        successCount++;
-      } catch (e) {
-        Logger.error(
-          'Failed to subscribe on relay',
-          category: LogCategory.nostr,
-          error: e,
-          data: {'relay': entry.key},
-        );
-      }
-    }
-
-    Logger.info(
-      'Subscription created',
-      category: LogCategory.nostr,
-      data: {
-        'subscriptionId': subscriptionId,
-        'relayCount': successCount,
-        'filter': filter.toJson(),
-      },
-    );
-
+    subscribeWithIdRaw(subscriptionId, filter.toJson());
     return subscriptionId;
   }
 
@@ -340,8 +342,18 @@ class NostrService {
       throw StateError('NostrService has been disposed');
     }
 
-    final message = jsonEncode(['REQ', subscriptionId, filter.toJson()]);
+    return subscribeWithIdRaw(subscriptionId, filter.toJson());
+  }
 
+  /// Subscribe using a raw filter JSON map. Unknown keys/tags are preserved.
+  String subscribeWithIdRaw(String subscriptionId, Map<String, dynamic> filterJson) {
+    if (_disposed) {
+      throw StateError('NostrService has been disposed');
+    }
+
+    _subscriptionFilters[subscriptionId] = filterJson;
+
+    final message = jsonEncode(['REQ', subscriptionId, filterJson]);
     var successCount = 0;
 
     for (final entry in _connections.entries) {
@@ -365,7 +377,7 @@ class NostrService {
       data: {
         'subscriptionId': subscriptionId,
         'relayCount': successCount,
-        'filter': filter.toJson(),
+        'filter': filterJson,
       },
     );
 
@@ -376,6 +388,7 @@ class NostrService {
   void closeSubscription(String subscriptionId) {
     if (_disposed) return;
 
+    _subscriptionFilters.remove(subscriptionId);
     final message = jsonEncode(['CLOSE', subscriptionId]);
 
     for (final entry in _connections.entries) {
@@ -426,8 +439,53 @@ class NostrService {
     Logger.info('Disposing NostrService', category: LogCategory.nostr);
 
     await disconnect();
+    _subscriptionFilters.clear();
+    _pendingPublishes.clear();
     await _eventController.close();
     await _connectionController.close();
+  }
+
+  void _resubscribeRelay(String relay) {
+    final channel = _connections[relay];
+    if (channel == null) return;
+
+    // Snapshot; callers may add/remove subscriptions while we iterate.
+    final filters = Map<String, Map<String, dynamic>>.from(_subscriptionFilters);
+    for (final entry in filters.entries) {
+      try {
+        channel.sink.add(jsonEncode(['REQ', entry.key, entry.value]));
+        _activeSubscriptions[relay]?.add(entry.key);
+      } catch (e) {
+        Logger.error(
+          'Failed to replay subscription on relay',
+          category: LogCategory.nostr,
+          error: e,
+          data: {'relay': relay, 'subscriptionId': entry.key},
+        );
+      }
+    }
+  }
+
+  void _enqueuePendingPublish(String eventJson) {
+    if (_pendingPublishes.length >= _maxPendingPublishes) {
+      _pendingPublishes.removeAt(0);
+    }
+    _pendingPublishes.add(eventJson);
+  }
+
+  Future<void> _flushPendingPublishes() async {
+    if (_pendingPublishes.isEmpty || _connections.isEmpty) return;
+
+    final pending = List<String>.from(_pendingPublishes);
+    _pendingPublishes.clear();
+
+    for (final eventJson in pending) {
+      try {
+        await publishEvent(eventJson);
+      } catch (_) {
+        // publishEvent re-queues on transport failure. We ignore here.
+      }
+    }
   }
 
   String _generateSubscriptionId() {
