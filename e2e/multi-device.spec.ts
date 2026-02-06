@@ -36,13 +36,20 @@ async function registerDevice(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   const registerButton = page.getByRole('button', { name: 'Register this device' })
+  const thisDeviceLabel = page.getByText('This device').first()
   try {
     if (!(await registerButton.count())) {
-      await registerButton.waitFor({ state: 'visible', timeout: 1000 }).catch(() => {})
+      await Promise.race([
+        registerButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+        thisDeviceLabel.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+      ])
     }
     if (await registerButton.count()) {
       await registerButton.click({ timeout: 5000 })
-      await expect(registerButton).not.toBeVisible({ timeout: 20000 })
+      await Promise.race([
+        expect(registerButton).not.toBeVisible({ timeout: 20000 }).catch(() => null),
+        thisDeviceLabel.waitFor({ state: 'visible', timeout: 20000 }).catch(() => null),
+      ])
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : ''

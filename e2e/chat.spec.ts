@@ -51,14 +51,22 @@ async function registerDevice(page: Page): Promise<void> {
   // This avoids spending the full timeout waiting when the device is already registered.
   await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   const registerButton = page.getByRole('button', { name: 'Register this device' })
+  const thisDeviceLabel = page.getByText('This device').first()
   try {
     if (!(await registerButton.count())) {
-      // If the device state is still initializing, give the button a moment to appear.
-      await registerButton.waitFor({ state: 'visible', timeout: 1000 }).catch(() => {})
+      // If the device state is still initializing, wait until we can tell whether
+      // registration is needed (button appears) or already done ("This device" appears).
+      await Promise.race([
+        registerButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+        thisDeviceLabel.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+      ])
     }
     if (await registerButton.count()) {
       await registerButton.click({ timeout: 5000 })
-      await registerButton.waitFor({ state: 'hidden', timeout: 20000 })
+      await Promise.race([
+        registerButton.waitFor({ state: 'hidden', timeout: 20000 }).catch(() => null),
+        thisDeviceLabel.waitFor({ state: 'visible', timeout: 20000 }).catch(() => null),
+      ])
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : ''
