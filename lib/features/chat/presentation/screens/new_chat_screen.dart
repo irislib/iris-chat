@@ -51,6 +51,26 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     final url = _pasteController.text.trim();
     if (url.isEmpty || _isJoining) return;
 
+    if (!looksLikeInviteUrl(url)) {
+      if (looksLikeNostrIdentityLink(url)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'That looks like a Nostr profile (npub), not an Iris Chat invite. Ask them to share an invite link from Iris Chat.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('That does not look like an invite link.'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isJoining = true);
     try {
       final purpose = extractInvitePurpose(url);
@@ -60,27 +80,28 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
             .acceptLinkInviteFromUrl(url);
         if (ok && mounted) {
           _pasteController.clear();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Device linked')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Device linked')));
         } else if (mounted) {
           final error = ref.read(inviteStateProvider).error;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(error ?? 'Invalid invite')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(error ?? 'Invalid invite')));
         }
         return;
       }
 
-      final sessionId =
-          await ref.read(inviteStateProvider.notifier).acceptInviteFromUrl(url);
+      final sessionId = await ref
+          .read(inviteStateProvider.notifier)
+          .acceptInviteFromUrl(url);
       if (sessionId != null && mounted) {
         context.go('/chats/$sessionId');
       } else if (mounted) {
         final error = ref.read(inviteStateProvider).error;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error ?? 'Invalid invite')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error ?? 'Invalid invite')));
       }
     } finally {
       if (mounted) setState(() => _isJoining = false);
@@ -88,9 +109,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   }
 
   void _onPasteChanged(String value) {
-    if (value.contains('iris.to') || value.contains('#invite')) {
-      _joinChat();
-    }
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return;
+    if (looksLikeInviteUrl(trimmed)) _joinChat();
   }
 
   @override
@@ -98,17 +119,27 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     final sessions = ref.watch(sessionStateProvider.select((s) => s.sessions));
     final hasChats = sessions.isNotEmpty;
     final inviteState = ref.watch(inviteStateProvider);
+    final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Iris'),
         leading: hasChats
-            ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.go('/chats'))
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => context.go('/chats'),
+              )
             : null,
         automaticallyImplyLeading: false,
         actions: [
-          const Padding(padding: EdgeInsets.only(right: 8), child: ConnectionStatusIcon(size: 20)),
-          IconButton(icon: const Icon(Icons.settings), onPressed: () => context.push('/settings')),
+          const Padding(
+            padding: EdgeInsets.only(right: 8),
+            child: ConnectionStatusIcon(size: 20),
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => context.push('/settings'),
+          ),
         ],
       ),
       body: Column(
@@ -135,6 +166,15 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     isCreating: inviteState.isCreating,
                     onCreateInvite: _createInvite,
                   ),
+                  if (inviteState.error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      inviteState.error!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -171,14 +211,22 @@ class _JoinChatCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Join Chat', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+            Text(
+              'Join Chat',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: controller,
               decoration: const InputDecoration(
                 hintText: 'Paste invite link',
                 border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
               ),
               onChanged: onChanged,
               onSubmitted: (_) => onJoin(),
@@ -218,19 +266,39 @@ class _NewChatCard extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('New Chat', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+            Text(
+              'New Chat',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             const SizedBox(height: 4),
-            Text('Share an invite link to start a chat', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            Text(
+              'Share an invite link to start a chat',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 12),
             if (invites.isEmpty && isCreating)
-              const Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator()))
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              )
             else ...[
-              ...invites.map((invite) => _InviteItem(key: ValueKey(invite.id), invite: invite)),
+              ...invites.map(
+                (invite) =>
+                    _InviteItem(key: ValueKey(invite.id), invite: invite),
+              ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: isCreating ? null : onCreateInvite,
                 icon: isCreating
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
                     : const Icon(Icons.add),
                 label: const Text('Create New Invite'),
               ),
@@ -267,29 +335,42 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
   }
 
   Future<void> _saveLabel() async {
-    await ref.read(inviteStateProvider.notifier).updateLabel(widget.invite.id, _labelController.text);
+    await ref
+        .read(inviteStateProvider.notifier)
+        .updateLabel(widget.invite.id, _labelController.text);
     setState(() => _isEditing = false);
   }
 
   Future<void> _copyInvite() async {
-    final url = await ref.read(inviteStateProvider.notifier).getInviteUrl(widget.invite.id);
+    final url = await ref
+        .read(inviteStateProvider.notifier)
+        .getInviteUrl(widget.invite.id);
     if (url != null) {
       await Clipboard.setData(ClipboardData(text: url));
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Copied'),
+            duration: Duration(seconds: 1),
+          ),
+        );
       }
     }
   }
 
   Future<void> _shareInvite() async {
-    final url = await ref.read(inviteStateProvider.notifier).getInviteUrl(widget.invite.id);
+    final url = await ref
+        .read(inviteStateProvider.notifier)
+        .getInviteUrl(widget.invite.id);
     if (url != null) {
       await Share.share(url, subject: 'Iris Chat Invite');
     }
   }
 
   void _showQRModal() async {
-    final url = await ref.read(inviteStateProvider.notifier).getInviteUrl(widget.invite.id);
+    final url = await ref
+        .read(inviteStateProvider.notifier)
+        .getInviteUrl(widget.invite.id);
     if (url != null && mounted) {
       await showDialog<void>(
         context: context,
@@ -325,14 +406,25 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
                     autofocus: true,
                     decoration: const InputDecoration(
                       isDense: true,
-                      contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
                       border: OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _saveLabel(),
                   ),
                 ),
-                IconButton(icon: const Icon(Icons.check, color: Colors.green), onPressed: _saveLabel, iconSize: 20),
-                IconButton(icon: const Icon(Icons.close, color: Colors.red), onPressed: () => setState(() => _isEditing = false), iconSize: 20),
+                IconButton(
+                  icon: const Icon(Icons.check, color: Colors.green),
+                  onPressed: _saveLabel,
+                  iconSize: 20,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Colors.red),
+                  onPressed: () => setState(() => _isEditing = false),
+                  iconSize: 20,
+                ),
               ] else ...[
                 Expanded(
                   child: GestureDetector(
@@ -343,19 +435,29 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
                           widget.invite.label ?? 'Add label...',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.w500,
-                            fontStyle: widget.invite.label == null ? FontStyle.italic : null,
-                            color: widget.invite.label == null ? theme.colorScheme.onSurfaceVariant : null,
+                            fontStyle: widget.invite.label == null
+                                ? FontStyle.italic
+                                : null,
+                            color: widget.invite.label == null
+                                ? theme.colorScheme.onSurfaceVariant
+                                : null,
                           ),
                         ),
                         const SizedBox(width: 4),
-                        Icon(Icons.edit, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                        Icon(
+                          Icons.edit,
+                          size: 14,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ],
                     ),
                   ),
                 ),
                 Text(
                   formatRelativeDateTime(widget.invite.createdAt),
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ],
@@ -369,7 +471,9 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
                   onPressed: _copyInvite,
                   icon: const Icon(Icons.copy, size: 16),
                   label: const Text('Copy'),
-                  style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -377,7 +481,9 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
                 onPressed: _showQRModal,
                 icon: const Icon(Icons.qr_code),
                 tooltip: 'Show QR',
-                style: IconButton.styleFrom(backgroundColor: theme.colorScheme.surfaceContainerHighest),
+                style: IconButton.styleFrom(
+                  backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                ),
               ),
               IconButton(
                 onPressed: _shareInvite,
@@ -386,7 +492,10 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
               ),
               IconButton(
                 onPressed: _deleteInvite,
-                icon: Icon(Icons.delete_outline, color: theme.colorScheme.error),
+                icon: Icon(
+                  Icons.delete_outline,
+                  color: theme.colorScheme.error,
+                ),
                 tooltip: 'Delete',
               ),
             ],
@@ -414,24 +523,48 @@ class _QRModal extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(label ?? 'Invite QR Code', style: theme.textTheme.titleLarge),
-                IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                Text(
+                  label ?? 'Invite QR Code',
+                  style: theme.textTheme.titleLarge,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
               ],
             ),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
-              child: QrImageView(data: url, version: QrVersions.auto, size: 250, backgroundColor: Colors.white),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: QrImageView(
+                data: url,
+                version: QrVersions.auto,
+                size: 250,
+                backgroundColor: Colors.white,
+              ),
             ),
             const SizedBox(height: 16),
-            Text('Scan this code to start a chat', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            Text(
+              'Scan this code to start a chat',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: url));
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Copied'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
                 }
               },
               icon: const Icon(Icons.copy),

@@ -73,6 +73,40 @@ Map<String, dynamic>? decodeInviteUrlData(String url) {
   return null;
 }
 
+/// Whether [url] looks like an Iris invite URL that we can accept.
+///
+/// This is used to avoid sending obviously-non-invite URLs to the native parser,
+/// which tends to produce confusing errors for users.
+bool looksLikeInviteUrl(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return false;
+
+  // JSON-based invites in fragment/query.
+  if (decodeInviteUrlData(url) != null) return true;
+
+  final path = uri.path.toLowerCase();
+  if (path.contains('/invite')) return true;
+
+  final qp = uri.queryParameters;
+  // Legacy format: /invite?id=...&secret=...
+  if (qp.containsKey('id') && qp.containsKey('secret')) return true;
+
+  // Fragment-based legacy: /#invite=...
+  final frag = uri.fragment.toLowerCase();
+  if (frag.startsWith('invite=')) return true;
+
+  return false;
+}
+
+/// Best-effort detection of a Nostr bech32 identity/profile link.
+bool looksLikeNostrIdentityLink(String input) {
+  final s = input.toLowerCase();
+  return s.contains('npub1') ||
+      s.contains('nprofile1') ||
+      s.startsWith('nostr:npub1') ||
+      s.startsWith('nostr:nprofile1');
+}
+
 /// Extract the optional invite purpose from an Iris invite URL.
 ///
 /// Expected values: "chat" | "link".

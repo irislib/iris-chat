@@ -30,6 +30,17 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
   Future<void> _processInvite(String url) async {
     if (_isProcessing) return;
 
+    if (!looksLikeInviteUrl(url)) {
+      if (looksLikeNostrIdentityLink(url)) {
+        _showError(
+          'That looks like a Nostr profile (npub), not an Iris Chat invite. Ask them to share an invite link from Iris Chat.',
+        );
+        return;
+      }
+      _showError('That does not look like an invite link.');
+      return;
+    }
+
     setState(() => _isProcessing = true);
 
     try {
@@ -39,17 +50,18 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
             .read(inviteStateProvider.notifier)
             .acceptLinkInviteFromUrl(url);
         if (ok && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Device linked')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Device linked')));
           context.pop();
         } else if (mounted) {
           final error = ref.read(inviteStateProvider).error;
           _showError(error ?? 'Failed to link device');
         }
       } else {
-        final sessionId =
-            await ref.read(inviteStateProvider.notifier).acceptInviteFromUrl(url);
+        final sessionId = await ref
+            .read(inviteStateProvider.notifier)
+            .acceptInviteFromUrl(url);
 
         if (sessionId != null && mounted) {
           // Navigate to the new chat
@@ -89,8 +101,8 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
   }
 
   bool _isValidInviteUrl(String url) {
-    // Check if it looks like an invite URL
-    return url.contains('iris.to') || url.contains('/invite/');
+    // Check if it looks like an invite URL (avoid false-positives like chat.iris.to/#npub...)
+    return looksLikeInviteUrl(url);
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -165,10 +177,7 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
   Widget _buildScanner(ThemeData theme) {
     return Stack(
       children: [
-        MobileScanner(
-          controller: _scannerController,
-          onDetect: _onDetect,
-        ),
+        MobileScanner(controller: _scannerController, onDetect: _onDetect),
         // Overlay with cutout
         CustomPaint(
           painter: _ScannerOverlayPainter(
@@ -234,7 +243,12 @@ class _ScannerOverlayPainter extends CustomPainter {
     final cutoutSize = size.width * 0.7;
     final cutoutLeft = (size.width - cutoutSize) / 2;
     final cutoutTop = (size.height - cutoutSize) / 2;
-    final cutoutRect = Rect.fromLTWH(cutoutLeft, cutoutTop, cutoutSize, cutoutSize);
+    final cutoutRect = Rect.fromLTWH(
+      cutoutLeft,
+      cutoutTop,
+      cutoutSize,
+      cutoutSize,
+    );
 
     // Draw overlay with hole
     final path = Path()
@@ -265,13 +279,29 @@ class _ScannerOverlayPainter extends CustomPainter {
     const cornerLength = 30.0;
     final corners = [
       // Top left
-      [Offset(cutoutLeft, cutoutTop + cornerLength), Offset(cutoutLeft, cutoutTop), Offset(cutoutLeft + cornerLength, cutoutTop)],
+      [
+        Offset(cutoutLeft, cutoutTop + cornerLength),
+        Offset(cutoutLeft, cutoutTop),
+        Offset(cutoutLeft + cornerLength, cutoutTop),
+      ],
       // Top right
-      [Offset(cutoutLeft + cutoutSize - cornerLength, cutoutTop), Offset(cutoutLeft + cutoutSize, cutoutTop), Offset(cutoutLeft + cutoutSize, cutoutTop + cornerLength)],
+      [
+        Offset(cutoutLeft + cutoutSize - cornerLength, cutoutTop),
+        Offset(cutoutLeft + cutoutSize, cutoutTop),
+        Offset(cutoutLeft + cutoutSize, cutoutTop + cornerLength),
+      ],
       // Bottom left
-      [Offset(cutoutLeft, cutoutTop + cutoutSize - cornerLength), Offset(cutoutLeft, cutoutTop + cutoutSize), Offset(cutoutLeft + cornerLength, cutoutTop + cutoutSize)],
+      [
+        Offset(cutoutLeft, cutoutTop + cutoutSize - cornerLength),
+        Offset(cutoutLeft, cutoutTop + cutoutSize),
+        Offset(cutoutLeft + cornerLength, cutoutTop + cutoutSize),
+      ],
       // Bottom right
-      [Offset(cutoutLeft + cutoutSize - cornerLength, cutoutTop + cutoutSize), Offset(cutoutLeft + cutoutSize, cutoutTop + cutoutSize), Offset(cutoutLeft + cutoutSize, cutoutTop + cutoutSize - cornerLength)],
+      [
+        Offset(cutoutLeft + cutoutSize - cornerLength, cutoutTop + cutoutSize),
+        Offset(cutoutLeft + cutoutSize, cutoutTop + cutoutSize),
+        Offset(cutoutLeft + cutoutSize, cutoutTop + cutoutSize - cornerLength),
+      ],
     ];
 
     for (final corner in corners) {

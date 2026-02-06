@@ -7,15 +7,28 @@ class DatabaseService {
   DatabaseService({String? dbPath}) : _dbPathOverride = dbPath;
 
   Database? _database;
+  Future<Database>? _databaseFuture;
   final String? _dbPathOverride;
 
   static const _dbName = 'iris_chat.db';
   static const _dbVersion = 3;
 
   /// Get the database instance, initializing if necessary.
-  Future<Database> get database async {
-    _database ??= await _initDatabase();
-    return _database!;
+  Future<Database> get database {
+    final existing = _database;
+    if (existing != null) return Future.value(existing);
+
+    // Avoid opening multiple concurrent connections. This can lead to
+    // "database locked" warnings (especially during schema creation/upgrades).
+    return _databaseFuture ??= _initDatabase()
+        .then((db) {
+          _database = db;
+          return db;
+        })
+        .catchError((Object e, StackTrace st) {
+          _databaseFuture = null;
+          Error.throwWithStackTrace(e, st);
+        });
   }
 
   Future<Database> _initDatabase() async {
@@ -24,6 +37,19 @@ class DatabaseService {
     return openDatabase(
       path,
       version: _dbVersion,
+      onConfigure: (db) async {
+        // Best-effort pragmas to reduce locking and keep referential integrity.
+        // Ignore errors to avoid hard-failing app startup on older SQLite builds.
+        try {
+          await db.execute('PRAGMA foreign_keys = ON');
+        } catch (_) {}
+        try {
+          await db.execute('PRAGMA journal_mode = WAL');
+        } catch (_) {}
+        try {
+          await db.execute('PRAGMA busy_timeout = 5000');
+        } catch (_) {}
+      },
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -114,16 +140,28 @@ class DatabaseService {
   /// Close the database connection.
   Future<void> close() async {
     final db = _database;
+    final future = _databaseFuture;
+    _database = null;
+    _databaseFuture = null;
+
     if (db != null) {
       await db.close();
-      _database = null;
+      return;
+    }
+
+    // If an open is in-flight, wait and close best-effort.
+    if (future != null) {
+      try {
+        final opened = await future;
+        await opened.close();
+      } catch (_) {}
     }
   }
 
   /// Delete the database (for testing or reset).
   Future<void> deleteDatabase() async {
+    await close();
     final path = _dbPathOverride ?? await _defaultDbPath();
     await databaseFactory.deleteDatabase(path);
-    _database = null;
   }
 }
