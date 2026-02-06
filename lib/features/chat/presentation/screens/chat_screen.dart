@@ -603,21 +603,20 @@ class _StatusIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = theme.colorScheme.onPrimaryContainer.withValues(alpha: 179);
-    final seenColor = theme.colorScheme.onPrimaryContainer;
+    final baseColor = theme.colorScheme.onPrimaryContainer.withValues(alpha: 179);
 
     switch (status) {
       case MessageStatus.pending:
         // Keep UI calm: pending means "not yet confirmed", not "spin forever".
-        return Icon(Icons.schedule, size: _iconSize, color: color);
+        return Icon(Icons.schedule, size: _iconSize, color: baseColor);
       case MessageStatus.queued:
         return _queuedIcon;
       case MessageStatus.sent:
-        return Icon(Icons.check, size: _iconSize, color: color);
+        return Icon(Icons.check, size: _iconSize, color: baseColor);
       case MessageStatus.delivered:
-        return Icon(Icons.done_all, size: _iconSize, color: color);
+        return Icon(Icons.done_all, size: _iconSize, color: baseColor);
       case MessageStatus.seen:
-        return Icon(Icons.done_all, size: _iconSize, color: seenColor);
+        return const Icon(Icons.done_all, size: _iconSize, color: Colors.blue);
       case MessageStatus.failed:
         return Icon(Icons.error_outline, size: _iconSize, color: theme.colorScheme.error);
     }

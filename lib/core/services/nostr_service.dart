@@ -351,7 +351,27 @@ class NostrService {
       throw StateError('NostrService has been disposed');
     }
 
+    final hadExisting = _subscriptionFilters.containsKey(subscriptionId);
     _subscriptionFilters[subscriptionId] = filterJson;
+
+    // Some relays don't apply a second REQ with the same subscription id. Treat this as
+    // an "update": CLOSE then REQ so key-rotation / filter changes actually take effect.
+    if (hadExisting) {
+      final closeMessage = jsonEncode(['CLOSE', subscriptionId]);
+      for (final entry in _connections.entries) {
+        try {
+          entry.value.sink.add(closeMessage);
+          _activeSubscriptions[entry.key]?.remove(subscriptionId);
+        } catch (e) {
+          Logger.error(
+            'Failed to close subscription on relay (resubscribe)',
+            category: LogCategory.nostr,
+            error: e,
+            data: {'relay': entry.key, 'subscriptionId': subscriptionId},
+          );
+        }
+      }
+    }
 
     final message = jsonEncode(['REQ', subscriptionId, filterJson]);
     var successCount = 0;
@@ -372,7 +392,7 @@ class NostrService {
     }
 
     Logger.info(
-      'Subscription created (custom id)',
+      hadExisting ? 'Subscription updated (custom id)' : 'Subscription created (custom id)',
       category: LogCategory.nostr,
       data: {
         'subscriptionId': subscriptionId,

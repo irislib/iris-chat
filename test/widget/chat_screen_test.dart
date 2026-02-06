@@ -259,6 +259,25 @@ void main() {
         expect(find.byIcon(Icons.done_all), findsOneWidget);
       });
 
+      testWidgets('shows blue double check for seen messages', (tester) async {
+        final messages = [
+          ChatMessage(
+            id: 'msg-1',
+            sessionId: testSessionId,
+            text: 'Seen message',
+            timestamp: DateTime.now(),
+            direction: MessageDirection.outgoing,
+            status: MessageStatus.seen,
+          ),
+        ];
+
+        await tester.pumpWidget(buildChatScreen(messages: messages));
+        await tester.pumpAndSettle();
+
+        final icon = tester.widget<Icon>(find.byIcon(Icons.done_all));
+        expect(icon.color, Colors.blue);
+      });
+
       testWidgets('shows error icon for failed messages', (tester) async {
         final messages = [
           ChatMessage(

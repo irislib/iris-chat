@@ -77,7 +77,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
       state = state.copyWith(sessions: sessions, isLoading: false);
 
       // Fetch profiles for all recipients without names
-      unawaited(_fetchMissingProfiles(sessions));
+      unawaited(_fetchMissingProfiles(sessions).catchError((_, __) {}));
     } catch (e, st) {
       final appError = AppError.from(e, st);
       state = state.copyWith(isLoading: false, error: appError.message);
@@ -86,23 +86,27 @@ class SessionNotifier extends StateNotifier<SessionState> {
 
   /// Fetch profiles for sessions without recipient names.
   Future<void> _fetchMissingProfiles(List<ChatSession> sessions) async {
-    final pubkeysToFetch = sessions
-        .where((s) => s.recipientName == null || s.recipientName!.isEmpty)
-        .map((s) => s.recipientPubkeyHex)
-        .toSet()
-        .toList();
+    try {
+      final pubkeysToFetch = sessions
+          .where((s) => s.recipientName == null || s.recipientName!.isEmpty)
+          .map((s) => s.recipientPubkeyHex)
+          .toSet()
+          .toList();
 
-    if (pubkeysToFetch.isEmpty) return;
+      if (pubkeysToFetch.isEmpty) return;
 
-    // Fetch profiles in background
-    await _profileService.fetchProfiles(pubkeysToFetch);
+      // Fetch profiles in background
+      await _profileService.fetchProfiles(pubkeysToFetch);
 
-    // Update sessions with profile names
-    for (final pubkey in pubkeysToFetch) {
-      final profile = await _profileService.getProfile(pubkey);
-      if (profile?.bestName != null) {
-        await updateRecipientName(pubkey, profile!.bestName!);
+      // Update sessions with profile names
+      for (final pubkey in pubkeysToFetch) {
+        final profile = await _profileService.getProfile(pubkey);
+        if (profile?.bestName != null) {
+          await updateRecipientName(pubkey, profile!.bestName!);
+        }
       }
+    } catch (_) {
+      // Best-effort background task; ignore errors to avoid noisy unhandled futures.
     }
   }
 
@@ -980,8 +984,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       messages: {...state.messages, sessionId: updatedMessages},
     );
 
-    // Save to database
-    _messageDatasource.saveMessage(updatedMessage);
+    // Save to database in background (DB can be locked; don't crash/log-spam).
+    unawaited(() async {
+      try {
+        await _messageDatasource.saveMessage(updatedMessage);
+      } catch (_) {}
+    }());
   }
 
   /// Check if content is a reaction payload and return parsed data.

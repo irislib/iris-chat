@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:iris_chat/core/services/nostr_service.dart';
@@ -222,6 +226,61 @@ void main() {
           throwsStateError,
         );
       });
+
+      test(
+        'subscribeWithIdRaw sends CLOSE + REQ when called again for the same id',
+        () async {
+          final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+          final port = server.port;
+
+          final messages = <List<dynamic>>[];
+          final wsDone = Completer<void>();
+
+          server.transform(WebSocketTransformer()).listen((ws) {
+            ws.listen((data) {
+              messages.add(jsonDecode(data as String) as List<dynamic>);
+              if (messages.length >= 3 && !wsDone.isCompleted) {
+                wsDone.complete();
+              }
+            });
+          });
+
+          final service = NostrService(relayUrls: ['ws://127.0.0.1:$port']);
+          await service.connect();
+
+          service.subscribeWithIdRaw('sub1', <String, dynamic>{
+            'kinds': const [1],
+            '#p': const ['a'],
+          });
+          service.subscribeWithIdRaw('sub1', <String, dynamic>{
+            'kinds': const [1],
+            '#p': const ['b'],
+          });
+
+          await wsDone.future.timeout(const Duration(seconds: 2));
+
+          expect(messages, hasLength(3));
+          expect(messages[0][0], 'REQ');
+          expect(messages[0][1], 'sub1');
+          expect(messages[0][2], <String, dynamic>{
+            'kinds': [1],
+            '#p': ['a'],
+          });
+
+          expect(messages[1][0], 'CLOSE');
+          expect(messages[1][1], 'sub1');
+
+          expect(messages[2][0], 'REQ');
+          expect(messages[2][1], 'sub1');
+          expect(messages[2][2], <String, dynamic>{
+            'kinds': [1],
+            '#p': ['b'],
+          });
+
+          await service.dispose();
+          await server.close(force: true);
+        },
+      );
     });
 
     group('RelayConnectionEvent', () {
