@@ -3,9 +3,26 @@ import { test, expect, useTestRelay } from './fixtures'
 async function openChatFromList(page: import('@playwright/test').Page, message: string): Promise<void> {
   const chatList = page.getByTestId('sidebar-chat-list')
   const escaped = message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const listItem = chatList.getByRole('button', { name: new RegExp(escaped) }).first()
-  await expect(listItem).toBeVisible({ timeout: 30000 })
-  await listItem.click()
+  const listItemName = new RegExp(escaped)
+
+  const allTab = page.getByTestId('sidebar-tab-all')
+  const requestsTab = page.getByTestId('sidebar-tab-requests')
+  const deadline = Date.now() + 30_000
+
+  while (Date.now() < deadline) {
+    for (const tabButton of [allTab, requestsTab]) {
+      await tabButton.click().catch(() => {})
+      const listItem = chatList.getByRole('button', { name: listItemName }).first()
+      if (await listItem.isVisible().catch(() => false)) {
+        await listItem.scrollIntoViewIfNeeded().catch(() => {})
+        await listItem.click()
+        return
+      }
+    }
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`Could not find chat list item for message preview: ${message}`)
 }
 
 async function registerDevice(page: import('@playwright/test').Page): Promise<void> {

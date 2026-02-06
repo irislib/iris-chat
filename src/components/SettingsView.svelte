@@ -10,6 +10,7 @@
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
+  import { messageRequestSettings, setReceiveMessageRequests } from '../lib/messageRequestSettings'
   import { devices } from '../lib/devices'
   import { parseLinkInviteInput } from '../lib/linkInvites'
   import { acceptLinkInvite, ensureDeviceRegistered, registerLinkedDevice, revokeDevice } from '../lib/privateChats'
@@ -737,6 +738,23 @@
             >
               <span
                 class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$typingSettings.sendTypingIndicators ? 'translate-x-5' : ''}"
+              ></span>
+            </button>
+          </div>
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm">Receive message requests</span>
+              <p class="text-xs text-gray-500 mt-0.5">Allow new chats from people you don't follow</p>
+            </div>
+            <button
+              class="w-10 h-5 rounded-full transition-colors relative {$messageRequestSettings.receiveMessageRequests ? 'bg-primary' : 'bg-gray-600'}"
+              onclick={() => setReceiveMessageRequests(!$messageRequestSettings.receiveMessageRequests)}
+              role="switch"
+              aria-checked={$messageRequestSettings.receiveMessageRequests}
+              aria-label="Toggle message requests"
+            >
+              <span
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$messageRequestSettings.receiveMessageRequests ? 'translate-x-5' : ''}"
               ></span>
             </button>
           </div>

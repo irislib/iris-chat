@@ -15,6 +15,7 @@
   import { loadGroupsFromStorage, groups, groupMessages, currentGroupId, setSaveSessionFn, type Group } from './lib/groups'
   import { get } from 'svelte/store'
   import { initMultiDevice, resetManagers } from './lib/privateChats'
+  import { initFollowing } from './lib/following'
   import CreateGroup from './components/CreateGroup.svelte'
   import GroupChatView from './components/GroupChatView.svelte'
   import GroupDetailsView from './components/GroupDetailsView.svelte'
@@ -40,6 +41,18 @@
   // Mobile: which panel to show - 'sidebar' or 'main'
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
   let duplicateTab = $state(false)
+
+  // If a chat is deleted (e.g. rejected request), ensure we don't keep rendering it.
+  $effect(() => {
+    const chatId = selectedChat?.id
+    if (!chatId) return
+    if ($chats.has(chatId)) return
+    selectedChat = null
+    currentChat.set(null)
+    if (currentView === 'chat') {
+      mobileView = 'sidebar'
+    }
+  })
 
   // Notify service worker when chat is opened/closed
   $effect(() => {
@@ -99,6 +112,7 @@
 
   onMount(() => {
     let cleanup: (() => void) | undefined
+    const stopFollowing = initFollowing()
 
     // Run async initialization
     ;(async () => {
@@ -289,6 +303,7 @@
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
       navigator.serviceWorker?.removeEventListener('message', handleGetOpenChat)
+      stopFollowing()
     }
     })()
 

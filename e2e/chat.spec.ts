@@ -90,19 +90,28 @@ function escapeRegExp(value: string): string {
 
 async function openChatFromList(page: Page, message: string): Promise<void> {
   const chatList = page.getByTestId('sidebar-chat-list')
-  const listItem = chatList.getByRole('button', { name: new RegExp(escapeRegExp(message)) }).first()
-  try {
-    await expect(listItem).toBeVisible({ timeout: 30000 })
-    await listItem.click()
-    return
-  } catch (err) {
-    const chatButtons = chatList.getByRole('button')
-    if (await chatButtons.count() === 1) {
-      await chatButtons.first().click()
-      return
+  const listItemName = new RegExp(escapeRegExp(message))
+
+  // Chats may appear under Requests first (message requests). Poll both tabs so we don't
+  // waste a full timeout waiting on All when the chat is in Requests.
+  const allTab = page.getByTestId('sidebar-tab-all')
+  const requestsTab = page.getByTestId('sidebar-tab-requests')
+  const deadline = Date.now() + 30_000
+
+  while (Date.now() < deadline) {
+    for (const tabButton of [allTab, requestsTab]) {
+      await tabButton.click().catch(() => {})
+      const listItem = chatList.getByRole('button', { name: listItemName }).first()
+      if (await listItem.isVisible().catch(() => false)) {
+        await listItem.scrollIntoViewIfNeeded().catch(() => {})
+        await listItem.click()
+        return
+      }
     }
-    throw err
+    await page.waitForTimeout(250)
   }
+
+  throw new Error(`Could not find chat list item for message preview: ${message}`)
 }
 
 async function joinViaPasteAndSync(inviter: Page, joiner: Page, inviteUrl: string, message: string): Promise<void> {
@@ -170,6 +179,7 @@ test.describe('iris chat', () => {
       await joiner.getByRole('button', { name: 'Send' }).click()
 
       // Verify unread indicator shows up on the list item.
+      await inviter.getByTestId('sidebar-tab-requests').click()
       const listItem = inviter
         .getByTestId('sidebar-chat-list')
         .getByRole('button', { name: new RegExp(escapeRegExp(secondMessage)) })
@@ -853,7 +863,7 @@ test.describe('iris chat', () => {
         await safeReload(page1)
 
         // Open the chat again
-        await page1.locator('button').filter({ hasText: 'React to this!' }).click()
+        await openChatFromList(page1, 'React to this!')
 
         // Wait for chat to load
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
@@ -1251,6 +1261,7 @@ test.describe('iris chat', () => {
 
         // User 1 goes back
         await page1.getByRole('button', { name: 'Back' }).click()
+        await page1.getByTestId('sidebar-tab-all').click()
         // Verify sidebar shows the message preview before reload
         await expect(page1.getByText('Before reload')).toBeVisible()
         // Small delay to ensure IndexedDB async save completes

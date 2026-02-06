@@ -1,6 +1,11 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
+  import { identity } from '../lib/identity'
+  import { following } from '../lib/following'
+  import { messageRequests, acceptChat, rejectChat } from '../lib/messageRequests'
+  import { messageRequestSettings } from '../lib/messageRequestSettings'
+  import { isMessageRequestChat, type MessageRequestPolicyContext } from '../lib/messageRequestPolicy'
   import { isTyping } from '../lib/typingState'
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
@@ -55,6 +60,17 @@
     await setDmDisappearingMessages(chat.id, ttlSeconds)
   }
 
+  let policyCtx = $derived.by((): MessageRequestPolicyContext => ({
+    myPubkey: $identity?.pubkey || null,
+    following: $following,
+    acceptedChats: $messageRequests.acceptedChats,
+    rejectedChats: $messageRequests.rejectedChats,
+    receiveMessageRequests: $messageRequestSettings.receiveMessageRequests,
+  }))
+
+  let effectiveChat = $derived($currentChat || chat)
+  let isRequest = $derived(isMessageRequestChat(effectiveChat, policyCtx))
+
   // Throttled typing event sender - recreated per chat
   let sendThrottledTyping = $derived(createTypingThrottle(() => sendTypingEvent(chat), 3000))
 
@@ -86,6 +102,17 @@
   const MAX_PREVIEW_SIZE = 10 * 1024 * 1024
 
   function handleDelete() {
+    deleteChat(chat)
+    onleave()
+  }
+
+  function handleAcceptRequest() {
+    acceptChat(chat.recipientPubkey)
+    requestAnimationFrame(() => inputRef?.focus())
+  }
+
+  function handleRejectRequest() {
+    rejectChat(chat.recipientPubkey)
     deleteChat(chat)
     onleave()
   }
@@ -385,6 +412,23 @@
       {/if}
     </div>
   </header>
+
+  {#if isRequest}
+    <div class="px-4 py-3 border-b border-surface-lighter bg-surface flex items-center justify-between gap-3">
+      <div class="min-w-0">
+        <p class="text-sm font-medium">Message request</p>
+        <p class="text-xs text-gray-400 truncate">Accept to start chatting (no receipts or typing until then)</p>
+      </div>
+      <div class="flex gap-2 flex-shrink-0">
+        <button class="btn-primary text-sm px-3" onclick={handleAcceptRequest} data-testid="request-accept-chat">
+          Accept
+        </button>
+        <button class="btn-ghost text-sm px-3 text-red-400" onclick={handleRejectRequest} data-testid="request-reject-chat">
+          Reject
+        </button>
+      </div>
+    </div>
+  {/if}
 
   {#if showMenu}
     <button

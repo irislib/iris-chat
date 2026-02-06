@@ -138,6 +138,8 @@ import { typingSettings } from './typingSettings'
 import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
 import { expirationStore } from './expirationStore'
 import { parseChatSettingsContent } from './chatSettings'
+import { acceptChat } from './messageRequests'
+import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
 
 export interface ChatMessage {
   id: string
@@ -250,10 +252,20 @@ function syncManagerChats(manager: SessionManager): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
+  const policyCtx = getMessageRequestPolicyContext()
+
   const currentChats = get(chats)
   for (const [pubkey, record] of manager.getUserRecords()) {
     if (pubkey === myPubkey) continue
     if (currentChats.has(pubkey)) continue
+    if (policyCtx.rejectedChats?.[pubkey]) continue
+    if (
+      policyCtx.receiveMessageRequests === false &&
+      !policyCtx.following.has(pubkey) &&
+      !policyCtx.acceptedChats?.[pubkey]
+    ) {
+      continue
+    }
 
     const hasSession = Array.from(record.devices.values()).some((device) =>
       Boolean(device.activeSession) || device.inactiveSessions.length > 0
@@ -727,17 +739,27 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
     }
   }
 
+  const policyCtx = getMessageRequestPolicyContext()
   const existing = get(chats).get(chatId)
+  const shouldIgnore = shouldIgnoreIncomingEvent(
+    existing || { recipientPubkey: chatId, messages: [] },
+    effectiveFromPubkey === myPubkey,
+    policyCtx
+  )
+  if (shouldIgnore) return
+
   const chatSession = await ensureManagerChat(chatId)
 
   const isEmptyChat = (existing ? existing.messages.length : chatSession.messages.length) === 0
-  const shouldAutoOpen =
+  const isFirstInboundMessage =
     effectiveFromPubkey !== myPubkey &&
     rumor.kind === CHAT_MESSAGE_KIND &&
     isEmptyChat
 
-  if (shouldAutoOpen) {
-    triggerAutoOpen(chatSession)
+  if (isFirstInboundMessage) {
+    if (isChatAccepted(chatSession, policyCtx)) {
+      triggerAutoOpen(chatSession)
+    }
     // Rotate our published device invite after the first successful inbound session
     // so subsequent new chats can establish their own sessions reliably.
     void rotateDeviceInvite().catch((e) =>
@@ -752,6 +774,8 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   if (invite.type === 'pubkey') {
     const existing = get(chats).get(invite.pubkey)
     const chatSession = await ensureManagerChat(invite.pubkey)
+    // User-initiated join: treat as accepted even before sending a message.
+    acceptChat(invite.pubkey)
     if (!existing) {
       // Device registration/AppKeys publishing is important for reliable multi-device messaging.
       // Don't block UI navigation on it: joining should be instant; registration can be slow.
@@ -819,6 +843,9 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
 
   // Update notification subscription for new session
   updateDMSubscription()
+
+  // User-initiated join: treat as accepted even before sending a message.
+  acceptChat(chatSession.recipientPubkey)
 
   return chatSession
 }
@@ -946,8 +973,18 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
 
   const isMine = rumor.pubkey === myPubkey
 
+  // Message requests:
+  // - if requests are disabled (or sender rejected), ignore all incoming events for unaccepted chats.
+  // - do not send receipts for unaccepted chats.
+  const policyCtx = getMessageRequestPolicyContext()
+  if (chatSession.mode === 'legacy') {
+    const shouldIgnore = shouldIgnoreIncomingEvent(currentSession, isMine, policyCtx)
+    if (shouldIgnore) return
+  }
+  const chatAccepted = isChatAccepted(currentSession, policyCtx)
+
   // Auto-set delivered status for incoming messages
-  const shouldAckDelivered = !isMine && get(receiptSettings).sendDeliveryReceipts
+  const shouldAckDelivered = !isMine && get(receiptSettings).sendDeliveryReceipts && chatAccepted
 
   // Extract NIP-40 expiration tag
   const expiresAt = getExpirationTimestampSeconds(rumor)
@@ -1178,7 +1215,8 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
     currentChat.set(updatedSession)
   }
 
-  if (get(receiptSettings).sendReadReceipts) {
+  const policyCtx = getMessageRequestPolicyContext()
+  if (get(receiptSettings).sendReadReceipts && isChatAccepted(updatedSession, policyCtx)) {
     sendReceipt(updatedSession, 'seen', toAck)
   }
 }
@@ -1220,6 +1258,12 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   const currentChats = get(chats)
   const currentSession = currentChats.get(chatSession.id)
   if (!currentSession) return
+
+  // Sending a message is an implicit accept for message requests.
+  const policyCtx = getMessageRequestPolicyContext()
+  if (!isChatAccepted(currentSession, policyCtx)) {
+    acceptChat(currentSession.recipientPubkey)
+  }
 
   // Add message optimistically - use outer event ID for service worker lookup
   const message: ChatMessage = {
@@ -1516,6 +1560,10 @@ export async function loadChatsFromStorage(): Promise<void> {
 // Send a typing indicator event
 export function sendTypingEvent(chatSession: ChatSession): void {
   if (!get(typingSettings).sendTypingIndicators) return
+
+  // Don't reveal we're typing until a request is accepted.
+  const policyCtx = getMessageRequestPolicyContext()
+  if (!isChatAccepted(chatSession, policyCtx)) return
 
   if (chatSession.mode === 'manager') {
     const manager = getSessionManager()

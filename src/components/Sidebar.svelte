@@ -1,8 +1,12 @@
 <script lang="ts">
   import { identity } from '../lib/identity'
-  import { chats, type ChatSession } from '../lib/chat'
+  import { chats, deleteChat, type ChatSession } from '../lib/chat'
   import { groups, groupMessages } from '../lib/groups'
   import { relayStore } from '../lib/relayStore'
+  import { following } from '../lib/following'
+  import { messageRequests, acceptChat, rejectChat } from '../lib/messageRequests'
+  import { messageRequestSettings } from '../lib/messageRequestSettings'
+  import { isMessageRequestChat, type MessageRequestPolicyContext } from '../lib/messageRequestPolicy'
   import Avatar from './Avatar.svelte'
   import ChatListItem from './ChatListItem.svelte'
   import GroupChatListItem from './GroupChatListItem.svelte'
@@ -20,8 +24,26 @@
   let { selectedChatId, selectedGroupId, onSelectChat, onSelectGroup, onNewChat, onSettings }: Props = $props()
 
   let showConnectivity = $derived($relayStore.showConnectivity)
+  let activeTab = $state<'all' | 'requests'>('all')
 
-  // Unified sorted items: DMs and groups merged by last message time
+  let policyCtx = $derived.by((): MessageRequestPolicyContext => ({
+    myPubkey: $identity?.pubkey || null,
+    following: $following,
+    acceptedChats: $messageRequests.acceptedChats,
+    rejectedChats: $messageRequests.rejectedChats,
+    receiveMessageRequests: $messageRequestSettings.receiveMessageRequests,
+  }))
+
+  let requestCount = $derived.by(() => {
+    let count = 0
+    for (const chat of $chats.values()) {
+      if (policyCtx.rejectedChats?.[chat.recipientPubkey]) continue
+      if (isMessageRequestChat(chat, policyCtx)) count += 1
+    }
+    return count
+  })
+
+  // Unified sorted items per tab: DMs and groups merged by last message time
   type SidebarItem =
     | { type: 'dm'; chat: ChatSession; lastTime: number }
     | { type: 'group'; groupId: string; lastTime: number }
@@ -30,14 +52,20 @@
     const items: SidebarItem[] = []
 
     for (const chat of $chats.values()) {
+      if (policyCtx.rejectedChats?.[chat.recipientPubkey]) continue
+      const isRequest = isMessageRequestChat(chat, policyCtx)
+      if (activeTab === 'all' && isRequest) continue
+      if (activeTab === 'requests' && !isRequest) continue
       const lastTime = chat.messages[chat.messages.length - 1]?.timestamp || 0
       items.push({ type: 'dm', chat, lastTime })
     }
 
-    for (const [groupId, group] of $groups.entries()) {
-      const msgs = $groupMessages.get(groupId) || []
-      const lastTime = msgs[msgs.length - 1]?.timestamp || group.createdAt || 0
-      items.push({ type: 'group', groupId, lastTime })
+    if (activeTab === 'all') {
+      for (const [groupId, group] of $groups.entries()) {
+        const msgs = $groupMessages.get(groupId) || []
+        const lastTime = msgs[msgs.length - 1]?.timestamp || group.createdAt || 0
+        items.push({ type: 'group', groupId, lastTime })
+      }
     }
 
     return items.sort((a, b) => b.lastTime - a.lastTime)
@@ -81,13 +109,50 @@
     </button>
   </div>
 
+  <!-- Tabs -->
+  <div class="px-3 pt-2 pb-1 border-b border-surface-lighter flex gap-2 flex-shrink-0">
+    <button
+      class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors {activeTab === 'all' ? 'bg-surface-light text-white' : 'text-gray-400 hover:bg-surface-light/50'}"
+      onclick={() => (activeTab = 'all')}
+      data-testid="sidebar-tab-all"
+      aria-pressed={activeTab === 'all'}
+    >
+      All
+    </button>
+    <button
+      class="flex-1 px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 {activeTab === 'requests' ? 'bg-surface-light text-white' : 'text-gray-400 hover:bg-surface-light/50'}"
+      onclick={() => (activeTab = 'requests')}
+      data-testid="sidebar-tab-requests"
+      aria-pressed={activeTab === 'requests'}
+    >
+      Requests
+      {#if requestCount > 0}
+        <span class="min-w-5 h-5 px-1.5 rounded-full bg-primary text-white text-xs flex items-center justify-center">
+          {requestCount > 99 ? '99+' : requestCount}
+        </span>
+      {/if}
+    </button>
+  </div>
+
   <!-- Chat List -->
   <div class="flex-1 overflow-y-auto overscroll-contain" data-testid="sidebar-chat-list">
     {#if sortedItems.length > 0}
       {#each sortedItems as item (item.type === 'dm' ? item.chat.id : item.groupId)}
         {#if item.type === 'dm'}
           <div class="{selectedChatId === item.chat.id ? 'bg-surface-light' : ''}">
-            <ChatListItem chat={item.chat} onopen={() => onSelectChat(item.chat)} />
+            <ChatListItem
+              chat={item.chat}
+              onopen={() => onSelectChat(item.chat)}
+              showRequestActions={activeTab === 'requests'}
+              onaccept={() => {
+                acceptChat(item.chat.recipientPubkey)
+                onSelectChat(item.chat)
+              }}
+              onreject={() => {
+                rejectChat(item.chat.recipientPubkey)
+                deleteChat(item.chat)
+              }}
+            />
           </div>
         {:else}
           {@const group = $groups.get(item.groupId)}
