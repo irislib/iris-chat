@@ -80,7 +80,9 @@ void main() {
     );
   });
 
-  testWidgets('pasting a chat.iris.to/#npub link opens a chat', (tester) async {
+  testWidgets('pasting a chat.iris.to/#npub link and tapping Join opens a chat', (
+    tester,
+  ) async {
     final mockInvites = _MockInviteLocalDatasource();
     final mockSessions = _MockSessionLocalDatasource();
     final mockProfiles = _MockProfileService();
@@ -135,6 +137,9 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), url);
+    await tester.pump();
+
+    await tester.tap(find.text('Join'));
     await tester.pumpAndSettle();
 
     // Navigated to the chat route using the decoded hex pubkey.

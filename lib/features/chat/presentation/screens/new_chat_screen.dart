@@ -22,6 +22,7 @@ class NewChatScreen extends ConsumerStatefulWidget {
 class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   final _pasteController = TextEditingController();
   bool _isJoining = false;
+  bool _canJoin = false;
 
   @override
   void initState() {
@@ -73,6 +74,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
             .ensureSessionForRecipient(pubkeyHex);
         if (!mounted) return;
         _pasteController.clear();
+        setState(() => _canJoin = false);
         context.go('/chats/${session.id}');
       } catch (e) {
         if (!mounted) return;
@@ -94,6 +96,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
             .acceptLinkInviteFromUrl(url);
         if (ok && mounted) {
           _pasteController.clear();
+          setState(() => _canJoin = false);
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(const SnackBar(content: Text('Device linked')));
@@ -110,6 +113,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
           .read(inviteStateProvider.notifier)
           .acceptInviteFromUrl(url);
       if (sessionId != null && mounted) {
+        _pasteController.clear();
+        setState(() => _canJoin = false);
         context.go('/chats/$sessionId');
       } else if (mounted) {
         final error = ref.read(inviteStateProvider).error;
@@ -124,10 +129,11 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
 
   void _onPasteChanged(String value) {
     final trimmed = value.trim();
-    if (trimmed.isEmpty) return;
-    if (looksLikeInviteUrl(trimmed) ||
-        extractNostrIdentityPubkeyHex(trimmed) != null) {
-      _joinChat();
+    final canJoin = trimmed.isNotEmpty &&
+        (looksLikeInviteUrl(trimmed) ||
+            extractNostrIdentityPubkeyHex(trimmed) != null);
+    if (canJoin != _canJoin) {
+      setState(() => _canJoin = canJoin);
     }
   }
 
@@ -172,6 +178,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   _JoinChatCard(
                     controller: _pasteController,
                     isJoining: _isJoining,
+                    canJoin: _canJoin,
                     onJoin: _joinChat,
                     onChanged: _onPasteChanged,
                     onScanQR: () => context.push('/invite/scan'),
@@ -206,6 +213,7 @@ class _JoinChatCard extends StatelessWidget {
   const _JoinChatCard({
     required this.controller,
     required this.isJoining,
+    required this.canJoin,
     required this.onJoin,
     required this.onChanged,
     required this.onScanQR,
@@ -213,6 +221,7 @@ class _JoinChatCard extends StatelessWidget {
 
   final TextEditingController controller;
   final bool isJoining;
+  final bool canJoin;
   final VoidCallback onJoin;
   final ValueChanged<String> onChanged;
   final VoidCallback onScanQR;
@@ -239,7 +248,7 @@ class _JoinChatCard extends StatelessWidget {
               controller: controller,
               enabled: !isJoining,
               decoration: const InputDecoration(
-                hintText: 'Paste invite or npub link',
+                hintText: 'Paste invite or npub link, then tap Join',
                 border: OutlineInputBorder(),
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: 12,
@@ -254,6 +263,12 @@ class _JoinChatCard extends StatelessWidget {
               const LinearProgressIndicator(),
             ],
             const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: isJoining || !canJoin ? null : onJoin,
+              icon: const Icon(Icons.arrow_forward),
+              label: const Text('Join'),
+            ),
+            const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: isJoining ? null : onScanQR,
               icon: const Icon(Icons.qr_code_scanner),
