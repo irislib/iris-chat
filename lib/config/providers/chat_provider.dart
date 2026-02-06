@@ -45,7 +45,7 @@ abstract class ChatState with _$ChatState {
 /// Notifier for session state.
 class SessionNotifier extends StateNotifier<SessionState> {
   SessionNotifier(this._sessionDatasource, this._profileService)
-      : super(const SessionState());
+    : super(const SessionState());
 
   final SessionLocalDatasource _sessionDatasource;
   final ProfileService _profileService;
@@ -92,7 +92,8 @@ class SessionNotifier extends StateNotifier<SessionState> {
     final updatedSessions = <ChatSession>[];
 
     for (final session in state.sessions) {
-      if (session.recipientPubkeyHex == pubkey && session.recipientName != name) {
+      if (session.recipientPubkeyHex == pubkey &&
+          session.recipientName != name) {
         final updated = session.copyWith(recipientName: name);
         await _sessionDatasource.saveSession(updated);
         updatedSessions.add(updated);
@@ -114,9 +115,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
     // (e.g., relay replays, reconnects, or overlapping flows).
     final existingIndex = state.sessions.indexWhere((s) => s.id == session.id);
     if (existingIndex == -1) {
-      state = state.copyWith(
-        sessions: [session, ...state.sessions],
-      );
+      state = state.copyWith(sessions: [session, ...state.sessions]);
       return;
     }
 
@@ -128,6 +127,27 @@ class SessionNotifier extends StateNotifier<SessionState> {
       updated.insert(0, session);
     }
     state = state.copyWith(sessions: updated);
+  }
+
+  /// Ensure a session exists for [recipientPubkeyHex] and return it.
+  ///
+  /// This is used for "public chat links" that only contain a Nostr identity
+  /// (npub/nprofile) rather than an Iris invite payload.
+  Future<ChatSession> ensureSessionForRecipient(
+    String recipientPubkeyHex,
+  ) async {
+    final normalized = recipientPubkeyHex.toLowerCase().trim();
+    final existing = await _sessionDatasource.getSessionByRecipient(normalized);
+    final session =
+        existing ??
+        ChatSession(
+          id: normalized,
+          recipientPubkeyHex: normalized,
+          createdAt: DateTime.now(),
+        );
+
+    await addSession(session);
+    return session;
   }
 
   /// Update a session.
@@ -308,10 +328,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// Send a message.
   Future<void> sendMessage(String sessionId, String text) async {
     // Create optimistic message
-    final message = ChatMessage.outgoing(
-      sessionId: sessionId,
-      text: text,
-    );
+    final message = ChatMessage.outgoing(sessionId: sessionId, text: text);
 
     // Add to UI immediately
     addMessageOptimistic(message);
@@ -327,13 +344,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
   ) async {
     // Find existing message or create placeholder
     final existingMessages = state.messages[sessionId] ?? [];
-    final existingMessage = existingMessages
-        .cast<ChatMessage?>()
-        .firstWhere((m) => m?.id == messageId, orElse: () => null);
+    final existingMessage = existingMessages.cast<ChatMessage?>().firstWhere(
+      (m) => m?.id == messageId,
+      orElse: () => null,
+    );
 
     if (existingMessage != null) {
       // Update to pending and send
-      final pendingMessage = existingMessage.copyWith(status: MessageStatus.pending);
+      final pendingMessage = existingMessage.copyWith(
+        status: MessageStatus.pending,
+      );
       await _sendMessageInternal(pendingMessage);
     } else {
       // Message not in state, create it
@@ -368,8 +388,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       );
 
       // Update session state from manager
-      final newState =
-          await _sessionManagerService.getActiveSessionState(session.recipientPubkeyHex);
+      final newState = await _sessionManagerService.getActiveSessionState(
+        session.recipientPubkeyHex,
+      );
       if (newState != null) {
         await _sessionDatasource.saveSessionState(message.sessionId, newState);
       }
@@ -415,8 +436,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // Legacy fallback: treat decrypted plaintext as a chat message.
       if (rumor == null) {
-        final existingSession =
-            await _sessionDatasource.getSessionByRecipient(senderPubkeyHex);
+        final existingSession = await _sessionDatasource.getSessionByRecipient(
+          senderPubkeyHex,
+        );
         final sessionId = existingSession?.id ?? senderPubkeyHex;
 
         if (existingSession == null) {
@@ -468,8 +490,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
 
       // Find or create session by recipient pubkey (peer pubkey).
-      final existingSession =
-          await _sessionDatasource.getSessionByRecipient(peerPubkeyHex);
+      final existingSession = await _sessionDatasource.getSessionByRecipient(
+        peerPubkeyHex,
+      );
       final sessionId = existingSession?.id ?? peerPubkeyHex;
 
       if (existingSession == null) {
@@ -516,7 +539,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (rumor.kind == _kReactionKind) {
         final messageId = getFirstTagValue(rumor.tags, 'e');
         if (messageId == null || messageId.isEmpty) return null;
-        handleIncomingReaction(sessionId, messageId, rumor.content, rumor.pubkey);
+        handleIncomingReaction(
+          sessionId,
+          messageId,
+          rumor.content,
+          rumor.pubkey,
+        );
         return null;
       }
 
@@ -548,8 +576,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
         sessionId: sessionId,
         text: rumor.content,
         timestamp: rumorTimestamp(rumor),
-        direction:
-            isMine ? MessageDirection.outgoing : MessageDirection.incoming,
+        direction: isMine
+            ? MessageDirection.outgoing
+            : MessageDirection.incoming,
         status: isMine ? MessageStatus.sent : MessageStatus.delivered,
         eventId: eventId,
         rumorId: rumor.id,
@@ -625,9 +654,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return m.copyWith(status: MessageStatus.seen);
     }).toList();
 
-    state = state.copyWith(
-      messages: {...state.messages, sessionId: updated},
-    );
+    state = state.copyWith(messages: {...state.messages, sessionId: updated});
   }
 
   Future<void> notifyTyping(String sessionId) async {
@@ -667,8 +694,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _clearRemoteTyping(String sessionId, {int? messageTimestampMs}) {
     if (messageTimestampMs != null) {
       final prev = _lastMessageAtMs[sessionId] ?? 0;
-      _lastMessageAtMs[sessionId] =
-          messageTimestampMs > prev ? messageTimestampMs : prev;
+      _lastMessageAtMs[sessionId] = messageTimestampMs > prev
+          ? messageTimestampMs
+          : prev;
     }
 
     _typingExpiryTimers[sessionId]?.cancel();
@@ -743,7 +771,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   /// Send a reaction to a message.
   /// Note: messageId here is the internal message ID, we need to use eventId for the reaction payload
-  Future<void> sendReaction(String sessionId, String messageId, String emoji, String myPubkey) async {
+  Future<void> sendReaction(
+    String sessionId,
+    String messageId,
+    String emoji,
+    String myPubkey,
+  ) async {
     try {
       // Find the message to get its eventId (Nostr event ID)
       final messages = state.messages[sessionId] ?? [];
@@ -781,8 +814,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       );
 
       // Update session state from manager
-      final newState =
-          await _sessionManagerService.getActiveSessionState(session.recipientPubkeyHex);
+      final newState = await _sessionManagerService.getActiveSessionState(
+        session.recipientPubkeyHex,
+      );
       if (newState != null) {
         await _sessionDatasource.saveSessionState(sessionId, newState);
       }
@@ -796,13 +830,23 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   /// Handle incoming reaction.
-  void handleIncomingReaction(String sessionId, String messageId, String emoji, String fromPubkey) {
+  void handleIncomingReaction(
+    String sessionId,
+    String messageId,
+    String emoji,
+    String fromPubkey,
+  ) {
     _applyReaction(sessionId, messageId, emoji, fromPubkey);
   }
 
   /// Apply a reaction to a message (used for both sent and received reactions).
   /// messageId can be either internal id or eventId (Nostr event ID)
-  void _applyReaction(String sessionId, String messageId, String emoji, String pubkey) {
+  void _applyReaction(
+    String sessionId,
+    String messageId,
+    String emoji,
+    String pubkey,
+  ) {
     final currentMessages = state.messages[sessionId] ?? [];
     // Match by internal id first, then by eventId
     var messageIndex = currentMessages.indexWhere((m) => m.id == messageId);
@@ -845,7 +889,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
   static Map<String, dynamic>? parseReactionPayload(String content) {
     try {
       final parsed = jsonDecode(content) as Map<String, dynamic>;
-      if (parsed['type'] == 'reaction' && parsed['messageId'] != null && parsed['emoji'] != null) {
+      if (parsed['type'] == 'reaction' &&
+          parsed['messageId'] != null &&
+          parsed['emoji'] != null) {
         return parsed;
       }
     } catch (_) {}
@@ -910,22 +956,28 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
 
 final sessionStateProvider =
     StateNotifierProvider<SessionNotifier, SessionState>((ref) {
-  final datasource = ref.watch(sessionDatasourceProvider);
-  final profileService = ref.watch(profileServiceProvider);
-  return SessionNotifier(datasource, profileService);
-});
+      final datasource = ref.watch(sessionDatasourceProvider);
+      final profileService = ref.watch(profileServiceProvider);
+      return SessionNotifier(datasource, profileService);
+    });
 
 final chatStateProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   final messageDatasource = ref.watch(messageDatasourceProvider);
   final sessionDatasource = ref.watch(sessionDatasourceProvider);
   final sessionManagerService = ref.watch(sessionManagerServiceProvider);
-  return ChatNotifier(messageDatasource, sessionDatasource, sessionManagerService);
+  return ChatNotifier(
+    messageDatasource,
+    sessionDatasource,
+    sessionManagerService,
+  );
 });
 
 /// Provider for messages in a specific session.
 /// Performance: Uses select() to only rebuild when messages for this specific session change.
-final sessionMessagesProvider =
-    Provider.family<List<ChatMessage>, String>((ref, sessionId) {
+final sessionMessagesProvider = Provider.family<List<ChatMessage>, String>((
+  ref,
+  sessionId,
+) {
   // Use select to only watch messages for this specific session
   return ref.watch(
     chatStateProvider.select((state) => state.messages[sessionId] ?? []),
@@ -934,8 +986,10 @@ final sessionMessagesProvider =
 
 /// Provider for message count in a specific session.
 /// Useful for UI that only needs to know if there are messages without watching the full list.
-final sessionMessageCountProvider =
-    Provider.family<int, String>((ref, sessionId) {
+final sessionMessageCountProvider = Provider.family<int, String>((
+  ref,
+  sessionId,
+) {
   return ref.watch(
     chatStateProvider.select((state) => state.messages[sessionId]?.length ?? 0),
   );
@@ -943,8 +997,10 @@ final sessionMessageCountProvider =
 
 /// Provider for checking if a session has messages.
 /// More efficient than watching the full message list when you only need a boolean.
-final sessionHasMessagesProvider =
-    Provider.family<bool, String>((ref, sessionId) {
+final sessionHasMessagesProvider = Provider.family<bool, String>((
+  ref,
+  sessionId,
+) {
   return ref.watch(
     chatStateProvider.select(
       (state) => state.messages[sessionId]?.isNotEmpty ?? false,

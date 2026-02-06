@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../../../config/providers/chat_provider.dart';
 import '../../../../config/providers/invite_provider.dart';
 import '../../../../core/utils/invite_url.dart';
 
@@ -30,14 +31,25 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
   Future<void> _processInvite(String url) async {
     if (_isProcessing) return;
 
+    // Public chat links (npub/nprofile) are not Iris invites.
     if (!looksLikeInviteUrl(url)) {
-      if (looksLikeNostrIdentityLink(url)) {
-        _showError(
-          'That looks like a Nostr profile (npub), not an Iris Chat invite. Ask them to share an invite link from Iris Chat.',
-        );
+      final pubkeyHex = extractNostrIdentityPubkeyHex(url);
+      if (pubkeyHex == null) {
+        _showError('That does not look like an invite link or chat link.');
         return;
       }
-      _showError('That does not look like an invite link.');
+
+      setState(() => _isProcessing = true);
+      try {
+        final session = await ref
+            .read(sessionStateProvider.notifier)
+            .ensureSessionForRecipient(pubkeyHex);
+        if (mounted) {
+          context.go('/chats/${session.id}');
+        }
+      } finally {
+        if (mounted) setState(() => _isProcessing = false);
+      }
       return;
     }
 
@@ -101,8 +113,9 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
   }
 
   bool _isValidInviteUrl(String url) {
-    // Check if it looks like an invite URL (avoid false-positives like chat.iris.to/#npub...)
-    return looksLikeInviteUrl(url);
+    // Accept both Iris invites and public chat links (npub/nprofile).
+    return looksLikeInviteUrl(url) ||
+        extractNostrIdentityPubkeyHex(url) != null;
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -199,7 +212,8 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
             controller: _urlController,
             decoration: InputDecoration(
               labelText: 'Invite Link',
-              hintText: 'https://iris.to/invite/...',
+              hintText:
+                  'https://iris.to/invite/... or https://chat.iris.to/#npub...',
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 icon: const Icon(Icons.paste),

@@ -1,8 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/core/utils/invite_url.dart';
+import 'package:nostr/nostr.dart' as nostr;
 
 void main() {
   group('invite_url', () {
+    const pubkeyHex =
+        '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    final npub = nostr.Nip19.encodePubkey(pubkeyHex) as String;
+
     group('looksLikeInviteUrl', () {
       test('accepts JSON fragment invites', () {
         const url =
@@ -22,29 +27,55 @@ void main() {
       });
 
       test('rejects chat.iris.to npub profile links', () {
-        const url =
-            'https://chat.iris.to/#npub143rgr4cphs52qxt864lz8crt7nsagkn68zufs473p2zw67u3xh0qka59k2';
+        final url = 'https://chat.iris.to/#$npub';
         expect(looksLikeInviteUrl(url), isFalse);
       });
     });
 
     group('looksLikeNostrIdentityLink', () {
       test('detects npub in URL fragment', () {
-        const url =
-            'https://chat.iris.to/#npub143rgr4cphs52qxt864lz8crt7nsagkn68zufs473p2zw67u3xh0qka59k2';
+        final url = 'https://chat.iris.to/#$npub';
         expect(looksLikeNostrIdentityLink(url), isTrue);
       });
 
       test('detects bare npub', () {
-        const npub =
-            'npub143rgr4cphs52qxt864lz8crt7nsagkn68zufs473p2zw67u3xh0qka59k2';
         expect(looksLikeNostrIdentityLink(npub), isTrue);
       });
 
       test('detects nostr:npub scheme', () {
-        const url =
-            'nostr:npub143rgr4cphs52qxt864lz8crt7nsagkn68zufs473p2zw67u3xh0qka59k2';
+        final url = 'nostr:$npub';
         expect(looksLikeNostrIdentityLink(url), isTrue);
+      });
+    });
+
+    group('extractNostrIdentityPubkeyHex', () {
+      test('extracts pubkey hex from bare npub', () {
+        expect(extractNostrIdentityPubkeyHex(npub), pubkeyHex);
+      });
+
+      test('extracts pubkey hex from nostr:npub scheme', () {
+        expect(extractNostrIdentityPubkeyHex('nostr:$npub'), pubkeyHex);
+      });
+
+      test('extracts pubkey hex from URL fragment', () {
+        expect(
+          extractNostrIdentityPubkeyHex('https://chat.iris.to/#$npub'),
+          pubkeyHex,
+        );
+      });
+
+      test('extracts pubkey hex from URL fragment with hash-routing slash', () {
+        expect(
+          extractNostrIdentityPubkeyHex('https://chat.iris.to/#/$npub'),
+          pubkeyHex,
+        );
+      });
+
+      test('extracts pubkey hex from nprofile', () {
+        // NIP-19 nprofile encodes a TLV where type=0 is the 32-byte pubkey.
+        const tlvHex = '0020$pubkeyHex';
+        final nprofile = nostr.bech32Encode('nprofile', tlvHex);
+        expect(extractNostrIdentityPubkeyHex(nprofile), pubkeyHex);
       });
     });
 

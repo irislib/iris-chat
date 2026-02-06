@@ -1,10 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:go_router/go_router.dart';
 
 /// Creates a test app wrapper with necessary providers and configuration
-Widget createTestApp(
-  Widget child, {
+Widget createTestApp(Widget child, {List<Override> overrides = const []}) {
+  return ProviderScope(
+    overrides: overrides,
+    child: ScreenUtilInit(
+      designSize: const Size(390, 844),
+      minTextAdapt: true,
+      builder: (context, _) {
+        return MaterialApp(home: child);
+      },
+    ),
+  );
+}
+
+/// Creates a test app wrapper using a [GoRouter] (for widgets that use
+/// `context.go(...)`).
+Widget createTestRouterApp(
+  GoRouter router, {
   List<Override> overrides = const [],
 }) {
   return ProviderScope(
@@ -13,9 +29,7 @@ Widget createTestApp(
       designSize: const Size(390, 844),
       minTextAdapt: true,
       builder: (context, _) {
-        return MaterialApp(
-          home: child,
-        );
+        return MaterialApp.router(routerConfig: router);
       },
     ),
   );

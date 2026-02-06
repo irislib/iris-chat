@@ -24,17 +24,16 @@ void main() {
   });
 
   setUpAll(() {
-    registerFallbackValue(Invite(
-      id: 'fallback',
-      inviterPubkeyHex: 'pubkey',
-      createdAt: DateTime.now(),
-    ));
+    registerFallbackValue(
+      Invite(
+        id: 'fallback',
+        inviterPubkeyHex: 'pubkey',
+        createdAt: DateTime.now(),
+      ),
+    );
   });
 
-  Widget buildScanInviteScreen({
-    bool isAccepting = false,
-    String? error,
-  }) {
+  Widget buildScanInviteScreen({bool isAccepting = false, String? error}) {
     return createTestApp(
       const ScanInviteScreen(),
       overrides: [
@@ -51,10 +50,7 @@ void main() {
         }),
         inviteStateProvider.overrideWith((ref) {
           final notifier = InviteNotifier(mockInviteDatasource, ref);
-          notifier.state = InviteState(
-            isAccepting: isAccepting,
-            error: error,
-          );
+          notifier.state = InviteState(isAccepting: isAccepting, error: error);
           return notifier;
         }),
       ],
@@ -78,8 +74,9 @@ void main() {
         expect(find.text('Paste'), findsOneWidget);
       });
 
-      testWidgets('toggle button changes to Scan when in paste mode',
-          (tester) async {
+      testWidgets('toggle button changes to Scan when in paste mode', (
+        tester,
+      ) async {
         await tester.pumpWidget(buildScanInviteScreen());
         await tester.pump();
 
@@ -124,7 +121,12 @@ void main() {
         await tester.tap(find.text('Paste'));
         await tester.pumpAndSettle();
 
-        expect(find.text('https://iris.to/invite/...'), findsOneWidget);
+        expect(
+          find.text(
+            'https://iris.to/invite/... or https://chat.iris.to/#npub...',
+          ),
+          findsOneWidget,
+        );
       });
 
       testWidgets('shows paste from clipboard button', (tester) async {

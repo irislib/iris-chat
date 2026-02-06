@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:nostr/nostr.dart' as nostr;
+
 Map<String, dynamic>? decodeInviteUrlData(String url) {
   try {
     final uri = Uri.parse(url);
@@ -100,11 +102,127 @@ bool looksLikeInviteUrl(String url) {
 
 /// Best-effort detection of a Nostr bech32 identity/profile link.
 bool looksLikeNostrIdentityLink(String input) {
-  final s = input.toLowerCase();
-  return s.contains('npub1') ||
-      s.contains('nprofile1') ||
-      s.startsWith('nostr:npub1') ||
-      s.startsWith('nostr:nprofile1');
+  return extractNostrIdentityPubkeyHex(input) != null;
+}
+
+/// Extract a Nostr identity pubkey (hex) from a bech32 `npub` or `nprofile` link.
+///
+/// Supports common input formats:
+/// - `npub1...`
+/// - `nostr:npub1...`
+/// - `https://chat.iris.to/#npub1...`
+/// - `https://chat.iris.to/#/npub1...` (hash-routing style)
+///
+/// Returns `null` if no valid identity is found.
+String? extractNostrIdentityPubkeyHex(String input) {
+  final bech32 = _extractNostrBech32Identity(input);
+  if (bech32 == null) return null;
+
+  final s = bech32.toLowerCase();
+
+  if (s.startsWith('npub1')) {
+    try {
+      final hex = nostr.Nip19.decodePubkey(s).toLowerCase();
+      if (_looksLikeHexPubkey(hex)) return hex;
+    } catch (_) {}
+    return null;
+  }
+
+  if (s.startsWith('nprofile1')) {
+    try {
+      final decoded = nostr.bech32Decode(s);
+      if (decoded['prefix'] != 'nprofile') return null;
+      final dataHex = decoded['data'];
+      if (dataHex == null || dataHex.isEmpty) return null;
+
+      final bytes = _hexToBytes(dataHex);
+      final pubkeyHex = _parseNprofilePubkeyHex(bytes);
+      if (pubkeyHex == null) return null;
+      final normalized = pubkeyHex.toLowerCase();
+      if (_looksLikeHexPubkey(normalized)) return normalized;
+    } catch (_) {}
+    return null;
+  }
+
+  return null;
+}
+
+String? _extractNostrBech32Identity(String input) {
+  final trimmed = input.trim();
+  if (trimmed.isEmpty) return null;
+
+  // Common format: `nostr:npub1...`
+  var s = trimmed;
+  if (s.toLowerCase().startsWith('nostr:')) {
+    s = s.substring('nostr:'.length);
+  }
+
+  // Most robust: find `npub1...` / `nprofile1...` anywhere in the string
+  // (covers URL fragments, pasted text, and QR contents).
+  const pattern = '(npub1[0-9a-z]+|nprofile1[0-9a-z]+)';
+  final re = RegExp(pattern, caseSensitive: false);
+
+  final match = re.firstMatch(s);
+  if (match != null) return match.group(1);
+
+  // Best-effort: try with percent-decoding (some apps encode the whole link).
+  try {
+    final decoded = Uri.decodeFull(s);
+    final match2 = re.firstMatch(decoded);
+    if (match2 != null) return match2.group(1);
+  } catch (_) {}
+
+  return null;
+}
+
+bool _looksLikeHexPubkey(String hex) {
+  if (hex.length != 64) return false;
+  for (var i = 0; i < hex.length; i++) {
+    final c = hex.codeUnitAt(i);
+    final isDigit = c >= 48 && c <= 57;
+    final isLowerAF = c >= 97 && c <= 102;
+    final isUpperAF = c >= 65 && c <= 70;
+    if (!(isDigit || isLowerAF || isUpperAF)) return false;
+  }
+  return true;
+}
+
+List<int> _hexToBytes(String hex) {
+  final s = hex.trim();
+  if (s.length.isOdd) {
+    throw const FormatException('Invalid hex: odd length');
+  }
+  final out = <int>[];
+  for (var i = 0; i < s.length; i += 2) {
+    final byte = int.parse(s.substring(i, i + 2), radix: 16);
+    out.add(byte);
+  }
+  return out;
+}
+
+String _bytesToHex(List<int> bytes) {
+  final b = StringBuffer();
+  for (final v in bytes) {
+    b.write(v.toRadixString(16).padLeft(2, '0'));
+  }
+  return b.toString();
+}
+
+String? _parseNprofilePubkeyHex(List<int> bytes) {
+  // NIP-19 nprofile: TLV entries. We only need type=0 (32-byte pubkey).
+  var i = 0;
+  while (i + 2 <= bytes.length) {
+    final t = bytes[i];
+    final l = bytes[i + 1];
+    i += 2;
+    if (i + l > bytes.length) return null;
+    final v = bytes.sublist(i, i + l);
+    i += l;
+    if (t == 0 && l == 32) {
+      return _bytesToHex(v);
+    }
+  }
+  return null;
 }
 
 /// Extract the optional invite purpose from an Iris invite URL.

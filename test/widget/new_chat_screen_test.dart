@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:iris_chat/config/providers/chat_provider.dart';
 import 'package:iris_chat/config/providers/invite_provider.dart';
 import 'package:iris_chat/core/services/profile_service.dart';
 import 'package:iris_chat/features/chat/data/datasources/session_local_datasource.dart';
+import 'package:iris_chat/features/chat/domain/models/session.dart';
 import 'package:iris_chat/features/chat/presentation/screens/new_chat_screen.dart';
 import 'package:iris_chat/features/invite/data/datasources/invite_local_datasource.dart';
 import 'package:iris_chat/features/invite/domain/models/invite.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:nostr/nostr.dart' as nostr;
 
 import '../test_helpers.dart';
 
@@ -65,12 +68,21 @@ class _TestInviteNotifier extends InviteNotifier {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('pasting a chat.iris.to/#npub link shows a friendly error', (
-    tester,
-  ) async {
+  setUpAll(() {
+    registerFallbackValue(
+      ChatSession(
+        id: 'fallback',
+        recipientPubkeyHex: testPubkeyHex,
+        createdAt: DateTime(2026, 1, 1),
+      ),
+    );
+  });
+
+  testWidgets('pasting a chat.iris.to/#npub link opens a chat', (tester) async {
     final mockInvites = _MockInviteLocalDatasource();
     final mockSessions = _MockSessionLocalDatasource();
     final mockProfiles = _MockProfileService();
+    late SessionNotifier sessionNotifier;
 
     when(mockInvites.getActiveInvites).thenAnswer(
       (_) async => [
@@ -82,33 +94,49 @@ void main() {
         ),
       ],
     );
+    when(
+      () => mockSessions.getSessionByRecipient(any()),
+    ).thenAnswer((_) async => null);
+    when(() => mockSessions.saveSession(any())).thenAnswer((_) async {});
+
+    final npub = nostr.Nip19.encodePubkey(testPubkeyHex) as String;
+    final url = 'https://chat.iris.to/#$npub';
+
+    final router = GoRouter(
+      routes: [
+        GoRoute(path: '/', builder: (context, state) => const NewChatScreen()),
+        GoRoute(
+          path: '/chats/:id',
+          builder: (context, state) {
+            final id = state.pathParameters['id']!;
+            return Scaffold(body: Text('Chat:$id'));
+          },
+        ),
+      ],
+    );
 
     await tester.pumpWidget(
-      createTestApp(
-        const NewChatScreen(),
+      createTestRouterApp(
+        router,
         overrides: [
           inviteDatasourceProvider.overrideWithValue(mockInvites),
           sessionStateProvider.overrideWith((ref) {
-            final notifier = SessionNotifier(mockSessions, mockProfiles);
-            notifier.state = const SessionState(sessions: []);
-            return notifier;
+            sessionNotifier = SessionNotifier(mockSessions, mockProfiles);
+            sessionNotifier.state = const SessionState(sessions: []);
+            return sessionNotifier;
           }),
         ],
       ),
     );
     await tester.pumpAndSettle();
 
-    const url =
-        'https://chat.iris.to/#npub143rgr4cphs52qxt864lz8crt7nsagkn68zufs473p2zw67u3xh0qka59k2';
     await tester.enterText(find.byType(TextField), url);
-    await tester.pump();
-
-    // Submit (e.g., keyboard "done").
-    await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
 
-    // Avoid matching the input field (it also contains "npub").
-    expect(find.textContaining('Nostr profile'), findsOneWidget);
+    // Navigated to the chat route using the decoded hex pubkey.
+    expect(find.text('Chat:$testPubkeyHex'), findsOneWidget);
+    expect(sessionNotifier.state.sessions, isNotEmpty);
+    expect(sessionNotifier.state.sessions.first.id, testPubkeyHex);
   });
 
   testWidgets('Create New Invite button calls createInvite()', (tester) async {

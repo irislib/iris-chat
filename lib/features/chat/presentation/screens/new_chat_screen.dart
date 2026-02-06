@@ -51,23 +51,32 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     final url = _pasteController.text.trim();
     if (url.isEmpty || _isJoining) return;
 
+    // Public chat links: `https://chat.iris.to/#npub1...` (or bare/nostr: forms).
+    // These are not Iris invites, so handle them separately.
     if (!looksLikeInviteUrl(url)) {
-      if (looksLikeNostrIdentityLink(url)) {
+      final pubkeyHex = extractNostrIdentityPubkeyHex(url);
+      if (pubkeyHex == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'That looks like a Nostr profile (npub), not an Iris Chat invite. Ask them to share an invite link from Iris Chat.',
+              'That does not look like an invite link or chat link.',
             ),
           ),
         );
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('That does not look like an invite link.'),
-        ),
-      );
+      setState(() => _isJoining = true);
+      try {
+        final session = await ref
+            .read(sessionStateProvider.notifier)
+            .ensureSessionForRecipient(pubkeyHex);
+        if (!mounted) return;
+        _pasteController.clear();
+        context.go('/chats/${session.id}');
+      } finally {
+        if (mounted) setState(() => _isJoining = false);
+      }
       return;
     }
 
@@ -111,7 +120,10 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   void _onPasteChanged(String value) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return;
-    if (looksLikeInviteUrl(trimmed)) _joinChat();
+    if (looksLikeInviteUrl(trimmed) ||
+        extractNostrIdentityPubkeyHex(trimmed) != null) {
+      _joinChat();
+    }
   }
 
   @override
@@ -221,7 +233,7 @@ class _JoinChatCard extends StatelessWidget {
             TextField(
               controller: controller,
               decoration: const InputDecoration(
-                hintText: 'Paste invite link',
+                hintText: 'Paste invite or npub link',
                 border: OutlineInputBorder(),
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: 12,
