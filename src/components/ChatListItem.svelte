@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ChatSession } from '../lib/chat'
   import { isTyping } from '../lib/typingState'
+  import { countUnseenMessages, formatUnseenCount } from '../lib/unseenCount'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
@@ -13,6 +14,8 @@
   let { chat, onopen }: Props = $props()
 
   let lastMessage = $derived(chat.messages[chat.messages.length - 1])
+  let unseenCount = $derived(countUnseenMessages(chat.messages))
+  let unseenCountLabel = $derived(formatUnseenCount(unseenCount))
 
   function formatTime(timestamp: number): string {
     const date = new Date(timestamp)
@@ -37,7 +40,17 @@
       <span class="font-medium text-sm truncate"><Name pubkey={chat.recipientPubkey} /></span>
       <div class="flex flex-col items-end flex-shrink-0 gap-0.5">
         {#if lastMessage}
-          <span class="text-xs text-gray-500">{formatTime(lastMessage.timestamp)}</span>
+          <div class="flex items-center gap-1.5">
+            {#if unseenCount > 0}
+              <span
+                data-testid="unread-indicator"
+                class="min-w-5 h-5 px-1.5 rounded-full bg-primary text-white text-xs flex items-center justify-center flex-shrink-0"
+              >
+                {unseenCountLabel}
+              </span>
+            {/if}
+            <span class="text-xs text-gray-500">{formatTime(lastMessage.timestamp)}</span>
+          </div>
           {#if lastMessage.isMine}
             <StatusIndicator status={lastMessage.status} />
           {/if}

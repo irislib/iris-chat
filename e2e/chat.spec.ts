@@ -1,5 +1,6 @@
 import { test, expect, useTestRelay } from './fixtures'
 import type { Page, BrowserContext } from '@playwright/test'
+import { nip19 } from 'nostr-tools'
 
 // Helper: reload page, retrying if navigation is aborted by background activity
 async function safeReload(page: Page) {
@@ -46,11 +47,19 @@ async function registerDevice(page: Page): Promise<void> {
   }
 
   await settingsButton.click()
+  // Ensure the settings view has rendered before probing for the register button.
+  // This avoids spending the full timeout waiting when the device is already registered.
+  await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   const registerButton = page.getByRole('button', { name: 'Register this device' })
   try {
-    await registerButton.waitFor({ state: 'visible', timeout: 5000 })
-    await registerButton.click({ timeout: 5000 })
-    await registerButton.waitFor({ state: 'hidden', timeout: 20000 })
+    if (!(await registerButton.count())) {
+      // If the device state is still initializing, give the button a moment to appear.
+      await registerButton.waitFor({ state: 'visible', timeout: 1000 }).catch(() => {})
+    }
+    if (await registerButton.count()) {
+      await registerButton.click({ timeout: 5000 })
+      await registerButton.waitFor({ state: 'hidden', timeout: 20000 })
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : ''
     const lowered = message.toLowerCase()
@@ -72,15 +81,13 @@ function escapeRegExp(value: string): string {
 }
 
 async function openChatFromList(page: Page, message: string): Promise<void> {
-  const listItem = page
-    .getByRole('button', { name: new RegExp(escapeRegExp(message)) })
-    .first()
+  const chatList = page.getByTestId('sidebar-chat-list')
+  const listItem = chatList.getByRole('button', { name: new RegExp(escapeRegExp(message)) }).first()
   try {
     await expect(listItem).toBeVisible({ timeout: 30000 })
     await listItem.click()
     return
   } catch (err) {
-    const chatList = page.locator('div.overflow-y-auto.overscroll-contain')
     const chatButtons = chatList.getByRole('button')
     if (await chatButtons.count() === 1) {
       await chatButtons.first().click()
@@ -127,63 +134,89 @@ async function createContext(browser: import('@playwright/test').Browser, relayU
 }
 
 test.describe('iris chat', () => {
+  test('shows a new messages indicator in chat list for unseen incoming messages', async ({ browser, testRelayUrl }) => {
+    const context1 = await createContext(browser, testRelayUrl)
+    const context2 = await createContext(browser, testRelayUrl)
+
+    const inviter = await context1.newPage()
+    const joiner = await context2.newPage()
+
+    try {
+      const firstMessage = 'First ping'
+      const secondMessage = 'Second ping'
+
+      // Setup: User 1 creates a chat invite.
+      const inviteUrl = await setupUserWithInvite(inviter)
+
+      // User 2 joins the chat and sends an initial message (establishes the session).
+      await joiner.goto('/')
+      await joiner.getByRole('button', { name: 'Go' }).click()
+      await joiner.getByRole('button', { name: 'New Chat' }).click()
+      await joinViaPasteAndSync(inviter, joiner, inviteUrl, firstMessage)
+
+      // User 1 returns to the chat list (chat is no longer open).
+      await inviter.getByRole('button', { name: 'Back' }).click()
+
+      // User 2 sends a second message while User 1 is not in the chat view.
+      await joiner.getByPlaceholder('Type a message...').fill(secondMessage)
+      await joiner.getByRole('button', { name: 'Send' }).click()
+
+      // Verify unread indicator shows up on the list item.
+      const listItem = inviter
+        .getByTestId('sidebar-chat-list')
+        .getByRole('button', { name: new RegExp(escapeRegExp(secondMessage)) })
+        .first()
+      await expect(listItem).toBeVisible({ timeout: 30000 })
+
+      const unreadIndicator = listItem.getByTestId('unread-indicator')
+      await expect(unreadIndicator).toHaveCount(1)
+      await expect(unreadIndicator).toHaveText('1')
+
+      // Opening the chat should clear the indicator.
+      await listItem.click()
+      await expect(unreadIndicator).toHaveCount(0)
+    } finally {
+      await context1.close()
+      await context2.close()
+    }
+  })
+
   test.describe('Chat input', () => {
     test('should focus input when opening or switching chat', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)
-      const context2 = await createContext(browser, testRelayUrl)
-      const context3 = await createContext(browser, testRelayUrl)
-
       const page1 = await context1.newPage()
-      const page2 = await context2.newPage()
-      const page3 = await context3.newPage()
 
       try {
-        const firstMessage = 'First ping'
-        const secondMessage = 'Second ping'
+        // Create two chats locally by pasting two different npub invites.
+        // This is much faster and avoids multi-context sync flakiness, while still
+        // exercising the real UI flow for opening and switching chats.
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await registerDevice(page1)
 
-        // Setup: User 1 creates first chat (invite auto-created)
-        const inviteUrl1 = await setupUserWithInvite(page1)
+        const npub1 = nip19.npubEncode('b'.repeat(64))
+        const npub2 = nip19.npubEncode('c'.repeat(64))
 
-        // User 2 joins first chat
-        await page2.goto('/')
-        await page2.getByRole('button', { name: 'Go' }).click()
-        await page2.getByRole('button', { name: 'New Chat' }).click()
-        await joinViaPasteAndSync(page1, page2, inviteUrl1, firstMessage)
-        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // Input should be focused when chat opens
-        const input = page1.getByPlaceholder('Type a message...')
-        await expect(input).toBeFocused()
-
-        // User 1 goes back to sidebar
-        await page1.getByRole('button', { name: 'Back' }).click()
-
-        // Create second invite
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create New Invite' }).click()
-        // Get the second invite URL (newest one)
-        const inviteUrl2 = await getInviteUrl(page1)
-
-        // User 3 joins second chat
-        await page3.goto('/')
-        await page3.getByRole('button', { name: 'Go' }).click()
-        await page3.getByRole('button', { name: 'New Chat' }).click()
-        await joinViaPasteAndSync(page1, page3, inviteUrl2, secondMessage)
+        await page1.getByPlaceholder('Paste invite link').fill(npub1)
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // Input should be focused when second chat opens
         await expect(page1.getByPlaceholder('Type a message...')).toBeFocused()
 
-        // Go back and click on first chat
         await page1.getByRole('button', { name: 'Back' }).click()
-        await openChatFromList(page1, firstMessage)
 
-        // Input should be focused when switching to first chat
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByPlaceholder('Paste invite link').fill(npub2)
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page1.getByPlaceholder('Type a message...')).toBeFocused()
+
+        // Switch back to the first chat from the list
+        await page1.getByRole('button', { name: 'Back' }).click()
+        const chatButtons = page1.getByTestId('sidebar-chat-list').getByRole('button')
+        await expect(chatButtons).toHaveCount(2)
+        await chatButtons.first().click()
         await expect(page1.getByPlaceholder('Type a message...')).toBeFocused()
       } finally {
         await context1.close()
-        await context2.close()
-        await context3.close()
       }
     })
 
@@ -316,60 +349,42 @@ test.describe('iris chat', () => {
 
     test('should persist message drafts per chat when switching', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)
-      const context2 = await createContext(browser, testRelayUrl)
-      const context3 = await createContext(browser, testRelayUrl)
-
       const page1 = await context1.newPage()
-      const page2 = await context2.newPage()
-      const page3 = await context3.newPage()
 
       try {
-        // User 1 creates first chat
-        const inviteUrl1 = await setupUserWithInvite(page1)
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await registerDevice(page1)
 
-        // User 2 joins first chat
-        await page2.goto('/')
-        await page2.getByRole('button', { name: 'Go' }).click()
-        await page2.getByRole('button', { name: 'New Chat' }).click()
-        await joinViaPasteAndSync(page1, page2, inviteUrl1, 'Chat one')
+        const npub1 = nip19.npubEncode('b'.repeat(64))
+        const npub2 = nip19.npubEncode('c'.repeat(64))
+
+        // Create chat 1 and type a draft (but do NOT send)
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        await page1.getByPlaceholder('Paste invite link').fill(npub1)
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 1 types a draft in chat 1 (but does NOT send)
         await page1.getByPlaceholder('Type a message...').fill('Draft for chat one')
 
-        // User 1 goes back to create second chat
+        // Create chat 2 and type a draft
         await page1.getByRole('button', { name: 'Back' }).click()
         await page1.getByRole('button', { name: 'New Chat' }).click()
-        await page1.getByRole('button', { name: 'Create New Invite' }).click()
-        const inviteUrl2 = await getInviteUrl(page1)
-
-        // User 3 joins second chat
-        await page3.goto('/')
-        await page3.getByRole('button', { name: 'Go' }).click()
-        await page3.getByRole('button', { name: 'New Chat' }).click()
-        await joinViaPasteAndSync(page1, page3, inviteUrl2, 'Chat two')
+        await page1.getByPlaceholder('Paste invite link').fill(npub2)
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
-
-        // User 1 types a draft in chat 2
         await page1.getByPlaceholder('Type a message...').fill('Draft for chat two')
 
         // Switch back to chat 1
         await page1.getByRole('button', { name: 'Back' }).click()
-        await page1.locator('button').filter({ hasText: 'Chat one' }).click()
-
-        // Draft for chat 1 should be restored
+        const chatButtons = page1.getByTestId('sidebar-chat-list').getByRole('button')
+        await expect(chatButtons).toHaveCount(2)
+        await chatButtons.first().click()
         await expect(page1.getByPlaceholder('Type a message...')).toHaveValue('Draft for chat one')
 
         // Switch back to chat 2
         await page1.getByRole('button', { name: 'Back' }).click()
-        await page1.locator('button').filter({ hasText: 'Chat two' }).click()
-
-        // Draft for chat 2 should be restored
+        await chatButtons.nth(1).click()
         await expect(page1.getByPlaceholder('Type a message...')).toHaveValue('Draft for chat two')
       } finally {
         await context1.close()
-        await context2.close()
-        await context3.close()
       }
     })
   })

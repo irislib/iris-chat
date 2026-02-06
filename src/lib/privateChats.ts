@@ -99,8 +99,11 @@ function getNDK() {
 }
 
 export const initAppKeysManager = async (): Promise<void> => {
+  if (appKeysInitPromise) {
+    await appKeysInitPromise
+    return
+  }
   if (appKeysManager) return
-  if (appKeysInitPromise) return appKeysInitPromise
 
   appKeysInitPromise = (async () => {
     const ndkInstance = getNDK()
@@ -123,8 +126,11 @@ export const initAppKeysManager = async (): Promise<void> => {
 }
 
 export const initDelegateManager = async (): Promise<void> => {
+  if (delegateInitPromise) {
+    await delegateInitPromise
+    return
+  }
   if (delegateManager) return
-  if (delegateInitPromise) return delegateInitPromise
 
   delegateInitPromise = (async () => {
     const ndkInstance = getNDK()
@@ -144,8 +150,11 @@ export const initDelegateManager = async (): Promise<void> => {
 }
 
 export const initSessionManager = async (ownerPubkey: string): Promise<void> => {
+  if (sessionManagerInitPromise) {
+    await sessionManagerInitPromise
+    return
+  }
   if (sessionManager) return
-  if (sessionManagerInitPromise) return sessionManagerInitPromise
 
   sessionManagerInitPromise = (async () => {
     if (!delegateManager) {
@@ -166,9 +175,10 @@ export const waitForSessionManager = async (): Promise<SessionManager> => {
   // send via SessionManager before initMultiDevice() has finished. Make this helper
   // resilient by lazily initializing the SessionManager when possible.
   if (!sessionManagerInitPromise || !sessionManager) {
-    if (!delegateManager) {
-      await initDelegateManager()
-    }
+    // SessionManager creation depends on DelegateManager state and (indirectly) the
+    // AppKeys / invite material kept in the same storage adapter. Initialize both
+    // managers first to avoid transient "missing invite" errors in fresh sessions.
+    await Promise.all([initAppKeysManager(), initDelegateManager()])
     const ownerPubkey = delegateManager?.getOwnerPublicKey() || get(identity)?.pubkey
     if (ownerPubkey) {
       await initSessionManager(ownerPubkey)
@@ -197,19 +207,23 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
   await initSessionManager(ownerPubkey)
   startAppKeysSubscription(ownerPubkey)
 
-  const deviceState = get(devices)
-  if (!isLinkedDeviceLogin() && !deviceState.hasLocalAppKeys && !deviceState.isCurrentDeviceRegistered) {
-    try {
-      await registerDevice()
-    } catch (e) {
-      console.warn('[privateChats] Auto-registration failed:', e)
-    }
-  }
-
+  // Make sure other users can establish a SessionManager session with us:
+  // - AppKeys must be published (device identity list)
+  // - our device Invite must be published (handshake material)
+  //
+  // Without this, a user can paste our invite and send a first message that
+  // never arrives because their SessionManager can't complete the handshake.
   try {
-    await republishInvite()
+    await ensureDeviceRegistered()
   } catch (e) {
-    console.warn('[privateChats] Republish invite failed:', e)
+    console.warn('[privateChats] ensureDeviceRegistered failed:', e)
+    // Best-effort: even if AppKeys publish failed, republishing the invite may
+    // still help existing sessions or subsequent retries.
+    try {
+      await republishInvite()
+    } catch (err) {
+      console.warn('[privateChats] Republish invite failed:', err)
+    }
   }
 }
 

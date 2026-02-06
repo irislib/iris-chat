@@ -151,7 +151,11 @@ test.describe('Notifications', () => {
         declined: true
       })
       await context.addInitScript((val: string) => {
-        localStorage.setItem('iris-chat-notifications', val)
+        try {
+          window.localStorage.setItem('iris-chat-notifications', val)
+        } catch {
+          // ignore opaque origins (about:blank)
+        }
       }, notifValue)
 
       // Login first to establish identity

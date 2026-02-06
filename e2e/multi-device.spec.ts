@@ -7,7 +7,11 @@ function toHex(bytes: Uint8Array): string {
 
 async function setIdentity(context: import('@playwright/test').BrowserContext, privkeyHex: string) {
   await context.addInitScript((key: string) => {
-    localStorage.setItem('iris-chat-identity', key)
+    try {
+      window.localStorage.setItem('iris-chat-identity', key)
+    } catch {
+      // ignore opaque origins (about:blank)
+    }
   }, privkeyHex)
 }
 
@@ -30,19 +34,22 @@ async function loginWithStoredKey(page: import('@playwright/test').Page) {
 
 async function registerDevice(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   const registerButton = page.getByRole('button', { name: 'Register this device' })
-  if (await registerButton.count()) {
-    try {
-      await expect(registerButton).toBeVisible({ timeout: 10000 })
+  try {
+    if (!(await registerButton.count())) {
+      await registerButton.waitFor({ state: 'visible', timeout: 1000 }).catch(() => {})
+    }
+    if (await registerButton.count()) {
       await registerButton.click({ timeout: 5000 })
       await expect(registerButton).not.toBeVisible({ timeout: 20000 })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : ''
-      if (!message.includes('detached') && !message.includes('not stable')) {
-        throw err
-      }
-      // Button likely disappeared due to auto-registration; continue.
     }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : ''
+    if (!message.includes('detached') && !message.includes('not stable')) {
+      throw err
+    }
+    // Button likely disappeared due to auto-registration; continue.
   }
   await page.getByRole('button', { name: 'Back' }).click()
 }
@@ -52,9 +59,8 @@ function escapeRegExp(value: string): string {
 }
 
 async function openChatFromList(page: import('@playwright/test').Page, message: string): Promise<void> {
-  const listItem = page
-    .getByRole('button', { name: new RegExp(escapeRegExp(message)) })
-    .first()
+  const chatList = page.getByTestId('sidebar-chat-list')
+  const listItem = chatList.getByRole('button', { name: new RegExp(escapeRegExp(message)) }).first()
   await expect(listItem).toBeVisible({ timeout: 30000 })
   await listItem.click()
 }

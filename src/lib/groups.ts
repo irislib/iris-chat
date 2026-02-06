@@ -30,6 +30,7 @@ import {
   saveMessage as saveMessageToDb,
   getMessagesForSession,
   deleteMessagesForSession,
+  updateMessageStatus as updateMessageStatusInDb,
   type StoredGroup,
   type StoredMessage
 } from './storage'
@@ -579,6 +580,7 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
       isMine: message.isMine,
       ...(message.replyTo && { replyTo: message.replyTo }),
       reactions,
+      status: message.status,
       senderPubkey: message.senderPubkey
     }
     await saveMessageToDb(storedMessage)
@@ -618,7 +620,8 @@ export async function loadGroupsFromStorage(): Promise<void> {
           isMine: m.isMine,
           senderPubkey: m.senderPubkey,
           ...(m.replyTo && { replyTo: m.replyTo }),
-          reactions: m.reactions
+          reactions: m.reactions,
+          status: m.status
         }))
         .sort((a, b) => a.timestamp - b.timestamp)
 
@@ -638,6 +641,32 @@ export async function loadGroupsFromStorage(): Promise<void> {
   } catch (e) {
     console.error('[groups] Failed to load groups from storage:', e)
   }
+}
+
+// Mark incoming group messages as seen locally (used for unread indicators).
+export function markGroupMessagesSeen(groupId: string, messageIds: string[]): void {
+  if (messageIds.length === 0) return
+  const idSet = new Set(messageIds)
+
+  groupMessages.update((gm) => {
+    const msgs = gm.get(groupId) || []
+    if (msgs.length === 0) return gm
+
+    let changed = false
+    const updated = msgs.map((m) => {
+      if (!m.isMine && idSet.has(m.id) && m.status !== 'seen') {
+        changed = true
+        // Persist status for local unread tracking (no receipts for groups).
+        updateMessageStatusInDb(m.id, 'seen')
+        return { ...m, status: 'seen' as const }
+      }
+      return m
+    })
+
+    if (!changed) return gm
+    gm.set(groupId, updated)
+    return gm
+  })
 }
 
 export async function deleteGroup(groupId: string): Promise<void> {

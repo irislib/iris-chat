@@ -12,7 +12,7 @@
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
   import { devices } from '../lib/devices'
   import { parseLinkInviteInput } from '../lib/linkInvites'
-  import { acceptLinkInvite, registerDevice, registerLinkedDevice, revokeDevice } from '../lib/privateChats'
+  import { acceptLinkInvite, ensureDeviceRegistered, registerLinkedDevice, revokeDevice } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
 
   interface Props {
@@ -113,7 +113,9 @@
     registeringDevice = true
     deviceError = ''
     try {
-      await registerDevice()
+      // ensureDeviceRegistered includes invite publishing, which is important for reliable
+      // SessionManager session establishment when other users try to DM this device.
+      await ensureDeviceRegistered()
     } catch (e) {
       deviceError = getErrorMessage(e, 'Failed to register device')
     } finally {

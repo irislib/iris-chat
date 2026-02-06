@@ -8,7 +8,7 @@
 
   let checkColor = $derived(
     status === 'seen'
-      ? (variant === 'bubble' ? 'text-[#7dd3fc]' : 'text-primary')
+      ? 'text-sky-300'
       : (variant === 'bubble' ? 'text-white/60' : 'text-gray-500')
   )
   let outlineColor = $derived(variant === 'bubble' ? 'text-[#6366f1]' : 'text-[#0a0a0a]')

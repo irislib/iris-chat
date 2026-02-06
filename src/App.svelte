@@ -207,9 +207,11 @@
     if (isLoggedIn) {
       const currentIdentity = get(identity)
       if (currentIdentity?.pubkey) {
-        void initMultiDevice(currentIdentity.pubkey)
-          .then(() => initSessionManagerEvents())
-          .catch((e) => console.error('[app] initMultiDevice failed:', e))
+        // Subscribe ASAP so we don't miss early incoming manager events.
+        initSessionManagerEvents()
+        void initMultiDevice(currentIdentity.pubkey).catch((e) =>
+          console.error('[app] initMultiDevice failed:', e)
+        )
       }
 
       // Wire up groups -> chat session saving (before loading anything)
@@ -290,9 +292,11 @@
   async function handleLogin() {
     const currentIdentity = get(identity)
     if (currentIdentity?.pubkey) {
-      void initMultiDevice(currentIdentity.pubkey)
-        .then(() => initSessionManagerEvents())
-        .catch((e) => console.error('[app] initMultiDevice failed:', e))
+      // Subscribe ASAP so we don't miss early incoming manager events.
+      initSessionManagerEvents()
+      void initMultiDevice(currentIdentity.pubkey).catch((e) =>
+        console.error('[app] initMultiDevice failed:', e)
+      )
     }
 
     loggedIn = true

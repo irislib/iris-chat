@@ -87,13 +87,29 @@ export class TestRelay {
         subs.set(subId, filters)
       }
       // Send matching stored events
+      let sent = 0
       for (const event of this.events.values()) {
         if (this.matchesFilters(event, filters)) {
           ws.send(JSON.stringify(['EVENT', subId, event]))
+          sent++
         }
       }
       // Send EOSE
       ws.send(JSON.stringify(['EOSE', subId]))
+      if (this.debug) {
+        const summarize = (f: Filter) => {
+          const kinds = Array.isArray(f.kinds) ? f.kinds.join(',') : '-'
+          const authors = Array.isArray(f.authors) ? f.authors.map((a) => a.slice(0, 8)).join(',') : '-'
+          const p = Array.isArray((f as any)['#p']) ? (f as any)['#p'].map((a: string) => a.slice(0, 8)).join(',') : '-'
+          const d = Array.isArray((f as any)['#d']) ? (f as any)['#d'].join(',') : '-'
+          const l = Array.isArray((f as any)['#l']) ? (f as any)['#l'].join(',') : '-'
+          return `kinds=${kinds} authors=${authors} #p=${p} #d=${d} #l=${l}`
+        }
+        console.log(
+          `[relay:${this.port}] REQ ${subId} (${filters.length} filters) sent=${sent} ` +
+            filters.map(summarize).join(' | ')
+        )
+      }
     } else if (type === 'CLOSE') {
       const subId = msg[1] as string
       const subs = this.subscriptions.get(ws)
@@ -116,7 +132,18 @@ export class TestRelay {
       }
     }
     if (this.debug) {
-      console.log(`[relay:${this.port}] broadcast kind=${event.kind} id=${event.id.slice(0,8)} → ${matched} subscribers (${this.subscriptions.size} clients)`)
+      const dTag = event.tags.find(t => t[0] === 'd')?.[1]
+      const lTag = event.tags.find(t => t[0] === 'l')?.[1]
+      const pTag = event.tags.find(t => t[0] === 'p')?.[1]
+      console.log(
+        `[relay:${this.port}] broadcast kind=${event.kind}` +
+          ` pubkey=${event.pubkey.slice(0, 8)}` +
+          ` d=${dTag ?? '-'}` +
+          ` l=${lTag ?? '-'}` +
+          ` p=${pTag ? pTag.slice(0, 8) : '-'}` +
+          ` id=${event.id.slice(0, 8)}` +
+          ` → ${matched} subscribers (${this.subscriptions.size} clients)`
+      )
     }
   }
 

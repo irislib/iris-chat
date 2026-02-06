@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, groupMessages, currentGroupId, type Group, type GroupMessage } from '../lib/groups'
+  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, type Group, type GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
@@ -284,6 +284,15 @@
     group.id
     if (inputRef) {
       inputRef.focus()
+    }
+  })
+
+  // Mark incoming messages as seen locally when group is open.
+  $effect(() => {
+    const msgs = ($groupMessages.get(group.id) || []) as GroupMessage[]
+    const unseen = msgs.filter(m => !m.isMine && m.status !== 'seen').map(m => m.id)
+    if (unseen.length > 0) {
+      markGroupMessagesSeen(group.id, unseen)
     }
   })
 

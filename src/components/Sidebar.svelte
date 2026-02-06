@@ -82,7 +82,7 @@
   </div>
 
   <!-- Chat List -->
-  <div class="flex-1 overflow-y-auto overscroll-contain">
+  <div class="flex-1 overflow-y-auto overscroll-contain" data-testid="sidebar-chat-list">
     {#if sortedItems.length > 0}
       {#each sortedItems as item (item.type === 'dm' ? item.chat.id : item.groupId)}
         {#if item.type === 'dm'}

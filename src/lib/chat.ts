@@ -212,18 +212,33 @@ function triggerAutoOpen(chatSession: ChatSession): void {
 
 export function initSessionManagerEvents(): void {
   if (sessionManagerSubscribed) return
-  const manager = getSessionManager()
-  if (!manager) return
-  sessionManagerSubscribed = true
-  manager.onEvent((rumor, from) => {
-    handleManagerEvent(rumor, from).catch((e) =>
-      console.error('[chat] Failed to handle SessionManager event:', e)
-    )
-  })
-  if (!sessionManagerPoller) {
-    sessionManagerPoller = setInterval(() => syncManagerChats(manager), 500)
-    syncManagerChats(manager)
+
+  const subscribe = (manager: SessionManager) => {
+    if (sessionManagerSubscribed) return
+    sessionManagerSubscribed = true
+    manager.onEvent((rumor, from) => {
+      handleManagerEvent(rumor, from).catch((e) =>
+        console.error('[chat] Failed to handle SessionManager event:', e)
+      )
+    })
+    if (!sessionManagerPoller) {
+      sessionManagerPoller = setInterval(() => syncManagerChats(manager), 500)
+      syncManagerChats(manager)
+    }
   }
+
+  const manager = getSessionManager()
+  if (manager) {
+    subscribe(manager)
+    return
+  }
+
+  // SessionManager may still be initializing (e.g. right after login). If we return early
+  // we can miss the first incoming manager events and end up with chats that have sessions
+  // but no messages. Wait for it and subscribe as soon as it's ready.
+  void waitForSessionManager()
+    .then(subscribe)
+    .catch((e) => console.error('[chat] Failed to init SessionManager events:', e))
 }
 
 function syncManagerChats(manager: SessionManager): void {
@@ -1105,8 +1120,6 @@ function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messa
 
 // Send seen receipts for incoming messages - called from ChatView
 export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[]): void {
-  if (!get(receiptSettings).sendReadReceipts) return
-
   // Get current state from store
   const currentChats = get(chats)
   const currentSession = currentChats.get(chatSession.id)
@@ -1140,7 +1153,9 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
     currentChat.set(updatedSession)
   }
 
-  sendReceipt(updatedSession, 'seen', toAck)
+  if (get(receiptSettings).sendReadReceipts) {
+    sendReceipt(updatedSession, 'seen', toAck)
+  }
 }
 
 // Send a message
@@ -1160,14 +1175,12 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
       tags,
     })
     messageId = rumor.id
-    const manager = getSessionManager()
-    if (manager) {
-      manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
-    } else {
-      waitForSessionManager()
-        .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
-        .catch((e) => console.error('[chat] SessionManager not ready for send:', e))
-    }
+    // Always await SessionManager init. It is possible to have a non-null manager while
+    // `init()` is still in progress (e.g. immediately after login), and calling sendEvent()
+    // too early can fail and silently drop the message.
+    void waitForSessionManager()
+      .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
+      .catch((e) => console.error('[chat] Failed to send via SessionManager:', e))
   } else {
     if (!chatSession.session) return
     const { event } = tags.length > 0

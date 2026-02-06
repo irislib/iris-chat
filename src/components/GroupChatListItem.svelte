@@ -1,9 +1,9 @@
 <script lang="ts">
   import type { Group, GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
+  import { countUnseenMessages, formatUnseenCount } from '../lib/unseenCount'
   import Name from './Name.svelte'
   import GroupAvatar from './GroupAvatar.svelte'
-  import { getPubkey } from '../lib/identity'
 
   interface Props {
     group: Group
@@ -14,7 +14,8 @@
   let { group, messages, onopen }: Props = $props()
 
   let lastMessage = $derived(messages[messages.length - 1])
-  let myPubkey = $derived(getPubkey())
+  let unseenCount = $derived(countUnseenMessages(messages))
+  let unseenCountLabel = $derived(formatUnseenCount(unseenCount))
 
   function formatTime(timestamp: number): string {
     const date = new Date(timestamp)
@@ -40,6 +41,14 @@
       <div class="flex items-center gap-1.5 flex-shrink-0">
         {#if group.accepted !== true}
           <span class="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">invite</span>
+        {/if}
+        {#if unseenCount > 0}
+          <span
+            data-testid="unread-indicator"
+            class="min-w-5 h-5 px-1.5 rounded-full bg-primary text-white text-xs flex items-center justify-center flex-shrink-0"
+          >
+            {unseenCountLabel}
+          </span>
         {/if}
         {#if lastMessage}
           <span class="text-xs text-gray-500">{formatTime(lastMessage.timestamp)}</span>
