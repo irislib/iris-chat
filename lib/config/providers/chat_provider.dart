@@ -109,9 +109,25 @@ class SessionNotifier extends StateNotifier<SessionState> {
   /// Add a new session.
   Future<void> addSession(ChatSession session) async {
     await _sessionDatasource.saveSession(session);
-    state = state.copyWith(
-      sessions: [session, ...state.sessions],
-    );
+
+    // Avoid duplicate sessions in memory when the same session is "added" twice
+    // (e.g., relay replays, reconnects, or overlapping flows).
+    final existingIndex = state.sessions.indexWhere((s) => s.id == session.id);
+    if (existingIndex == -1) {
+      state = state.copyWith(
+        sessions: [session, ...state.sessions],
+      );
+      return;
+    }
+
+    final updated = [...state.sessions];
+    updated[existingIndex] = session;
+    // Keep most-recent sessions at the top.
+    if (existingIndex != 0) {
+      updated.removeAt(existingIndex);
+      updated.insert(0, session);
+    }
+    state = state.copyWith(sessions: updated);
   }
 
   /// Update a session.

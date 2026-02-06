@@ -79,6 +79,10 @@ class InviteLocalDatasource {
     final invite = await getInvite(id);
     if (invite == null) return;
 
+    // Idempotency: relays can replay events and we can receive duplicates.
+    // Don't inflate use counts or accepted_by with the same pubkey.
+    if (invite.acceptedBy.contains(acceptedByPubkey)) return;
+
     final acceptedBy = [...invite.acceptedBy, acceptedByPubkey];
 
     final db = await _db;

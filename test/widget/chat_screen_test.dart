@@ -315,6 +315,14 @@ void main() {
         expect(find.text('Message'), findsOneWidget);
       });
 
+      testWidgets('autofocuses message field on open', (tester) async {
+        await tester.pumpWidget(buildChatScreen());
+        await tester.pumpAndSettle();
+
+        final editable = tester.widget<EditableText>(find.byType(EditableText));
+        expect(editable.focusNode.hasFocus, isTrue);
+      });
+
       testWidgets('shows send button', (tester) async {
         await tester.pumpWidget(buildChatScreen());
         await tester.pumpAndSettle();

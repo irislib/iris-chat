@@ -61,7 +61,10 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
           decoded['ephemeralKey'],
           decoded['inviterEphemeralPublicKey'],
           decoded['inviterEphemeralPublicKeyHex'],
+          decoded['inviterEphemeralPubkeyHex'],
           decoded['inviter_ephemeral_public_key'],
+          decoded['inviter_ephemeral_public_key_hex'],
+          decoded['inviter_ephemeral_pubkey_hex'],
         ];
         for (final c in candidates) {
           if (c is String && c.isNotEmpty) return c;
@@ -78,7 +81,11 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
       final eph =
           data?['ephemeralKey'] ??
           data?['inviterEphemeralPublicKey'] ??
-          data?['inviterEphemeralPublicKeyHex'];
+          data?['inviterEphemeralPublicKeyHex'] ??
+          data?['inviterEphemeralPubkeyHex'] ??
+          data?['inviter_ephemeral_public_key'] ??
+          data?['inviter_ephemeral_public_key_hex'] ??
+          data?['inviter_ephemeral_pubkey_hex'];
       if (eph is String && eph.isNotEmpty) return eph;
     } catch (_) {
       // Ignore; invite state may be malformed or native may be unavailable.
@@ -157,6 +164,9 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
 
   final inviteSub = nostrService.events.listen((event) async {
     if (event.kind != 1059) return;
+    // Only consider events delivered by our invite-response subscription.
+    // Other subscriptions (sessions, app-keys, etc.) can also carry kind 1059.
+    if (event.subscriptionId != inviteResponsesSubId) return;
     final pTags = <String>{};
     for (final t in event.tags) {
       if (t.length < 2) continue;

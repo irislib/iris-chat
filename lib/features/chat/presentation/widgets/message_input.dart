@@ -12,11 +12,13 @@ class MessageInput extends StatefulWidget {
     required this.controller,
     required this.onSend,
     this.onChanged,
+    this.autofocus = false,
   });
 
   final TextEditingController controller;
   final VoidCallback onSend;
   final ValueChanged<String>? onChanged;
+  final bool autofocus;
 
   @override
   State<MessageInput> createState() => _MessageInputState();
@@ -110,6 +112,7 @@ class _MessageInputState extends State<MessageInput> {
             child: TextField(
               focusNode: _focusNode,
               controller: widget.controller,
+              autofocus: widget.autofocus,
               decoration: InputDecoration(
                 hintText: 'Message',
                 border: const OutlineInputBorder(

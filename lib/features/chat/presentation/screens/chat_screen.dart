@@ -184,6 +184,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           MessageInput(
             controller: _messageController,
             onSend: _sendMessage,
+            autofocus: true,
             onChanged: (text) {
               if (text.trim().isEmpty) return;
               ref.read(chatStateProvider.notifier).notifyTyping(widget.sessionId);

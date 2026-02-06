@@ -50,6 +50,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
   /// Create a new invite.
   Future<Invite?> createInvite({String? label, int? maxUses}) async {
     state = state.copyWith(isCreating: true, error: null);
+    InviteHandle? inviteHandle;
     try {
       final authState = _ref.read(authStateProvider);
       if (!authState.isAuthenticated || authState.pubkeyHex == null) {
@@ -64,12 +65,18 @@ class InviteNotifier extends StateNotifier<InviteState> {
       }
       final devicePubkeyHex = await NdrFfi.derivePublicKey(devicePrivkeyHex);
 
+      // Default to single-use chat invites to avoid replay/duplicate session creation.
+      final effectiveMaxUses = maxUses ?? 1;
+
       // Create invite using ndr-ffi
-      final inviteHandle = await NdrFfi.createInvite(
+      inviteHandle = await NdrFfi.createInvite(
         inviterPubkeyHex: devicePubkeyHex,
         deviceId: devicePubkeyHex,
-        maxUses: maxUses,
+        maxUses: effectiveMaxUses,
       );
+
+      // Make purpose explicit for cross-client compatibility.
+      await inviteHandle.setPurpose('chat');
 
       // Embed owner pubkey in invite URLs for multi-device mapping.
       await inviteHandle.setOwnerPubkeyHex(authState.pubkeyHex);
@@ -83,7 +90,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
         inviterPubkeyHex: inviterPubkey,
         label: label,
         createdAt: DateTime.now(),
-        maxUses: maxUses,
+        maxUses: effectiveMaxUses,
         serializedState: serializedState,
       );
 
@@ -98,12 +105,18 @@ class InviteNotifier extends StateNotifier<InviteState> {
     } catch (e) {
       state = state.copyWith(isCreating: false, error: e.toString());
       return null;
+    } finally {
+      try {
+        await inviteHandle?.dispose();
+      } catch (_) {}
     }
   }
 
   /// Accept an invite from a URL.
   Future<String?> acceptInviteFromUrl(String url) async {
     state = state.copyWith(isAccepting: true, error: null);
+    InviteHandle? inviteHandle;
+    InviteAcceptResult? acceptResult;
     try {
       final authState = _ref.read(authStateProvider);
       if (!authState.isAuthenticated || authState.pubkeyHex == null) {
@@ -120,8 +133,8 @@ class InviteNotifier extends StateNotifier<InviteState> {
       final ownerPubkeyHex = authState.pubkeyHex!;
 
       // Parse and accept invite
-      final inviteHandle = await NdrFfi.inviteFromUrl(url);
-      final acceptResult = await inviteHandle.acceptWithOwner(
+      inviteHandle = await NdrFfi.inviteFromUrl(url);
+      acceptResult = await inviteHandle.acceptWithOwner(
         inviteePubkeyHex: devicePubkeyHex,
         inviteePrivkeyHex: devicePrivkeyHex,
         deviceId: devicePubkeyHex,
@@ -136,13 +149,25 @@ class InviteNotifier extends StateNotifier<InviteState> {
       // Serialize session state
       final sessionState = await acceptResult.session.stateJson();
 
+      // Store sessions keyed by peer owner pubkey for stable routing/deduping.
+      final sessionDatasource = _ref.read(sessionDatasourceProvider);
+      final existing = await sessionDatasource.getSessionByRecipient(
+        inviterOwnerPubkey,
+      );
+      final sessionId = existing?.id ?? inviterOwnerPubkey;
+
       // Create session in chat provider
       final sessionNotifier = _ref.read(sessionStateProvider.notifier);
       final session = ChatSession(
-        id: acceptResult.session.id,
+        id: sessionId,
         recipientPubkeyHex: inviterOwnerPubkey,
-        createdAt: DateTime.now(),
-        isInitiator: false,
+        recipientName: existing?.recipientName,
+        createdAt: existing?.createdAt ?? DateTime.now(),
+        lastMessageAt: existing?.lastMessageAt,
+        lastMessagePreview: existing?.lastMessagePreview,
+        unreadCount: existing?.unreadCount ?? 0,
+        inviteId: existing?.inviteId,
+        isInitiator: existing?.isInitiator ?? false,
         serializedState: sessionState,
       );
 
@@ -164,10 +189,17 @@ class InviteNotifier extends StateNotifier<InviteState> {
       await sessionManager.refreshSubscription();
 
       state = state.copyWith(isAccepting: false);
-      return session.id;
+      return sessionId;
     } catch (e) {
       state = state.copyWith(isAccepting: false, error: e.toString());
       return null;
+    } finally {
+      try {
+        await acceptResult?.session.dispose();
+      } catch (_) {}
+      try {
+        await inviteHandle?.dispose();
+      } catch (_) {}
     }
   }
 
@@ -241,17 +273,22 @@ class InviteNotifier extends StateNotifier<InviteState> {
     String inviteId, {
     String root = 'https://iris.to',
   }) async {
+    InviteHandle? inviteHandle;
     try {
       final invite = await _datasource.getInvite(inviteId);
       if (invite?.serializedState == null) return null;
 
-      final inviteHandle = await NdrFfi.inviteDeserialize(
+      inviteHandle = await NdrFfi.inviteDeserialize(
         invite!.serializedState!,
       );
-      return inviteHandle.toUrl(root);
+      return await inviteHandle.toUrl(root);
     } catch (e) {
       state = state.copyWith(error: e.toString());
       return null;
+    } finally {
+      try {
+        await inviteHandle?.dispose();
+      } catch (_) {}
     }
   }
 
@@ -282,6 +319,8 @@ class InviteNotifier extends StateNotifier<InviteState> {
       data: {'inviteId': inviteId},
     );
 
+    InviteHandle? inviteHandle;
+    InviteResponseResult? result;
     try {
       final invite = await _datasource.getInvite(inviteId);
       if (invite?.serializedState == null) {
@@ -306,10 +345,10 @@ class InviteNotifier extends StateNotifier<InviteState> {
       }
 
       // Process invite response
-      final inviteHandle = await NdrFfi.inviteDeserialize(
+      inviteHandle = await NdrFfi.inviteDeserialize(
         invite!.serializedState!,
       );
-      final result = await inviteHandle.processResponse(
+      result = await inviteHandle.processResponse(
         eventJson: eventJson,
         inviterPrivkeyHex: devicePrivkeyHex,
       );
@@ -329,50 +368,76 @@ class InviteNotifier extends StateNotifier<InviteState> {
       // Serialize session state
       final sessionState = await result.session.stateJson();
 
-      // Create session in chat provider
-      final sessionNotifier = _ref.read(sessionStateProvider.notifier);
-      final session = ChatSession(
-        id: result.session.id,
-        recipientPubkeyHex: recipientOwnerPubkey,
-        recipientName: invite.label,
-        createdAt: DateTime.now(),
-        isInitiator: true,
-        serializedState: sessionState,
+      // If we already have a session with this peer, treat this as a replay/duplicate.
+      // (Relays can replay stored events on reconnect; multiple relays can send duplicates.)
+      final sessionDatasource = _ref.read(sessionDatasourceProvider);
+      final existingSession = await sessionDatasource.getSessionByRecipient(
+        recipientOwnerPubkey,
       );
 
-      await sessionNotifier.addSession(session);
-
-      // Import session into the session manager (so it can subscribe/decrypt)
       final sessionManager = _ref.read(sessionManagerServiceProvider);
-      await sessionManager.importSessionState(
-        peerPubkeyHex: recipientOwnerPubkey,
-        stateJson: sessionState,
-        deviceId: result.inviteePubkeyHex,
-      );
+
+      if (existingSession == null) {
+        // Store sessions keyed by peer owner pubkey for stable routing/deduping.
+        final sessionId = recipientOwnerPubkey;
+
+        // Create session in chat provider
+        final sessionNotifier = _ref.read(sessionStateProvider.notifier);
+        final session = ChatSession(
+          id: sessionId,
+          recipientPubkeyHex: recipientOwnerPubkey,
+          createdAt: DateTime.now(),
+          inviteId: inviteId,
+          isInitiator: true,
+          serializedState: sessionState,
+        );
+
+        await sessionNotifier.addSession(session);
+
+        // Import session into the session manager (so it can subscribe/decrypt)
+        await sessionManager.importSessionState(
+          peerPubkeyHex: recipientOwnerPubkey,
+          stateJson: sessionState,
+          deviceId: result.inviteePubkeyHex,
+        );
+      } else {
+        // Best-effort: ensure the session manager is aware of the (possibly new) peer device id,
+        // without overwriting our existing ratchet state.
+        final existingState = existingSession.serializedState;
+        if (existingState != null && existingState.isNotEmpty) {
+          await sessionManager.importSessionState(
+            peerPubkeyHex: recipientOwnerPubkey,
+            stateJson: existingState,
+            deviceId: result.inviteePubkeyHex,
+          );
+        }
+      }
 
       // Mark invite as used
       await _datasource.markUsed(inviteId, recipientOwnerPubkey);
 
-      // Update local state
-      final updatedInvite = invite.copyWith(
-        useCount: invite.useCount + 1,
-        acceptedBy: [...invite.acceptedBy, recipientOwnerPubkey],
-      );
-      state = state.copyWith(
-        invites: state.invites
-            .map((i) => i.id == inviteId ? updatedInvite : i)
-            .toList(),
-      );
+      // Update local state (only if this is a new acceptance for this invite).
+      if (!invite.acceptedBy.contains(recipientOwnerPubkey)) {
+        final updatedInvite = invite.copyWith(
+          useCount: invite.useCount + 1,
+          acceptedBy: [...invite.acceptedBy, recipientOwnerPubkey],
+        );
+        state = state.copyWith(
+          invites: state.invites
+              .map((i) => i.id == inviteId ? updatedInvite : i)
+              .where((i) => i.canBeUsed)
+              .toList(),
+        );
+      }
 
       // Refresh message subscription to include new session
       await sessionManager.refreshSubscription();
 
       Logger.info(
-        'Invite response processed, session created',
+        'Invite response processed, session ready',
         category: LogCategory.nostr,
         data: {
           'inviteId': inviteId,
-          'sessionId': session.id,
           'invitee': recipientOwnerPubkey.substring(0, 8),
         },
       );
@@ -384,6 +449,13 @@ class InviteNotifier extends StateNotifier<InviteState> {
         data: {'inviteId': inviteId},
       );
       state = state.copyWith(error: e.toString());
+    } finally {
+      try {
+        await result?.session.dispose();
+      } catch (_) {}
+      try {
+        await inviteHandle?.dispose();
+      } catch (_) {}
     }
   }
 

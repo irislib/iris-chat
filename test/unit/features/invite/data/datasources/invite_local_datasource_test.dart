@@ -257,6 +257,32 @@ void main() {
             )).called(1);
       });
 
+      test('is idempotent when acceptedBy already contains pubkey', () async {
+        final now = DateTime.now();
+
+        when(() => mockDb.query(
+              'invites',
+              where: 'id = ?',
+              whereArgs: ['invite-1'],
+              limit: 1,
+            )).thenAnswer((_) async => [
+              {
+                'id': 'invite-1',
+                'inviter_pubkey_hex': 'pubkey1',
+                'label': null,
+                'created_at': now.millisecondsSinceEpoch,
+                'max_uses': 5,
+                'use_count': 1,
+                'accepted_by': jsonEncode(['user1']),
+                'serialized_state': null,
+              },
+            ]);
+
+        await datasource.markUsed('invite-1', 'user1');
+
+        verifyNever(() => mockDb.update(any(), any(), where: any(named: 'where'), whereArgs: any(named: 'whereArgs')));
+      });
+
       test('does nothing when invite not found', () async {
         when(() => mockDb.query(
               'invites',
