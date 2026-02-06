@@ -81,6 +81,7 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
                 "sessionManagerSendTextWithInnerId" -> handleSessionManagerSendTextWithInnerId(call, result)
                 "sessionManagerSendReceipt" -> handleSessionManagerSendReceipt(call, result)
                 "sessionManagerSendTyping" -> handleSessionManagerSendTyping(call, result)
+                "sessionManagerSendReaction" -> handleSessionManagerSendReaction(call, result)
                 "sessionManagerImportSessionState" -> handleSessionManagerImportSessionState(call, result)
                 "sessionManagerGetActiveSessionState" -> handleSessionManagerGetActiveSessionState(call, result)
                 "sessionManagerProcessEvent" -> handleSessionManagerProcessEvent(call, result)
@@ -561,6 +562,22 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
         val manager = sessionManagerHandles[id]
             ?: throw IllegalArgumentException("SessionManager handle not found: $id")
         val eventIds = manager.sendTyping(recipientPubkeyHex)
+        result.success(eventIds)
+    }
+
+    private fun handleSessionManagerSendReaction(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val recipientPubkeyHex = call.argument<String>("recipientPubkeyHex")
+            ?: throw IllegalArgumentException("Missing recipientPubkeyHex")
+        val messageId = call.argument<String>("messageId")
+            ?: throw IllegalArgumentException("Missing messageId")
+        val emoji = call.argument<String>("emoji")
+            ?: throw IllegalArgumentException("Missing emoji")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        val eventIds = manager.sendReaction(recipientPubkeyHex, messageId, emoji)
         result.success(eventIds)
     }
 

@@ -136,6 +136,21 @@ class SessionManagerService {
     await _drainEvents();
   }
 
+  Future<void> sendReaction({
+    required String recipientPubkeyHex,
+    required String messageId,
+    required String emoji,
+  }) async {
+    final manager = _manager;
+    if (manager == null) return;
+    await manager.sendReaction(
+      recipientPubkeyHex: recipientPubkeyHex,
+      messageId: messageId,
+      emoji: emoji,
+    );
+    await _drainEvents();
+  }
+
   Future<void> importSessionState({
     required String peerPubkeyHex,
     required String stateJson,

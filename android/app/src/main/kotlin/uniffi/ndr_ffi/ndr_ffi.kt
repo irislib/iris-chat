@@ -800,6 +800,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -895,6 +897,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_process_event(`ptr`: Pointer,`eventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`messageId`: RustBuffer.ByValue,`emoji`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`receiptType`: RustBuffer.ByValue,`messageIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1083,6 +1087,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event(
     ): Short
+    fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction(
+    ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt(
     ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text(
@@ -1209,6 +1215,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event() != 55445.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction() != 19995.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt() != 36088.toShort()) {
@@ -2485,6 +2494,11 @@ public interface SessionManagerHandleInterface {
     fun `processEvent`(`eventJson`: kotlin.String)
     
     /**
+     * Send an emoji reaction (kind 7) to a specific message id.
+     */
+    fun `sendReaction`(`recipientPubkeyHex`: kotlin.String, `messageId`: kotlin.String, `emoji`: kotlin.String): List<kotlin.String>
+    
+    /**
      * Send a delivery/read receipt for messages.
      */
     fun `sendReceipt`(`recipientPubkeyHex`: kotlin.String, `receiptType`: kotlin.String, `messageIds`: List<kotlin.String>): List<kotlin.String>
@@ -2737,6 +2751,22 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
 }
     }
     
+    
+
+    
+    /**
+     * Send an emoji reaction (kind 7) to a specific message id.
+     */
+    @Throws(NdrException::class)override fun `sendReaction`(`recipientPubkeyHex`: kotlin.String, `messageId`: kotlin.String, `emoji`: kotlin.String): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NdrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(
+        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`messageId`),FfiConverterString.lower(`emoji`),_status)
+}
+    }
+    )
+    }
     
 
     

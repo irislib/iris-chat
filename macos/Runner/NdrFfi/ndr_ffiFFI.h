@@ -441,6 +441,11 @@ void uniffi_ndr_ffi_fn_method_sessionmanagerhandle_init(void*_Nonnull ptr, RustC
 void uniffi_ndr_ffi_fn_method_sessionmanagerhandle_process_event(void*_Nonnull ptr, RustBuffer event_json, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_METHOD_SESSIONMANAGERHANDLE_SEND_REACTION
+#define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_METHOD_SESSIONMANAGERHANDLE_SEND_REACTION
+RustBuffer uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(void*_Nonnull ptr, RustBuffer recipient_pubkey_hex, RustBuffer message_id, RustBuffer emoji, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_METHOD_SESSIONMANAGERHANDLE_SEND_RECEIPT
 #define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_FN_METHOD_SESSIONMANAGERHANDLE_SEND_RECEIPT
 RustBuffer uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(void*_Nonnull ptr, RustBuffer recipient_pubkey_hex, RustBuffer receipt_type, RustBuffer message_ids, RustCallStatus *_Nonnull out_status
@@ -939,6 +944,12 @@ uint16_t uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_init(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_METHOD_SESSIONMANAGERHANDLE_PROCESS_EVENT
 #define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_METHOD_SESSIONMANAGERHANDLE_PROCESS_EVENT
 uint16_t uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_METHOD_SESSIONMANAGERHANDLE_SEND_REACTION
+#define UNIFFI_FFIDEF_UNIFFI_NDR_FFI_CHECKSUM_METHOD_SESSIONMANAGERHANDLE_SEND_REACTION
+uint16_t uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction(void
     
 );
 #endif

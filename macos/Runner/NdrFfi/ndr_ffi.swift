@@ -1095,6 +1095,11 @@ public protocol SessionManagerHandleProtocol : AnyObject {
     func processEvent(eventJson: String) throws 
     
     /**
+     * Send an emoji reaction (kind 7) to a specific message id.
+     */
+    func sendReaction(recipientPubkeyHex: String, messageId: String, emoji: String) throws  -> [String]
+    
+    /**
      * Send a delivery/read receipt for messages.
      */
     func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageIds: [String]) throws  -> [String]
@@ -1289,6 +1294,19 @@ open func processEvent(eventJson: String)throws  {try rustCallWithError(FfiConve
         FfiConverterString.lower(eventJson),$0
     )
 }
+}
+    
+    /**
+     * Send an emoji reaction (kind 7) to a specific message id.
+     */
+open func sendReaction(recipientPubkeyHex: String, messageId: String, emoji: String)throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(self.uniffiClonePointer(),
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterString.lower(messageId),
+        FfiConverterString.lower(emoji),$0
+    )
+})
 }
     
     /**
@@ -2373,6 +2391,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event() != 55445) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction() != 19995) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt() != 36088) {

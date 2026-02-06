@@ -892,15 +892,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
         ),
       );
 
-      // Use eventId for the reaction - this is what iris-chat expects
-      final reactionMessageId = message.eventId ?? message.id;
-
-      // Send reaction as JSON payload
-      final payload = jsonEncode({
-        'type': 'reaction',
-        'messageId': reactionMessageId,
-        'emoji': emoji,
-      });
+      // Use the outer Nostr event id when available. Fall back to the stable inner id
+      // (rumor id) rather than the local UI id.
+      final reactionMessageId =
+          (message.eventId != null && message.eventId!.isNotEmpty)
+          ? message.eventId!
+          : (message.rumorId != null && message.rumorId!.isNotEmpty)
+              ? message.rumorId!
+              : null;
+      if (reactionMessageId == null) {
+        throw const AppError(
+          type: AppErrorType.unknown,
+          message: 'Message not yet ready for reactions. Try again in a moment.',
+          isRetryable: true,
+        );
+      }
 
       final session = await _sessionDatasource.getSession(sessionId);
       if (session == null) {
@@ -911,9 +917,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
         );
       }
 
-      await _sessionManagerService.sendText(
+      await _sessionManagerService.sendReaction(
         recipientPubkeyHex: session.recipientPubkeyHex,
-        text: payload,
+        messageId: reactionMessageId,
+        emoji: emoji,
       );
 
       // Update session state from manager

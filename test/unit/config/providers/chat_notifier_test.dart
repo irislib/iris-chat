@@ -433,5 +433,59 @@ void main() {
         expect(updated.status, MessageStatus.sent);
       });
     });
+
+    group('sendReaction', () {
+      test('uses SessionManagerService.sendReaction and updates local reactions', () async {
+        final session = ChatSession(
+          id: 'session-1',
+          recipientPubkeyHex: 'peer-pubkey',
+          createdAt: DateTime.now(),
+          isInitiator: true,
+        );
+
+        when(() => mockSessionDatasource.getSession('session-1')).thenAnswer(
+          (_) async => session,
+        );
+        when(
+          () => mockSessionManagerService.sendReaction(
+            recipientPubkeyHex: 'peer-pubkey',
+            messageId: 'event-123',
+            emoji: '❤️',
+          ),
+        ).thenAnswer((_) async {});
+        when(
+          () => mockSessionManagerService.getActiveSessionState('peer-pubkey'),
+        ).thenAnswer((_) async => null);
+
+        notifier.state = notifier.state.copyWith(messages: {
+          'session-1': [
+            ChatMessage(
+              id: 'msg-1',
+              sessionId: 'session-1',
+              text: 'Hello',
+              timestamp: DateTime.now(),
+              direction: MessageDirection.outgoing,
+              status: MessageStatus.sent,
+              eventId: 'event-123',
+              rumorId: 'rumor-123',
+            ),
+          ],
+        });
+
+        await notifier.sendReaction('session-1', 'msg-1', '❤️', 'my-pubkey');
+
+        verify(
+          () => mockSessionManagerService.sendReaction(
+            recipientPubkeyHex: 'peer-pubkey',
+            messageId: 'event-123',
+            emoji: '❤️',
+          ),
+        ).called(1);
+
+        final updated = notifier.state.messages['session-1']!.first;
+        expect(updated.reactions['❤️'], ['my-pubkey']);
+        expect(notifier.state.error, isNull);
+      });
+    });
   });
 }

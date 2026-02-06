@@ -101,6 +101,8 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
                 try handleSessionManagerSendReceipt(call: call, result: result)
             case "sessionManagerSendTyping":
                 try handleSessionManagerSendTyping(call: call, result: result)
+            case "sessionManagerSendReaction":
+                try handleSessionManagerSendReaction(call: call, result: result)
             case "sessionManagerImportSessionState":
                 try handleSessionManagerImportSessionState(call: call, result: result)
             case "sessionManagerGetActiveSessionState":
@@ -666,6 +668,20 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
         }
         result(try manager.sendTyping(recipientPubkeyHex: recipientPubkeyHex))
+    }
+
+    private func handleSessionManagerSendReaction(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let recipientPubkeyHex = args["recipientPubkeyHex"] as? String,
+              let messageId = args["messageId"] as? String,
+              let emoji = args["emoji"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(try manager.sendReaction(recipientPubkeyHex: recipientPubkeyHex, messageId: messageId, emoji: emoji))
     }
 
     private func handleSessionManagerImportSessionState(call: FlutterMethodCall, result: FlutterResult) throws {

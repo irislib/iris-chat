@@ -711,6 +711,25 @@ class SessionManagerHandle {
     return result.map((e) => e.toString()).toList();
   }
 
+  /// Send an emoji reaction (kind 7) to a specific message id.
+  Future<List<String>> sendReaction({
+    required String recipientPubkeyHex,
+    required String messageId,
+    required String emoji,
+  }) async {
+    final result = await _channel.invokeMethod<List>(
+      'sessionManagerSendReaction',
+      {
+        'id': _id,
+        'recipientPubkeyHex': recipientPubkeyHex,
+        'messageId': messageId,
+        'emoji': emoji,
+      },
+    );
+    if (result == null) return [];
+    return result.map((e) => e.toString()).toList();
+  }
+
   /// Import a session state for a peer.
   Future<void> importSessionState({
     required String peerPubkeyHex,
