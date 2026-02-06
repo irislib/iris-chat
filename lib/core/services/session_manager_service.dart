@@ -288,6 +288,12 @@ class SessionManagerService {
               final createdAt = decoded['created_at'];
               if (id is String && createdAt is num) {
                 _eventTimestamps[id] = createdAt.toInt();
+                if (_eventTimestamps.length > 10000) {
+                  final keys = _eventTimestamps.keys.take(2000).toList();
+                  for (final k in keys) {
+                    _eventTimestamps.remove(k);
+                  }
+                }
               }
             } catch (_) {}
             try {
