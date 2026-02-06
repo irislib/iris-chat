@@ -155,6 +155,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   icon: const Icon(Icons.key),
                   label: const Text('Import Existing Key'),
                 ),
+                const SizedBox(height: 12),
+                // Link device button (delegated device login)
+                TextButton.icon(
+                  onPressed: authState.isLoading ? null : () => context.push('/link'),
+                  icon: const Icon(Icons.devices),
+                  label: const Text('Link This Device'),
+                ),
               ],
               const Spacer(),
             ],

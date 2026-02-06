@@ -10,6 +10,7 @@ private func ndrVersion() -> String {
 public class NdrFfiPlugin: NSObject, FlutterPlugin {
     private var inviteHandles: [String: InviteHandle] = [:]
     private var sessionHandles: [String: SessionHandle] = [:]
+    private var sessionManagerHandles: [String: SessionManagerHandle] = [:]
     private var nextHandleId: UInt64 = 1
 
     private func generateHandleId() -> String {
@@ -36,6 +37,10 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
                 handleGenerateKeypair(result: result)
             case "derivePublicKey":
                 try handleDerivePublicKey(call: call, result: result)
+            case "createSignedAppKeysEvent":
+                try handleCreateSignedAppKeysEvent(call: call, result: result)
+            case "parseAppKeysEvent":
+                try handleParseAppKeysEvent(call: call, result: result)
             case "createInvite":
                 try handleCreateInvite(call: call, result: result)
             case "inviteFromUrl":
@@ -52,10 +57,18 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
                 try handleInviteSerialize(call: call, result: result)
             case "inviteAccept":
                 try handleInviteAccept(call: call, result: result)
+            case "inviteAcceptWithOwner":
+                try handleInviteAcceptWithOwner(call: call, result: result)
+            case "inviteSetPurpose":
+                try handleInviteSetPurpose(call: call, result: result)
+            case "inviteSetOwnerPubkeyHex":
+                try handleInviteSetOwnerPubkeyHex(call: call, result: result)
             case "inviteGetInviterPubkeyHex":
                 try handleInviteGetInviterPubkeyHex(call: call, result: result)
             case "inviteGetSharedSecretHex":
                 try handleInviteGetSharedSecretHex(call: call, result: result)
+            case "inviteProcessResponse":
+                try handleInviteProcessResponse(call: call, result: result)
             case "inviteDispose":
                 try handleInviteDispose(call: call, result: result)
             case "sessionFromStateJson":
@@ -74,6 +87,38 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
                 try handleSessionIsDrMessage(call: call, result: result)
             case "sessionDispose":
                 try handleSessionDispose(call: call, result: result)
+            case "sessionManagerNew":
+                try handleSessionManagerNew(call: call, result: result)
+            case "sessionManagerNewWithStoragePath":
+                try handleSessionManagerNewWithStoragePath(call: call, result: result)
+            case "sessionManagerInit":
+                try handleSessionManagerInit(call: call, result: result)
+            case "sessionManagerSendText":
+                try handleSessionManagerSendText(call: call, result: result)
+            case "sessionManagerSendTextWithInnerId":
+                try handleSessionManagerSendTextWithInnerId(call: call, result: result)
+            case "sessionManagerSendReceipt":
+                try handleSessionManagerSendReceipt(call: call, result: result)
+            case "sessionManagerSendTyping":
+                try handleSessionManagerSendTyping(call: call, result: result)
+            case "sessionManagerImportSessionState":
+                try handleSessionManagerImportSessionState(call: call, result: result)
+            case "sessionManagerGetActiveSessionState":
+                try handleSessionManagerGetActiveSessionState(call: call, result: result)
+            case "sessionManagerProcessEvent":
+                try handleSessionManagerProcessEvent(call: call, result: result)
+            case "sessionManagerDrainEvents":
+                try handleSessionManagerDrainEvents(call: call, result: result)
+            case "sessionManagerGetDeviceId":
+                try handleSessionManagerGetDeviceId(call: call, result: result)
+            case "sessionManagerGetOurPubkeyHex":
+                try handleSessionManagerGetOurPubkeyHex(call: call, result: result)
+            case "sessionManagerGetOwnerPubkeyHex":
+                try handleSessionManagerGetOwnerPubkeyHex(call: call, result: result)
+            case "sessionManagerGetTotalSessions":
+                try handleSessionManagerGetTotalSessions(call: call, result: result)
+            case "sessionManagerDispose":
+                try handleSessionManagerDispose(call: call, result: result)
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -97,9 +142,50 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
     }
 
     private func handleDerivePublicKey(call: FlutterMethodCall, result: FlutterResult) throws {
-        // Note: derivePublicKey is not exposed in the current ndr-ffi API
-        // We can implement it using generateKeypair as a workaround or add it to the Rust lib
-        throw PluginError.invalidArguments("derivePublicKey not yet implemented")
+        guard let args = call.arguments as? [String: Any],
+              let privkeyHex = args["privkeyHex"] as? String else {
+            throw PluginError.invalidArguments("Missing privkeyHex")
+        }
+
+        result(try derivePublicKey(privkeyHex: privkeyHex))
+    }
+
+    // MARK: - AppKeys
+
+    private func handleCreateSignedAppKeysEvent(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let ownerPubkeyHex = args["ownerPubkeyHex"] as? String,
+              let ownerPrivkeyHex = args["ownerPrivkeyHex"] as? String else {
+            throw PluginError.invalidArguments("Missing ownerPubkeyHex or ownerPrivkeyHex")
+        }
+
+        let deviceMaps = args["devices"] as? [[String: Any]] ?? []
+        let devices: [FfiDeviceEntry] = deviceMaps.compactMap { m in
+            guard let identity = m["identityPubkeyHex"] as? String else { return nil }
+            let createdAt = (m["createdAt"] as? NSNumber)?.uint64Value ?? 0
+            return FfiDeviceEntry(identityPubkeyHex: identity, createdAt: createdAt)
+        }
+
+        result(try createSignedAppKeysEvent(
+            ownerPubkeyHex: ownerPubkeyHex,
+            ownerPrivkeyHex: ownerPrivkeyHex,
+            devices: devices
+        ))
+    }
+
+    private func handleParseAppKeysEvent(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let eventJson = args["eventJson"] as? String else {
+            throw PluginError.invalidArguments("Missing eventJson")
+        }
+
+        let devices = try parseAppKeysEvent(eventJson: eventJson).map { d in
+            return [
+                "identityPubkeyHex": d.identityPubkeyHex,
+                "createdAt": d.createdAt,
+            ]
+        }
+        result(devices)
     }
 
     // MARK: - Invite Creation
@@ -225,6 +311,95 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         result([
             "session": ["id": sessionId],
             "responseEventJson": acceptResult.responseEventJson
+        ])
+    }
+
+    private func handleInviteAcceptWithOwner(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let inviteePubkeyHex = args["inviteePubkeyHex"] as? String,
+              let inviteePrivkeyHex = args["inviteePrivkeyHex"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        let deviceId = args["deviceId"] as? String
+        let ownerPubkeyHex = args["ownerPubkeyHex"] as? String
+
+        guard let invite = inviteHandles[id] else {
+            throw PluginError.handleNotFound("Invite handle not found: \(id)")
+        }
+
+        let acceptResult = try invite.acceptWithOwner(
+            inviteePubkeyHex: inviteePubkeyHex,
+            inviteePrivkeyHex: inviteePrivkeyHex,
+            deviceId: deviceId,
+            ownerPubkeyHex: ownerPubkeyHex
+        )
+
+        let sessionId = generateHandleId()
+        sessionHandles[sessionId] = acceptResult.session
+
+        result([
+            "session": ["id": sessionId],
+            "responseEventJson": acceptResult.responseEventJson
+        ])
+    }
+
+    private func handleInviteSetPurpose(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        let purpose = args["purpose"] as? String
+
+        guard let invite = inviteHandles[id] else {
+            throw PluginError.handleNotFound("Invite handle not found: \(id)")
+        }
+
+        invite.setPurpose(purpose: purpose)
+        result(nil)
+    }
+
+    private func handleInviteSetOwnerPubkeyHex(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        let ownerPubkeyHex = args["ownerPubkeyHex"] as? String
+
+        guard let invite = inviteHandles[id] else {
+            throw PluginError.handleNotFound("Invite handle not found: \(id)")
+        }
+
+        try invite.setOwnerPubkeyHex(ownerPubkeyHex: ownerPubkeyHex)
+        result(nil)
+    }
+
+    private func handleInviteProcessResponse(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let eventJson = args["eventJson"] as? String,
+              let inviterPrivkeyHex = args["inviterPrivkeyHex"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+
+        guard let invite = inviteHandles[id] else {
+            throw PluginError.handleNotFound("Invite handle not found: \(id)")
+        }
+
+        let processResult = try invite.processResponse(eventJson: eventJson, inviterPrivkeyHex: inviterPrivkeyHex)
+        guard let r = processResult else {
+            result(nil)
+            return
+        }
+
+        let sessionId = generateHandleId()
+        sessionHandles[sessionId] = r.session
+
+        result([
+            "session": ["id": sessionId],
+            "inviteePubkeyHex": r.inviteePubkeyHex,
+            "deviceId": r.deviceId as Any,
+            "ownerPubkeyHex": r.ownerPubkeyHex as Any,
         ])
     }
 
@@ -377,6 +552,236 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw PluginError.invalidArguments("Missing id")
         }
         sessionHandles.removeValue(forKey: id)
+        result(nil)
+    }
+
+    // MARK: - Session Manager
+
+    private func handleSessionManagerNew(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let ourPubkeyHex = args["ourPubkeyHex"] as? String,
+              let ourIdentityPrivkeyHex = args["ourIdentityPrivkeyHex"] as? String,
+              let deviceId = args["deviceId"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        let ownerPubkeyHex = args["ownerPubkeyHex"] as? String
+
+        let manager = try SessionManagerHandle(
+            ourPubkeyHex: ourPubkeyHex,
+            ourIdentityPrivkeyHex: ourIdentityPrivkeyHex,
+            deviceId: deviceId,
+            ownerPubkeyHex: ownerPubkeyHex
+        )
+        let id = generateHandleId()
+        sessionManagerHandles[id] = manager
+        result(["id": id])
+    }
+
+    private func handleSessionManagerNewWithStoragePath(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let ourPubkeyHex = args["ourPubkeyHex"] as? String,
+              let ourIdentityPrivkeyHex = args["ourIdentityPrivkeyHex"] as? String,
+              let deviceId = args["deviceId"] as? String,
+              let storagePath = args["storagePath"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        let ownerPubkeyHex = args["ownerPubkeyHex"] as? String
+
+        let manager = try SessionManagerHandle.newWithStoragePath(
+            ourPubkeyHex: ourPubkeyHex,
+            ourIdentityPrivkeyHex: ourIdentityPrivkeyHex,
+            deviceId: deviceId,
+            storagePath: storagePath,
+            ownerPubkeyHex: ownerPubkeyHex
+        )
+        let id = generateHandleId()
+        sessionManagerHandles[id] = manager
+        result(["id": id])
+    }
+
+    private func handleSessionManagerInit(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        try manager.init()
+        result(nil)
+    }
+
+    private func handleSessionManagerSendText(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let recipientPubkeyHex = args["recipientPubkeyHex"] as? String,
+              let text = args["text"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(try manager.sendText(recipientPubkeyHex: recipientPubkeyHex, text: text))
+    }
+
+    private func handleSessionManagerSendTextWithInnerId(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let recipientPubkeyHex = args["recipientPubkeyHex"] as? String,
+              let text = args["text"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+
+        let sendResult = try manager.sendTextWithInnerId(recipientPubkeyHex: recipientPubkeyHex, text: text)
+        result([
+            "innerId": sendResult.innerId,
+            "outerEventIds": sendResult.outerEventIds,
+        ])
+    }
+
+    private func handleSessionManagerSendReceipt(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let recipientPubkeyHex = args["recipientPubkeyHex"] as? String,
+              let receiptType = args["receiptType"] as? String,
+              let messageIds = args["messageIds"] as? [String] else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(try manager.sendReceipt(recipientPubkeyHex: recipientPubkeyHex, receiptType: receiptType, messageIds: messageIds))
+    }
+
+    private func handleSessionManagerSendTyping(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let recipientPubkeyHex = args["recipientPubkeyHex"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(try manager.sendTyping(recipientPubkeyHex: recipientPubkeyHex))
+    }
+
+    private func handleSessionManagerImportSessionState(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let peerPubkeyHex = args["peerPubkeyHex"] as? String,
+              let stateJson = args["stateJson"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        let deviceId = args["deviceId"] as? String
+
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        try manager.importSessionState(peerPubkeyHex: peerPubkeyHex, stateJson: stateJson, deviceId: deviceId)
+        result(nil)
+    }
+
+    private func handleSessionManagerGetActiveSessionState(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let peerPubkeyHex = args["peerPubkeyHex"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(try manager.getActiveSessionState(peerPubkeyHex: peerPubkeyHex))
+    }
+
+    private func handleSessionManagerProcessEvent(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let eventJson = args["eventJson"] as? String else {
+            throw PluginError.invalidArguments("Missing required arguments")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        try manager.processEvent(eventJson: eventJson)
+        result(nil)
+    }
+
+    private func handleSessionManagerDrainEvents(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+
+        let events = try manager.drainEvents().map { e in
+            return [
+                "kind": e.kind,
+                "subid": e.subid as Any,
+                "filterJson": e.filterJson as Any,
+                "eventJson": e.eventJson as Any,
+                "senderPubkeyHex": e.senderPubkeyHex as Any,
+                "content": e.content as Any,
+                "eventId": e.eventId as Any,
+            ]
+        }
+        result(events)
+    }
+
+    private func handleSessionManagerGetDeviceId(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(manager.getDeviceId())
+    }
+
+    private func handleSessionManagerGetOurPubkeyHex(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(manager.getOurPubkeyHex())
+    }
+
+    private func handleSessionManagerGetOwnerPubkeyHex(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(manager.getOwnerPubkeyHex())
+    }
+
+    private func handleSessionManagerGetTotalSessions(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+        result(Int64(manager.getTotalSessions()))
+    }
+
+    private func handleSessionManagerDispose(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String else {
+            throw PluginError.invalidArguments("Missing id")
+        }
+        sessionManagerHandles.removeValue(forKey: id)
         result(nil)
     }
 }

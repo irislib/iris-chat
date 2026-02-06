@@ -1,9 +1,13 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/ffi/ndr_ffi.dart';
 import '../../core/services/logger_service.dart';
+import '../../core/services/nostr_service.dart';
+import '../../core/utils/invite_url.dart';
 import '../../features/chat/domain/models/session.dart';
 import '../../features/invite/data/datasources/invite_local_datasource.dart';
 import '../../features/invite/domain/models/invite.dart';
@@ -15,7 +19,7 @@ part 'invite_provider.freezed.dart';
 
 /// State for invites.
 @freezed
-class InviteState with _$InviteState {
+abstract class InviteState with _$InviteState {
   const factory InviteState({
     @Default([]) List<Invite> invites,
     @Default(false) bool isLoading,
@@ -52,11 +56,23 @@ class InviteNotifier extends StateNotifier<InviteState> {
         throw Exception('Not authenticated');
       }
 
+      // Use the device identity key to create invites so linked devices can participate.
+      final authRepo = _ref.read(authRepositoryProvider);
+      final devicePrivkeyHex = await authRepo.getPrivateKey();
+      if (devicePrivkeyHex == null) {
+        throw Exception('Private key not found');
+      }
+      final devicePubkeyHex = await NdrFfi.derivePublicKey(devicePrivkeyHex);
+
       // Create invite using ndr-ffi
       final inviteHandle = await NdrFfi.createInvite(
-        inviterPubkeyHex: authState.pubkeyHex!,
+        inviterPubkeyHex: devicePubkeyHex,
+        deviceId: devicePubkeyHex,
         maxUses: maxUses,
       );
+
+      // Embed owner pubkey in invite URLs for multi-device mapping.
+      await inviteHandle.setOwnerPubkeyHex(authState.pubkeyHex);
 
       // Serialize for storage
       final serializedState = await inviteHandle.serialize();
@@ -99,20 +115,26 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
       // Get private key from storage
       final authRepo = _ref.read(authRepositoryProvider);
-      final privkeyHex = await authRepo.getPrivateKey();
-      if (privkeyHex == null) {
+      final devicePrivkeyHex = await authRepo.getPrivateKey();
+      if (devicePrivkeyHex == null) {
         throw Exception('Private key not found');
       }
+      final devicePubkeyHex = await NdrFfi.derivePublicKey(devicePrivkeyHex);
+      final ownerPubkeyHex = authState.pubkeyHex!;
 
       // Parse and accept invite
       final inviteHandle = await NdrFfi.inviteFromUrl(url);
-      final acceptResult = await inviteHandle.accept(
-        inviteePubkeyHex: authState.pubkeyHex!,
-        inviteePrivkeyHex: privkeyHex,
+      final acceptResult = await inviteHandle.acceptWithOwner(
+        inviteePubkeyHex: devicePubkeyHex,
+        inviteePrivkeyHex: devicePrivkeyHex,
+        deviceId: devicePubkeyHex,
+        ownerPubkeyHex: ownerPubkeyHex,
       );
 
       // Get inviter pubkey
-      final inviterPubkey = await inviteHandle.getInviterPubkeyHex();
+      final inviterDevicePubkey = await inviteHandle.getInviterPubkeyHex();
+      final inviterOwnerPubkey =
+          extractInviteOwnerPubkeyHex(url) ?? inviterDevicePubkey;
 
       // Serialize session state
       final sessionState = await acceptResult.session.stateJson();
@@ -121,7 +143,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
       final sessionNotifier = _ref.read(sessionStateProvider.notifier);
       final session = ChatSession(
         id: acceptResult.session.id,
-        recipientPubkeyHex: inviterPubkey,
+        recipientPubkeyHex: inviterOwnerPubkey,
         createdAt: DateTime.now(),
         isInitiator: false,
         serializedState: sessionState,
@@ -132,8 +154,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
       // Import session into the session manager (so it can subscribe/decrypt)
       final sessionManager = _ref.read(sessionManagerServiceProvider);
       await sessionManager.importSessionState(
-        peerPubkeyHex: inviterPubkey,
+        peerPubkeyHex: inviterOwnerPubkey,
         stateJson: sessionState,
+        deviceId: inviterDevicePubkey,
       );
 
       // Publish response event to Nostr relays
@@ -148,6 +171,74 @@ class InviteNotifier extends StateNotifier<InviteState> {
     } catch (e) {
       state = state.copyWith(isAccepting: false, error: e.toString());
       return null;
+    }
+  }
+
+  /// Accept a private link invite as the owner and register the new device in AppKeys.
+  ///
+  /// Returns true on success.
+  Future<bool> acceptLinkInviteFromUrl(String url) async {
+    state = state.copyWith(isAccepting: true, error: null);
+    InviteHandle? inviteHandle;
+    InviteAcceptResult? acceptResult;
+    try {
+      final authState = _ref.read(authStateProvider);
+      if (!authState.isAuthenticated || authState.pubkeyHex == null) {
+        throw Exception('Not authenticated');
+      }
+      if (authState.isLinkedDevice) {
+        throw Exception('Linked devices cannot accept link invites');
+      }
+
+      final authRepo = _ref.read(authRepositoryProvider);
+      final ownerPrivkeyHex = await authRepo.getPrivateKey();
+      if (ownerPrivkeyHex == null) {
+        throw Exception('Private key not found');
+      }
+
+      final ownerPubkeyHex = authState.pubkeyHex!;
+      final devicePubkeyHex = await NdrFfi.derivePublicKey(ownerPrivkeyHex);
+
+      inviteHandle = await NdrFfi.inviteFromUrl(url);
+      acceptResult = await inviteHandle.acceptWithOwner(
+        inviteePubkeyHex: devicePubkeyHex,
+        inviteePrivkeyHex: ownerPrivkeyHex,
+        deviceId: devicePubkeyHex,
+        ownerPubkeyHex: ownerPubkeyHex,
+      );
+
+      final linkedDevicePubkeyHex = await inviteHandle.getInviterPubkeyHex();
+
+      // Publish response event so the linking device can complete the flow.
+      final nostrService = _ref.read(nostrServiceProvider);
+      await nostrService.publishEvent(acceptResult.responseEventJson);
+
+      // Publish updated AppKeys authorizing the new device.
+      await _publishMergedAppKeys(
+        ownerPubkeyHex: ownerPubkeyHex,
+        ownerPrivkeyHex: ownerPrivkeyHex,
+        devicePubkeysToEnsure: {
+          devicePubkeyHex,
+          linkedDevicePubkeyHex,
+        },
+      );
+
+      // Best-effort refresh so the local SessionManager can learn about the new device quickly.
+      await _ref.read(sessionManagerServiceProvider).refreshSubscription();
+
+      state = state.copyWith(isAccepting: false);
+      return true;
+    } catch (e) {
+      state = state.copyWith(isAccepting: false, error: e.toString());
+      return false;
+    } finally {
+      // We don't need the temporary link session/handle beyond the response + AppKeys publish.
+      try {
+        await acceptResult?.session.dispose();
+      } catch (_) {}
+      try {
+        await inviteHandle?.dispose();
+      } catch (_) {}
     }
   }
 
@@ -214,8 +305,8 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
       // Get private key from storage
       final authRepo = _ref.read(authRepositoryProvider);
-      final privkeyHex = await authRepo.getPrivateKey();
-      if (privkeyHex == null) {
+      final devicePrivkeyHex = await authRepo.getPrivateKey();
+      if (devicePrivkeyHex == null) {
         throw Exception('Private key not found');
       }
 
@@ -224,7 +315,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
           await NdrFfi.inviteDeserialize(invite!.serializedState!);
       final result = await inviteHandle.processResponse(
         eventJson: eventJson,
-        inviterPrivkeyHex: privkeyHex,
+        inviterPrivkeyHex: devicePrivkeyHex,
       );
 
       if (result == null) {
@@ -236,6 +327,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
         return;
       }
 
+      final recipientOwnerPubkey =
+          result.ownerPubkeyHex ?? result.inviteePubkeyHex;
+
       // Serialize session state
       final sessionState = await result.session.stateJson();
 
@@ -243,7 +337,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
       final sessionNotifier = _ref.read(sessionStateProvider.notifier);
       final session = ChatSession(
         id: result.session.id,
-        recipientPubkeyHex: result.inviteePubkeyHex,
+        recipientPubkeyHex: recipientOwnerPubkey,
         recipientName: invite.label,
         createdAt: DateTime.now(),
         isInitiator: true,
@@ -255,18 +349,18 @@ class InviteNotifier extends StateNotifier<InviteState> {
       // Import session into the session manager (so it can subscribe/decrypt)
       final sessionManager = _ref.read(sessionManagerServiceProvider);
       await sessionManager.importSessionState(
-        peerPubkeyHex: result.inviteePubkeyHex,
+        peerPubkeyHex: recipientOwnerPubkey,
         stateJson: sessionState,
-        deviceId: result.deviceId,
+        deviceId: result.inviteePubkeyHex,
       );
 
       // Mark invite as used
-      await _datasource.markUsed(inviteId, result.inviteePubkeyHex);
+      await _datasource.markUsed(inviteId, recipientOwnerPubkey);
 
       // Update local state
       final updatedInvite = invite.copyWith(
         useCount: invite.useCount + 1,
-        acceptedBy: [...invite.acceptedBy, result.inviteePubkeyHex],
+        acceptedBy: [...invite.acceptedBy, recipientOwnerPubkey],
       );
       state = state.copyWith(
         invites:
@@ -282,7 +376,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
         data: {
           'inviteId': inviteId,
           'sessionId': session.id,
-          'invitee': result.inviteePubkeyHex.substring(0, 8),
+          'invitee': recipientOwnerPubkey.substring(0, 8),
         },
       );
     } catch (e) {
@@ -299,6 +393,86 @@ class InviteNotifier extends StateNotifier<InviteState> {
   /// Clear error state.
   void clearError() {
     state = state.copyWith(error: null);
+  }
+
+  Future<void> _publishMergedAppKeys({
+    required String ownerPubkeyHex,
+    required String ownerPrivkeyHex,
+    required Set<String> devicePubkeysToEnsure,
+  }) async {
+    final nostrService = _ref.read(nostrServiceProvider);
+
+    final existing = await _fetchLatestAppKeysEvent(
+      nostrService,
+      ownerPubkeyHex: ownerPubkeyHex,
+    );
+
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final Map<String, int> devices = {};
+
+    if (existing != null) {
+      final parsed = await NdrFfi.parseAppKeysEvent(jsonEncode(existing.toJson()));
+      for (final entry in parsed) {
+        devices[entry.identityPubkeyHex] = entry.createdAt;
+      }
+    }
+
+    for (final pk in devicePubkeysToEnsure) {
+      devices.putIfAbsent(pk, () => now);
+    }
+
+    final eventJson = await NdrFfi.createSignedAppKeysEvent(
+      ownerPubkeyHex: ownerPubkeyHex,
+      ownerPrivkeyHex: ownerPrivkeyHex,
+      devices: devices.entries
+          .map(
+            (e) => FfiDeviceEntry(
+              identityPubkeyHex: e.key,
+              createdAt: e.value,
+            ),
+          )
+          .toList(),
+    );
+
+    await nostrService.publishEvent(eventJson);
+  }
+
+  Future<NostrEvent?> _fetchLatestAppKeysEvent(
+    NostrService nostrService, {
+    required String ownerPubkeyHex,
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
+    final subid = 'appkeys-fetch-${DateTime.now().microsecondsSinceEpoch}';
+
+    NostrEvent? best;
+    final sub = nostrService.events.listen((event) {
+      if (event.subscriptionId != subid) return;
+      if (event.kind != 30078) return;
+      if (event.pubkey != ownerPubkeyHex) return;
+      final d = event.getTagValue('d');
+      if (d != 'double-ratchet/app-keys') return;
+
+      if (best == null || event.createdAt > best!.createdAt) {
+        best = event;
+      }
+    });
+
+    try {
+      nostrService.subscribeWithId(
+        subid,
+        NostrFilter(
+          kinds: const [30078],
+          authors: [ownerPubkeyHex],
+          limit: 50,
+        ),
+      );
+
+      await Future.delayed(timeout);
+      return best;
+    } finally {
+      await sub.cancel();
+      nostrService.closeSubscription(subid);
+    }
   }
 }
 

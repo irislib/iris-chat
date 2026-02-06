@@ -223,8 +223,8 @@ void main() {
         when(() => mockDb.query(
               'messages',
               columns: ['id'],
-              where: 'event_id = ?',
-              whereArgs: ['event-123'],
+              where: 'id = ? OR rumor_id = ? OR event_id = ?',
+              whereArgs: ['event-123', 'event-123', 'event-123'],
               limit: 1,
             )).thenAnswer((_) async => [
               {'id': 'msg-1'},
@@ -239,8 +239,8 @@ void main() {
         when(() => mockDb.query(
               'messages',
               columns: ['id'],
-              where: 'event_id = ?',
-              whereArgs: ['nonexistent'],
+              where: 'id = ? OR rumor_id = ? OR event_id = ?',
+              whereArgs: ['nonexistent', 'nonexistent', 'nonexistent'],
               limit: 1,
             )).thenAnswer((_) async => []);
 

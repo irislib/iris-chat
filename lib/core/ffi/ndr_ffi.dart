@@ -190,6 +190,40 @@ class NdrFfi {
     }
   }
 
+  /// Create a signed AppKeys event JSON for publishing to relays.
+  static Future<String> createSignedAppKeysEvent({
+    required String ownerPubkeyHex,
+    required String ownerPrivkeyHex,
+    required List<FfiDeviceEntry> devices,
+  }) async {
+    final result = await _channel.invokeMethod<String>(
+      'createSignedAppKeysEvent',
+      {
+        'ownerPubkeyHex': ownerPubkeyHex,
+        'ownerPrivkeyHex': ownerPrivkeyHex,
+        'devices': devices.map((d) => d.toMap()).toList(),
+      },
+    );
+    if (result == null) {
+      throw NdrException.serialization('Failed to create AppKeys event');
+    }
+    return result;
+  }
+
+  /// Parse a signed AppKeys event JSON into device entries.
+  static Future<List<FfiDeviceEntry>> parseAppKeysEvent(String eventJson) async {
+    final result = await _channel.invokeMethod<List>(
+      'parseAppKeysEvent',
+      {'eventJson': eventJson},
+    );
+    if (result == null) return [];
+    return result
+        .map(
+          (e) => FfiDeviceEntry.fromMap(Map<String, dynamic>.from(e as Map)),
+        )
+        .toList();
+  }
+
   /// Initialize a new session directly (advanced use).
   static Future<SessionHandle> sessionInit({
     required String theirEphemeralPubkeyHex,
@@ -232,6 +266,7 @@ class NdrFfi {
     required String ourPubkeyHex,
     required String ourIdentityPrivkeyHex,
     required String deviceId,
+    String? ownerPubkeyHex,
     String? storagePath,
   }) async {
     final method =
@@ -240,6 +275,7 @@ class NdrFfi {
       'ourPubkeyHex': ourPubkeyHex,
       'ourIdentityPrivkeyHex': ourIdentityPrivkeyHex,
       'deviceId': deviceId,
+      if (ownerPubkeyHex != null) 'ownerPubkeyHex': ownerPubkeyHex,
       if (storagePath != null) 'storagePath': storagePath,
     });
     if (result == null) {
@@ -344,6 +380,42 @@ class InviteHandle {
       );
       rethrow;
     }
+  }
+
+  /// Accept the invite and create a session, optionally including an owner pubkey (for link invites).
+  Future<InviteAcceptResult> acceptWithOwner({
+    required String inviteePubkeyHex,
+    required String inviteePrivkeyHex,
+    String? deviceId,
+    String? ownerPubkeyHex,
+  }) async {
+    final result = await _channel.invokeMethod<Map>('inviteAcceptWithOwner', {
+      'id': _id,
+      'inviteePubkeyHex': inviteePubkeyHex,
+      'inviteePrivkeyHex': inviteePrivkeyHex,
+      'deviceId': deviceId,
+      'ownerPubkeyHex': ownerPubkeyHex,
+    });
+    if (result == null) {
+      throw NdrException.inviteError('Failed to accept invite');
+    }
+    return InviteAcceptResult._fromMap(Map<String, dynamic>.from(result));
+  }
+
+  /// Set the invite purpose (e.g. "chat" or "link").
+  Future<void> setPurpose(String? purpose) async {
+    await _channel.invokeMethod<void>('inviteSetPurpose', {
+      'id': _id,
+      'purpose': purpose,
+    });
+  }
+
+  /// Set the invite owner pubkey hex (optional, typically used for link invites).
+  Future<void> setOwnerPubkeyHex(String? ownerPubkeyHex) async {
+    await _channel.invokeMethod<void>('inviteSetOwnerPubkeyHex', {
+      'id': _id,
+      'ownerPubkeyHex': ownerPubkeyHex,
+    });
   }
 
   /// Get the inviter's public key as hex.
@@ -586,6 +658,59 @@ class SessionManagerHandle {
     return result.map((e) => e.toString()).toList();
   }
 
+  /// Send a text message and return both stable inner id and outer event ids.
+  Future<SendTextWithInnerIdResult> sendTextWithInnerId({
+    required String recipientPubkeyHex,
+    required String text,
+  }) async {
+    final result = await _channel.invokeMethod<Map>(
+      'sessionManagerSendTextWithInnerId',
+      {
+        'id': _id,
+        'recipientPubkeyHex': recipientPubkeyHex,
+        'text': text,
+      },
+    );
+    if (result == null) {
+      throw NdrException.sessionNotReady('Failed to send message');
+    }
+    return SendTextWithInnerIdResult.fromMap(Map<String, dynamic>.from(result));
+  }
+
+  /// Send a delivery/read receipt.
+  Future<List<String>> sendReceipt({
+    required String recipientPubkeyHex,
+    required String receiptType,
+    required List<String> messageIds,
+  }) async {
+    final result = await _channel.invokeMethod<List>(
+      'sessionManagerSendReceipt',
+      {
+        'id': _id,
+        'recipientPubkeyHex': recipientPubkeyHex,
+        'receiptType': receiptType,
+        'messageIds': messageIds,
+      },
+    );
+    if (result == null) return [];
+    return result.map((e) => e.toString()).toList();
+  }
+
+  /// Send a typing indicator.
+  Future<List<String>> sendTyping({
+    required String recipientPubkeyHex,
+  }) async {
+    final result = await _channel.invokeMethod<List>(
+      'sessionManagerSendTyping',
+      {
+        'id': _id,
+        'recipientPubkeyHex': recipientPubkeyHex,
+      },
+    );
+    if (result == null) return [];
+    return result.map((e) => e.toString()).toList();
+  }
+
   /// Import a session state for a peer.
   Future<void> importSessionState({
     required String peerPubkeyHex,
@@ -645,6 +770,15 @@ class SessionManagerHandle {
     return result ?? '';
   }
 
+  /// Get owner public key as hex.
+  Future<String> getOwnerPubkeyHex() async {
+    final result =
+        await _channel.invokeMethod<String>('sessionManagerGetOwnerPubkeyHex', {
+      'id': _id,
+    });
+    return result ?? '';
+  }
+
   /// Get total active sessions.
   Future<int> getTotalSessions() async {
     final result = await _channel.invokeMethod<int>('sessionManagerGetTotalSessions', {
@@ -685,6 +819,7 @@ class InviteResponseResult {
     required this.session,
     required this.inviteePubkeyHex,
     this.deviceId,
+    this.ownerPubkeyHex,
   });
 
   factory InviteResponseResult._fromMap(Map<String, dynamic> map) {
@@ -694,10 +829,12 @@ class InviteResponseResult {
       ),
       inviteePubkeyHex: map['inviteePubkeyHex'] as String,
       deviceId: map['deviceId'] as String?,
+      ownerPubkeyHex: map['ownerPubkeyHex'] as String?,
     );
   }
 
   final SessionHandle session;
   final String inviteePubkeyHex;
   final String? deviceId;
+  final String? ownerPubkeyHex;
 }

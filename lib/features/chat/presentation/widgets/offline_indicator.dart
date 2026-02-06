@@ -67,7 +67,7 @@ class _QueueIndicator extends ConsumerWidget {
     return Container(
       padding: _padding,
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
+        color: Colors.white.withValues(alpha: 51),
         borderRadius: _borderRadius,
       ),
       child: Text(

@@ -29,6 +29,14 @@ void main() {
         expect(notifier.state.pubkeyHex, isNull);
       });
 
+      test('has no device pubkey', () {
+        expect(notifier.state.devicePubkeyHex, isNull);
+      });
+
+      test('is not a linked device login', () {
+        expect(notifier.state.isLinkedDevice, false);
+      });
+
       test('has no error', () {
         expect(notifier.state.error, isNull);
       });
@@ -41,11 +49,38 @@ void main() {
         when(() => mockRepo.getCurrentIdentity()).thenAnswer(
           (_) async => const Identity(pubkeyHex: testPubkey),
         );
+        when(() => mockRepo.getDevicePubkeyHex()).thenAnswer(
+          (_) async => testPubkey,
+        );
 
         await notifier.checkAuth();
 
         expect(notifier.state.isAuthenticated, true);
         expect(notifier.state.pubkeyHex, testPubkey);
+        expect(notifier.state.devicePubkeyHex, testPubkey);
+        expect(notifier.state.isLinkedDevice, false);
+        expect(notifier.state.isInitialized, true);
+      });
+
+      test('sets isLinkedDevice true when owner differs from device pubkey',
+          () async {
+        const ownerPubkey =
+            'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+        const devicePubkey =
+            'b1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+        when(() => mockRepo.getCurrentIdentity()).thenAnswer(
+          (_) async => const Identity(pubkeyHex: ownerPubkey),
+        );
+        when(() => mockRepo.getDevicePubkeyHex()).thenAnswer(
+          (_) async => devicePubkey,
+        );
+
+        await notifier.checkAuth();
+
+        expect(notifier.state.isAuthenticated, true);
+        expect(notifier.state.pubkeyHex, ownerPubkey);
+        expect(notifier.state.devicePubkeyHex, devicePubkey);
+        expect(notifier.state.isLinkedDevice, true);
         expect(notifier.state.isInitialized, true);
       });
 
@@ -86,6 +121,8 @@ void main() {
 
         expect(notifier.state.isAuthenticated, true);
         expect(notifier.state.pubkeyHex, testPubkey);
+        expect(notifier.state.devicePubkeyHex, testPubkey);
+        expect(notifier.state.isLinkedDevice, false);
         expect(notifier.state.isLoading, false);
       });
 
@@ -116,6 +153,8 @@ void main() {
 
         expect(notifier.state.isAuthenticated, true);
         expect(notifier.state.pubkeyHex, testPubkey);
+        expect(notifier.state.devicePubkeyHex, testPubkey);
+        expect(notifier.state.isLinkedDevice, false);
       });
 
       test('sets error on InvalidKeyException', () async {
@@ -127,6 +166,37 @@ void main() {
 
         expect(notifier.state.isAuthenticated, false);
         expect(notifier.state.error, 'Invalid key format');
+      });
+    });
+
+    group('loginLinkedDevice', () {
+      test('sets authenticated on success', () async {
+        const ownerPubkey =
+            'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+        const devicePrivkey =
+            'f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2';
+        const devicePubkey =
+            'b1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+
+        when(
+          () => mockRepo.loginLinkedDevice(
+            ownerPubkeyHex: ownerPubkey,
+            devicePrivkeyHex: devicePrivkey,
+          ),
+        ).thenAnswer((_) async => const Identity(pubkeyHex: ownerPubkey));
+        when(() => mockRepo.getDevicePubkeyHex()).thenAnswer(
+          (_) async => devicePubkey,
+        );
+
+        await notifier.loginLinkedDevice(
+          ownerPubkeyHex: ownerPubkey,
+          devicePrivkeyHex: devicePrivkey,
+        );
+
+        expect(notifier.state.isAuthenticated, true);
+        expect(notifier.state.pubkeyHex, ownerPubkey);
+        expect(notifier.state.devicePubkeyHex, devicePubkey);
+        expect(notifier.state.isLinkedDevice, true);
       });
     });
 
@@ -146,6 +216,8 @@ void main() {
 
         expect(notifier.state.isAuthenticated, false);
         expect(notifier.state.pubkeyHex, isNull);
+        expect(notifier.state.devicePubkeyHex, isNull);
+        expect(notifier.state.isLinkedDevice, false);
         expect(notifier.state.isInitialized, true);
       });
     });

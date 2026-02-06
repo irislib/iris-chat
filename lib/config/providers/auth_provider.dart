@@ -10,12 +10,14 @@ part 'auth_provider.freezed.dart';
 
 /// Authentication state.
 @freezed
-class AuthState with _$AuthState {
+abstract class AuthState with _$AuthState {
   const factory AuthState({
     @Default(false) bool isAuthenticated,
     @Default(false) bool isLoading,
     @Default(false) bool isInitialized,
+    @Default(false) bool isLinkedDevice,
     String? pubkeyHex,
+    String? devicePubkeyHex,
     String? error,
   }) = _AuthState;
 }
@@ -32,23 +34,42 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       final identity = await _repository.getCurrentIdentity();
       if (identity != null) {
+        final devicePubkeyHex = await _repository.getDevicePubkeyHex();
+        if (devicePubkeyHex == null) {
+          state = state.copyWith(
+            isAuthenticated: false,
+            isLoading: false,
+            isInitialized: true,
+            pubkeyHex: null,
+            devicePubkeyHex: null,
+            isLinkedDevice: false,
+            error: 'Private key not found',
+          );
+          return;
+        }
         state = state.copyWith(
           isAuthenticated: true,
           isLoading: false,
           isInitialized: true,
           pubkeyHex: identity.pubkeyHex,
+          devicePubkeyHex: devicePubkeyHex,
+          isLinkedDevice: devicePubkeyHex != identity.pubkeyHex,
         );
       } else {
         state = state.copyWith(
           isAuthenticated: false,
           isLoading: false,
           isInitialized: true,
+          pubkeyHex: null,
+          devicePubkeyHex: null,
+          isLinkedDevice: false,
         );
       }
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
         isInitialized: true,
+        isLinkedDevice: false,
         error: e.toString(),
       );
     }
@@ -63,6 +84,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
         isAuthenticated: true,
         isLoading: false,
         pubkeyHex: identity.pubkeyHex,
+        devicePubkeyHex: identity.pubkeyHex,
+        isLinkedDevice: false,
+        isInitialized: true,
       );
     } catch (e) {
       state = state.copyWith(
@@ -81,6 +105,44 @@ class AuthNotifier extends StateNotifier<AuthState> {
         isAuthenticated: true,
         isLoading: false,
         pubkeyHex: identity.pubkeyHex,
+        devicePubkeyHex: identity.pubkeyHex,
+        isLinkedDevice: false,
+        isInitialized: true,
+      );
+    } on InvalidKeyException catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: e.message,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: e.toString(),
+      );
+    }
+  }
+
+  /// Login as a linked device using a device private key and an owner pubkey.
+  Future<void> loginLinkedDevice({
+    required String ownerPubkeyHex,
+    required String devicePrivkeyHex,
+  }) async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      final identity = await _repository.loginLinkedDevice(
+        ownerPubkeyHex: ownerPubkeyHex,
+        devicePrivkeyHex: devicePrivkeyHex,
+      );
+
+      final devicePubkeyHex = await _repository.getDevicePubkeyHex();
+      state = state.copyWith(
+        isAuthenticated: true,
+        isLoading: false,
+        pubkeyHex: identity.pubkeyHex,
+        devicePubkeyHex: devicePubkeyHex,
+        isLinkedDevice:
+            devicePubkeyHex != null && devicePubkeyHex != identity.pubkeyHex,
+        isInitialized: true,
       );
     } on InvalidKeyException catch (e) {
       state = state.copyWith(

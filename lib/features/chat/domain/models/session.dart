@@ -7,7 +7,7 @@ part 'session.g.dart';
 
 /// Represents an encrypted chat session with another user.
 @freezed
-class ChatSession with _$ChatSession {
+abstract class ChatSession with _$ChatSession {
   const factory ChatSession({
     /// Unique identifier for this session.
     required String id,

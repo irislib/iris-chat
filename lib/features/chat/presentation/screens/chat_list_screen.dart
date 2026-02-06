@@ -25,7 +25,7 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await ref.read(sessionStateProvider.notifier).loadSessions();
-      ref.read(inviteStateProvider.notifier).loadInvites();
+      await ref.read(inviteStateProvider.notifier).loadInvites();
       // Start message subscription
       ref.read(messageSubscriptionProvider);
       if (mounted) {

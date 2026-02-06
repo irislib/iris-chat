@@ -415,6 +415,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -491,6 +507,11 @@ public protocol InviteHandleProtocol : AnyObject {
     func accept(inviteePubkeyHex: String, inviteePrivkeyHex: String, deviceId: String?) throws  -> InviteAcceptResult
     
     /**
+     * Accept the invite as an owner and include the owner pubkey in the response payload.
+     */
+    func acceptWithOwner(inviteePubkeyHex: String, inviteePrivkeyHex: String, deviceId: String?, ownerPubkeyHex: String?) throws  -> InviteAcceptResult
+    
+    /**
      * Get the inviter's public key as hex.
      */
     func getInviterPubkeyHex()  -> String
@@ -501,9 +522,26 @@ public protocol InviteHandleProtocol : AnyObject {
     func getSharedSecretHex()  -> String
     
     /**
+     * Process an invite response event and create a session (inviter side).
+     *
+     * Returns `None` if the event is not a valid response for this invite.
+     */
+    func processResponse(eventJson: String, inviterPrivkeyHex: String) throws  -> InviteProcessResult?
+    
+    /**
      * Serialize the invite to JSON for persistence.
      */
     func serialize() throws  -> String
+    
+    /**
+     * Update the owner pubkey embedded in invite URLs.
+     */
+    func setOwnerPubkeyHex(ownerPubkeyHex: String?) throws 
+    
+    /**
+     * Update the invite purpose (e.g. \"link\").
+     */
+    func setPurpose(purpose: String?) 
     
     /**
      * Convert the invite to a Nostr event JSON.
@@ -630,6 +668,20 @@ open func accept(inviteePubkeyHex: String, inviteePrivkeyHex: String, deviceId: 
 }
     
     /**
+     * Accept the invite as an owner and include the owner pubkey in the response payload.
+     */
+open func acceptWithOwner(inviteePubkeyHex: String, inviteePrivkeyHex: String, deviceId: String?, ownerPubkeyHex: String?)throws  -> InviteAcceptResult {
+    return try  FfiConverterTypeInviteAcceptResult.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_invitehandle_accept_with_owner(self.uniffiClonePointer(),
+        FfiConverterString.lower(inviteePubkeyHex),
+        FfiConverterString.lower(inviteePrivkeyHex),
+        FfiConverterOptionString.lower(deviceId),
+        FfiConverterOptionString.lower(ownerPubkeyHex),$0
+    )
+})
+}
+    
+    /**
      * Get the inviter's public key as hex.
      */
 open func getInviterPubkeyHex() -> String {
@@ -650,6 +702,20 @@ open func getSharedSecretHex() -> String {
 }
     
     /**
+     * Process an invite response event and create a session (inviter side).
+     *
+     * Returns `None` if the event is not a valid response for this invite.
+     */
+open func processResponse(eventJson: String, inviterPrivkeyHex: String)throws  -> InviteProcessResult? {
+    return try  FfiConverterOptionTypeInviteProcessResult.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_invitehandle_process_response(self.uniffiClonePointer(),
+        FfiConverterString.lower(eventJson),
+        FfiConverterString.lower(inviterPrivkeyHex),$0
+    )
+})
+}
+    
+    /**
      * Serialize the invite to JSON for persistence.
      */
 open func serialize()throws  -> String {
@@ -657,6 +723,26 @@ open func serialize()throws  -> String {
     uniffi_ndr_ffi_fn_method_invitehandle_serialize(self.uniffiClonePointer(),$0
     )
 })
+}
+    
+    /**
+     * Update the owner pubkey embedded in invite URLs.
+     */
+open func setOwnerPubkeyHex(ownerPubkeyHex: String?)throws  {try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_invitehandle_set_owner_pubkey_hex(self.uniffiClonePointer(),
+        FfiConverterOptionString.lower(ownerPubkeyHex),$0
+    )
+}
+}
+    
+    /**
+     * Update the invite purpose (e.g. \"link\").
+     */
+open func setPurpose(purpose: String?) {try! rustCall() {
+    uniffi_ndr_ffi_fn_method_invitehandle_set_purpose(self.uniffiClonePointer(),
+        FfiConverterOptionString.lower(purpose),$0
+    )
+}
 }
     
     /**
@@ -956,6 +1042,359 @@ public func FfiConverterTypeSessionHandle_lower(_ value: SessionHandle) -> Unsaf
 }
 
 
+
+
+/**
+ * FFI wrapper for SessionManager.
+ */
+public protocol SessionManagerHandleProtocol : AnyObject {
+    
+    /**
+     * Drain pending pubsub events from the internal queue.
+     */
+    func drainEvents() throws  -> [PubSubEvent]
+    
+    /**
+     * Export the active session state for a peer.
+     */
+    func getActiveSessionState(peerPubkeyHex: String) throws  -> String?
+    
+    /**
+     * Get our device id.
+     */
+    func getDeviceId()  -> String
+    
+    /**
+     * Get our public key as hex.
+     */
+    func getOurPubkeyHex()  -> String
+    
+    /**
+     * Get owner public key as hex.
+     */
+    func getOwnerPubkeyHex()  -> String
+    
+    /**
+     * Get total active sessions.
+     */
+    func getTotalSessions()  -> UInt64
+    
+    /**
+     * Import a session state for a peer.
+     */
+    func importSessionState(peerPubkeyHex: String, stateJson: String, deviceId: String?) throws 
+    
+    /**
+     * Initialize the session manager (loads state, creates device invite, subscribes).
+     */
+    func `init`() throws 
+    
+    /**
+     * Process a received Nostr event JSON.
+     */
+    func processEvent(eventJson: String) throws 
+    
+    /**
+     * Send a delivery/read receipt for messages.
+     */
+    func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageIds: [String]) throws  -> [String]
+    
+    /**
+     * Send a text message to a recipient.
+     */
+    func sendText(recipientPubkeyHex: String, text: String) throws  -> [String]
+    
+    /**
+     * Send a text message and return both the stable inner (rumor) id and the
+     * list of outer message event ids that were published.
+     */
+    func sendTextWithInnerId(recipientPubkeyHex: String, text: String) throws  -> SendTextResult
+    
+    /**
+     * Send a typing indicator.
+     */
+    func sendTyping(recipientPubkeyHex: String) throws  -> [String]
+    
+}
+
+/**
+ * FFI wrapper for SessionManager.
+ */
+open class SessionManagerHandle:
+    SessionManagerHandleProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_ndr_ffi_fn_clone_sessionmanagerhandle(self.pointer, $0) }
+    }
+    /**
+     * Create a new session manager with an internal event queue.
+     */
+public convenience init(ourPubkeyHex: String, ourIdentityPrivkeyHex: String, deviceId: String, ownerPubkeyHex: String?)throws  {
+    let pointer =
+        try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_constructor_sessionmanagerhandle_new(
+        FfiConverterString.lower(ourPubkeyHex),
+        FfiConverterString.lower(ourIdentityPrivkeyHex),
+        FfiConverterString.lower(deviceId),
+        FfiConverterOptionString.lower(ownerPubkeyHex),$0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_ndr_ffi_fn_free_sessionmanagerhandle(pointer, $0) }
+    }
+
+    
+    /**
+     * Create a new session manager with file-backed storage.
+     */
+public static func newWithStoragePath(ourPubkeyHex: String, ourIdentityPrivkeyHex: String, deviceId: String, storagePath: String, ownerPubkeyHex: String?)throws  -> SessionManagerHandle {
+    return try  FfiConverterTypeSessionManagerHandle.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_constructor_sessionmanagerhandle_new_with_storage_path(
+        FfiConverterString.lower(ourPubkeyHex),
+        FfiConverterString.lower(ourIdentityPrivkeyHex),
+        FfiConverterString.lower(deviceId),
+        FfiConverterString.lower(storagePath),
+        FfiConverterOptionString.lower(ownerPubkeyHex),$0
+    )
+})
+}
+    
+
+    
+    /**
+     * Drain pending pubsub events from the internal queue.
+     */
+open func drainEvents()throws  -> [PubSubEvent] {
+    return try  FfiConverterSequenceTypePubSubEvent.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_drain_events(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Export the active session state for a peer.
+     */
+open func getActiveSessionState(peerPubkeyHex: String)throws  -> String? {
+    return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_get_active_session_state(self.uniffiClonePointer(),
+        FfiConverterString.lower(peerPubkeyHex),$0
+    )
+})
+}
+    
+    /**
+     * Get our device id.
+     */
+open func getDeviceId() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_get_device_id(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Get our public key as hex.
+     */
+open func getOurPubkeyHex() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_get_our_pubkey_hex(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Get owner public key as hex.
+     */
+open func getOwnerPubkeyHex() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_get_owner_pubkey_hex(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Get total active sessions.
+     */
+open func getTotalSessions() -> UInt64 {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_get_total_sessions(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Import a session state for a peer.
+     */
+open func importSessionState(peerPubkeyHex: String, stateJson: String, deviceId: String?)throws  {try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_import_session_state(self.uniffiClonePointer(),
+        FfiConverterString.lower(peerPubkeyHex),
+        FfiConverterString.lower(stateJson),
+        FfiConverterOptionString.lower(deviceId),$0
+    )
+}
+}
+    
+    /**
+     * Initialize the session manager (loads state, creates device invite, subscribes).
+     */
+open func `init`()throws  {try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_init(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+    /**
+     * Process a received Nostr event JSON.
+     */
+open func processEvent(eventJson: String)throws  {try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_process_event(self.uniffiClonePointer(),
+        FfiConverterString.lower(eventJson),$0
+    )
+}
+}
+    
+    /**
+     * Send a delivery/read receipt for messages.
+     */
+open func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageIds: [String])throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(self.uniffiClonePointer(),
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterString.lower(receiptType),
+        FfiConverterSequenceString.lower(messageIds),$0
+    )
+})
+}
+    
+    /**
+     * Send a text message to a recipient.
+     */
+open func sendText(recipientPubkeyHex: String, text: String)throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text(self.uniffiClonePointer(),
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterString.lower(text),$0
+    )
+})
+}
+    
+    /**
+     * Send a text message and return both the stable inner (rumor) id and the
+     * list of outer message event ids that were published.
+     */
+open func sendTextWithInnerId(recipientPubkeyHex: String, text: String)throws  -> SendTextResult {
+    return try  FfiConverterTypeSendTextResult.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text_with_inner_id(self.uniffiClonePointer(),
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterString.lower(text),$0
+    )
+})
+}
+    
+    /**
+     * Send a typing indicator.
+     */
+open func sendTyping(recipientPubkeyHex: String)throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_typing(self.uniffiClonePointer(),
+        FfiConverterString.lower(recipientPubkeyHex),$0
+    )
+})
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionManagerHandle: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = SessionManagerHandle
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> SessionManagerHandle {
+        return SessionManagerHandle(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: SessionManagerHandle) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionManagerHandle {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: SessionManagerHandle, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionManagerHandle_lift(_ pointer: UnsafeMutableRawPointer) throws -> SessionManagerHandle {
+    return try FfiConverterTypeSessionManagerHandle.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionManagerHandle_lower(_ value: SessionManagerHandle) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeSessionManagerHandle.lower(value)
+}
+
+
 /**
  * Result of decrypting a message.
  */
@@ -1022,6 +1461,75 @@ public func FfiConverterTypeDecryptResult_lift(_ buf: RustBuffer) throws -> Decr
 #endif
 public func FfiConverterTypeDecryptResult_lower(_ value: DecryptResult) -> RustBuffer {
     return FfiConverterTypeDecryptResult.lower(value)
+}
+
+
+/**
+ * FFI-friendly device entry for AppKeys.
+ */
+public struct FfiDeviceEntry {
+    public var identityPubkeyHex: String
+    public var createdAt: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(identityPubkeyHex: String, createdAt: UInt64) {
+        self.identityPubkeyHex = identityPubkeyHex
+        self.createdAt = createdAt
+    }
+}
+
+
+
+extension FfiDeviceEntry: Equatable, Hashable {
+    public static func ==(lhs: FfiDeviceEntry, rhs: FfiDeviceEntry) -> Bool {
+        if lhs.identityPubkeyHex != rhs.identityPubkeyHex {
+            return false
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(identityPubkeyHex)
+        hasher.combine(createdAt)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiDeviceEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDeviceEntry {
+        return
+            try FfiDeviceEntry(
+                identityPubkeyHex: FfiConverterString.read(from: &buf), 
+                createdAt: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiDeviceEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.identityPubkeyHex, into: &buf)
+        FfiConverterUInt64.write(value.createdAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDeviceEntry_lift(_ buf: RustBuffer) throws -> FfiDeviceEntry {
+    return try FfiConverterTypeFfiDeviceEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiDeviceEntry_lower(_ value: FfiDeviceEntry) -> RustBuffer {
+    return FfiConverterTypeFfiDeviceEntry.lower(value)
 }
 
 
@@ -1146,6 +1654,174 @@ public func FfiConverterTypeInviteAcceptResult_lower(_ value: InviteAcceptResult
 
 
 /**
+ * Result of processing an invite response.
+ */
+public struct InviteProcessResult {
+    public var session: SessionHandle
+    public var inviteePubkeyHex: String
+    public var deviceId: String?
+    public var ownerPubkeyHex: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(session: SessionHandle, inviteePubkeyHex: String, deviceId: String?, ownerPubkeyHex: String?) {
+        self.session = session
+        self.inviteePubkeyHex = inviteePubkeyHex
+        self.deviceId = deviceId
+        self.ownerPubkeyHex = ownerPubkeyHex
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeInviteProcessResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> InviteProcessResult {
+        return
+            try InviteProcessResult(
+                session: FfiConverterTypeSessionHandle.read(from: &buf), 
+                inviteePubkeyHex: FfiConverterString.read(from: &buf), 
+                deviceId: FfiConverterOptionString.read(from: &buf), 
+                ownerPubkeyHex: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: InviteProcessResult, into buf: inout [UInt8]) {
+        FfiConverterTypeSessionHandle.write(value.session, into: &buf)
+        FfiConverterString.write(value.inviteePubkeyHex, into: &buf)
+        FfiConverterOptionString.write(value.deviceId, into: &buf)
+        FfiConverterOptionString.write(value.ownerPubkeyHex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeInviteProcessResult_lift(_ buf: RustBuffer) throws -> InviteProcessResult {
+    return try FfiConverterTypeInviteProcessResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeInviteProcessResult_lower(_ value: InviteProcessResult) -> RustBuffer {
+    return FfiConverterTypeInviteProcessResult.lower(value)
+}
+
+
+/**
+ * Event emitted by SessionManager for external publish/subscribe handling.
+ */
+public struct PubSubEvent {
+    public var kind: String
+    public var subid: String?
+    public var filterJson: String?
+    public var eventJson: String?
+    public var senderPubkeyHex: String?
+    public var content: String?
+    public var eventId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(kind: String, subid: String?, filterJson: String?, eventJson: String?, senderPubkeyHex: String?, content: String?, eventId: String?) {
+        self.kind = kind
+        self.subid = subid
+        self.filterJson = filterJson
+        self.eventJson = eventJson
+        self.senderPubkeyHex = senderPubkeyHex
+        self.content = content
+        self.eventId = eventId
+    }
+}
+
+
+
+extension PubSubEvent: Equatable, Hashable {
+    public static func ==(lhs: PubSubEvent, rhs: PubSubEvent) -> Bool {
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.subid != rhs.subid {
+            return false
+        }
+        if lhs.filterJson != rhs.filterJson {
+            return false
+        }
+        if lhs.eventJson != rhs.eventJson {
+            return false
+        }
+        if lhs.senderPubkeyHex != rhs.senderPubkeyHex {
+            return false
+        }
+        if lhs.content != rhs.content {
+            return false
+        }
+        if lhs.eventId != rhs.eventId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(kind)
+        hasher.combine(subid)
+        hasher.combine(filterJson)
+        hasher.combine(eventJson)
+        hasher.combine(senderPubkeyHex)
+        hasher.combine(content)
+        hasher.combine(eventId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePubSubEvent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PubSubEvent {
+        return
+            try PubSubEvent(
+                kind: FfiConverterString.read(from: &buf), 
+                subid: FfiConverterOptionString.read(from: &buf), 
+                filterJson: FfiConverterOptionString.read(from: &buf), 
+                eventJson: FfiConverterOptionString.read(from: &buf), 
+                senderPubkeyHex: FfiConverterOptionString.read(from: &buf), 
+                content: FfiConverterOptionString.read(from: &buf), 
+                eventId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PubSubEvent, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterOptionString.write(value.subid, into: &buf)
+        FfiConverterOptionString.write(value.filterJson, into: &buf)
+        FfiConverterOptionString.write(value.eventJson, into: &buf)
+        FfiConverterOptionString.write(value.senderPubkeyHex, into: &buf)
+        FfiConverterOptionString.write(value.content, into: &buf)
+        FfiConverterOptionString.write(value.eventId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePubSubEvent_lift(_ buf: RustBuffer) throws -> PubSubEvent {
+    return try FfiConverterTypePubSubEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePubSubEvent_lower(_ value: PubSubEvent) -> RustBuffer {
+    return FfiConverterTypePubSubEvent.lower(value)
+}
+
+
+/**
  * Result of sending a message.
  */
 public struct SendResult {
@@ -1211,6 +1887,75 @@ public func FfiConverterTypeSendResult_lift(_ buf: RustBuffer) throws -> SendRes
 #endif
 public func FfiConverterTypeSendResult_lower(_ value: SendResult) -> RustBuffer {
     return FfiConverterTypeSendResult.lower(value)
+}
+
+
+/**
+ * Result of sending a text message including stable inner id.
+ */
+public struct SendTextResult {
+    public var innerId: String
+    public var outerEventIds: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(innerId: String, outerEventIds: [String]) {
+        self.innerId = innerId
+        self.outerEventIds = outerEventIds
+    }
+}
+
+
+
+extension SendTextResult: Equatable, Hashable {
+    public static func ==(lhs: SendTextResult, rhs: SendTextResult) -> Bool {
+        if lhs.innerId != rhs.innerId {
+            return false
+        }
+        if lhs.outerEventIds != rhs.outerEventIds {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(innerId)
+        hasher.combine(outerEventIds)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSendTextResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SendTextResult {
+        return
+            try SendTextResult(
+                innerId: FfiConverterString.read(from: &buf), 
+                outerEventIds: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SendTextResult, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.innerId, into: &buf)
+        FfiConverterSequenceString.write(value.outerEventIds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSendTextResult_lift(_ buf: RustBuffer) throws -> SendTextResult {
+    return try FfiConverterTypeSendTextResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSendTextResult_lower(_ value: SendTextResult) -> RustBuffer {
+    return FfiConverterTypeSendTextResult.lower(value)
 }
 
 
@@ -1378,12 +2123,143 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         }
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeInviteProcessResult: FfiConverterRustBuffer {
+    typealias SwiftType = InviteProcessResult?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeInviteProcessResult.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeInviteProcessResult.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiDeviceEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiDeviceEntry]
+
+    public static func write(_ value: [FfiDeviceEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiDeviceEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiDeviceEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiDeviceEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiDeviceEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypePubSubEvent: FfiConverterRustBuffer {
+    typealias SwiftType = [PubSubEvent]
+
+    public static func write(_ value: [PubSubEvent], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePubSubEvent.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PubSubEvent] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PubSubEvent]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePubSubEvent.read(from: &buf))
+        }
+        return seq
+    }
+}
+/**
+ * Create a signed AppKeys event JSON for publishing to relays.
+ */
+public func createSignedAppKeysEvent(ownerPubkeyHex: String, ownerPrivkeyHex: String, devices: [FfiDeviceEntry])throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_func_create_signed_app_keys_event(
+        FfiConverterString.lower(ownerPubkeyHex),
+        FfiConverterString.lower(ownerPrivkeyHex),
+        FfiConverterSequenceTypeFfiDeviceEntry.lower(devices),$0
+    )
+})
+}
+/**
+ * Derive a public key from a hex-encoded private key.
+ */
+public func derivePublicKey(privkeyHex: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_func_derive_public_key(
+        FfiConverterString.lower(privkeyHex),$0
+    )
+})
+}
 /**
  * Generate a new keypair.
  */
 public func generateKeypair() -> FfiKeyPair {
     return try!  FfiConverterTypeFfiKeyPair.lift(try! rustCall() {
     uniffi_ndr_ffi_fn_func_generate_keypair($0
+    )
+})
+}
+/**
+ * Parse an AppKeys event JSON and return the contained device entries.
+ */
+public func parseAppKeysEvent(eventJson: String)throws  -> [FfiDeviceEntry] {
+    return try  FfiConverterSequenceTypeFfiDeviceEntry.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_func_parse_app_keys_event(
+        FfiConverterString.lower(eventJson),$0
     )
 })
 }
@@ -1412,7 +2288,16 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_ndr_ffi_checksum_func_create_signed_app_keys_event() != 62391) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_func_derive_public_key() != 23373) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ndr_ffi_checksum_func_generate_keypair() != 56100) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_func_parse_app_keys_event() != 33390) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_func_version() != 58200) {
@@ -1421,13 +2306,25 @@ private var initializationResult: InitializationResult = {
     if (uniffi_ndr_ffi_checksum_method_invitehandle_accept() != 50404) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_ndr_ffi_checksum_method_invitehandle_accept_with_owner() != 19609) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ndr_ffi_checksum_method_invitehandle_get_inviter_pubkey_hex() != 17047) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_method_invitehandle_get_shared_secret_hex() != 42269) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_ndr_ffi_checksum_method_invitehandle_process_response() != 8323) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ndr_ffi_checksum_method_invitehandle_serialize() != 6090) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_invitehandle_set_owner_pubkey_hex() != 988) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_invitehandle_set_purpose() != 14438) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_method_invitehandle_to_event_json() != 25504) {
@@ -1451,6 +2348,45 @@ private var initializationResult: InitializationResult = {
     if (uniffi_ndr_ffi_checksum_method_sessionhandle_state_json() != 62261) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_drain_events() != 33023) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_get_active_session_state() != 34884) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_get_device_id() != 27863) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_get_our_pubkey_hex() != 15248) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_get_owner_pubkey_hex() != 38134) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_get_total_sessions() != 54736) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_import_session_state() != 57446) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_init() != 12215) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event() != 55445) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt() != 36088) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text() != 18392) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text_with_inner_id() != 12060) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_typing() != 30715) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ndr_ffi_checksum_constructor_invitehandle_create_new() != 4301) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1467,6 +2403,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_constructor_sessionhandle_init() != 28461) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_constructor_sessionmanagerhandle_new() != 8939) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_constructor_sessionmanagerhandle_new_with_storage_path() != 33050) {
         return InitializationResult.apiChecksumMismatch
     }
 

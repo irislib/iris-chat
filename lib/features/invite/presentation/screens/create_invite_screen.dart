@@ -21,8 +21,14 @@ class _CreateInviteScreenState extends ConsumerState<CreateInviteScreen> {
   @override
   void initState() {
     super.initState();
-    // Create an invite immediately
-    WidgetsBinding.instance.addPostFrameCallback((_) => _createInvite());
+    // Create an invite immediately, unless we're already in a creating state.
+    // This makes the screen more testable and avoids double-creating invites.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final inviteState = ref.read(inviteStateProvider);
+      if (!inviteState.isCreating) {
+        _createInvite();
+      }
+    });
   }
 
   @override
@@ -172,7 +178,7 @@ class _CreateInviteScreenState extends ConsumerState<CreateInviteScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: theme.colorScheme.primaryContainer.withOpacity(0.3),
+                color: theme.colorScheme.primaryContainer.withValues(alpha: 77),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(

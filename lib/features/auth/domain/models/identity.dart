@@ -5,7 +5,7 @@ part 'identity.g.dart';
 
 /// Represents the user's Nostr identity.
 @freezed
-class Identity with _$Identity {
+abstract class Identity with _$Identity {
   const factory Identity({
     /// The public key as a 64-character hex string.
     required String pubkeyHex,

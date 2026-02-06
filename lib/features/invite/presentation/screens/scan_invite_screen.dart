@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../../../config/providers/invite_provider.dart';
+import '../../../../core/utils/invite_url.dart';
 
 class ScanInviteScreen extends ConsumerStatefulWidget {
   const ScanInviteScreen({super.key});
@@ -32,15 +33,31 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      final sessionId =
-          await ref.read(inviteStateProvider.notifier).acceptInviteFromUrl(url);
+      final purpose = extractInvitePurpose(url);
+      if (purpose == 'link') {
+        final ok = await ref
+            .read(inviteStateProvider.notifier)
+            .acceptLinkInviteFromUrl(url);
+        if (ok && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Device linked')),
+          );
+          context.pop();
+        } else if (mounted) {
+          final error = ref.read(inviteStateProvider).error;
+          _showError(error ?? 'Failed to link device');
+        }
+      } else {
+        final sessionId =
+            await ref.read(inviteStateProvider.notifier).acceptInviteFromUrl(url);
 
-      if (sessionId != null && mounted) {
-        // Navigate to the new chat
-        context.go('/chats/$sessionId');
-      } else if (mounted) {
-        final error = ref.read(inviteStateProvider).error;
-        _showError(error ?? 'Failed to accept invite');
+        if (sessionId != null && mounted) {
+          // Navigate to the new chat
+          context.go('/chats/$sessionId');
+        } else if (mounted) {
+          final error = ref.read(inviteStateProvider).error;
+          _showError(error ?? 'Failed to accept invite');
+        }
       }
     } finally {
       if (mounted) {

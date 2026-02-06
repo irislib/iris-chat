@@ -45,13 +45,34 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
   final nostrService = ref.watch(nostrServiceProvider);
   final inviteDatasource = ref.watch(inviteDatasourceProvider);
 
-  final sub = service.decryptedMessages.listen((message) {
-    ref.read(chatStateProvider.notifier).receiveDecryptedMessage(
+  final sub = service.decryptedMessages.listen((message) async {
+    final chatMessage =
+        await ref.read(chatStateProvider.notifier).receiveDecryptedMessage(
           message.senderPubkeyHex,
           message.content,
           eventId: message.eventId,
           createdAt: message.createdAt,
         );
+
+    if (chatMessage == null) return;
+
+    final sessionDatasource = ref.read(sessionDatasourceProvider);
+    final session = await sessionDatasource.getSession(chatMessage.sessionId);
+    if (session == null) return;
+
+    final sessionNotifier = ref.read(sessionStateProvider.notifier);
+    final existingIds =
+        ref.read(sessionStateProvider).sessions.map((s) => s.id).toSet();
+
+    if (!existingIds.contains(session.id)) {
+      await sessionNotifier.addSession(session);
+    }
+
+    await sessionNotifier.updateSessionWithMessage(session.id, chatMessage);
+
+    if (chatMessage.isIncoming) {
+      await sessionNotifier.incrementUnread(session.id);
+    }
   });
 
   final inviteSub = nostrService.events.listen((event) async {
@@ -67,7 +88,7 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
             jsonDecode(invite.serializedState!) as Map<String, dynamic>;
         final ephemeralPubkey = state['inviterEphemeralPublicKey'] as String?;
         if (ephemeralPubkey == inviteEphemeralPubkey) {
-          ref
+          await ref
               .read(inviteStateProvider.notifier)
               .handleInviteResponse(invite.id, jsonEncode(event.toJson()));
           return;

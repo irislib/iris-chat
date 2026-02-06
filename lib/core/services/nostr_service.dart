@@ -547,6 +547,20 @@ class NostrFilter {
     this.limit,
   });
 
+  factory NostrFilter.fromJson(Map<String, dynamic> json) {
+    return NostrFilter(
+      ids: (json['ids'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      authors:
+          (json['authors'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      kinds: (json['kinds'] as List<dynamic>?)?.map((e) => e as int).toList(),
+      eTags: (json['#e'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      pTags: (json['#p'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      since: json['since'] as int?,
+      until: json['until'] as int?,
+      limit: json['limit'] as int?,
+    );
+  }
+
   final List<String>? ids;
   final List<String>? authors;
   final List<int>? kinds;
@@ -567,20 +581,6 @@ class NostrFilter {
     if (until != null) json['until'] = until;
     if (limit != null) json['limit'] = limit;
     return json;
-  }
-
-  factory NostrFilter.fromJson(Map<String, dynamic> json) {
-    return NostrFilter(
-      ids: (json['ids'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
-      authors:
-          (json['authors'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
-      kinds: (json['kinds'] as List<dynamic>?)?.map((e) => e as int).toList(),
-      eTags: (json['#e'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
-      pTags: (json['#p'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
-      since: json['since'] as int?,
-      until: json['until'] as int?,
-      limit: json['limit'] as int?,
-    );
   }
 }
 

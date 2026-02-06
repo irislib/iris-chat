@@ -34,6 +34,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Load messages and clear unread
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(chatStateProvider.notifier).loadMessages(widget.sessionId);
+      ref.read(chatStateProvider.notifier).markSessionSeen(widget.sessionId);
       ref.read(sessionStateProvider.notifier).clearUnread(widget.sessionId);
     });
   }
@@ -101,6 +102,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
     );
     final messages = ref.watch(sessionMessagesProvider(widget.sessionId));
+    final isTyping = ref.watch(
+      chatStateProvider.select(
+        (s) => s.typingStates[widget.sessionId] ?? false,
+      ),
+    );
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -159,10 +165,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
 
+          if (isTyping)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, bottom: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Typing…',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+
           // Message input
           _MessageInput(
             controller: _messageController,
             onSend: _sendMessage,
+            onChanged: (text) {
+              if (text.trim().isEmpty) return;
+              ref.read(chatStateProvider.notifier).notifyTyping(widget.sessionId);
+            },
           ),
         ],
       ),
@@ -440,7 +464,7 @@ class _MessageBubbleState extends ConsumerState<_MessageBubble> {
                         formatTime(message.timestamp),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: isOutgoing
-                              ? theme.colorScheme.onPrimaryContainer.withOpacity(0.7)
+                              ? theme.colorScheme.onPrimaryContainer.withValues(alpha: 179)
                               : theme.colorScheme.onSurfaceVariant,
                           fontSize: 11,
                         ),
@@ -495,7 +519,7 @@ class _EmojiPicker extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 51),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -578,7 +602,8 @@ class _StatusIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = theme.colorScheme.onPrimaryContainer.withOpacity(0.7);
+    final color = theme.colorScheme.onPrimaryContainer.withValues(alpha: 179);
+    final seenColor = theme.colorScheme.onPrimaryContainer;
 
     switch (status) {
       case MessageStatus.pending:
@@ -596,6 +621,8 @@ class _StatusIcon extends StatelessWidget {
         return Icon(Icons.check, size: _iconSize, color: color);
       case MessageStatus.delivered:
         return Icon(Icons.done_all, size: _iconSize, color: color);
+      case MessageStatus.seen:
+        return Icon(Icons.done_all, size: _iconSize, color: seenColor);
       case MessageStatus.failed:
         return Icon(Icons.error_outline, size: _iconSize, color: theme.colorScheme.error);
     }
@@ -606,10 +633,12 @@ class _MessageInput extends StatelessWidget {
   const _MessageInput({
     required this.controller,
     required this.onSend,
+    this.onChanged,
   });
 
   final TextEditingController controller;
   final VoidCallback onSend;
+  final ValueChanged<String>? onChanged;
 
   static const _inputBorderRadius = BorderRadius.all(Radius.circular(24));
   static const _contentPadding = EdgeInsets.symmetric(horizontal: 16, vertical: 10);
@@ -651,6 +680,7 @@ class _MessageInput extends StatelessWidget {
               textCapitalization: TextCapitalization.sentences,
               minLines: 1,
               maxLines: 5,
+              onChanged: onChanged,
               onSubmitted: (_) => onSend(),
             ),
           ),

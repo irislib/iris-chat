@@ -3,11 +3,11 @@ import 'dart:convert';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../features/auth/domain/repositories/auth_repository.dart';
+import '../../features/chat/data/datasources/session_local_datasource.dart';
 import '../ffi/ndr_ffi.dart';
 import 'logger_service.dart';
 import 'nostr_service.dart';
-import '../../features/auth/domain/repositories/auth_repository.dart';
-import '../../features/chat/data/datasources/session_local_datasource.dart';
 
 class DecryptedMessage {
   const DecryptedMessage({
@@ -41,11 +41,15 @@ class SessionManagerService {
   Stream<DecryptedMessage> get decryptedMessages => _decryptedController.stream;
 
   SessionManagerHandle? _manager;
+  String? _ownerPubkeyHex;
   StreamSubscription<NostrEvent>? _eventSubscription;
   Timer? _drainTimer;
   bool _draining = false;
   bool _started = false;
   final Map<String, int> _eventTimestamps = {};
+
+  /// Owner public key (hex) for this session manager (differs for linked devices).
+  String? get ownerPubkeyHex => _ownerPubkeyHex;
 
   Future<void> start() async {
     if (_started) return;
@@ -91,6 +95,46 @@ class SessionManagerService {
     return eventIds;
   }
 
+  Future<SendTextWithInnerIdResult> sendTextWithInnerId({
+    required String recipientPubkeyHex,
+    required String text,
+  }) async {
+    final manager = _manager;
+    if (manager == null) {
+      throw const NostrException('Session manager not initialized');
+    }
+    final sendResult = await manager.sendTextWithInnerId(
+      recipientPubkeyHex: recipientPubkeyHex,
+      text: text,
+    );
+    await _drainEvents();
+    return sendResult;
+  }
+
+  Future<void> sendReceipt({
+    required String recipientPubkeyHex,
+    required String receiptType,
+    required List<String> messageIds,
+  }) async {
+    final manager = _manager;
+    if (manager == null) return;
+    await manager.sendReceipt(
+      recipientPubkeyHex: recipientPubkeyHex,
+      receiptType: receiptType,
+      messageIds: messageIds,
+    );
+    await _drainEvents();
+  }
+
+  Future<void> sendTyping({
+    required String recipientPubkeyHex,
+  }) async {
+    final manager = _manager;
+    if (manager == null) return;
+    await manager.sendTyping(recipientPubkeyHex: recipientPubkeyHex);
+    await _drainEvents();
+  }
+
   Future<void> importSessionState({
     required String peerPubkeyHex,
     required String stateJson,
@@ -119,8 +163,8 @@ class SessionManagerService {
 
   Future<void> _initManager() async {
     final identity = await _authRepository.getCurrentIdentity();
-    final privkeyHex = await _authRepository.getPrivateKey();
-    if (identity?.pubkeyHex == null || privkeyHex == null) {
+    final devicePrivkeyHex = await _authRepository.getPrivateKey();
+    if (identity?.pubkeyHex == null || devicePrivkeyHex == null) {
       Logger.warning(
         'Session manager not initialized: missing identity',
         category: LogCategory.session,
@@ -128,17 +172,22 @@ class SessionManagerService {
       return;
     }
 
+    final ownerPubkeyHex = identity!.pubkeyHex;
+    final devicePubkeyHex = await NdrFfi.derivePublicKey(devicePrivkeyHex);
+
     final supportDir = await getApplicationSupportDirectory();
     final storagePath = '${supportDir.path}/ndr';
 
     _manager = await NdrFfi.createSessionManager(
-      ourPubkeyHex: identity!.pubkeyHex!,
-      ourIdentityPrivkeyHex: privkeyHex,
-      deviceId: 'public',
+      ourPubkeyHex: devicePubkeyHex,
+      ourIdentityPrivkeyHex: devicePrivkeyHex,
+      deviceId: devicePubkeyHex,
       storagePath: storagePath,
+      ownerPubkeyHex: ownerPubkeyHex == devicePubkeyHex ? null : ownerPubkeyHex,
     );
 
     await _manager!.init();
+    _ownerPubkeyHex = await _manager!.getOwnerPubkeyHex();
 
     // If storage is empty, import existing sessions from local DB.
     final total = await _manager!.getTotalSessions();
@@ -165,7 +214,10 @@ class SessionManagerService {
 
   Future<void> _handleEvent(NostrEvent event) async {
     // Only handle NDR-related kinds to reduce overhead.
-    if (event.kind != 1060 && event.kind != 1059 && event.kind != 30078) {
+    if (event.kind != 1060 &&
+        event.kind != 1058 &&
+        event.kind != 1059 &&
+        event.kind != 30078) {
       return;
     }
 

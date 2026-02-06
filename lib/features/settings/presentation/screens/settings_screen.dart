@@ -50,6 +50,21 @@ class SettingsScreen extends ConsumerWidget {
                 : null,
           ),
 
+          // Devices section
+          const _SectionHeader(title: 'Devices'),
+          ListTile(
+            leading: const Icon(Icons.devices),
+            title: const Text('Link a Device'),
+            subtitle: Text(
+              authState.isLinkedDevice
+                  ? 'Linked devices cannot link new devices'
+                  : 'Scan a link invite from the new device',
+            ),
+            onTap: authState.isLinkedDevice
+                ? null
+                : () => context.push('/invite/scan'),
+          ),
+
           // Security section
           const _SectionHeader(title: 'Security'),
           ListTile(
@@ -106,6 +121,26 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _showExportKeyDialog(BuildContext context, WidgetRef ref) async {
+    final authState = ref.read(authStateProvider);
+    if (authState.isLinkedDevice) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Export Private Key'),
+          content: const Text(
+            'This is a linked device. It does not store your main private key.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(

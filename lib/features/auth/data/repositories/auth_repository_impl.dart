@@ -47,6 +47,32 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   @override
+  Future<Identity> loginLinkedDevice({
+    required String ownerPubkeyHex,
+    required String devicePrivkeyHex,
+  }) async {
+    // Validate key formats
+    if (!_isValidPrivateKey(devicePrivkeyHex)) {
+      throw const InvalidKeyException('Invalid private key format');
+    }
+    if (!_isValidHexKey(ownerPubkeyHex)) {
+      throw const InvalidKeyException('Invalid public key format');
+    }
+
+    // Derive device pubkey to ensure the private key is usable.
+    await _derivePublicKey(devicePrivkeyHex);
+
+    // Store device private key + owner public key.
+    await _storage.savePrivateKey(devicePrivkeyHex);
+    await _storage.savePublicKey(ownerPubkeyHex);
+
+    return Identity(
+      pubkeyHex: ownerPubkeyHex,
+      createdAt: DateTime.now(),
+    );
+  }
+
+  @override
   Future<Identity?> getCurrentIdentity() async {
     final pubkeyHex = await _storage.getPublicKey();
     if (pubkeyHex == null) return null;
@@ -69,7 +95,23 @@ class AuthRepositoryImpl implements AuthRepository {
     return _storage.getPrivateKey();
   }
 
+  @override
+  Future<String?> getDevicePubkeyHex() async {
+    final privkeyHex = await _storage.getPrivateKey();
+    if (privkeyHex == null) return null;
+    try {
+      return await _derivePublicKey(privkeyHex);
+    } catch (_) {
+      return null;
+    }
+  }
+
   bool _isValidPrivateKey(String hex) {
+    if (hex.length != 64) return false;
+    return _isValidHexKey(hex);
+  }
+
+  bool _isValidHexKey(String hex) {
     if (hex.length != 64) return false;
     return RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex);
   }

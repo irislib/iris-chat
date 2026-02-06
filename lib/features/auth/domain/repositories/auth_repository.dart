@@ -10,6 +10,14 @@ abstract class AuthRepository {
   /// Throws [InvalidKeyException] if the key is invalid.
   Future<Identity> login(String privkeyHex);
 
+  /// Login as a linked device using a device private key and an owner pubkey.
+  ///
+  /// Linked devices should not have the owner's private key.
+  Future<Identity> loginLinkedDevice({
+    required String ownerPubkeyHex,
+    required String devicePrivkeyHex,
+  });
+
   /// Get the current identity, if any.
   Future<Identity?> getCurrentIdentity();
 
@@ -21,4 +29,7 @@ abstract class AuthRepository {
 
   /// Get the stored private key (use with caution).
   Future<String?> getPrivateKey();
+
+  /// Get the current device public key (derived from the stored private key).
+  Future<String?> getDevicePubkeyHex();
 }

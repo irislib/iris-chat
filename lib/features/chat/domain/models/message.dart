@@ -5,7 +5,7 @@ part 'message.g.dart';
 
 /// Represents a chat message.
 @freezed
-class ChatMessage with _$ChatMessage {
+abstract class ChatMessage with _$ChatMessage {
   const factory ChatMessage({
     /// Unique identifier for this message.
     required String id,
@@ -27,6 +27,9 @@ class ChatMessage with _$ChatMessage {
 
     /// The Nostr event ID (outer event).
     String? eventId,
+
+    /// Stable inner event id (rumor id). Used for receipts and multi-device de-duplication.
+    String? rumorId,
 
     /// Optional reply reference.
     String? replyToId,
@@ -53,6 +56,7 @@ class ChatMessage with _$ChatMessage {
       timestamp: DateTime.now(),
       direction: MessageDirection.outgoing,
       status: MessageStatus.pending,
+      rumorId: null,
       replyToId: replyToId,
     );
   }
@@ -62,16 +66,18 @@ class ChatMessage with _$ChatMessage {
     required String sessionId,
     required String text,
     required String eventId,
+    required String rumorId,
     DateTime? timestamp,
   }) {
     return ChatMessage(
-      id: eventId,
+      id: rumorId,
       sessionId: sessionId,
       text: text,
       timestamp: timestamp ?? DateTime.now(),
       direction: MessageDirection.incoming,
       status: MessageStatus.delivered,
       eventId: eventId,
+      rumorId: rumorId,
     );
   }
 
@@ -82,7 +88,10 @@ class ChatMessage with _$ChatMessage {
   bool get isIncoming => direction == MessageDirection.incoming;
 
   /// Whether the message has been sent.
-  bool get isSent => status == MessageStatus.sent || status == MessageStatus.delivered;
+  bool get isSent =>
+      status == MessageStatus.sent ||
+      status == MessageStatus.delivered ||
+      status == MessageStatus.seen;
 }
 
 /// Direction of a message.
@@ -104,6 +113,9 @@ enum MessageStatus {
 
   /// Message has been delivered (received by recipient).
   delivered,
+
+  /// Message has been seen (read by recipient).
+  seen,
 
   /// Message failed to send.
   failed,

@@ -96,16 +96,44 @@ class MessageLocalDatasource {
   }
 
   /// Check if a message with the given event ID exists.
-  Future<bool> messageExists(String eventId) async {
+  Future<bool> messageExists(String idOrEventIdOrRumorId) async {
     final db = await _db;
     final result = await db.query(
       'messages',
       columns: ['id'],
-      where: 'event_id = ?',
-      whereArgs: [eventId],
+      where: 'id = ? OR rumor_id = ? OR event_id = ?',
+      whereArgs: [idOrEventIdOrRumorId, idOrEventIdOrRumorId, idOrEventIdOrRumorId],
       limit: 1,
     );
     return result.isNotEmpty;
+  }
+
+  /// Update message status by stable rumor id (outgoing messages store this in `rumor_id`).
+  Future<void> updateOutgoingStatusByRumorId(String rumorId, MessageStatus status) async {
+    final db = await _db;
+    final extraWhere = status == MessageStatus.delivered ? ' AND status != ?' : '';
+    final extraArgs =
+        status == MessageStatus.delivered ? [MessageStatus.seen.name] : const <Object>[];
+    await db.update(
+      'messages',
+      {'status': status.name},
+      where: '(rumor_id = ? OR id = ?) AND direction = ?$extraWhere',
+      whereArgs: [rumorId, rumorId, MessageDirection.outgoing.name, ...extraArgs],
+    );
+  }
+
+  /// Update incoming message status by stable rumor id (incoming messages use `id == rumorId`).
+  Future<void> updateIncomingStatusByRumorId(String rumorId, MessageStatus status) async {
+    final db = await _db;
+    final extraWhere = status == MessageStatus.delivered ? ' AND status != ?' : '';
+    final extraArgs =
+        status == MessageStatus.delivered ? [MessageStatus.seen.name] : const <Object>[];
+    await db.update(
+      'messages',
+      {'status': status.name},
+      where: '(rumor_id = ? OR id = ?) AND direction = ?$extraWhere',
+      whereArgs: [rumorId, rumorId, MessageDirection.incoming.name, ...extraArgs],
+    );
   }
 
   ChatMessage _messageFromMap(Map<String, dynamic> map) {
@@ -124,6 +152,7 @@ class MessageLocalDatasource {
       direction: MessageDirection.values.byName(map['direction'] as String),
       status: MessageStatus.values.byName(map['status'] as String),
       eventId: map['event_id'] as String?,
+      rumorId: map['rumor_id'] as String?,
       replyToId: map['reply_to_id'] as String?,
       reactions: reactions,
     );
@@ -138,6 +167,7 @@ class MessageLocalDatasource {
       'direction': message.direction.name,
       'status': message.status.name,
       'event_id': message.eventId,
+      'rumor_id': message.rumorId,
       'reply_to_id': message.replyToId,
       'reactions': message.reactions.isEmpty ? null : jsonEncode(message.reactions),
     };

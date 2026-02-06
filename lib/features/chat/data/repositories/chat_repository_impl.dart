@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../../../../core/ffi/ndr_ffi.dart';
 import '../../../../core/services/nostr_service.dart';
+import '../../../../core/utils/nostr_rumor.dart';
 import '../../domain/models/message.dart';
 import '../../domain/models/session.dart';
 import '../../domain/repositories/chat_repository.dart';
@@ -173,15 +174,23 @@ class ChatRepositoryImpl implements ChatRepository {
     final newState = await handle.stateJson();
     await _sessionDatasource.saveSessionState(sessionId, newState);
 
-    // Parse timestamp from event
+    // The new nostr-double-ratchet sends decrypted content as an inner rumor JSON.
+    // Fall back to treating it as plain text for backwards compatibility.
+    final rumor = NostrRumor.tryParse(decryptResult.plaintext);
+
+    // Parse timestamp (prefer inner ms tag if present).
     final createdAt = eventData['created_at'] as int;
-    final timestamp = DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
+    final timestamp =
+        rumor != null ? rumorTimestamp(rumor) : DateTime.fromMillisecondsSinceEpoch(createdAt * 1000);
+    final text = rumor?.content ?? decryptResult.plaintext;
+    final rumorId = rumor?.id ?? eventId;
 
     // Create and save the message
     final message = ChatMessage.incoming(
       sessionId: sessionId,
-      text: decryptResult.plaintext,
+      text: text,
       eventId: eventId,
+      rumorId: rumorId,
       timestamp: timestamp,
     );
 
@@ -191,9 +200,8 @@ class ChatRepositoryImpl implements ChatRepository {
     await updateSessionMetadata(
       sessionId,
       lastMessageAt: timestamp,
-      lastMessagePreview: decryptResult.plaintext.length > 50
-          ? '${decryptResult.plaintext.substring(0, 50)}...'
-          : decryptResult.plaintext,
+      lastMessagePreview:
+          text.length > 50 ? '${text.substring(0, 50)}...' : text,
     );
 
     return message;

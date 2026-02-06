@@ -67,11 +67,24 @@ void main() {
     when(() => mockSessionDatasource.getAllSessions()).thenAnswer(
       (_) async => [effectiveSession],
     );
+    when(() => mockSessionDatasource.getSession(any())).thenAnswer(
+      (_) async => effectiveSession,
+    );
     when(() => mockMessageDatasource.getMessagesForSession(
           any(),
           limit: any(named: 'limit'),
           beforeId: any(named: 'beforeId'),
         )).thenAnswer((_) async => messages);
+    when(() => mockMessageDatasource.updateIncomingStatusByRumorId(any(), any()))
+        .thenAnswer((_) async {});
+    when(() => mockSessionManagerService.sendReceipt(
+          recipientPubkeyHex: any(named: 'recipientPubkeyHex'),
+          receiptType: any(named: 'receiptType'),
+          messageIds: any(named: 'messageIds'),
+        )).thenAnswer((_) async {});
+    when(() => mockSessionManagerService.sendTyping(
+          recipientPubkeyHex: any(named: 'recipientPubkeyHex'),
+        )).thenAnswer((_) async {});
     when(() => mockSessionDatasource.updateMetadata(
           any(),
           unreadCount: any(named: 'unreadCount'),

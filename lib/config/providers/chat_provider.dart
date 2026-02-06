@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,21 +6,23 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../../core/services/database_service.dart';
 import '../../core/services/error_service.dart';
-import '../../core/services/session_manager_service.dart';
 import '../../core/services/profile_service.dart';
+import '../../core/services/session_manager_service.dart';
+import '../../core/utils/nostr_rumor.dart';
 import '../../features/chat/data/datasources/message_local_datasource.dart';
 import '../../features/chat/data/datasources/session_local_datasource.dart';
 import '../../features/chat/data/repositories/chat_repository_impl.dart';
 import '../../features/chat/domain/models/message.dart';
 import '../../features/chat/domain/models/session.dart';
 import '../../features/chat/domain/repositories/chat_repository.dart';
+import '../../features/chat/domain/utils/message_status_utils.dart';
 import 'nostr_provider.dart';
 
 part 'chat_provider.freezed.dart';
 
 /// State for chat sessions.
 @freezed
-class SessionState with _$SessionState {
+abstract class SessionState with _$SessionState {
   const factory SessionState({
     @Default([]) List<ChatSession> sessions,
     @Default(false) bool isLoading,
@@ -29,11 +32,12 @@ class SessionState with _$SessionState {
 
 /// State for messages in a chat.
 @freezed
-class ChatState with _$ChatState {
+abstract class ChatState with _$ChatState {
   const factory ChatState({
     @Default({}) Map<String, List<ChatMessage>> messages,
     @Default({}) Map<String, int> unreadCounts,
     @Default({}) Map<String, bool> sendingStates,
+    @Default({}) Map<String, bool> typingStates,
     String? error,
   }) = _ChatState;
 }
@@ -54,7 +58,7 @@ class SessionNotifier extends StateNotifier<SessionState> {
       state = state.copyWith(sessions: sessions, isLoading: false);
 
       // Fetch profiles for all recipients without names
-      _fetchMissingProfiles(sessions);
+      unawaited(_fetchMissingProfiles(sessions));
     } catch (e, st) {
       final appError = AppError.from(e, st);
       state = state.copyWith(isLoading: false, error: appError.message);
@@ -205,6 +209,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final SessionLocalDatasource _sessionDatasource;
   final SessionManagerService _sessionManagerService;
 
+  static const int _kReactionKind = 7;
+  static const int _kChatMessageKind = 14;
+  static const int _kReceiptKind = 15;
+  static const int _kTypingKind = 25;
+
+  static const Duration _kTypingExpiry = Duration(seconds: 10);
+  static const Duration _kTypingThrottle = Duration(seconds: 3);
+
+  final Map<String, Timer> _typingExpiryTimers = {};
+  final Map<String, int> _lastMessageAtMs = {};
+  final Map<String, int> _lastTypingSentAtMs = {};
+
+  @override
+  void dispose() {
+    for (final t in _typingExpiryTimers.values) {
+      t.cancel();
+    }
+    _typingExpiryTimers.clear();
+    super.dispose();
+  }
+
   /// Load messages for a session.
   Future<void> loadMessages(String sessionId, {int limit = 50}) async {
     try {
@@ -321,7 +346,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
 
       // Send via session manager (publishes through pubsub bridge)
-      final eventIds = await _sessionManagerService.sendText(
+      final sendResult = await _sessionManagerService.sendTextWithInnerId(
         recipientPubkeyHex: session.recipientPubkeyHex,
         text: message.text,
       );
@@ -333,12 +358,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
         await _sessionDatasource.saveSessionState(message.sessionId, newState);
       }
 
-      final eventId = eventIds.isNotEmpty ? eventIds.first : null;
+      final outerEventIds = sendResult.outerEventIds;
+      final eventId = outerEventIds.isNotEmpty ? outerEventIds.first : null;
+      final rumorId = sendResult.innerId.isNotEmpty ? sendResult.innerId : null;
 
       // Update message with success
       final sentMessage = message.copyWith(
         status: eventId != null ? MessageStatus.sent : MessageStatus.pending,
         eventId: eventId,
+        rumorId: rumorId,
       );
       await updateMessage(sentMessage);
     } catch (e, st) {
@@ -356,7 +384,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   /// Receive a decrypted message from the session manager.
-  Future<void> receiveDecryptedMessage(
+  Future<ChatMessage?> receiveDecryptedMessage(
     String senderPubkeyHex,
     String content, {
     String? eventId,
@@ -364,56 +392,300 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }) async {
     try {
       if (eventId != null && await _messageDatasource.messageExists(eventId)) {
-        return;
+        return null;
       }
 
-      // Find or create session by recipient pubkey
+      final rumor = NostrRumor.tryParse(content);
+
+      // Legacy fallback: treat decrypted plaintext as a chat message.
+      if (rumor == null) {
+        final existingSession =
+            await _sessionDatasource.getSessionByRecipient(senderPubkeyHex);
+        final sessionId = existingSession?.id ?? senderPubkeyHex;
+
+        if (existingSession == null) {
+          final session = ChatSession(
+            id: sessionId,
+            recipientPubkeyHex: senderPubkeyHex,
+            createdAt: DateTime.now(),
+            isInitiator: false,
+          );
+          await _sessionDatasource.saveSession(session);
+        }
+
+        final reactionPayload = parseReactionPayload(content);
+        if (reactionPayload != null) {
+          handleIncomingReaction(
+            sessionId,
+            reactionPayload['messageId'] as String,
+            reactionPayload['emoji'] as String,
+            senderPubkeyHex,
+          );
+          return null;
+        }
+
+        final timestamp = createdAt != null
+            ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000)
+            : DateTime.now();
+
+        final resolvedEventId =
+            eventId ?? DateTime.now().microsecondsSinceEpoch.toString();
+        final message = ChatMessage.incoming(
+          sessionId: sessionId,
+          text: content,
+          eventId: resolvedEventId,
+          rumorId: resolvedEventId,
+          timestamp: timestamp,
+        );
+
+        await addReceivedMessage(message);
+        return message;
+      }
+
+      final ownerPubkeyHex = _sessionManagerService.ownerPubkeyHex;
+      final peerPubkeyHex = ownerPubkeyHex != null
+          ? resolveRumorPeerPubkey(ownerPubkeyHex: ownerPubkeyHex, rumor: rumor)
+          : senderPubkeyHex;
+
+      if (peerPubkeyHex == null || peerPubkeyHex.isEmpty) {
+        return null;
+      }
+
+      // Find or create session by recipient pubkey (peer pubkey).
       final existingSession =
-          await _sessionDatasource.getSessionByRecipient(senderPubkeyHex);
-      final sessionId = existingSession?.id ?? senderPubkeyHex;
+          await _sessionDatasource.getSessionByRecipient(peerPubkeyHex);
+      final sessionId = existingSession?.id ?? peerPubkeyHex;
 
       if (existingSession == null) {
         final session = ChatSession(
           id: sessionId,
-          recipientPubkeyHex: senderPubkeyHex,
+          recipientPubkeyHex: peerPubkeyHex,
           createdAt: DateTime.now(),
           isInitiator: false,
         );
         await _sessionDatasource.saveSession(session);
       }
 
-      // Check if this is a reaction
-      final reactionPayload = parseReactionPayload(content);
+      // Receipt (kind 15): update outgoing message status by stable rumor ids.
+      if (rumor.kind == _kReceiptKind) {
+        final receiptType = rumor.content;
+        final messageIds = getTagValues(rumor.tags, 'e');
+        if (messageIds.isEmpty) return null;
+
+        final nextStatus = switch (receiptType) {
+          'delivered' => MessageStatus.delivered,
+          'seen' => MessageStatus.seen,
+          _ => null,
+        };
+        if (nextStatus == null) return null;
+
+        for (final id in messageIds) {
+          await _applyOutgoingStatusByRumorId(id, nextStatus);
+        }
+        return null;
+      }
+
+      // Typing indicator (kind 25)
+      if (rumor.kind == _kTypingKind) {
+        if (ownerPubkeyHex != null && rumor.pubkey == ownerPubkeyHex) {
+          // Ignore self typing events (multi-device sync).
+          return null;
+        }
+        final tsMs = rumorTimestamp(rumor).millisecondsSinceEpoch;
+        _setRemoteTyping(sessionId, eventTimestampMs: tsMs);
+        return null;
+      }
+
+      // Reaction (kind 7) or legacy reaction payload inside kind 14.
+      if (rumor.kind == _kReactionKind) {
+        final messageId = getFirstTagValue(rumor.tags, 'e');
+        if (messageId == null || messageId.isEmpty) return null;
+        handleIncomingReaction(sessionId, messageId, rumor.content, rumor.pubkey);
+        return null;
+      }
+
+      if (rumor.kind != _kChatMessageKind) {
+        return null;
+      }
+
+      // De-dup using stable inner id.
+      if (await _messageDatasource.messageExists(rumor.id)) {
+        return null;
+      }
+
+      // Some clients send reactions as JSON content in kind 14; keep compatibility.
+      final reactionPayload = parseReactionPayload(rumor.content);
       if (reactionPayload != null) {
         handleIncomingReaction(
           sessionId,
           reactionPayload['messageId'] as String,
           reactionPayload['emoji'] as String,
-          senderPubkeyHex,
+          rumor.pubkey,
         );
-        return;
+        return null;
       }
 
-      final timestamp = createdAt != null
-          ? DateTime.fromMillisecondsSinceEpoch(createdAt * 1000)
-          : DateTime.now();
+      final isMine = ownerPubkeyHex != null && rumor.pubkey == ownerPubkeyHex;
 
-      // Create message
-      final resolvedEventId =
-          eventId ?? DateTime.now().microsecondsSinceEpoch.toString();
-      final message = ChatMessage.incoming(
+      final message = ChatMessage(
+        id: rumor.id,
         sessionId: sessionId,
-        text: content,
-        eventId: resolvedEventId,
-        timestamp: timestamp,
+        text: rumor.content,
+        timestamp: rumorTimestamp(rumor),
+        direction:
+            isMine ? MessageDirection.outgoing : MessageDirection.incoming,
+        status: isMine ? MessageStatus.sent : MessageStatus.delivered,
+        eventId: eventId,
+        rumorId: rumor.id,
       );
 
-      // Save and add to state
+      _clearRemoteTyping(
+        sessionId,
+        messageTimestampMs: message.timestamp.millisecondsSinceEpoch,
+      );
+
       await addReceivedMessage(message);
+
+      // Auto-send delivery receipt for incoming messages.
+      if (!isMine) {
+        await _sessionManagerService.sendReceipt(
+          recipientPubkeyHex: peerPubkeyHex,
+          receiptType: 'delivered',
+          messageIds: [rumor.id],
+        );
+      }
+
+      return message;
     } catch (e, st) {
       final appError = AppError.from(e, st);
       state = state.copyWith(error: appError.message);
+      return null;
     }
+  }
+
+  Future<void> markSessionSeen(String sessionId) async {
+    final session = await _sessionDatasource.getSession(sessionId);
+    if (session == null) return;
+
+    final inState = state.messages[sessionId];
+    final messages = (inState == null || inState.isEmpty)
+        ? await _messageDatasource.getMessagesForSession(sessionId, limit: 200)
+        : inState;
+
+    final toMark = messages
+        .where((m) => m.isIncoming && m.status != MessageStatus.seen)
+        .toList();
+    if (toMark.isEmpty) return;
+
+    final rumorIds = toMark
+        .map((m) => m.rumorId ?? m.id)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    if (rumorIds.isNotEmpty) {
+      await _sessionManagerService.sendReceipt(
+        recipientPubkeyHex: session.recipientPubkeyHex,
+        receiptType: 'seen',
+        messageIds: rumorIds.toList(),
+      );
+
+      for (final id in rumorIds) {
+        await _messageDatasource.updateIncomingStatusByRumorId(
+          id,
+          MessageStatus.seen,
+        );
+      }
+    }
+
+    // Update in-memory state (only for messages currently loaded into state).
+    final current = state.messages[sessionId];
+    if (current == null) return;
+
+    final updated = current.map((m) {
+      if (!m.isIncoming) return m;
+      final id = m.rumorId ?? m.id;
+      if (!rumorIds.contains(id)) return m;
+      if (!shouldAdvanceStatus(m.status, MessageStatus.seen)) return m;
+      return m.copyWith(status: MessageStatus.seen);
+    }).toList();
+
+    state = state.copyWith(
+      messages: {...state.messages, sessionId: updated},
+    );
+  }
+
+  Future<void> notifyTyping(String sessionId) async {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final last = _lastTypingSentAtMs[sessionId] ?? 0;
+    if (nowMs - last < _kTypingThrottle.inMilliseconds) return;
+
+    _lastTypingSentAtMs[sessionId] = nowMs;
+
+    final session = await _sessionDatasource.getSession(sessionId);
+    if (session == null) return;
+
+    await _sessionManagerService.sendTyping(
+      recipientPubkeyHex: session.recipientPubkeyHex,
+    );
+  }
+
+  void _setRemoteTyping(String sessionId, {int? eventTimestampMs}) {
+    if (eventTimestampMs != null) {
+      final lastMsg = _lastMessageAtMs[sessionId];
+      if (lastMsg != null && eventTimestampMs <= lastMsg) return;
+    }
+
+    _typingExpiryTimers[sessionId]?.cancel();
+
+    state = state.copyWith(
+      typingStates: {...state.typingStates, sessionId: true},
+    );
+
+    _typingExpiryTimers[sessionId] = Timer(_kTypingExpiry, () {
+      _typingExpiryTimers.remove(sessionId);
+      final next = {...state.typingStates}..remove(sessionId);
+      state = state.copyWith(typingStates: next);
+    });
+  }
+
+  void _clearRemoteTyping(String sessionId, {int? messageTimestampMs}) {
+    if (messageTimestampMs != null) {
+      final prev = _lastMessageAtMs[sessionId] ?? 0;
+      _lastMessageAtMs[sessionId] =
+          messageTimestampMs > prev ? messageTimestampMs : prev;
+    }
+
+    _typingExpiryTimers[sessionId]?.cancel();
+    _typingExpiryTimers.remove(sessionId);
+
+    if (!state.typingStates.containsKey(sessionId)) return;
+    final next = {...state.typingStates}..remove(sessionId);
+    state = state.copyWith(typingStates: next);
+  }
+
+  Future<void> _applyOutgoingStatusByRumorId(
+    String rumorId,
+    MessageStatus nextStatus,
+  ) async {
+    await _messageDatasource.updateOutgoingStatusByRumorId(rumorId, nextStatus);
+
+    var changed = false;
+    final updatedBySession = <String, List<ChatMessage>>{};
+
+    for (final entry in state.messages.entries) {
+      final sessionId = entry.key;
+      final updated = entry.value.map((m) {
+        if (!m.isOutgoing) return m;
+        if (m.rumorId != rumorId && m.id != rumorId) return m;
+        if (!shouldAdvanceStatus(m.status, nextStatus)) return m;
+        changed = true;
+        return m.copyWith(status: nextStatus);
+      }).toList();
+      updatedBySession[sessionId] = updated;
+    }
+
+    if (!changed) return;
+    state = state.copyWith(messages: updatedBySession);
   }
 
   /// Update a message (e.g., after sending succeeds).
@@ -437,10 +709,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// Add a received message.
   Future<void> addReceivedMessage(ChatMessage message) async {
     // Check if message already exists
-    if (message.eventId != null) {
-      final exists = await _messageDatasource.messageExists(message.eventId!);
-      if (exists) return;
-    }
+    final dedupeKey = message.rumorId ?? message.eventId ?? message.id;
+    if (await _messageDatasource.messageExists(dedupeKey)) return;
 
     await _messageDatasource.saveMessage(message);
 
@@ -522,6 +792,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
     var messageIndex = currentMessages.indexWhere((m) => m.id == messageId);
     if (messageIndex == -1) {
       messageIndex = currentMessages.indexWhere((m) => m.eventId == messageId);
+    }
+    if (messageIndex == -1) {
+      messageIndex = currentMessages.indexWhere((m) => m.rumorId == messageId);
     }
     if (messageIndex == -1) return;
 

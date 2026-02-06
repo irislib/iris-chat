@@ -36,6 +36,7 @@ void main() {
           sessionId: 'session-1',
           text: 'Hi there',
           eventId: 'event-123',
+          rumorId: 'rumor-123',
         );
 
         expect(message.sessionId, 'session-1');
@@ -43,7 +44,7 @@ void main() {
         expect(message.direction, MessageDirection.incoming);
         expect(message.status, MessageStatus.delivered);
         expect(message.eventId, 'event-123');
-        expect(message.id, 'event-123'); // Uses eventId as id
+        expect(message.id, 'rumor-123'); // Uses stable rumor id as id
       });
 
       test('uses provided timestamp', () {
@@ -52,6 +53,7 @@ void main() {
           sessionId: 'session-1',
           text: 'Hi',
           eventId: 'event-123',
+          rumorId: 'rumor-123',
           timestamp: timestamp,
         );
 
@@ -64,6 +66,7 @@ void main() {
           sessionId: 'session-1',
           text: 'Hi',
           eventId: 'event-123',
+          rumorId: 'rumor-123',
         );
         final after = DateTime.now();
 
@@ -88,6 +91,7 @@ void main() {
           sessionId: 'session-1',
           text: 'Hi',
           eventId: 'event-123',
+          rumorId: 'rumor-123',
         );
 
         expect(message.isIncoming, true);
@@ -185,8 +189,10 @@ void main() {
   group('MessageStatus', () {
     test('has all expected values', () {
       expect(MessageStatus.values, contains(MessageStatus.pending));
+      expect(MessageStatus.values, contains(MessageStatus.queued));
       expect(MessageStatus.values, contains(MessageStatus.sent));
       expect(MessageStatus.values, contains(MessageStatus.delivered));
+      expect(MessageStatus.values, contains(MessageStatus.seen));
       expect(MessageStatus.values, contains(MessageStatus.failed));
     });
   });

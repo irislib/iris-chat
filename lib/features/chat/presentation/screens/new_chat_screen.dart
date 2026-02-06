@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../../../config/providers/chat_provider.dart';
 import '../../../../config/providers/invite_provider.dart';
+import '../../../../core/utils/invite_url.dart';
 import '../../../../shared/utils/formatters.dart';
 import '../../../invite/domain/models/invite.dart';
 import '../widgets/offline_indicator.dart';
@@ -29,7 +30,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       await ref.read(inviteStateProvider.notifier).loadInvites();
       final invites = ref.read(inviteStateProvider).invites;
       if (invites.isEmpty) {
-        _createInvite();
+        await _createInvite();
       }
     });
   }
@@ -52,7 +53,27 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
 
     setState(() => _isJoining = true);
     try {
-      final sessionId = await ref.read(inviteStateProvider.notifier).acceptInviteFromUrl(url);
+      final purpose = extractInvitePurpose(url);
+      if (purpose == 'link') {
+        final ok = await ref
+            .read(inviteStateProvider.notifier)
+            .acceptLinkInviteFromUrl(url);
+        if (ok && mounted) {
+          _pasteController.clear();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Device linked')),
+          );
+        } else if (mounted) {
+          final error = ref.read(inviteStateProvider).error;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(error ?? 'Invalid invite')),
+          );
+        }
+        return;
+      }
+
+      final sessionId =
+          await ref.read(inviteStateProvider.notifier).acceptInviteFromUrl(url);
       if (sessionId != null && mounted) {
         context.go('/chats/$sessionId');
       } else if (mounted) {
@@ -270,7 +291,7 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
   void _showQRModal() async {
     final url = await ref.read(inviteStateProvider.notifier).getInviteUrl(widget.invite.id);
     if (url != null && mounted) {
-      showDialog(
+      await showDialog<void>(
         context: context,
         builder: (context) => _QRModal(url: url, label: widget.invite.label),
       );

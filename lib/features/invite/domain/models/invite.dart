@@ -5,7 +5,7 @@ part 'invite.g.dart';
 
 /// Represents a chat invite that can be shared.
 @freezed
-class Invite with _$Invite {
+abstract class Invite with _$Invite {
   const factory Invite({
     /// Unique identifier for this invite.
     required String id,
@@ -45,7 +45,7 @@ class Invite with _$Invite {
 
 /// Result of accepting an invite.
 @freezed
-class InviteAcceptData with _$InviteAcceptData {
+abstract class InviteAcceptData with _$InviteAcceptData {
   const factory InviteAcceptData({
     /// The created session ID.
     required String sessionId,

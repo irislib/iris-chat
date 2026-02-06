@@ -191,6 +191,10 @@ void main() {
         await tester.pumpWidget(buildSettingsScreen(pubkeyHex: testPubkeyHex));
         await tester.pumpAndSettle();
 
+        await tester.scrollUntilVisible(
+          find.text('Danger Zone'),
+          300,
+        );
         expect(find.text('Danger Zone'), findsOneWidget);
       });
 
@@ -198,6 +202,10 @@ void main() {
         await tester.pumpWidget(buildSettingsScreen(pubkeyHex: testPubkeyHex));
         await tester.pumpAndSettle();
 
+        await tester.scrollUntilVisible(
+          find.text('Logout'),
+          300,
+        );
         expect(find.text('Logout'), findsOneWidget);
         expect(
             find.text('Your data will be kept on this device'), findsOneWidget);
@@ -208,9 +216,10 @@ void main() {
         await tester.pumpWidget(buildSettingsScreen(pubkeyHex: testPubkeyHex));
         await tester.pumpAndSettle();
 
-        // Scroll down to see the Delete All Data option
-        await tester.drag(find.byType(ListView), const Offset(0, -200));
-        await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(
+          find.text('Delete All Data'),
+          300,
+        );
 
         expect(find.text('Delete All Data'), findsOneWidget);
         expect(
@@ -223,6 +232,10 @@ void main() {
         await tester.pumpWidget(buildSettingsScreen(pubkeyHex: testPubkeyHex));
         await tester.pumpAndSettle();
 
+        await tester.scrollUntilVisible(
+          find.text('Logout'),
+          300,
+        );
         await tester.tap(find.text('Logout'));
         await tester.pumpAndSettle();
 
@@ -237,9 +250,10 @@ void main() {
         await tester.pumpWidget(buildSettingsScreen(pubkeyHex: testPubkeyHex));
         await tester.pumpAndSettle();
 
-        // First scroll to make Delete All Data visible
-        await tester.drag(find.byType(ListView), const Offset(0, -300));
-        await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(
+          find.text('Delete All Data'),
+          300,
+        );
 
         await tester.tap(find.text('Delete All Data'));
         await tester.pumpAndSettle();
@@ -254,6 +268,10 @@ void main() {
         await tester.pumpWidget(buildSettingsScreen(pubkeyHex: testPubkeyHex));
         await tester.pumpAndSettle();
 
+        await tester.scrollUntilVisible(
+          find.text('Logout'),
+          300,
+        );
         await tester.tap(find.text('Logout'));
         await tester.pumpAndSettle();
 
