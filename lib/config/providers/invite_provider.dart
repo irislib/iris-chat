@@ -94,9 +94,6 @@ class InviteNotifier extends StateNotifier<InviteState> {
         isCreating: false,
       );
 
-      // Refresh subscription to listen for responses to the new invite
-      await _ref.read(messageSubscriptionProvider).refreshSubscription();
-
       return invite;
     } catch (e) {
       state = state.copyWith(isCreating: false, error: e.toString());
@@ -217,10 +214,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
       await _publishMergedAppKeys(
         ownerPubkeyHex: ownerPubkeyHex,
         ownerPrivkeyHex: ownerPrivkeyHex,
-        devicePubkeysToEnsure: {
-          devicePubkeyHex,
-          linkedDevicePubkeyHex,
-        },
+        devicePubkeysToEnsure: {devicePubkeyHex, linkedDevicePubkeyHex},
       );
 
       // Best-effort refresh so the local SessionManager can learn about the new device quickly.
@@ -251,8 +245,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
       final invite = await _datasource.getInvite(inviteId);
       if (invite?.serializedState == null) return null;
 
-      final inviteHandle =
-          await NdrFfi.inviteDeserialize(invite!.serializedState!);
+      final inviteHandle = await NdrFfi.inviteDeserialize(
+        invite!.serializedState!,
+      );
       return inviteHandle.toUrl(root);
     } catch (e) {
       state = state.copyWith(error: e.toString());
@@ -311,8 +306,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
       }
 
       // Process invite response
-      final inviteHandle =
-          await NdrFfi.inviteDeserialize(invite!.serializedState!);
+      final inviteHandle = await NdrFfi.inviteDeserialize(
+        invite!.serializedState!,
+      );
       final result = await inviteHandle.processResponse(
         eventJson: eventJson,
         inviterPrivkeyHex: devicePrivkeyHex,
@@ -363,8 +359,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
         acceptedBy: [...invite.acceptedBy, recipientOwnerPubkey],
       );
       state = state.copyWith(
-        invites:
-            state.invites.map((i) => i.id == inviteId ? updatedInvite : i).toList(),
+        invites: state.invites
+            .map((i) => i.id == inviteId ? updatedInvite : i)
+            .toList(),
       );
 
       // Refresh message subscription to include new session
@@ -411,7 +408,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
     final Map<String, int> devices = {};
 
     if (existing != null) {
-      final parsed = await NdrFfi.parseAppKeysEvent(jsonEncode(existing.toJson()));
+      final parsed = await NdrFfi.parseAppKeysEvent(
+        jsonEncode(existing.toJson()),
+      );
       for (final entry in parsed) {
         devices[entry.identityPubkeyHex] = entry.createdAt;
       }
@@ -426,10 +425,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
       ownerPrivkeyHex: ownerPrivkeyHex,
       devices: devices.entries
           .map(
-            (e) => FfiDeviceEntry(
-              identityPubkeyHex: e.key,
-              createdAt: e.value,
-            ),
+            (e) => FfiDeviceEntry(identityPubkeyHex: e.key, createdAt: e.value),
           )
           .toList(),
     );
@@ -460,11 +456,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
     try {
       nostrService.subscribeWithId(
         subid,
-        NostrFilter(
-          kinds: const [30078],
-          authors: [ownerPubkeyHex],
-          limit: 50,
-        ),
+        NostrFilter(kinds: const [30078], authors: [ownerPubkeyHex], limit: 50),
       );
 
       await Future.delayed(timeout);
@@ -483,8 +475,9 @@ final inviteDatasourceProvider = Provider<InviteLocalDatasource>((ref) {
   return InviteLocalDatasource(db);
 });
 
-final inviteStateProvider =
-    StateNotifierProvider<InviteNotifier, InviteState>((ref) {
+final inviteStateProvider = StateNotifierProvider<InviteNotifier, InviteState>((
+  ref,
+) {
   final datasource = ref.watch(inviteDatasourceProvider);
   return InviteNotifier(datasource, ref);
 });

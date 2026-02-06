@@ -4,7 +4,11 @@ import 'package:sqflite/sqflite.dart';
 
 /// Service for managing the SQLite database.
 class DatabaseService {
-  static Database? _database;
+  DatabaseService({String? dbPath}) : _dbPathOverride = dbPath;
+
+  Database? _database;
+  final String? _dbPathOverride;
+
   static const _dbName = 'iris_chat.db';
   static const _dbVersion = 3;
 
@@ -15,8 +19,7 @@ class DatabaseService {
   }
 
   Future<Database> _initDatabase() async {
-    final documentsDirectory = await getApplicationDocumentsDirectory();
-    final path = join(documentsDirectory.path, _dbName);
+    final path = _dbPathOverride ?? await _defaultDbPath();
 
     return openDatabase(
       path,
@@ -24,6 +27,11 @@ class DatabaseService {
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
+  }
+
+  Future<String> _defaultDbPath() async {
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+    return join(documentsDirectory.path, _dbName);
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -76,13 +84,17 @@ class DatabaseService {
 
     // Create indexes
     await db.execute(
-        'CREATE INDEX idx_messages_session_id ON messages (session_id)');
+      'CREATE INDEX idx_messages_session_id ON messages (session_id)',
+    );
     await db.execute(
-        'CREATE INDEX idx_messages_timestamp ON messages (timestamp DESC)');
+      'CREATE INDEX idx_messages_timestamp ON messages (timestamp DESC)',
+    );
     await db.execute(
-        'CREATE INDEX idx_messages_rumor_id ON messages (rumor_id)');
+      'CREATE INDEX idx_messages_rumor_id ON messages (rumor_id)',
+    );
     await db.execute(
-        'CREATE INDEX idx_sessions_last_message ON sessions (last_message_at DESC)');
+      'CREATE INDEX idx_sessions_last_message ON sessions (last_message_at DESC)',
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -93,7 +105,9 @@ class DatabaseService {
     if (oldVersion < 3) {
       // Add stable inner (rumor) id column for receipts and multi-device support.
       await db.execute('ALTER TABLE messages ADD COLUMN rumor_id TEXT');
-      await db.execute('CREATE INDEX idx_messages_rumor_id ON messages (rumor_id)');
+      await db.execute(
+        'CREATE INDEX idx_messages_rumor_id ON messages (rumor_id)',
+      );
     }
   }
 
@@ -108,8 +122,7 @@ class DatabaseService {
 
   /// Delete the database (for testing or reset).
   Future<void> deleteDatabase() async {
-    final documentsDirectory = await getApplicationDocumentsDirectory();
-    final path = join(documentsDirectory.path, _dbName);
+    final path = _dbPathOverride ?? await _defaultDbPath();
     await databaseFactory.deleteDatabase(path);
     _database = null;
   }

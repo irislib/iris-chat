@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
@@ -28,12 +29,14 @@ class SessionManagerService {
   SessionManagerService(
     this._nostrService,
     this._sessionDatasource,
-    this._authRepository,
-  );
+    this._authRepository, {
+    String? storagePathOverride,
+  }) : _storagePathOverride = storagePathOverride;
 
   final NostrService _nostrService;
   final SessionLocalDatasource _sessionDatasource;
   final AuthRepository _authRepository;
+  final String? _storagePathOverride;
 
   final StreamController<DecryptedMessage> _decryptedController =
       StreamController<DecryptedMessage>.broadcast();
@@ -126,9 +129,7 @@ class SessionManagerService {
     await _drainEvents();
   }
 
-  Future<void> sendTyping({
-    required String recipientPubkeyHex,
-  }) async {
+  Future<void> sendTyping({required String recipientPubkeyHex}) async {
     final manager = _manager;
     if (manager == null) return;
     await manager.sendTyping(recipientPubkeyHex: recipientPubkeyHex);
@@ -175,8 +176,9 @@ class SessionManagerService {
     final ownerPubkeyHex = identity!.pubkeyHex;
     final devicePubkeyHex = await NdrFfi.derivePublicKey(devicePrivkeyHex);
 
-    final supportDir = await getApplicationSupportDirectory();
-    final storagePath = '${supportDir.path}/ndr';
+    final storagePath = await _resolveStoragePath();
+    // ndr-ffi expects the directory to exist.
+    await Directory(storagePath).create(recursive: true);
 
     _manager = await NdrFfi.createSessionManager(
       ourPubkeyHex: devicePubkeyHex,
@@ -196,6 +198,14 @@ class SessionManagerService {
     }
 
     await _drainEvents();
+  }
+
+  Future<String> _resolveStoragePath() async {
+    final override = _storagePathOverride;
+    if (override != null && override.isNotEmpty) return override;
+
+    final supportDir = await getApplicationSupportDirectory();
+    return '${supportDir.path}/ndr';
   }
 
   Future<void> _importSessionsFromDb() async {
@@ -221,7 +231,18 @@ class SessionManagerService {
       return;
     }
 
+    // De-dupe by id. It's normal to receive the same event multiple times
+    // (multiple relays, overlapping subscriptions, reconnect replays).
+    if (_eventTimestamps.containsKey(event.id)) return;
     _eventTimestamps[event.id] = event.createdAt;
+    // Prevent unbounded growth in long-running sessions.
+    if (_eventTimestamps.length > 10000) {
+      // Map preserves insertion order; drop oldest.
+      final keys = _eventTimestamps.keys.take(2000).toList();
+      for (final k in keys) {
+        _eventTimestamps.remove(k);
+      }
+    }
 
     final manager = _manager;
     if (manager == null) return;
@@ -234,9 +255,12 @@ class SessionManagerService {
     if (manager == null || _draining) return;
     _draining = true;
     try {
-      final events = await manager.drainEvents();
-      for (final event in events) {
-        await _handlePubSubEvent(event);
+      while (true) {
+        final events = await manager.drainEvents();
+        if (events.isEmpty) break;
+        for (final event in events) {
+          await _handlePubSubEvent(event);
+        }
       }
     } finally {
       _draining = false;
@@ -244,6 +268,7 @@ class SessionManagerService {
   }
 
   Future<void> _handlePubSubEvent(PubSubEvent event) async {
+    final manager = _manager;
     switch (event.kind) {
       case 'publish':
       case 'publish_signed':
@@ -251,6 +276,24 @@ class SessionManagerService {
           try {
             await _nostrService.publishEvent(event.eventJson!);
           } catch (_) {}
+          // Loop back our own publishes so the native manager can advance state and
+          // update subscriptions without relying on a relay echo + subscription.
+          //
+          // This is important for back-to-back sends (e.g., auto receipts + user reply).
+          if (manager != null) {
+            try {
+              final decoded =
+                  jsonDecode(event.eventJson!) as Map<String, dynamic>;
+              final id = decoded['id'];
+              final createdAt = decoded['created_at'];
+              if (id is String && createdAt is num) {
+                _eventTimestamps[id] = createdAt.toInt();
+              }
+            } catch (_) {}
+            try {
+              await manager.processEvent(event.eventJson!);
+            } catch (_) {}
+          }
         }
         break;
       case 'subscribe':
