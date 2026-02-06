@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -94,10 +96,12 @@ void main() {
         ),
       ],
     );
+    // Simulate a DB lock/hang: join should still navigate immediately.
+    final completer = Completer<ChatSession?>();
     when(
       () => mockSessions.getSessionByRecipient(any()),
-    ).thenAnswer((_) async => null);
-    when(() => mockSessions.saveSession(any())).thenAnswer((_) async {});
+    ).thenAnswer((_) => completer.future);
+    when(() => mockSessions.insertSessionIfAbsent(any())).thenAnswer((_) async {});
 
     final npub = nostr.Nip19.encodePubkey(testPubkeyHex) as String;
     final url = 'https://chat.iris.to/#$npub';

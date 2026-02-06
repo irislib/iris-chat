@@ -599,7 +599,6 @@ class _StatusIcon extends StatelessWidget {
   // Const icons for better performance - avoid recreating icons on every build
   static const _queuedIcon = Icon(Icons.cloud_queue, size: 14, color: Colors.orange);
   static const _iconSize = 14.0;
-  static const _progressSize = 12.0;
 
   @override
   Widget build(BuildContext context) {
@@ -609,14 +608,8 @@ class _StatusIcon extends StatelessWidget {
 
     switch (status) {
       case MessageStatus.pending:
-        return SizedBox(
-          width: _progressSize,
-          height: _progressSize,
-          child: CircularProgressIndicator(
-            strokeWidth: 1.5,
-            color: color,
-          ),
-        );
+        // Keep UI calm: pending means "not yet confirmed", not "spin forever".
+        return Icon(Icons.schedule, size: _iconSize, color: color);
       case MessageStatus.queued:
         return _queuedIcon;
       case MessageStatus.sent:

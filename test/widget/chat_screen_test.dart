@@ -277,8 +277,7 @@ void main() {
         expect(find.byIcon(Icons.error_outline), findsOneWidget);
       });
 
-      testWidgets('shows loading indicator for pending messages',
-          (tester) async {
+      testWidgets('shows clock icon for pending messages', (tester) async {
         final messages = [
           ChatMessage(
             id: 'msg-1',
@@ -291,18 +290,9 @@ void main() {
         ];
 
         await tester.pumpWidget(buildChatScreen(messages: messages));
-        await tester.pump();
+        await tester.pumpAndSettle();
 
-        // Find small circular progress indicator (status icon)
-        expect(
-          find.byWidgetPredicate(
-            (widget) =>
-                widget is SizedBox &&
-                widget.width == 12 &&
-                widget.height == 12,
-          ),
-          findsWidgets,
-        );
+        expect(find.byIcon(Icons.schedule), findsOneWidget);
       });
     });
 

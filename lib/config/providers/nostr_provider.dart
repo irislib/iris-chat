@@ -52,6 +52,13 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
 
   const inviteResponsesSubId = 'app-invite-responses';
 
+  // Serialize all processing in this provider to reduce SQLite "database locked"
+  // warnings caused by concurrent async stream handlers.
+  Future<void> serial = Future.value();
+  void schedule(Future<void> Function() task) {
+    serial = serial.then((_) => task()).catchError((_, __) {});
+  }
+
   Future<String?> resolveInviteEphemeralPubkey(String serializedState) async {
     // Best-effort extract from stored JSON first.
     try {
@@ -120,75 +127,69 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
   }
 
   // Subscribe for invite responses (and refresh when invites change).
-  unawaited(refreshInviteResponseSubscription());
+  schedule(refreshInviteResponseSubscription);
   ref.listen<InviteState>(inviteStateProvider, (_, __) {
-    unawaited(refreshInviteResponseSubscription());
+    schedule(refreshInviteResponseSubscription);
   });
   ref.onDispose(() {
     nostrService.closeSubscription(inviteResponsesSubId);
   });
 
-  final sub = service.decryptedMessages.listen((message) async {
-    final chatMessage = await ref
-        .read(chatStateProvider.notifier)
-        .receiveDecryptedMessage(
-          message.senderPubkeyHex,
-          message.content,
-          eventId: message.eventId,
-          createdAt: message.createdAt,
-        );
+  final sub = service.decryptedMessages.listen((message) {
+    schedule(() async {
+      final chatMessage = await ref
+          .read(chatStateProvider.notifier)
+          .receiveDecryptedMessage(
+            message.senderPubkeyHex,
+            message.content,
+            eventId: message.eventId,
+            createdAt: message.createdAt,
+          );
 
-    if (chatMessage == null) return;
+      if (chatMessage == null) return;
 
-    final sessionDatasource = ref.read(sessionDatasourceProvider);
-    final session = await sessionDatasource.getSession(chatMessage.sessionId);
-    if (session == null) return;
+      final sessionNotifier = ref.read(sessionStateProvider.notifier);
+      final session = await sessionNotifier.ensureSessionForRecipient(
+        chatMessage.sessionId,
+      );
 
-    final sessionNotifier = ref.read(sessionStateProvider.notifier);
-    final existingIds = ref
-        .read(sessionStateProvider)
-        .sessions
-        .map((s) => s.id)
-        .toSet();
+      await sessionNotifier.updateSessionWithMessage(session.id, chatMessage);
 
-    if (!existingIds.contains(session.id)) {
-      await sessionNotifier.addSession(session);
-    }
-
-    await sessionNotifier.updateSessionWithMessage(session.id, chatMessage);
-
-    if (chatMessage.isIncoming) {
-      await sessionNotifier.incrementUnread(session.id);
-    }
+      if (chatMessage.isIncoming) {
+        await sessionNotifier.incrementUnread(session.id);
+      }
+    });
   });
 
-  final inviteSub = nostrService.events.listen((event) async {
-    if (event.kind != 1059) return;
-    // Only consider events delivered by our invite-response subscription.
-    // Other subscriptions (sessions, app-keys, etc.) can also carry kind 1059.
-    if (event.subscriptionId != inviteResponsesSubId) return;
-    final pTags = <String>{};
-    for (final t in event.tags) {
-      if (t.length < 2) continue;
-      if (t[0] == 'p') pTags.add(t[1]);
-    }
-    if (pTags.isEmpty) return;
+  final inviteSub = nostrService.events.listen((event) {
+    schedule(() async {
+      if (event.kind != 1059) return;
+      // Only consider events delivered by our invite-response subscription.
+      // Other subscriptions (sessions, app-keys, etc.) can also carry kind 1059.
+      if (event.subscriptionId != inviteResponsesSubId) return;
+      final pTags = <String>{};
+      for (final t in event.tags) {
+        if (t.length < 2) continue;
+        if (t[0] == 'p') pTags.add(t[1]);
+      }
+      if (pTags.isEmpty) return;
 
-    final invites = await inviteDatasource.getActiveInvites();
-    for (final invite in invites) {
-      if (invite.serializedState == null) continue;
-      try {
-        final serialized = invite.serializedState!;
-        final ephemeralPubkey = await resolveInviteEphemeralPubkey(serialized);
-        if (ephemeralPubkey == null || ephemeralPubkey.isEmpty) continue;
-        if (!pTags.contains(ephemeralPubkey)) continue;
+      final invites = await inviteDatasource.getActiveInvites();
+      for (final invite in invites) {
+        if (invite.serializedState == null) continue;
+        try {
+          final serialized = invite.serializedState!;
+          final ephemeralPubkey = await resolveInviteEphemeralPubkey(serialized);
+          if (ephemeralPubkey == null || ephemeralPubkey.isEmpty) continue;
+          if (!pTags.contains(ephemeralPubkey)) continue;
 
-        await ref
-            .read(inviteStateProvider.notifier)
-            .handleInviteResponse(invite.id, jsonEncode(event.toJson()));
-        return;
-      } catch (_) {}
-    }
+          await ref
+              .read(inviteStateProvider.notifier)
+              .handleInviteResponse(invite.id, jsonEncode(event.toJson()));
+          return;
+        } catch (_) {}
+      }
+    });
   });
 
   ref.onDispose(sub.cancel);

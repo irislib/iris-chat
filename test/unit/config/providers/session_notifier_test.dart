@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/chat_provider.dart';
 import 'package:iris_chat/core/services/profile_service.dart';
@@ -98,6 +100,27 @@ void main() {
         // Error is mapped to user-friendly message
         expect(notifier.state.error, isNotNull);
         expect(notifier.state.error, isNotEmpty);
+      });
+    });
+
+    group('ensureSessionForRecipient', () {
+      test('returns quickly even if database calls hang', () async {
+        const pubkeyHex =
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+        // Simulate a stuck/locked DB call.
+        final completer = Completer<ChatSession?>();
+        when(() => mockDatasource.getSessionByRecipient(any()))
+            .thenAnswer((_) => completer.future);
+        when(() => mockDatasource.insertSessionIfAbsent(any()))
+            .thenAnswer((_) async {});
+
+        final session = await notifier
+            .ensureSessionForRecipient(pubkeyHex)
+            .timeout(const Duration(milliseconds: 200));
+
+        expect(session.id, pubkeyHex);
+        expect(notifier.state.sessions.first.id, pubkeyHex);
       });
     });
 

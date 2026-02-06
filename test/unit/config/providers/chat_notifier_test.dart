@@ -4,6 +4,7 @@ import 'package:iris_chat/core/services/session_manager_service.dart';
 import 'package:iris_chat/features/chat/data/datasources/message_local_datasource.dart';
 import 'package:iris_chat/features/chat/data/datasources/session_local_datasource.dart';
 import 'package:iris_chat/features/chat/domain/models/message.dart';
+import 'package:iris_chat/features/chat/domain/models/session.dart';
 import 'package:mocktail/mocktail.dart';
 
 class MockMessageLocalDatasource extends Mock
@@ -363,6 +364,73 @@ void main() {
               'session-1',
               limit: any(named: 'limit'),
             )).called(1);
+      });
+    });
+
+    group('receiveDecryptedMessage', () {
+      test('backfills outgoing eventId when receiving self-echo by rumor id',
+          () async {
+        const myPubkey =
+            '1111111111111111111111111111111111111111111111111111111111111111';
+        const peerPubkey =
+            '2222222222222222222222222222222222222222222222222222222222222222';
+        const rumorId = 'rumor-123';
+        const outerEventId = 'outer-456';
+
+        when(() => mockSessionManagerService.ownerPubkeyHex)
+            .thenReturn(myPubkey);
+
+        when(() => mockMessageDatasource.messageExists(outerEventId))
+            .thenAnswer((_) async => false);
+        when(() => mockMessageDatasource.messageExists(rumorId))
+            .thenAnswer((_) async => true);
+        when(() => mockMessageDatasource.updateOutgoingEventIdByRumorId(
+              rumorId,
+              outerEventId,
+            )).thenAnswer((_) async {});
+
+        when(() => mockSessionDatasource.getSessionByRecipient(peerPubkey))
+            .thenAnswer(
+          (_) async => ChatSession(
+            id: peerPubkey,
+            recipientPubkeyHex: peerPubkey,
+            createdAt: DateTime.now(),
+          ),
+        );
+
+        final outgoing = ChatMessage(
+          id: 'local-1',
+          sessionId: peerPubkey,
+          text: 'hi',
+          timestamp: DateTime.now(),
+          direction: MessageDirection.outgoing,
+          status: MessageStatus.pending,
+          rumorId: rumorId,
+        );
+        notifier.addMessageOptimistic(outgoing);
+
+        const rumorJson =
+            '{"id":"$rumorId","pubkey":"$myPubkey","created_at":123,"kind":14,"content":"hi","tags":[["p","$peerPubkey"]]}';
+
+        final result = await notifier.receiveDecryptedMessage(
+          'ignored',
+          rumorJson,
+          eventId: outerEventId,
+          createdAt: 123,
+        );
+
+        expect(result, isNull);
+        verify(
+          () => mockMessageDatasource.updateOutgoingEventIdByRumorId(
+            rumorId,
+            outerEventId,
+          ),
+        ).called(1);
+
+        final updated = notifier.state.messages[peerPubkey]!
+            .firstWhere((m) => m.id == 'local-1');
+        expect(updated.eventId, outerEventId);
+        expect(updated.status, MessageStatus.sent);
       });
     });
   });

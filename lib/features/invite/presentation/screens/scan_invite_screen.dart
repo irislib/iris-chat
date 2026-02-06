@@ -47,6 +47,10 @@ class _ScanInviteScreenState extends ConsumerState<ScanInviteScreen> {
         if (mounted) {
           context.go('/chats/${session.id}');
         }
+      } catch (e) {
+        if (mounted) {
+          _showError(e.toString());
+        }
       } finally {
         if (mounted) setState(() => _isProcessing = false);
       }

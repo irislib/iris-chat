@@ -122,6 +122,35 @@ class MessageLocalDatasource {
     );
   }
 
+  /// Backfill the outer Nostr event id for an outgoing message using its stable rumor id.
+  ///
+  /// This fixes "stuck pending" UI when `sendTextWithInnerId` couldn't provide an
+  /// outer event id, but we later receive a relay echo / decrypted self-copy.
+  Future<void> updateOutgoingEventIdByRumorId(String rumorId, String eventId) async {
+    final db = await _db;
+    await db.rawUpdate(
+      '''
+UPDATE messages
+SET event_id = ?,
+    status = CASE
+      WHEN status IN (?, ?) THEN ?
+      ELSE status
+    END
+WHERE (rumor_id = ? OR id = ?)
+  AND direction = ?
+''',
+      [
+        eventId,
+        MessageStatus.pending.name,
+        MessageStatus.queued.name,
+        MessageStatus.sent.name,
+        rumorId,
+        rumorId,
+        MessageDirection.outgoing.name,
+      ],
+    );
+  }
+
   /// Update incoming message status by stable rumor id (incoming messages use `id == rumorId`).
   Future<void> updateIncomingStatusByRumorId(String rumorId, MessageStatus status) async {
     final db = await _db;

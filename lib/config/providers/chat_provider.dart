@@ -50,6 +50,25 @@ class SessionNotifier extends StateNotifier<SessionState> {
   final SessionLocalDatasource _sessionDatasource;
   final ProfileService _profileService;
 
+  void _upsertSessionInState(ChatSession session) {
+    // Avoid duplicate sessions in memory when the same session is "added" twice
+    // (e.g., relay replays, reconnects, or overlapping flows).
+    final existingIndex = state.sessions.indexWhere((s) => s.id == session.id);
+    if (existingIndex == -1) {
+      state = state.copyWith(sessions: [session, ...state.sessions]);
+      return;
+    }
+
+    final updated = [...state.sessions];
+    updated[existingIndex] = session;
+    // Keep most-recent sessions at the top.
+    if (existingIndex != 0) {
+      updated.removeAt(existingIndex);
+      updated.insert(0, session);
+    }
+    state = state.copyWith(sessions: updated);
+  }
+
   /// Load all sessions from storage.
   Future<void> loadSessions() async {
     state = state.copyWith(isLoading: true, error: null);
@@ -95,7 +114,11 @@ class SessionNotifier extends StateNotifier<SessionState> {
       if (session.recipientPubkeyHex == pubkey &&
           session.recipientName != name) {
         final updated = session.copyWith(recipientName: name);
-        await _sessionDatasource.saveSession(updated);
+        unawaited(() async {
+          try {
+            await _sessionDatasource.saveSession(updated);
+          } catch (_) {}
+        }());
         updatedSessions.add(updated);
       } else {
         updatedSessions.add(session);
@@ -109,24 +132,12 @@ class SessionNotifier extends StateNotifier<SessionState> {
 
   /// Add a new session.
   Future<void> addSession(ChatSession session) async {
-    await _sessionDatasource.saveSession(session);
-
-    // Avoid duplicate sessions in memory when the same session is "added" twice
-    // (e.g., relay replays, reconnects, or overlapping flows).
-    final existingIndex = state.sessions.indexWhere((s) => s.id == session.id);
-    if (existingIndex == -1) {
-      state = state.copyWith(sessions: [session, ...state.sessions]);
-      return;
-    }
-
-    final updated = [...state.sessions];
-    updated[existingIndex] = session;
-    // Keep most-recent sessions at the top.
-    if (existingIndex != 0) {
-      updated.removeAt(existingIndex);
-      updated.insert(0, session);
-    }
-    state = state.copyWith(sessions: updated);
+    _upsertSessionInState(session);
+    unawaited(() async {
+      try {
+        await _sessionDatasource.saveSession(session);
+      } catch (_) {}
+    }());
   }
 
   /// Ensure a session exists for [recipientPubkeyHex] and return it.
@@ -137,27 +148,45 @@ class SessionNotifier extends StateNotifier<SessionState> {
     String recipientPubkeyHex,
   ) async {
     final normalized = recipientPubkeyHex.toLowerCase().trim();
-    final existing = await _sessionDatasource.getSessionByRecipient(normalized);
-    final session =
-        existing ??
-        ChatSession(
-          id: normalized,
-          recipientPubkeyHex: normalized,
-          createdAt: DateTime.now(),
-        );
 
-    await addSession(session);
+    // Fast-path: if already in memory, don't touch the DB (avoids UI stalls on locked DB).
+    for (final s in state.sessions) {
+      if (s.id == normalized || s.recipientPubkeyHex == normalized) {
+        return s;
+      }
+    }
+
+    // Create a placeholder session immediately so the UI can navigate.
+    // Persist with INSERT-IF-ABSENT to avoid overwriting an existing session's
+    // ratchet state/metadata if the DB already contains it.
+    final session = ChatSession(
+      id: normalized,
+      recipientPubkeyHex: normalized,
+      createdAt: DateTime.now(),
+    );
+
+    _upsertSessionInState(session);
+    unawaited(() async {
+      try {
+        await _sessionDatasource.insertSessionIfAbsent(session);
+      } catch (_) {}
+    }());
+
     return session;
   }
 
   /// Update a session.
   Future<void> updateSession(ChatSession session) async {
-    await _sessionDatasource.saveSession(session);
     state = state.copyWith(
       sessions: state.sessions
           .map((s) => s.id == session.id ? session : s)
           .toList(),
     );
+    unawaited(() async {
+      try {
+        await _sessionDatasource.saveSession(session);
+      } catch (_) {}
+    }());
   }
 
   /// Delete a session.
@@ -173,27 +202,37 @@ class SessionNotifier extends StateNotifier<SessionState> {
     String sessionId,
     ChatMessage message,
   ) async {
-    await _sessionDatasource.updateMetadata(
-      sessionId,
+    final index = state.sessions.indexWhere((s) => s.id == sessionId);
+    if (index == -1) return;
+
+    final current = state.sessions[index];
+    final updatedSession = current.copyWith(
       lastMessageAt: message.timestamp,
       lastMessagePreview: message.text.length > 50
           ? '${message.text.substring(0, 50)}...'
           : message.text,
     );
 
-    state = state.copyWith(
-      sessions: state.sessions.map((s) {
-        if (s.id == sessionId) {
-          return s.copyWith(
-            lastMessageAt: message.timestamp,
-            lastMessagePreview: message.text.length > 50
-                ? '${message.text.substring(0, 50)}...'
-                : message.text,
-          );
-        }
-        return s;
-      }).toList(),
-    );
+    final next = [...state.sessions];
+    next[index] = updatedSession;
+    if (index != 0) {
+      next.removeAt(index);
+      next.insert(0, updatedSession);
+    }
+
+    state = state.copyWith(sessions: next);
+
+    unawaited(() async {
+      try {
+        await _sessionDatasource.updateMetadata(
+          sessionId,
+          lastMessageAt: message.timestamp,
+          lastMessagePreview: message.text.length > 50
+              ? '${message.text.substring(0, 50)}...'
+              : message.text,
+        );
+      } catch (_) {}
+    }());
   }
 
   /// Increment unread count for a session.
@@ -201,11 +240,6 @@ class SessionNotifier extends StateNotifier<SessionState> {
     final session = state.sessions.firstWhere(
       (s) => s.id == sessionId,
       orElse: () => throw Exception('Session not found'),
-    );
-
-    await _sessionDatasource.updateMetadata(
-      sessionId,
-      unreadCount: session.unreadCount + 1,
     );
 
     state = state.copyWith(
@@ -216,12 +250,19 @@ class SessionNotifier extends StateNotifier<SessionState> {
         return s;
       }).toList(),
     );
+
+    unawaited(() async {
+      try {
+        await _sessionDatasource.updateMetadata(
+          sessionId,
+          unreadCount: session.unreadCount + 1,
+        );
+      } catch (_) {}
+    }());
   }
 
   /// Clear unread count for a session.
   Future<void> clearUnread(String sessionId) async {
-    await _sessionDatasource.updateMetadata(sessionId, unreadCount: 0);
-
     state = state.copyWith(
       sessions: state.sessions.map((s) {
         if (s.id == sessionId) {
@@ -230,6 +271,12 @@ class SessionNotifier extends StateNotifier<SessionState> {
         return s;
       }).toList(),
     );
+
+    unawaited(() async {
+      try {
+        await _sessionDatasource.updateMetadata(sessionId, unreadCount: 0);
+      } catch (_) {}
+    }());
   }
 }
 
@@ -401,7 +448,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // Update message with success
       final sentMessage = message.copyWith(
-        status: eventId != null ? MessageStatus.sent : MessageStatus.pending,
+        // `outerEventIds` can be empty even when the send succeeded (queued/offline
+        // publishes, relays without ACKs, etc). Treat a successful send call as
+        // "sent" and rely on receipts / self-echo backfill to advance further.
+        status: MessageStatus.sent,
         eventId: eventId,
         rumorId: rumorId,
       );
@@ -552,8 +602,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
         return null;
       }
 
+      final isMine = ownerPubkeyHex != null && rumor.pubkey == ownerPubkeyHex;
+
       // De-dup using stable inner id.
       if (await _messageDatasource.messageExists(rumor.id)) {
+        // When we receive a relay echo / self-copy of our own outgoing message,
+        // use it to backfill the outer event id so reactions can reference it.
+        if (isMine && eventId != null && eventId.isNotEmpty) {
+          _backfillOutgoingEventId(rumor.id, eventId);
+        }
         return null;
       }
 
@@ -568,8 +625,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
         );
         return null;
       }
-
-      final isMine = ownerPubkeyHex != null && rumor.pubkey == ownerPubkeyHex;
 
       final message = ChatMessage(
         id: rumor.id,
@@ -732,10 +787,47 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(messages: updatedBySession);
   }
 
+  void _backfillOutgoingEventId(String rumorId, String eventId) {
+    // Update UI state immediately; persist in background.
+    var changed = false;
+    final updatedBySession = <String, List<ChatMessage>>{};
+
+    for (final entry in state.messages.entries) {
+      final sessionId = entry.key;
+      final updated = entry.value.map((m) {
+        if (!m.isOutgoing) return m;
+        if (m.rumorId != rumorId && m.id != rumorId) return m;
+
+        final nextEventId = (m.eventId == null || m.eventId!.isEmpty)
+            ? eventId
+            : m.eventId;
+        final nextStatus = shouldAdvanceStatus(m.status, MessageStatus.sent)
+            ? MessageStatus.sent
+            : m.status;
+
+        if (nextEventId == m.eventId && nextStatus == m.status) return m;
+        changed = true;
+        return m.copyWith(eventId: nextEventId, status: nextStatus);
+      }).toList();
+      updatedBySession[sessionId] = updated;
+    }
+
+    if (changed) {
+      state = state.copyWith(messages: updatedBySession);
+    }
+
+    unawaited(() async {
+      try {
+        await _messageDatasource.updateOutgoingEventIdByRumorId(
+          rumorId,
+          eventId,
+        );
+      } catch (_) {}
+    }());
+  }
+
   /// Update a message (e.g., after sending succeeds).
   Future<void> updateMessage(ChatMessage message) async {
-    await _messageDatasource.saveMessage(message);
-
     final sessionId = message.sessionId;
     final currentMessages = state.messages[sessionId] ?? [];
 
@@ -748,6 +840,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
       },
       sendingStates: {...state.sendingStates}..remove(message.id),
     );
+
+    // Persist in background so UI doesn't stall on a locked DB.
+    unawaited(() async {
+      try {
+        await _messageDatasource.saveMessage(message);
+      } catch (_) {}
+    }());
   }
 
   /// Add a received message.

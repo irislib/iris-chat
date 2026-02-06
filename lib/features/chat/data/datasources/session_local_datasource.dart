@@ -57,6 +57,20 @@ class SessionLocalDatasource {
     );
   }
 
+  /// Insert a session only if it doesn't already exist.
+  ///
+  /// This is useful for "public chat links" (npub/nprofile) where we want to
+  /// create a placeholder session in the UI without risking overwriting an
+  /// existing session's ratchet state/metadata.
+  Future<void> insertSessionIfAbsent(ChatSession session) async {
+    final db = await _db;
+    await db.insert(
+      'sessions',
+      _sessionToMap(session),
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
   /// Delete a session.
   Future<void> deleteSession(String id) async {
     final db = await _db;

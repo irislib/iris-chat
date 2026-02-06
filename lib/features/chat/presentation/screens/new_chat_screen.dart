@@ -74,6 +74,11 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         if (!mounted) return;
         _pasteController.clear();
         context.go('/chats/${session.id}');
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
       } finally {
         if (mounted) setState(() => _isJoining = false);
       }
@@ -232,6 +237,7 @@ class _JoinChatCard extends StatelessWidget {
             const SizedBox(height: 12),
             TextField(
               controller: controller,
+              enabled: !isJoining,
               decoration: const InputDecoration(
                 hintText: 'Paste invite or npub link',
                 border: OutlineInputBorder(),
@@ -243,9 +249,13 @@ class _JoinChatCard extends StatelessWidget {
               onChanged: onChanged,
               onSubmitted: (_) => onJoin(),
             ),
+            if (isJoining) ...[
+              const SizedBox(height: 8),
+              const LinearProgressIndicator(),
+            ],
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: onScanQR,
+              onPressed: isJoining ? null : onScanQR,
               icon: const Icon(Icons.qr_code_scanner),
               label: const Text('Scan QR Code'),
             ),
