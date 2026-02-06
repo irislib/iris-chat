@@ -3,11 +3,54 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:iris_chat/core/ffi/ndr_ffi.dart';
 import 'package:iris_chat/core/services/nostr_service.dart';
+import 'package:iris_chat/core/services/secure_storage_service.dart';
+import 'package:iris_chat/core/utils/invite_url.dart';
 import 'package:iris_chat/core/utils/nostr_rumor.dart';
+import 'package:iris_chat/features/auth/data/repositories/auth_repository_impl.dart';
+import 'package:mocktail/mocktail.dart';
+
+class _MockFlutterSecureStorage extends Mock implements FlutterSecureStorage {}
+
+SecureStorageService _createInMemorySecureStorage() {
+  final store = <String, String?>{};
+  final storage = _MockFlutterSecureStorage();
+
+  when(
+    () => storage.write(
+      key: any(named: 'key'),
+      value: any(named: 'value'),
+    ),
+  ).thenAnswer((invocation) async {
+    final key = invocation.namedArguments[#key] as String;
+    final value = invocation.namedArguments[#value] as String?;
+    store[key] = value;
+  });
+
+  when(() => storage.read(key: any(named: 'key'))).thenAnswer((invocation) async {
+    final key = invocation.namedArguments[#key] as String;
+    return store[key];
+  });
+
+  when(() => storage.containsKey(key: any(named: 'key'))).thenAnswer((invocation) async {
+    final key = invocation.namedArguments[#key] as String;
+    return store.containsKey(key);
+  });
+
+  when(() => storage.delete(key: any(named: 'key'))).thenAnswer((invocation) async {
+    final key = invocation.namedArguments[#key] as String;
+    store.remove(key);
+  });
+
+  Future<void> clearAll(Invocation _) async => store.clear();
+  when(storage.deleteAll).thenAnswer(clearAll);
+
+  return SecureStorageService(storage);
+}
 
 class _TestRelay {
   _TestRelay._(this._server);
@@ -508,6 +551,131 @@ void main() {
       try {
         await bobDir.delete(recursive: true);
       } catch (_) {}
+    }
+  });
+
+  testWidgets('link device: link invite roundtrip over relay', (tester) async {
+    await tester.pumpWidget(const SizedBox.shrink());
+
+    if (!Platform.isMacOS) {
+      return;
+    }
+
+    final relay = await _TestRelay.start();
+    final url = 'ws://127.0.0.1:${relay.port}';
+
+    final deviceNostr = NostrService(relayUrls: [url]);
+    final ownerNostr = NostrService(relayUrls: [url]);
+
+    final ownerRepo = AuthRepositoryImpl(_createInMemorySecureStorage());
+    final deviceRepo = AuthRepositoryImpl(_createInMemorySecureStorage());
+
+    StreamSubscription<NostrEvent>? deviceSub;
+    String? subid;
+
+    InviteHandle? deviceInvite;
+    InviteHandle? ownerInvite;
+    InviteAcceptResult? accept;
+    InviteResponseResult? response;
+
+    try {
+      await deviceNostr.connect();
+      await ownerNostr.connect();
+
+      // Owner creates an identity (main device).
+      final ownerIdentity = await ownerRepo.createIdentity();
+      final ownerPrivkeyHex = await ownerRepo.getPrivateKey();
+      expect(ownerPrivkeyHex, isNotNull);
+
+      // New device creates a link invite.
+      final deviceKeypair = await NdrFfi.generateKeypair();
+      deviceInvite = await NdrFfi.createInvite(
+        inviterPubkeyHex: deviceKeypair.publicKeyHex,
+        deviceId: deviceKeypair.publicKeyHex,
+        maxUses: 1,
+      );
+      await deviceInvite.setPurpose('link');
+      final inviteUrl = await deviceInvite.toUrl('https://iris.to');
+
+      final data = decodeInviteUrlData(inviteUrl);
+      final eph =
+          (data?['ephemeralKey'] ?? data?['inviterEphemeralPublicKey']) as String?;
+      expect(eph, isNotNull, reason: 'Invite URL missing ephemeral key');
+
+      // Device subscribes for the accept response.
+      subid = 'link-invite-${DateTime.now().microsecondsSinceEpoch}';
+      final completer = Completer<NostrEvent>();
+      deviceSub = deviceNostr.events.listen((event) {
+        if (completer.isCompleted) return;
+        if (event.subscriptionId != subid) return;
+        if (event.kind != 1059) return;
+        completer.complete(event);
+      });
+
+      deviceNostr.subscribeWithId(
+        subid,
+        NostrFilter(
+          kinds: const [1059],
+          pTags: [eph!],
+        ),
+      );
+
+      // Owner accepts (simulating Settings -> Link a Device -> scan).
+      ownerInvite = await NdrFfi.inviteFromUrl(inviteUrl);
+      accept = await ownerInvite.acceptWithOwner(
+        inviteePubkeyHex: ownerIdentity.pubkeyHex,
+        inviteePrivkeyHex: ownerPrivkeyHex!,
+        deviceId: ownerIdentity.pubkeyHex,
+        ownerPubkeyHex: ownerIdentity.pubkeyHex,
+      );
+      await ownerNostr.publishEvent(accept.responseEventJson);
+
+      final event = await completer.future.timeout(const Duration(seconds: 8));
+
+      // Device processes response and logs in as a linked device.
+      response = await deviceInvite.processResponse(
+        eventJson: jsonEncode(event.toJson()),
+        inviterPrivkeyHex: deviceKeypair.privateKeyHex,
+      );
+      expect(response, isNotNull);
+
+      final ownerPubkeyHex = response!.ownerPubkeyHex ?? response.inviteePubkeyHex;
+      expect(ownerPubkeyHex, ownerIdentity.pubkeyHex);
+
+      final identity = await deviceRepo.loginLinkedDevice(
+        ownerPubkeyHex: ownerPubkeyHex,
+        devicePrivkeyHex: deviceKeypair.privateKeyHex,
+      );
+      expect(identity.pubkeyHex, ownerIdentity.pubkeyHex);
+
+      final currentIdentity = await deviceRepo.getCurrentIdentity();
+      expect(currentIdentity?.pubkeyHex, ownerIdentity.pubkeyHex);
+
+      final devicePubkeyHex = await deviceRepo.getDevicePubkeyHex();
+      expect(devicePubkeyHex, deviceKeypair.publicKeyHex);
+    } finally {
+      if (subid != null) {
+        deviceNostr.closeSubscription(subid);
+      }
+      await deviceSub?.cancel();
+
+      // Best-effort cleanup; these are native handles.
+      try {
+        await response?.session.dispose();
+      } catch (_) {}
+      try {
+        await accept?.session.dispose();
+      } catch (_) {}
+      try {
+        await ownerInvite?.dispose();
+      } catch (_) {}
+      try {
+        await deviceInvite?.dispose();
+      } catch (_) {}
+
+      await deviceNostr.dispose();
+      await ownerNostr.dispose();
+      await relay.stop();
     }
   });
 }
