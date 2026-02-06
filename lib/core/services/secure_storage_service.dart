@@ -2,13 +2,16 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Service for securely storing sensitive data like private keys.
 ///
-/// Uses platform-specific secure storage (Keychain on iOS, EncryptedSharedPreferences on Android).
+/// Uses platform-specific secure storage (Keychain on iOS/macOS, EncryptedSharedPreferences on Android).
 class SecureStorageService {
   SecureStorageService([FlutterSecureStorage? storage])
       : _storage = storage ??
             const FlutterSecureStorage(
               aOptions: AndroidOptions(encryptedSharedPreferences: true),
               iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
+              // macOS: Data Protection Keychain requires entitlements that we don't ship with.
+              // Disabling it avoids `-34018` ("A required entitlement isn't present.").
+              mOptions: MacOsOptions(useDataProtectionKeyChain: false),
             );
 
   final FlutterSecureStorage _storage;
