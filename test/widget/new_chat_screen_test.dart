@@ -80,9 +80,7 @@ void main() {
     );
   });
 
-  testWidgets('pasting a chat.iris.to/#npub link and tapping Join opens a chat', (
-    tester,
-  ) async {
+  testWidgets('pasting a chat.iris.to/#npub link opens a chat', (tester) async {
     final mockInvites = _MockInviteLocalDatasource();
     final mockSessions = _MockSessionLocalDatasource();
     final mockProfiles = _MockProfileService();
@@ -106,7 +104,8 @@ void main() {
     when(() => mockSessions.insertSessionIfAbsent(any())).thenAnswer((_) async {});
 
     final npub = nostr.Nip19.encodePubkey(testPubkeyHex) as String;
-    final url = 'https://chat.iris.to/#$npub';
+    // Some sources copy these links with a newline between origin and fragment.
+    final url = 'https://chat.iris.to/\\n#$npub';
 
     final router = GoRouter(
       routes: [
@@ -137,9 +136,6 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), url);
-    await tester.pump();
-
-    await tester.tap(find.text('Join'));
     await tester.pumpAndSettle();
 
     // Navigated to the chat route using the decoded hex pubkey.
