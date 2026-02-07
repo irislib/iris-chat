@@ -69,6 +69,11 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
     serial = serial.then((_) => task()).catchError((_, __) {});
   }
 
+  // Coalesce refresh work so repeated invite state changes don't build up an
+  // unbounded Future chain (which can lead to runaway memory usage).
+  var refreshScheduled = false;
+  var refreshAgain = false;
+
   Future<String?> resolveInviteEphemeralPubkey(String serializedState) async {
     // Best-effort extract from stored JSON first.
     try {
@@ -137,9 +142,28 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
   }
 
   // Subscribe for invite responses (and refresh when invites change).
-  schedule(refreshInviteResponseSubscription);
+  void requestInviteResponseSubscriptionRefresh() {
+    if (refreshScheduled) {
+      refreshAgain = true;
+      return;
+    }
+    refreshScheduled = true;
+    schedule(() async {
+      try {
+        while (true) {
+          refreshAgain = false;
+          await refreshInviteResponseSubscription();
+          if (!refreshAgain) break;
+        }
+      } finally {
+        refreshScheduled = false;
+      }
+    });
+  }
+
+  requestInviteResponseSubscriptionRefresh();
   ref.listen<InviteState>(inviteStateProvider, (_, __) {
-    schedule(refreshInviteResponseSubscription);
+    requestInviteResponseSubscriptionRefresh();
   });
   ref.onDispose(() {
     nostrService.closeSubscription(inviteResponsesSubId);
@@ -172,11 +196,14 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
   });
 
   final inviteSub = nostrService.events.listen((event) {
+    // Filter before scheduling: relays can deliver a high volume of events and
+    // queueing no-op tasks here can explode memory if the DB stalls.
+    if (event.kind != 1059) return;
+    // Only consider events delivered by our invite-response subscription.
+    // Other subscriptions (sessions, app-keys, etc.) can also carry kind 1059.
+    if (event.subscriptionId != inviteResponsesSubId) return;
+
     schedule(() async {
-      if (event.kind != 1059) return;
-      // Only consider events delivered by our invite-response subscription.
-      // Other subscriptions (sessions, app-keys, etc.) can also carry kind 1059.
-      if (event.subscriptionId != inviteResponsesSubId) return;
       final pTags = <String>{};
       for (final t in event.tags) {
         if (t.length < 2) continue;
