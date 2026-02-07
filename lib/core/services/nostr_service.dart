@@ -132,16 +132,6 @@ class NostrService {
             final eventData = message[2] as Map<String, dynamic>;
             final event = NostrEvent.fromJson(eventData, subscriptionId: subscriptionId);
 
-            Logger.debug(
-              'Received event',
-              category: LogCategory.nostr,
-              data: {
-                'relay': relay,
-                'kind': event.kind,
-                'subscriptionId': subscriptionId,
-              },
-            );
-
             _eventController.add(event);
           }
           break;
@@ -397,7 +387,14 @@ class NostrService {
       data: {
         'subscriptionId': subscriptionId,
         'relayCount': successCount,
-        'filter': filterJson,
+        // Avoid logging full filter JSON (can be very large, e.g. big `#p` lists),
+        // which can flood debug consoles and inflate memory usage in debug builds.
+        'kinds': filterJson['kinds'],
+        'authorsCount': (filterJson['authors'] as List<dynamic>?)?.length,
+        'idsCount': (filterJson['ids'] as List<dynamic>?)?.length,
+        '#pCount': (filterJson['#p'] as List<dynamic>?)?.length,
+        '#eCount': (filterJson['#e'] as List<dynamic>?)?.length,
+        '#dCount': (filterJson['#d'] as List<dynamic>?)?.length,
       },
     );
 

@@ -55,11 +55,24 @@ enum LogCategory {
 /// Logger.error('Decryption failed', category: LogCategory.crypto, error: e);
 /// ```
 class Logger {
-  /// Minimum log level to output. Defaults to debug in debug mode, info in release.
-  static LogLevel minLevel = kDebugMode ? LogLevel.debug : LogLevel.info;
+  /// Minimum log level to output.
+  ///
+  /// NOTE: `debugPrint()` is throttled and buffers output; logging at DEBUG level
+  /// in a high-throughput path (e.g. Nostr relay events) can build an
+  /// unbounded in-memory backlog in debug builds and look like a "memory leak".
+  ///
+  /// Keep the default at INFO and opt-in to DEBUG when actively debugging.
+  static LogLevel minLevel = LogLevel.info;
 
   /// Whether logging is enabled.
   static bool enabled = true;
+
+  /// Whether to mirror logs to the console via `debugPrint`.
+  ///
+  /// In debug mode, prefer relying on `developer.log` (shown in DevTools and
+  /// usually the flutter run console) and only printing warnings/errors to
+  /// avoid `debugPrint` buffering lots of logs in memory.
+  static bool printToConsole = kDebugMode;
 
   /// Category filter - if set, only logs from these categories are output.
   static Set<LogCategory>? categoryFilter;
@@ -236,8 +249,10 @@ class Logger {
       stackTrace: stackTrace,
     );
 
-    // Also print to console in debug mode
-    if (kDebugMode) {
+    // Also print to console in debug mode.
+    // Only mirror warning/error by default to avoid `debugPrint` buffering
+    // massive log volumes in-memory under load.
+    if (printToConsole && level.index >= LogLevel.warning.index) {
       debugPrint(output);
       if (stackTrace != null) {
         debugPrint(stackTrace.toString());
