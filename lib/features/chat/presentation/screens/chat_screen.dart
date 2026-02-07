@@ -482,13 +482,15 @@ class _MessageBubbleState extends ConsumerState<_MessageBubble> {
             ),
             // Reactions display
             if (hasReactions)
-              Padding(
-                padding: EdgeInsets.only(
-                  left: isOutgoing ? 0 : 8,
-                  right: isOutgoing ? 8 : 0,
-                  bottom: 4,
+              Align(
+                alignment: Alignment.centerRight,
+                child: Transform.translate(
+                  offset: const Offset(0, -8),
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _ReactionsDisplay(reactions: message.reactions),
+                  ),
                 ),
-                child: _ReactionsDisplay(reactions: message.reactions),
               ),
           ],
         ),
@@ -559,6 +561,7 @@ class _ReactionsDisplay extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Wrap(
+      alignment: WrapAlignment.end,
       spacing: 4,
       children: reactions.entries.map((entry) {
         final emoji = entry.key;
@@ -568,7 +571,7 @@ class _ReactionsDisplay extends StatelessWidget {
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: theme.colorScheme.outlineVariant),
+            border: Border.all(color: theme.colorScheme.onSurface.withValues(alpha: 0.15)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,

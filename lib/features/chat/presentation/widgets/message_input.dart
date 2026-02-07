@@ -102,9 +102,6 @@ class _MessageInputState extends State<MessageInput> {
       ),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
-        border: Border(
-          top: BorderSide(color: theme.colorScheme.outlineVariant),
-        ),
       ),
       child: Row(
         children: [
