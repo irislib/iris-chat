@@ -802,6 +802,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -897,6 +899,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_process_event(`ptr`: Pointer,`eventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_event_with_inner_id(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`kind`: Int,`content`: RustBuffer.ByValue,`tagsJson`: RustBuffer.ByValue,`createdAtSeconds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`messageId`: RustBuffer.ByValue,`emoji`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`receiptType`: RustBuffer.ByValue,`messageIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1087,6 +1091,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event(
     ): Short
+    fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_event_with_inner_id(
+    ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction(
     ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt(
@@ -1215,6 +1221,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event() != 55445.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_event_with_inner_id() != 35167.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction() != 19995.toShort()) {
@@ -2494,6 +2503,18 @@ public interface SessionManagerHandleInterface {
     fun `processEvent`(`eventJson`: kotlin.String)
     
     /**
+     * Send an arbitrary inner rumor event to a recipient, returning stable inner id + outer ids.
+     *
+     * This is used for group chats where we need custom kinds/tags (e.g. group metadata kind 40,
+     * group-tagged chat messages kind 14, reactions kind 7, typing kind 25).
+     *
+     * The caller controls the inner rumor tags via `tags_json` (JSON array of string arrays).
+     * For group fan-out, do NOT include recipient-specific tags like `["p", <recipient>]` so
+     * the inner rumor id stays stable across all recipients.
+     */
+    fun `sendEventWithInnerId`(`recipientPubkeyHex`: kotlin.String, `kind`: kotlin.UInt, `content`: kotlin.String, `tagsJson`: kotlin.String, `createdAtSeconds`: kotlin.ULong?): SendTextResult
+    
+    /**
      * Send an emoji reaction (kind 7) to a specific message id.
      */
     fun `sendReaction`(`recipientPubkeyHex`: kotlin.String, `messageId`: kotlin.String, `emoji`: kotlin.String): List<kotlin.String>
@@ -2751,6 +2772,29 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
 }
     }
     
+    
+
+    
+    /**
+     * Send an arbitrary inner rumor event to a recipient, returning stable inner id + outer ids.
+     *
+     * This is used for group chats where we need custom kinds/tags (e.g. group metadata kind 40,
+     * group-tagged chat messages kind 14, reactions kind 7, typing kind 25).
+     *
+     * The caller controls the inner rumor tags via `tags_json` (JSON array of string arrays).
+     * For group fan-out, do NOT include recipient-specific tags like `["p", <recipient>]` so
+     * the inner rumor id stays stable across all recipients.
+     */
+    @Throws(NdrException::class)override fun `sendEventWithInnerId`(`recipientPubkeyHex`: kotlin.String, `kind`: kotlin.UInt, `content`: kotlin.String, `tagsJson`: kotlin.String, `createdAtSeconds`: kotlin.ULong?): SendTextResult {
+            return FfiConverterTypeSendTextResult.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NdrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_event_with_inner_id(
+        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterUInt.lower(`kind`),FfiConverterString.lower(`content`),FfiConverterString.lower(`tagsJson`),FfiConverterOptionalULong.lower(`createdAtSeconds`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -3431,6 +3475,38 @@ public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
         } else {
             buf.put(1)
             FfiConverterUInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
         }
     }
 }

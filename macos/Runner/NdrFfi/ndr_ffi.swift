@@ -1095,30 +1095,42 @@ public protocol SessionManagerHandleProtocol : AnyObject {
     func processEvent(eventJson: String) throws 
     
     /**
+     * Send an arbitrary inner rumor event to a recipient, returning stable inner id + outer ids.
+     *
+     * This is used for group chats where we need custom kinds/tags (e.g. group metadata kind 40,
+     * group-tagged chat messages kind 14, reactions kind 7, typing kind 25).
+     *
+     * The caller controls the inner rumor tags via `tags_json` (JSON array of string arrays).
+     * For group fan-out, do NOT include recipient-specific tags like `["p", <recipient>]` so
+     * the inner rumor id stays stable across all recipients.
+     */
+    func sendEventWithInnerId(recipientPubkeyHex: String, kind: UInt32, content: String, tagsJson: String, createdAtSeconds: UInt64?) throws  -> SendTextResult
+    
+    /**
      * Send an emoji reaction (kind 7) to a specific message id.
      */
-    func sendReaction(recipientPubkeyHex: String, messageId: String, emoji: String) throws  -> [String]
+    func sendReaction(recipientPubkeyHex: String, messageId: String, emoji: String, expiresAtSeconds: UInt64?) throws  -> [String]
     
     /**
      * Send a delivery/read receipt for messages.
      */
-    func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageIds: [String]) throws  -> [String]
+    func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageIds: [String], expiresAtSeconds: UInt64?) throws  -> [String]
     
     /**
      * Send a text message to a recipient.
      */
-    func sendText(recipientPubkeyHex: String, text: String) throws  -> [String]
+    func sendText(recipientPubkeyHex: String, text: String, expiresAtSeconds: UInt64?) throws  -> [String]
     
     /**
      * Send a text message and return both the stable inner (rumor) id and the
      * list of outer message event ids that were published.
      */
-    func sendTextWithInnerId(recipientPubkeyHex: String, text: String) throws  -> SendTextResult
+    func sendTextWithInnerId(recipientPubkeyHex: String, text: String, expiresAtSeconds: UInt64?) throws  -> SendTextResult
     
     /**
      * Send a typing indicator.
      */
-    func sendTyping(recipientPubkeyHex: String) throws  -> [String]
+    func sendTyping(recipientPubkeyHex: String, expiresAtSeconds: UInt64?) throws  -> [String]
     
 }
 
@@ -1297,14 +1309,37 @@ open func processEvent(eventJson: String)throws  {try rustCallWithError(FfiConve
 }
     
     /**
+     * Send an arbitrary inner rumor event to a recipient, returning stable inner id + outer ids.
+     *
+     * This is used for group chats where we need custom kinds/tags (e.g. group metadata kind 40,
+     * group-tagged chat messages kind 14, reactions kind 7, typing kind 25).
+     *
+     * The caller controls the inner rumor tags via `tags_json` (JSON array of string arrays).
+     * For group fan-out, do NOT include recipient-specific tags like `["p", <recipient>]` so
+     * the inner rumor id stays stable across all recipients.
+     */
+open func sendEventWithInnerId(recipientPubkeyHex: String, kind: UInt32, content: String, tagsJson: String, createdAtSeconds: UInt64?)throws  -> SendTextResult {
+    return try  FfiConverterTypeSendTextResult.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_event_with_inner_id(self.uniffiClonePointer(),
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterUInt32.lower(kind),
+        FfiConverterString.lower(content),
+        FfiConverterString.lower(tagsJson),
+        FfiConverterOptionUInt64.lower(createdAtSeconds),$0
+    )
+})
+}
+    
+    /**
      * Send an emoji reaction (kind 7) to a specific message id.
      */
-open func sendReaction(recipientPubkeyHex: String, messageId: String, emoji: String)throws  -> [String] {
+open func sendReaction(recipientPubkeyHex: String, messageId: String, emoji: String, expiresAtSeconds: UInt64?)throws  -> [String] {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
     uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(self.uniffiClonePointer(),
         FfiConverterString.lower(recipientPubkeyHex),
         FfiConverterString.lower(messageId),
-        FfiConverterString.lower(emoji),$0
+        FfiConverterString.lower(emoji),
+        FfiConverterOptionUInt64.lower(expiresAtSeconds),$0
     )
 })
 }
@@ -1312,12 +1347,13 @@ open func sendReaction(recipientPubkeyHex: String, messageId: String, emoji: Str
     /**
      * Send a delivery/read receipt for messages.
      */
-open func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageIds: [String])throws  -> [String] {
+open func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageIds: [String], expiresAtSeconds: UInt64?)throws  -> [String] {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
     uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(self.uniffiClonePointer(),
         FfiConverterString.lower(recipientPubkeyHex),
         FfiConverterString.lower(receiptType),
-        FfiConverterSequenceString.lower(messageIds),$0
+        FfiConverterSequenceString.lower(messageIds),
+        FfiConverterOptionUInt64.lower(expiresAtSeconds),$0
     )
 })
 }
@@ -1325,11 +1361,12 @@ open func sendReceipt(recipientPubkeyHex: String, receiptType: String, messageId
     /**
      * Send a text message to a recipient.
      */
-open func sendText(recipientPubkeyHex: String, text: String)throws  -> [String] {
+open func sendText(recipientPubkeyHex: String, text: String, expiresAtSeconds: UInt64?)throws  -> [String] {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
     uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text(self.uniffiClonePointer(),
         FfiConverterString.lower(recipientPubkeyHex),
-        FfiConverterString.lower(text),$0
+        FfiConverterString.lower(text),
+        FfiConverterOptionUInt64.lower(expiresAtSeconds),$0
     )
 })
 }
@@ -1338,11 +1375,12 @@ open func sendText(recipientPubkeyHex: String, text: String)throws  -> [String] 
      * Send a text message and return both the stable inner (rumor) id and the
      * list of outer message event ids that were published.
      */
-open func sendTextWithInnerId(recipientPubkeyHex: String, text: String)throws  -> SendTextResult {
+open func sendTextWithInnerId(recipientPubkeyHex: String, text: String, expiresAtSeconds: UInt64?)throws  -> SendTextResult {
     return try  FfiConverterTypeSendTextResult.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
     uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text_with_inner_id(self.uniffiClonePointer(),
         FfiConverterString.lower(recipientPubkeyHex),
-        FfiConverterString.lower(text),$0
+        FfiConverterString.lower(text),
+        FfiConverterOptionUInt64.lower(expiresAtSeconds),$0
     )
 })
 }
@@ -1350,10 +1388,11 @@ open func sendTextWithInnerId(recipientPubkeyHex: String, text: String)throws  -
     /**
      * Send a typing indicator.
      */
-open func sendTyping(recipientPubkeyHex: String)throws  -> [String] {
+open func sendTyping(recipientPubkeyHex: String, expiresAtSeconds: UInt64?)throws  -> [String] {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
     uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_typing(self.uniffiClonePointer(),
-        FfiConverterString.lower(recipientPubkeyHex),$0
+        FfiConverterString.lower(recipientPubkeyHex),
+        FfiConverterOptionUInt64.lower(expiresAtSeconds),$0
     )
 })
 }
@@ -2121,6 +2160,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -2393,19 +2456,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_process_event() != 55445) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction() != 19995) {
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_event_with_inner_id() != 35167) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt() != 36088) {
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction() != 32190) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text() != 18392) {
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt() != 34112) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text_with_inner_id() != 12060) {
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text() != 39171) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_typing() != 30715) {
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text_with_inner_id() != 49408) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_typing() != 11765) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_constructor_invitehandle_create_new() != 4301) {

@@ -11,7 +11,7 @@ class DatabaseService {
   final String? _dbPathOverride;
 
   static const _dbName = 'iris_chat.db';
-  static const _dbVersion = 3;
+  static const _dbVersion = 5;
 
   /// Get the database instance, initializing if necessary.
   Future<Database> get database {
@@ -90,7 +90,44 @@ class DatabaseService {
         rumor_id TEXT,
         reply_to_id TEXT,
         reactions TEXT,
+        sender_pubkey_hex TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+      )
+    ''');
+
+    // Groups table (private group chats coordinated via encrypted group-tagged rumors)
+    await db.execute('''
+      CREATE TABLE groups (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        picture TEXT,
+        members TEXT NOT NULL,
+        admins TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        secret TEXT,
+        accepted INTEGER DEFAULT 0,
+        last_message_at INTEGER,
+        last_message_preview TEXT,
+        unread_count INTEGER DEFAULT 0
+      )
+    ''');
+
+    // Group messages table.
+    await db.execute('''
+      CREATE TABLE group_messages (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        direction TEXT NOT NULL,
+        status TEXT NOT NULL,
+        event_id TEXT,
+        rumor_id TEXT,
+        reply_to_id TEXT,
+        reactions TEXT,
+        sender_pubkey_hex TEXT,
+        FOREIGN KEY (group_id) REFERENCES groups (id) ON DELETE CASCADE
       )
     ''');
 
@@ -121,6 +158,18 @@ class DatabaseService {
     await db.execute(
       'CREATE INDEX idx_sessions_last_message ON sessions (last_message_at DESC)',
     );
+    await db.execute(
+      'CREATE INDEX idx_groups_last_message ON groups (last_message_at DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_group_messages_group_id ON group_messages (group_id)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_group_messages_timestamp ON group_messages (timestamp DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_group_messages_rumor_id ON group_messages (rumor_id)',
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -133,6 +182,58 @@ class DatabaseService {
       await db.execute('ALTER TABLE messages ADD COLUMN rumor_id TEXT');
       await db.execute(
         'CREATE INDEX idx_messages_rumor_id ON messages (rumor_id)',
+      );
+    }
+    if (oldVersion < 4) {
+      // Add sender pubkey column for group messages.
+      await db.execute('ALTER TABLE messages ADD COLUMN sender_pubkey_hex TEXT');
+
+      // Add groups table.
+      await db.execute('''
+        CREATE TABLE groups (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          picture TEXT,
+          members TEXT NOT NULL,
+          admins TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          secret TEXT,
+          accepted INTEGER DEFAULT 0,
+          last_message_at INTEGER,
+          last_message_preview TEXT,
+          unread_count INTEGER DEFAULT 0
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX idx_groups_last_message ON groups (last_message_at DESC)',
+      );
+    }
+    if (oldVersion < 5) {
+      await db.execute('''
+        CREATE TABLE group_messages (
+          id TEXT PRIMARY KEY,
+          group_id TEXT NOT NULL,
+          text TEXT NOT NULL,
+          timestamp INTEGER NOT NULL,
+          direction TEXT NOT NULL,
+          status TEXT NOT NULL,
+          event_id TEXT,
+          rumor_id TEXT,
+          reply_to_id TEXT,
+          reactions TEXT,
+          sender_pubkey_hex TEXT,
+          FOREIGN KEY (group_id) REFERENCES groups (id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX idx_group_messages_group_id ON group_messages (group_id)',
+      );
+      await db.execute(
+        'CREATE INDEX idx_group_messages_timestamp ON group_messages (timestamp DESC)',
+      );
+      await db.execute(
+        'CREATE INDEX idx_group_messages_rumor_id ON group_messages (rumor_id)',
       );
     }
   }

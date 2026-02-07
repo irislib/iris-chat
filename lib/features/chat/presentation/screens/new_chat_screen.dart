@@ -180,6 +180,10 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     onScanQR: () => context.push('/invite/scan'),
                   ),
                   const SizedBox(height: 16),
+                  _NewGroupCard(
+                    onCreateGroup: () => context.push('/groups/new'),
+                  ),
+                  const SizedBox(height: 16),
                   // New Chat card
                   _NewChatCard(
                     invites: inviteState.invites,
@@ -328,6 +332,48 @@ class _NewChatCard extends ConsumerWidget {
                 label: const Text('Create New Invite'),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NewGroupCard extends StatelessWidget {
+  const _NewGroupCard({required this.onCreateGroup});
+
+  final VoidCallback onCreateGroup;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'New Group',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Create a private group chat',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onCreateGroup,
+              icon: const Icon(Icons.groups),
+              label: const Text('Create Group'),
+            ),
           ],
         ),
       ),

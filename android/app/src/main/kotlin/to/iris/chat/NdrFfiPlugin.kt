@@ -79,6 +79,7 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
                 "sessionManagerInit" -> handleSessionManagerInit(call, result)
                 "sessionManagerSendText" -> handleSessionManagerSendText(call, result)
                 "sessionManagerSendTextWithInnerId" -> handleSessionManagerSendTextWithInnerId(call, result)
+                "sessionManagerSendEventWithInnerId" -> handleSessionManagerSendEventWithInnerId(call, result)
                 "sessionManagerSendReceipt" -> handleSessionManagerSendReceipt(call, result)
                 "sessionManagerSendTyping" -> handleSessionManagerSendTyping(call, result)
                 "sessionManagerSendReaction" -> handleSessionManagerSendReaction(call, result)
@@ -535,6 +536,36 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
             "innerId" to sendResult.innerId,
             "outerEventIds" to sendResult.outerEventIds,
         ))
+    }
+
+    private fun handleSessionManagerSendEventWithInnerId(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val recipientPubkeyHex = call.argument<String>("recipientPubkeyHex")
+            ?: throw IllegalArgumentException("Missing recipientPubkeyHex")
+        val kind = call.argument<Int>("kind")
+            ?: throw IllegalArgumentException("Missing kind")
+        val content = call.argument<String>("content")
+            ?: throw IllegalArgumentException("Missing content")
+        val tagsJson = call.argument<String>("tagsJson")
+            ?: throw IllegalArgumentException("Missing tagsJson")
+        val createdAtSeconds = (call.argument<Number>("createdAtSeconds"))?.toLong()?.toULong()
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        val sendResult = manager.sendEventWithInnerId(
+            recipientPubkeyHex,
+            kind.toUInt(),
+            content,
+            tagsJson,
+            createdAtSeconds,
+        )
+        result.success(
+            mapOf(
+                "innerId" to sendResult.innerId,
+                "outerEventIds" to sendResult.outerEventIds,
+            ),
+        )
     }
 
     private fun handleSessionManagerSendReceipt(call: MethodCall, result: Result) {

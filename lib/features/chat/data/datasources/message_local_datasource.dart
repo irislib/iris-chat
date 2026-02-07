@@ -90,7 +90,7 @@ class MessageLocalDatasource {
     final db = await _db;
     final result = await db.rawQuery(
       'SELECT COUNT(*) as count FROM messages WHERE session_id = ? AND direction = ? AND status != ?',
-      [sessionId, MessageDirection.incoming.name, MessageStatus.delivered.name],
+      [sessionId, MessageDirection.incoming.name, MessageStatus.seen.name],
     );
     return Sqflite.firstIntValue(result) ?? 0;
   }
@@ -184,6 +184,7 @@ WHERE (rumor_id = ? OR id = ?)
       rumorId: map['rumor_id'] as String?,
       replyToId: map['reply_to_id'] as String?,
       reactions: reactions,
+      senderPubkeyHex: map['sender_pubkey_hex'] as String?,
     );
   }
 
@@ -199,6 +200,7 @@ WHERE (rumor_id = ? OR id = ?)
       'rumor_id': message.rumorId,
       'reply_to_id': message.replyToId,
       'reactions': message.reactions.isEmpty ? null : jsonEncode(message.reactions),
+      'sender_pubkey_hex': message.senderPubkeyHex,
     };
   }
 }

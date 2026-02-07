@@ -8,6 +8,7 @@ import '../../core/services/nostr_service.dart';
 import '../../core/services/profile_service.dart';
 import '../../core/services/session_manager_service.dart';
 import '../../core/utils/invite_url.dart';
+import '../../core/utils/nostr_rumor.dart';
 import 'auth_provider.dart';
 import 'chat_provider.dart';
 import 'invite_provider.dart';
@@ -171,6 +172,20 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
 
   final sub = service.decryptedMessages.listen((message) {
     schedule(() async {
+      final rumor = NostrRumor.tryParse(message.content);
+      if (rumor != null) {
+        final groupId = getFirstTagValue(rumor.tags, 'l');
+        if (groupId != null || rumor.kind == 40) {
+          await ref
+              .read(groupStateProvider.notifier)
+              .handleIncomingGroupRumorJson(
+                message.content,
+                eventId: message.eventId,
+              );
+          return;
+        }
+      }
+
       final chatMessage = await ref
           .read(chatStateProvider.notifier)
           .receiveDecryptedMessage(

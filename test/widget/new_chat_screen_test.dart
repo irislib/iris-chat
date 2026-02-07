@@ -184,7 +184,10 @@ void main() {
 
     expect(notifier.createCalls, 0);
 
-    await tester.tap(find.text('Create New Invite'));
+    final createInviteButton = find.text('Create New Invite');
+    await tester.ensureVisible(createInviteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(createInviteButton);
     await tester.pumpAndSettle();
 
     expect(notifier.createCalls, 1);

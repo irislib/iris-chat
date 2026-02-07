@@ -36,6 +36,12 @@ abstract class ChatMessage with _$ChatMessage {
 
     /// Reactions: emoji -> list of pubkeys who reacted.
     @Default({}) Map<String, List<String>> reactions,
+
+    /// Sender identity pubkey (hex) for group messages.
+    ///
+    /// For 1:1 DMs this is redundant (the session already implies the peer),
+    /// so it's typically null.
+    String? senderPubkeyHex,
   }) = _ChatMessage;
 
   const ChatMessage._();
@@ -68,6 +74,7 @@ abstract class ChatMessage with _$ChatMessage {
     required String eventId,
     required String rumorId,
     DateTime? timestamp,
+    String? senderPubkeyHex,
   }) {
     return ChatMessage(
       id: rumorId,
@@ -78,6 +85,7 @@ abstract class ChatMessage with _$ChatMessage {
       status: MessageStatus.delivered,
       eventId: eventId,
       rumorId: rumorId,
+      senderPubkeyHex: senderPubkeyHex,
     );
   }
 

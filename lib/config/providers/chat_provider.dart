@@ -9,12 +9,16 @@ import '../../core/services/error_service.dart';
 import '../../core/services/profile_service.dart';
 import '../../core/services/session_manager_service.dart';
 import '../../core/utils/nostr_rumor.dart';
+import '../../features/chat/data/datasources/group_local_datasource.dart';
+import '../../features/chat/data/datasources/group_message_local_datasource.dart';
 import '../../features/chat/data/datasources/message_local_datasource.dart';
 import '../../features/chat/data/datasources/session_local_datasource.dart';
 import '../../features/chat/data/repositories/chat_repository_impl.dart';
+import '../../features/chat/domain/models/group.dart';
 import '../../features/chat/domain/models/message.dart';
 import '../../features/chat/domain/models/session.dart';
 import '../../features/chat/domain/repositories/chat_repository.dart';
+import '../../features/chat/domain/utils/group_metadata.dart';
 import '../../features/chat/domain/utils/message_status_utils.dart';
 import 'nostr_provider.dart';
 
@@ -40,6 +44,18 @@ abstract class ChatState with _$ChatState {
     @Default({}) Map<String, bool> typingStates,
     String? error,
   }) = _ChatState;
+}
+
+/// State for group chats.
+@freezed
+abstract class GroupState with _$GroupState {
+  const factory GroupState({
+    @Default([]) List<ChatGroup> groups,
+    @Default(false) bool isLoading,
+    @Default({}) Map<String, List<ChatMessage>> messages,
+    @Default({}) Map<String, bool> typingStates,
+    String? error,
+  }) = _GroupState;
 }
 
 /// Notifier for session state.
@@ -305,8 +321,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
   static const Duration _kTypingThrottle = Duration(seconds: 3);
 
   final Map<String, Timer> _typingExpiryTimers = {};
-  final Map<String, int> _lastMessageAtMs = {};
   final Map<String, int> _lastTypingSentAtMs = {};
+  final Map<String, int> _lastMessageAtMs = {};
 
   @override
   void dispose() {
@@ -1040,6 +1056,698 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 }
 
+class _PendingGroupEvent {
+  const _PendingGroupEvent({
+    required this.rumorId,
+    required this.rumorJson,
+    required this.receivedAtMs,
+    this.eventId,
+  });
+
+  final String rumorId;
+  final String rumorJson;
+  final int receivedAtMs;
+  final String? eventId;
+}
+
+/// Notifier for group chats and group messages.
+class GroupNotifier extends StateNotifier<GroupState> {
+  GroupNotifier(
+    this._groupDatasource,
+    this._groupMessageDatasource,
+    this._sessionManagerService,
+  ) : super(const GroupState());
+
+  final GroupLocalDatasource _groupDatasource;
+  final GroupMessageLocalDatasource _groupMessageDatasource;
+  final SessionManagerService _sessionManagerService;
+
+  static const int _kGroupMetadataKind = kGroupMetadataKind;
+  static const int _kChatMessageKind = 14;
+  static const int _kReactionKind = 7;
+  static const int _kTypingKind = 25;
+
+  static const Duration _kTypingExpiry = Duration(seconds: 10);
+  static const Duration _kTypingThrottle = Duration(seconds: 3);
+
+  // Queue events that arrive before the group's metadata.
+  final Map<String, List<_PendingGroupEvent>> _pendingByGroupId = {};
+  static const int _kMaxPendingPerGroup = 50;
+  static const Duration _kPendingMaxAge = Duration(minutes: 5);
+
+  // Dedupe inner rumor ids (bounded).
+  final Map<String, int> _seenRumorAtMs = {};
+  static const int _kMaxSeenRumors = 10000;
+
+  final Map<String, Timer> _typingExpiryTimers = {};
+  final Map<String, int> _lastTypingSentAtMs = {};
+
+  @override
+  void dispose() {
+    for (final t in _typingExpiryTimers.values) {
+      t.cancel();
+    }
+    _typingExpiryTimers.clear();
+    super.dispose();
+  }
+
+  String? _myPubkeyHex() => _sessionManagerService.ownerPubkeyHex;
+
+  Future<void> loadGroups() async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      final groups = await _groupDatasource.getAllGroups();
+      state = state.copyWith(groups: groups, isLoading: false);
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(isLoading: false, error: appError.message);
+    }
+  }
+
+  Future<void> loadGroupMessages(String groupId, {int limit = 200}) async {
+    try {
+      final messages = await _groupMessageDatasource.getMessagesForGroup(
+        groupId,
+        limit: limit,
+      );
+      state = state.copyWith(
+        messages: {...state.messages, groupId: messages},
+        error: null,
+      );
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  Future<ChatGroup?> getGroup(String groupId) async {
+    final inState = state.groups.cast<ChatGroup?>().firstWhere(
+      (g) => g?.id == groupId,
+      orElse: () => null,
+    );
+    if (inState != null) return inState;
+    return _groupDatasource.getGroup(groupId);
+  }
+
+  Future<String?> createGroup({
+    required String name,
+    required List<String> memberPubkeysHex,
+  }) async {
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) {
+      state = state.copyWith(error: 'Not logged in');
+      return null;
+    }
+
+    try {
+      final group = createGroupData(
+        name: name.trim(),
+        creatorPubkeyHex: myPubkeyHex,
+        memberPubkeysHex: memberPubkeysHex,
+      );
+
+      // Persist and update UI.
+      await _groupDatasource.saveGroup(group);
+      state = state.copyWith(
+        groups: [group, ...state.groups.where((g) => g.id != group.id)],
+        error: null,
+      );
+
+      // Fan-out group metadata (kind 40) to members.
+      await _fanOutGroupEvent(
+        group: group,
+        kind: _kGroupMetadataKind,
+        content: buildGroupMetadataContent(group),
+        tags: [
+          [kGroupTagName, group.id],
+        ],
+      );
+
+      return group.id;
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+      return null;
+    }
+  }
+
+  Future<void> acceptGroupInvitation(String groupId) async {
+    try {
+      final group = await getGroup(groupId);
+      if (group == null) return;
+      final updated = group.copyWith(accepted: true);
+      await _groupDatasource.saveGroup(updated);
+      state = state.copyWith(
+        groups: state.groups.map((g) => g.id == groupId ? updated : g).toList(),
+      );
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  Future<void> deleteGroup(String groupId) async {
+    try {
+      await _groupDatasource.deleteGroup(groupId);
+      await _groupMessageDatasource.deleteMessagesForGroup(groupId);
+
+      final nextGroups = state.groups.where((g) => g.id != groupId).toList();
+      final nextMessages = {...state.messages}..remove(groupId);
+      state = state.copyWith(groups: nextGroups, messages: nextMessages);
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  Future<void> markGroupSeen(String groupId) async {
+    final group = await getGroup(groupId);
+    if (group == null) return;
+
+    // Mark in-memory messages as seen (local only; no receipts for groups).
+    final current = state.messages[groupId] ?? const <ChatMessage>[];
+    final updated = current.map((m) {
+      if (!m.isIncoming) return m;
+      if (m.status == MessageStatus.seen) return m;
+      return m.copyWith(status: MessageStatus.seen);
+    }).toList();
+
+    state = state.copyWith(messages: {...state.messages, groupId: updated});
+
+    // Persist best-effort.
+    unawaited(() async {
+      try {
+        for (final m in updated) {
+          if (!m.isIncoming) continue;
+          await _groupMessageDatasource.updateMessageStatus(m.id, MessageStatus.seen);
+        }
+      } catch (_) {}
+    }());
+
+    // Clear unread counter.
+    final updatedGroup = group.copyWith(unreadCount: 0);
+    state = state.copyWith(
+      groups: state.groups.map((g) => g.id == groupId ? updatedGroup : g).toList(),
+    );
+    unawaited(() async {
+      try {
+        await _groupDatasource.updateMetadata(groupId, unreadCount: 0);
+      } catch (_) {}
+    }());
+  }
+
+  Future<void> sendGroupMessage(String groupId, String text, {String? replyToId}) async {
+    final group = await getGroup(groupId);
+    if (group == null) return;
+    if (!group.accepted) {
+      state = state.copyWith(error: 'Accept the group invitation first.');
+      return;
+    }
+
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) return;
+
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+
+	    try {
+	      final nowMs = DateTime.now().millisecondsSinceEpoch;
+	      final createdAtSec = nowMs ~/ 1000;
+
+      final tags = <List<String>>[
+        [kGroupTagName, groupId],
+        ['ms', nowMs.toString()],
+        if (replyToId != null && replyToId.trim().isNotEmpty)
+          ['e', replyToId.trim(), '', 'reply'],
+      ];
+
+      final sendInnerId = await _fanOutGroupEvent(
+        group: group,
+        kind: _kChatMessageKind,
+        content: trimmed,
+        tags: tags,
+        createdAtSeconds: createdAtSec,
+      );
+
+      final rumorId = sendInnerId ?? DateTime.now().microsecondsSinceEpoch.toString();
+
+      final message = ChatMessage(
+        id: rumorId,
+        sessionId: groupSessionId(groupId),
+        text: trimmed,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(nowMs),
+        direction: MessageDirection.outgoing,
+        status: MessageStatus.sent,
+        rumorId: rumorId,
+        senderPubkeyHex: myPubkeyHex,
+      );
+
+      // Update UI state.
+      final current = state.messages[groupId] ?? const <ChatMessage>[];
+      state = state.copyWith(
+        messages: {...state.messages, groupId: [...current, message]},
+      );
+
+      // Persist best-effort.
+      unawaited(() async {
+        try {
+          await _groupMessageDatasource.saveMessage(message);
+          await _groupDatasource.updateMetadata(
+            groupId,
+            lastMessageAt: message.timestamp,
+            lastMessagePreview: message.text.length > 50
+                ? '${message.text.substring(0, 50)}...'
+                : message.text,
+            unreadCount: 0,
+          );
+        } catch (_) {}
+      }());
+
+      // Update group list state immediately.
+      _updateGroupLastMessageInState(
+        groupId,
+        lastMessageAt: message.timestamp,
+        lastMessagePreview: message.text,
+        resetUnread: true,
+      );
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  Future<void> sendGroupReaction({
+    required String groupId,
+    required String messageId,
+    required String emoji,
+  }) async {
+    final group = await getGroup(groupId);
+    if (group == null) return;
+    if (!group.accepted) return;
+
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) return;
+
+    final trimmed = emoji.trim();
+    if (trimmed.isEmpty) return;
+
+    // Optimistic update.
+    _applyGroupReaction(groupId, messageId, trimmed, myPubkeyHex);
+
+	    final nowMs = DateTime.now().millisecondsSinceEpoch;
+	    final createdAtSec = nowMs ~/ 1000;
+    final tags = <List<String>>[
+      [kGroupTagName, groupId],
+      ['ms', nowMs.toString()],
+      ['e', messageId],
+    ];
+
+    try {
+      await _fanOutGroupEvent(
+        group: group,
+        kind: _kReactionKind,
+        content: trimmed,
+        tags: tags,
+        createdAtSeconds: createdAtSec,
+      );
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  Future<void> sendGroupTyping(String groupId) async {
+    final group = await getGroup(groupId);
+    if (group == null) return;
+    if (!group.accepted) return;
+
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) return;
+
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final last = _lastTypingSentAtMs[groupId] ?? 0;
+	    if (nowMs - last < _kTypingThrottle.inMilliseconds) return;
+	    _lastTypingSentAtMs[groupId] = nowMs;
+	    final createdAtSec = nowMs ~/ 1000;
+	    final tags = <List<String>>[
+	      [kGroupTagName, groupId],
+	      ['ms', nowMs.toString()],
+	    ];
+
+    try {
+      await _fanOutGroupEvent(
+        group: group,
+        kind: _kTypingKind,
+        content: 'typing',
+        tags: tags,
+        createdAtSeconds: createdAtSec,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> handleIncomingGroupRumorJson(String rumorJson, {String? eventId}) async {
+    final rumor = NostrRumor.tryParse(rumorJson);
+    if (rumor == null) return;
+    await _handleGroupRumor(rumor, eventId: eventId);
+  }
+
+  Future<void> _handleGroupRumor(NostrRumor rumor, {String? eventId}) async {
+    final groupTag = getFirstTagValue(rumor.tags, kGroupTagName);
+    final groupId = groupTag ?? (rumor.kind == _kGroupMetadataKind
+        ? parseGroupMetadata(rumor.content)?.id
+        : null);
+    if (groupId == null || groupId.isEmpty) return;
+
+    if (rumor.kind == _kGroupMetadataKind) {
+      await _handleGroupMetadata(rumor, groupId);
+      return;
+    }
+
+    final group = await getGroup(groupId);
+    if (group == null) {
+      // Queue until we get metadata.
+      _queuePending(
+        groupId,
+        rumorId: rumor.id,
+        rumorJson: jsonEncode(_rumorToMap(rumor)),
+        eventId: eventId,
+      );
+      return;
+    }
+
+    // Dedupe by stable inner id (rumor.id) once the group exists.
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final prevSeen = _seenRumorAtMs[rumor.id];
+    if (prevSeen != null) return;
+    _seenRumorAtMs[rumor.id] = nowMs;
+    if (_seenRumorAtMs.length > _kMaxSeenRumors) {
+      final keys = _seenRumorAtMs.keys.take(2000).toList();
+      for (final k in keys) {
+        _seenRumorAtMs.remove(k);
+      }
+    }
+
+    if (rumor.kind == _kTypingKind) {
+      _handleGroupTyping(rumor, groupId, group);
+      return;
+    }
+
+    if (rumor.kind == _kReactionKind) {
+      await _handleGroupReaction(rumor, groupId);
+      return;
+    }
+
+    if (rumor.kind == _kChatMessageKind) {
+      await _handleGroupMessage(rumor, groupId, group, eventId: eventId);
+      return;
+    }
+  }
+
+  Future<void> _handleGroupMetadata(NostrRumor rumor, String groupId) async {
+    final metadata = parseGroupMetadata(rumor.content);
+    if (metadata == null) return;
+
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) return;
+
+    final existing = await getGroup(metadata.id);
+    if (existing != null) {
+      final result = validateMetadataUpdate(
+        existing: existing,
+        metadata: metadata,
+        senderPubkeyHex: rumor.pubkey,
+        myPubkeyHex: myPubkeyHex,
+      );
+      if (result == MetadataValidation.reject) return;
+      if (result == MetadataValidation.removed) {
+        await deleteGroup(metadata.id);
+        return;
+      }
+
+      final updated = applyMetadataUpdate(existing: existing, metadata: metadata);
+      await _groupDatasource.saveGroup(updated);
+      state = state.copyWith(
+        groups: state.groups.map((g) => g.id == updated.id ? updated : g).toList(),
+      );
+      return;
+    }
+
+    if (!validateMetadataCreation(
+      metadata: metadata,
+      senderPubkeyHex: rumor.pubkey,
+      myPubkeyHex: myPubkeyHex,
+    )) {
+      return;
+    }
+
+    final createdAt = rumorTimestamp(rumor);
+    final group = ChatGroup(
+      id: metadata.id,
+      name: metadata.name,
+      members: metadata.members,
+      admins: metadata.admins,
+      description: metadata.description,
+      picture: metadata.picture,
+      createdAt: createdAt,
+      secret: metadata.secret,
+      accepted: false,
+    );
+
+    await _groupDatasource.saveGroup(group);
+    state = state.copyWith(groups: [group, ...state.groups.where((g) => g.id != group.id)]);
+
+    // Flush any pending events for this group.
+    await _flushPending(group.id);
+  }
+
+  Future<void> _handleGroupMessage(
+    NostrRumor rumor,
+    String groupId,
+    ChatGroup group, {
+    String? eventId,
+  }) async {
+    final myPubkeyHex = _myPubkeyHex();
+    final isMine = myPubkeyHex != null && rumor.pubkey == myPubkeyHex;
+
+    // Persist first to avoid duplicates across UI rebuilds.
+    if (await _groupMessageDatasource.messageExists(rumor.id)) return;
+
+    final replyToId = _resolveReplyToId(rumor.tags);
+
+    final message = ChatMessage(
+      id: rumor.id,
+      sessionId: groupSessionId(groupId),
+      text: rumor.content,
+      timestamp: rumorTimestamp(rumor),
+      direction: isMine ? MessageDirection.outgoing : MessageDirection.incoming,
+      status: isMine ? MessageStatus.sent : MessageStatus.delivered,
+      eventId: eventId,
+      rumorId: rumor.id,
+      replyToId: replyToId,
+      senderPubkeyHex: rumor.pubkey,
+    );
+
+    await _groupMessageDatasource.saveMessage(message);
+
+    // Update in-memory list.
+    final current = state.messages[groupId] ?? const <ChatMessage>[];
+    if (current.any((m) => m.id == message.id)) return;
+    final updated = [...current, message]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    state = state.copyWith(messages: {...state.messages, groupId: updated});
+
+    final lastPreview = message.text.length > 50 ? '${message.text.substring(0, 50)}...' : message.text;
+
+    // Update group last message + unread.
+    final incUnread = !isMine;
+    _updateGroupLastMessageInState(
+      groupId,
+      lastMessageAt: message.timestamp,
+      lastMessagePreview: message.text,
+      incrementUnread: incUnread,
+    );
+
+    unawaited(() async {
+      try {
+        await _groupDatasource.updateMetadata(
+          groupId,
+          lastMessageAt: message.timestamp,
+          lastMessagePreview: lastPreview,
+          unreadCount: incUnread ? group.unreadCount + 1 : null,
+        );
+      } catch (_) {}
+    }());
+  }
+
+  Future<void> _handleGroupReaction(NostrRumor rumor, String groupId) async {
+    final messageId = getFirstTagValue(rumor.tags, 'e');
+    if (messageId == null || messageId.isEmpty) return;
+    _applyGroupReaction(groupId, messageId, rumor.content, rumor.pubkey);
+  }
+
+  void _handleGroupTyping(NostrRumor rumor, String groupId, ChatGroup group) {
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex != null && rumor.pubkey == myPubkeyHex) return;
+
+    final tsMs = rumorTimestamp(rumor).millisecondsSinceEpoch;
+    final lastMsgAt = group.lastMessageAt?.millisecondsSinceEpoch ?? 0;
+    if (tsMs <= lastMsgAt) return;
+
+    _typingExpiryTimers[groupId]?.cancel();
+    state = state.copyWith(typingStates: {...state.typingStates, groupId: true});
+    _typingExpiryTimers[groupId] = Timer(_kTypingExpiry, () {
+      _typingExpiryTimers.remove(groupId);
+      final next = {...state.typingStates}..remove(groupId);
+      state = state.copyWith(typingStates: next);
+    });
+  }
+
+  void _applyGroupReaction(String groupId, String messageId, String emoji, String pubkeyHex) {
+    final current = state.messages[groupId] ?? const <ChatMessage>[];
+    var idx = current.indexWhere((m) => m.id == messageId);
+    if (idx == -1) {
+      idx = current.indexWhere((m) => m.rumorId == messageId);
+    }
+    if (idx == -1) return;
+
+    final message = current[idx];
+    final reactions = <String, List<String>>{};
+
+    for (final entry in message.reactions.entries) {
+      final filtered = entry.value.where((u) => u != pubkeyHex).toList();
+      if (filtered.isNotEmpty) reactions[entry.key] = filtered;
+    }
+    reactions[emoji] = [...(reactions[emoji] ?? []), pubkeyHex];
+
+    final updatedMessage = message.copyWith(reactions: reactions);
+    final next = [...current];
+    next[idx] = updatedMessage;
+    state = state.copyWith(messages: {...state.messages, groupId: next});
+
+    unawaited(() async {
+      try {
+        await _groupMessageDatasource.saveMessage(updatedMessage);
+      } catch (_) {}
+    }());
+  }
+
+  void _queuePending(
+    String groupId, {
+    required String rumorId,
+    required String rumorJson,
+    String? eventId,
+  }) {
+    final list = _pendingByGroupId.putIfAbsent(groupId, () => <_PendingGroupEvent>[]);
+    if (list.length >= _kMaxPendingPerGroup) return;
+    if (list.any((p) => p.rumorId == rumorId)) return;
+    list.add(
+      _PendingGroupEvent(
+        rumorId: rumorId,
+        rumorJson: rumorJson,
+        receivedAtMs: DateTime.now().millisecondsSinceEpoch,
+        eventId: eventId,
+      ),
+    );
+  }
+
+  Future<void> _flushPending(String groupId) async {
+    final pending = _pendingByGroupId.remove(groupId);
+    if (pending == null || pending.isEmpty) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final p in pending) {
+      if (now - p.receivedAtMs > _kPendingMaxAge.inMilliseconds) continue;
+      final rumor = NostrRumor.tryParse(p.rumorJson);
+      if (rumor == null) continue;
+      await _handleGroupRumor(rumor, eventId: p.eventId);
+    }
+  }
+
+  /// Fan-out a group-tagged inner rumor to all group members (excluding self).
+  ///
+  /// Important: group events intentionally do *not* include `p` tags so the inner rumor id
+  /// is stable across all recipients. The outer event encryption already targets each
+  /// recipient device via SessionManager.
+  Future<String?> _fanOutGroupEvent({
+    required ChatGroup group,
+    required int kind,
+    required String content,
+    required List<List<String>> tags,
+    int? createdAtSeconds,
+  }) async {
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) return null;
+
+    final recipients = group.members.where((m) => m != myPubkeyHex).toList();
+    if (recipients.isEmpty) return null;
+
+    final tagsJson = jsonEncode(tags);
+
+    String? innerId;
+    for (final member in recipients) {
+      final sendResult = await _sessionManagerService.sendEventWithInnerId(
+        recipientPubkeyHex: member,
+        kind: kind,
+        content: content,
+        tagsJson: tagsJson,
+        createdAtSeconds: createdAtSeconds,
+      );
+      if (innerId == null && sendResult.innerId.isNotEmpty) {
+        innerId = sendResult.innerId;
+      }
+    }
+    return innerId;
+  }
+
+  void _updateGroupLastMessageInState(
+    String groupId, {
+    required DateTime lastMessageAt,
+    required String lastMessagePreview,
+    bool incrementUnread = false,
+    bool resetUnread = false,
+  }) {
+    final nextGroups = state.groups.map((g) {
+      if (g.id != groupId) return g;
+
+      final nextUnread = resetUnread
+          ? 0
+          : incrementUnread
+              ? (g.unreadCount + 1)
+              : g.unreadCount;
+
+      return g.copyWith(
+        lastMessageAt: lastMessageAt,
+        lastMessagePreview: lastMessagePreview.length > 50
+            ? '${lastMessagePreview.substring(0, 50)}...'
+            : lastMessagePreview,
+        unreadCount: nextUnread,
+      );
+    }).toList();
+
+    state = state.copyWith(groups: nextGroups);
+  }
+
+  static String? _resolveReplyToId(List<List<String>> tags) {
+    for (final t in tags) {
+      if (t.length < 2) continue;
+      if (t[0] != 'e') continue;
+      if (t.length >= 4 && t[3] == 'reply') return t[1];
+    }
+    // Fallback: first e tag.
+    return getFirstTagValue(tags, 'e');
+  }
+
+  static Map<String, dynamic> _rumorToMap(NostrRumor rumor) {
+    return {
+      'id': rumor.id,
+      'pubkey': rumor.pubkey,
+      'created_at': rumor.createdAt,
+      'kind': rumor.kind,
+      'content': rumor.content,
+      'tags': rumor.tags,
+    };
+  }
+}
+
 // Providers
 
 final databaseServiceProvider = Provider<DatabaseService>((ref) {
@@ -1054,6 +1762,16 @@ final sessionDatasourceProvider = Provider<SessionLocalDatasource>((ref) {
 final messageDatasourceProvider = Provider<MessageLocalDatasource>((ref) {
   final db = ref.watch(databaseServiceProvider);
   return MessageLocalDatasource(db);
+});
+
+final groupDatasourceProvider = Provider<GroupLocalDatasource>((ref) {
+  final db = ref.watch(databaseServiceProvider);
+  return GroupLocalDatasource(db);
+});
+
+final groupMessageDatasourceProvider = Provider<GroupMessageLocalDatasource>((ref) {
+  final db = ref.watch(databaseServiceProvider);
+  return GroupMessageLocalDatasource(db);
 });
 
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
@@ -1084,6 +1802,17 @@ final chatStateProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     sessionDatasource,
     sessionManagerService,
   );
+});
+
+final groupStateProvider = StateNotifierProvider<GroupNotifier, GroupState>((ref) {
+  final groupDatasource = ref.watch(groupDatasourceProvider);
+  final groupMessageDatasource = ref.watch(groupMessageDatasourceProvider);
+  final sessionManagerService = ref.watch(sessionManagerServiceProvider);
+  return GroupNotifier(groupDatasource, groupMessageDatasource, sessionManagerService);
+});
+
+final groupMessagesProvider = Provider.family<List<ChatMessage>, String>((ref, groupId) {
+  return ref.watch(groupStateProvider.select((s) => s.messages[groupId] ?? const <ChatMessage>[]));
 });
 
 /// Provider for messages in a specific session.

@@ -10,6 +10,8 @@ import 'package:iris_chat/config/providers/nostr_provider.dart';
 import 'package:iris_chat/core/services/connectivity_service.dart';
 import 'package:iris_chat/core/services/profile_service.dart';
 import 'package:iris_chat/core/services/session_manager_service.dart';
+import 'package:iris_chat/features/chat/data/datasources/group_local_datasource.dart';
+import 'package:iris_chat/features/chat/data/datasources/group_message_local_datasource.dart';
 import 'package:iris_chat/features/chat/data/datasources/session_local_datasource.dart';
 import 'package:iris_chat/features/chat/domain/models/session.dart';
 import 'package:iris_chat/features/chat/presentation/screens/chat_list_screen.dart';
@@ -23,21 +25,29 @@ class MockSessionLocalDatasource extends Mock
 class MockInviteLocalDatasource extends Mock implements InviteLocalDatasource {}
 class MockSessionManagerService extends Mock implements SessionManagerService {}
 class MockProfileService extends Mock implements ProfileService {}
+class MockGroupLocalDatasource extends Mock implements GroupLocalDatasource {}
+class MockGroupMessageLocalDatasource extends Mock
+    implements GroupMessageLocalDatasource {}
 
 void main() {
   late MockSessionLocalDatasource mockSessionDatasource;
   late MockInviteLocalDatasource mockInviteDatasource;
   late MockSessionManagerService mockSessionManagerService;
   late MockProfileService mockProfileService;
+  late MockGroupLocalDatasource mockGroupDatasource;
+  late MockGroupMessageLocalDatasource mockGroupMessageDatasource;
 
   setUp(() {
     mockSessionDatasource = MockSessionLocalDatasource();
     mockInviteDatasource = MockInviteLocalDatasource();
     mockSessionManagerService = MockSessionManagerService();
     mockProfileService = MockProfileService();
+    mockGroupDatasource = MockGroupLocalDatasource();
+    mockGroupMessageDatasource = MockGroupMessageLocalDatasource();
 
     when(() => mockProfileService.fetchProfiles(any())).thenAnswer((_) async {});
     when(() => mockProfileService.getProfile(any())).thenAnswer((_) async => null);
+    when(() => mockGroupDatasource.getAllGroups()).thenAnswer((_) async => []);
   });
 
   setUpAll(() {
@@ -87,6 +97,9 @@ void main() {
         sessionDatasourceProvider.overrideWithValue(mockSessionDatasource),
         inviteDatasourceProvider.overrideWithValue(mockInviteDatasource),
         messageSubscriptionProvider.overrideWithValue(mockSessionManagerService),
+        sessionManagerServiceProvider.overrideWithValue(mockSessionManagerService),
+        groupDatasourceProvider.overrideWithValue(mockGroupDatasource),
+        groupMessageDatasourceProvider.overrideWithValue(mockGroupMessageDatasource),
         profileServiceProvider.overrideWithValue(mockProfileService),
         connectivityStatusProvider.overrideWith(
           (_) => Stream.value(ConnectivityStatus.online),

@@ -114,6 +114,28 @@ class SessionManagerService {
     return sendResult;
   }
 
+  Future<SendTextWithInnerIdResult> sendEventWithInnerId({
+    required String recipientPubkeyHex,
+    required int kind,
+    required String content,
+    required String tagsJson,
+    int? createdAtSeconds,
+  }) async {
+    final manager = _manager;
+    if (manager == null) {
+      throw const NostrException('Session manager not initialized');
+    }
+    final sendResult = await manager.sendEventWithInnerId(
+      recipientPubkeyHex: recipientPubkeyHex,
+      kind: kind,
+      content: content,
+      tagsJson: tagsJson,
+      createdAtSeconds: createdAtSeconds,
+    );
+    await _drainEvents();
+    return sendResult;
+  }
+
   Future<void> sendReceipt({
     required String recipientPubkeyHex,
     required String receiptType,

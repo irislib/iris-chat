@@ -677,6 +677,35 @@ class SessionManagerHandle {
     return SendTextWithInnerIdResult.fromMap(Map<String, dynamic>.from(result));
   }
 
+  /// Send an arbitrary inner rumor event to a recipient, returning stable inner id + outer ids.
+  ///
+  /// This is used for group chats where we need custom kinds/tags (e.g. kind 40 metadata
+  /// and kind 14 messages tagged with ["l", groupId]) and where the inner rumor should
+  /// typically *not* include recipient-specific tags (so ids remain stable across fan-out).
+  Future<SendTextWithInnerIdResult> sendEventWithInnerId({
+    required String recipientPubkeyHex,
+    required int kind,
+    required String content,
+    required String tagsJson,
+    int? createdAtSeconds,
+  }) async {
+    final result = await _channel.invokeMethod<Map>(
+      'sessionManagerSendEventWithInnerId',
+      {
+        'id': _id,
+        'recipientPubkeyHex': recipientPubkeyHex,
+        'kind': kind,
+        'content': content,
+        'tagsJson': tagsJson,
+        'createdAtSeconds': createdAtSeconds,
+      },
+    );
+    if (result == null) {
+      throw NdrException.sessionNotReady('Failed to send event');
+    }
+    return SendTextWithInnerIdResult.fromMap(Map<String, dynamic>.from(result));
+  }
+
   /// Send a delivery/read receipt.
   Future<List<String>> sendReceipt({
     required String recipientPubkeyHex,
