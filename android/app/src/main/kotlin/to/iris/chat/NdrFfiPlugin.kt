@@ -514,10 +514,11 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
             ?: throw IllegalArgumentException("Missing recipientPubkeyHex")
         val text = call.argument<String>("text")
             ?: throw IllegalArgumentException("Missing text")
+        val expiresAtSeconds = (call.argument<Number>("expiresAtSeconds"))?.toLong()?.toULong()
 
         val manager = sessionManagerHandles[id]
             ?: throw IllegalArgumentException("SessionManager handle not found: $id")
-        val eventIds = manager.sendText(recipientPubkeyHex, text)
+        val eventIds = manager.sendText(recipientPubkeyHex, text, expiresAtSeconds)
         result.success(eventIds)
     }
 
@@ -528,10 +529,11 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
             ?: throw IllegalArgumentException("Missing recipientPubkeyHex")
         val text = call.argument<String>("text")
             ?: throw IllegalArgumentException("Missing text")
+        val expiresAtSeconds = (call.argument<Number>("expiresAtSeconds"))?.toLong()?.toULong()
 
         val manager = sessionManagerHandles[id]
             ?: throw IllegalArgumentException("SessionManager handle not found: $id")
-        val sendResult = manager.sendTextWithInnerId(recipientPubkeyHex, text)
+        val sendResult = manager.sendTextWithInnerId(recipientPubkeyHex, text, expiresAtSeconds)
         result.success(mapOf(
             "innerId" to sendResult.innerId,
             "outerEventIds" to sendResult.outerEventIds,
@@ -577,10 +579,11 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
             ?: throw IllegalArgumentException("Missing receiptType")
         val messageIds = call.argument<List<String>>("messageIds")
             ?: throw IllegalArgumentException("Missing messageIds")
+        val expiresAtSeconds = (call.argument<Number>("expiresAtSeconds"))?.toLong()?.toULong()
 
         val manager = sessionManagerHandles[id]
             ?: throw IllegalArgumentException("SessionManager handle not found: $id")
-        val eventIds = manager.sendReceipt(recipientPubkeyHex, receiptType, messageIds)
+        val eventIds = manager.sendReceipt(recipientPubkeyHex, receiptType, messageIds, expiresAtSeconds)
         result.success(eventIds)
     }
 
@@ -589,10 +592,11 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
             ?: throw IllegalArgumentException("Missing id")
         val recipientPubkeyHex = call.argument<String>("recipientPubkeyHex")
             ?: throw IllegalArgumentException("Missing recipientPubkeyHex")
+        val expiresAtSeconds = (call.argument<Number>("expiresAtSeconds"))?.toLong()?.toULong()
 
         val manager = sessionManagerHandles[id]
             ?: throw IllegalArgumentException("SessionManager handle not found: $id")
-        val eventIds = manager.sendTyping(recipientPubkeyHex)
+        val eventIds = manager.sendTyping(recipientPubkeyHex, expiresAtSeconds)
         result.success(eventIds)
     }
 
@@ -605,10 +609,11 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
             ?: throw IllegalArgumentException("Missing messageId")
         val emoji = call.argument<String>("emoji")
             ?: throw IllegalArgumentException("Missing emoji")
+        val expiresAtSeconds = (call.argument<Number>("expiresAtSeconds"))?.toLong()?.toULong()
 
         val manager = sessionManagerHandles[id]
             ?: throw IllegalArgumentException("SessionManager handle not found: $id")
-        val eventIds = manager.sendReaction(recipientPubkeyHex, messageId, emoji)
+        val eventIds = manager.sendReaction(recipientPubkeyHex, messageId, emoji, expiresAtSeconds)
         result.success(eventIds)
     }
 
