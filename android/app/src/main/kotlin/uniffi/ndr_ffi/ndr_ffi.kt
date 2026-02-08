@@ -901,15 +901,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_event_with_inner_id(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`kind`: Int,`content`: RustBuffer.ByValue,`tagsJson`: RustBuffer.ByValue,`createdAtSeconds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`messageId`: RustBuffer.ByValue,`emoji`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`messageId`: RustBuffer.ByValue,`emoji`: RustBuffer.ByValue,`expiresAtSeconds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`receiptType`: RustBuffer.ByValue,`messageIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`receiptType`: RustBuffer.ByValue,`messageIds`: RustBuffer.ByValue,`expiresAtSeconds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`expiresAtSeconds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text_with_inner_id(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text_with_inner_id(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,`expiresAtSeconds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_typing(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_typing(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`expiresAtSeconds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ndr_ffi_fn_func_create_signed_app_keys_event(`ownerPubkeyHex`: RustBuffer.ByValue,`ownerPrivkeyHex`: RustBuffer.ByValue,`devices`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1226,19 +1226,19 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_event_with_inner_id() != 35167.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction() != 19995.toShort()) {
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_reaction() != 32190.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt() != 36088.toShort()) {
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_receipt() != 34112.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text() != 18392.toShort()) {
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text() != 39171.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text_with_inner_id() != 12060.toShort()) {
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_text_with_inner_id() != 49408.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_typing() != 30715.toShort()) {
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_send_typing() != 11765.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ndr_ffi_checksum_constructor_invitehandle_create_new() != 4301.toShort()) {
@@ -2517,28 +2517,28 @@ public interface SessionManagerHandleInterface {
     /**
      * Send an emoji reaction (kind 7) to a specific message id.
      */
-    fun `sendReaction`(`recipientPubkeyHex`: kotlin.String, `messageId`: kotlin.String, `emoji`: kotlin.String): List<kotlin.String>
+    fun `sendReaction`(`recipientPubkeyHex`: kotlin.String, `messageId`: kotlin.String, `emoji`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String>
     
     /**
      * Send a delivery/read receipt for messages.
      */
-    fun `sendReceipt`(`recipientPubkeyHex`: kotlin.String, `receiptType`: kotlin.String, `messageIds`: List<kotlin.String>): List<kotlin.String>
+    fun `sendReceipt`(`recipientPubkeyHex`: kotlin.String, `receiptType`: kotlin.String, `messageIds`: List<kotlin.String>, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String>
     
     /**
      * Send a text message to a recipient.
      */
-    fun `sendText`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String): List<kotlin.String>
+    fun `sendText`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String>
     
     /**
      * Send a text message and return both the stable inner (rumor) id and the
      * list of outer message event ids that were published.
      */
-    fun `sendTextWithInnerId`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String): SendTextResult
+    fun `sendTextWithInnerId`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): SendTextResult
     
     /**
      * Send a typing indicator.
      */
-    fun `sendTyping`(`recipientPubkeyHex`: kotlin.String): List<kotlin.String>
+    fun `sendTyping`(`recipientPubkeyHex`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String>
     
     companion object
 }
@@ -2801,12 +2801,12 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
     /**
      * Send an emoji reaction (kind 7) to a specific message id.
      */
-    @Throws(NdrException::class)override fun `sendReaction`(`recipientPubkeyHex`: kotlin.String, `messageId`: kotlin.String, `emoji`: kotlin.String): List<kotlin.String> {
+    @Throws(NdrException::class)override fun `sendReaction`(`recipientPubkeyHex`: kotlin.String, `messageId`: kotlin.String, `emoji`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     callWithPointer {
     uniffiRustCallWithError(NdrException) { _status ->
     UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_reaction(
-        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`messageId`),FfiConverterString.lower(`emoji`),_status)
+        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`messageId`),FfiConverterString.lower(`emoji`),FfiConverterOptionalULong.lower(`expiresAtSeconds`),_status)
 }
     }
     )
@@ -2817,12 +2817,12 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
     /**
      * Send a delivery/read receipt for messages.
      */
-    @Throws(NdrException::class)override fun `sendReceipt`(`recipientPubkeyHex`: kotlin.String, `receiptType`: kotlin.String, `messageIds`: List<kotlin.String>): List<kotlin.String> {
+    @Throws(NdrException::class)override fun `sendReceipt`(`recipientPubkeyHex`: kotlin.String, `receiptType`: kotlin.String, `messageIds`: List<kotlin.String>, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     callWithPointer {
     uniffiRustCallWithError(NdrException) { _status ->
     UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_receipt(
-        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`receiptType`),FfiConverterSequenceString.lower(`messageIds`),_status)
+        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`receiptType`),FfiConverterSequenceString.lower(`messageIds`),FfiConverterOptionalULong.lower(`expiresAtSeconds`),_status)
 }
     }
     )
@@ -2833,12 +2833,12 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
     /**
      * Send a text message to a recipient.
      */
-    @Throws(NdrException::class)override fun `sendText`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String): List<kotlin.String> {
+    @Throws(NdrException::class)override fun `sendText`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     callWithPointer {
     uniffiRustCallWithError(NdrException) { _status ->
     UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text(
-        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`text`),_status)
+        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`text`),FfiConverterOptionalULong.lower(`expiresAtSeconds`),_status)
 }
     }
     )
@@ -2850,12 +2850,12 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
      * Send a text message and return both the stable inner (rumor) id and the
      * list of outer message event ids that were published.
      */
-    @Throws(NdrException::class)override fun `sendTextWithInnerId`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String): SendTextResult {
+    @Throws(NdrException::class)override fun `sendTextWithInnerId`(`recipientPubkeyHex`: kotlin.String, `text`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): SendTextResult {
             return FfiConverterTypeSendTextResult.lift(
     callWithPointer {
     uniffiRustCallWithError(NdrException) { _status ->
     UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_text_with_inner_id(
-        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`text`),_status)
+        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`text`),FfiConverterOptionalULong.lower(`expiresAtSeconds`),_status)
 }
     }
     )
@@ -2866,12 +2866,12 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
     /**
      * Send a typing indicator.
      */
-    @Throws(NdrException::class)override fun `sendTyping`(`recipientPubkeyHex`: kotlin.String): List<kotlin.String> {
+    @Throws(NdrException::class)override fun `sendTyping`(`recipientPubkeyHex`: kotlin.String, `expiresAtSeconds`: kotlin.ULong?): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     callWithPointer {
     uniffiRustCallWithError(NdrException) { _status ->
     UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_send_typing(
-        it, FfiConverterString.lower(`recipientPubkeyHex`),_status)
+        it, FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterOptionalULong.lower(`expiresAtSeconds`),_status)
 }
     }
     )

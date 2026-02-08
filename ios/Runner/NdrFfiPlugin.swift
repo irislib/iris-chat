@@ -142,10 +142,10 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         if NDR_FFI_ENABLED {
             // Uncomment when UniFFI bindings are integrated:
             // result(version())
-            result("0.0.39")
+            result("0.0.58")
         } else {
             // Return version string even in stub mode for compatibility
-            result("0.0.39-stub")
+            result("0.0.58-stub")
         }
     }
 
