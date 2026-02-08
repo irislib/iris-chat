@@ -8,6 +8,7 @@ import '../features/chat/presentation/screens/chat_list_screen.dart';
 import '../features/chat/presentation/screens/chat_screen.dart';
 import '../features/chat/presentation/screens/create_group_screen.dart';
 import '../features/chat/presentation/screens/group_chat_screen.dart';
+import '../features/chat/presentation/screens/group_info_screen.dart';
 import '../features/chat/presentation/screens/new_chat_screen.dart';
 import '../features/invite/presentation/screens/create_invite_screen.dart';
 import '../features/invite/presentation/screens/scan_invite_screen.dart';
@@ -102,6 +103,14 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => GroupChatScreen(
           groupId: state.pathParameters['id']!,
         ),
+        routes: [
+          GoRoute(
+            path: 'info',
+            builder: (context, state) => GroupInfoScreen(
+              groupId: state.pathParameters['id']!,
+            ),
+          ),
+        ],
       ),
       GoRoute(
         path: '/settings',

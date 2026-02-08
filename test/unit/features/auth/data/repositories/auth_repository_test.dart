@@ -114,14 +114,22 @@ void main() {
           },
         );
 
-        when(() => mockStorage.savePrivateKey(any())).thenAnswer((_) async {});
-        when(() => mockStorage.savePublicKey(any())).thenAnswer((_) async {});
+        when(
+          () => mockStorage.saveIdentity(
+            privkeyHex: any(named: 'privkeyHex'),
+            pubkeyHex: any(named: 'pubkeyHex'),
+          ),
+        ).thenAnswer((_) async {});
 
         final result = await repository.createIdentity();
 
         expect(result.pubkeyHex, testPubkey);
-        verify(() => mockStorage.savePrivateKey(testPrivkey)).called(1);
-        verify(() => mockStorage.savePublicKey(testPubkey)).called(1);
+        verify(
+          () => mockStorage.saveIdentity(
+            privkeyHex: testPrivkey,
+            pubkeyHex: testPubkey,
+          ),
+        ).called(1);
 
         // Clean up mock
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -146,14 +154,22 @@ void main() {
           },
         );
 
-        when(() => mockStorage.savePrivateKey(any())).thenAnswer((_) async {});
-        when(() => mockStorage.savePublicKey(any())).thenAnswer((_) async {});
+        when(
+          () => mockStorage.saveIdentity(
+            privkeyHex: any(named: 'privkeyHex'),
+            pubkeyHex: any(named: 'pubkeyHex'),
+          ),
+        ).thenAnswer((_) async {});
 
         final result = await repository.login(testPrivkey);
 
         expect(result.pubkeyHex, testPubkey);
-        verify(() => mockStorage.savePrivateKey(testPrivkey)).called(1);
-        verify(() => mockStorage.savePublicKey(testPubkey)).called(1);
+        verify(
+          () => mockStorage.saveIdentity(
+            privkeyHex: testPrivkey,
+            pubkeyHex: testPubkey,
+          ),
+        ).called(1);
 
         // Clean up mock
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

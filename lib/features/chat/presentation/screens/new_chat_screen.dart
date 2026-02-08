@@ -139,7 +139,6 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     final sessions = ref.watch(sessionStateProvider.select((s) => s.sessions));
     final hasChats = sessions.isNotEmpty;
     final inviteState = ref.watch(inviteStateProvider);
-    final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -180,25 +179,16 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     onScanQR: () => context.push('/invite/scan'),
                   ),
                   const SizedBox(height: 16),
-                  _NewGroupCard(
-                    onCreateGroup: () => context.push('/groups/new'),
-                  ),
-                  const SizedBox(height: 16),
                   // New Chat card
                   _NewChatCard(
                     invites: inviteState.invites,
                     isCreating: inviteState.isCreating,
                     onCreateInvite: _createInvite,
                   ),
-                  if (inviteState.error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      inviteState.error!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.error,
-                      ),
-                    ),
-                  ],
+                  const SizedBox(height: 16),
+                  _NewGroupCard(
+                    onCreateGroup: () => context.push('/groups/new'),
+                  ),
                 ],
               ),
             ),
@@ -426,6 +416,11 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
           ),
         );
       }
+    } else if (mounted) {
+      final error = ref.read(inviteStateProvider).error;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error ?? 'Failed to generate invite link')),
+      );
     }
   }
 
@@ -435,6 +430,11 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
         .getInviteUrl(widget.invite.id);
     if (url != null) {
       await Share.share(url, subject: 'Iris Chat Invite');
+    } else if (mounted) {
+      final error = ref.read(inviteStateProvider).error;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error ?? 'Failed to generate invite link')),
+      );
     }
   }
 
@@ -446,6 +446,11 @@ class _InviteItemState extends ConsumerState<_InviteItem> {
       await showDialog<void>(
         context: context,
         builder: (context) => _QRModal(url: url, label: widget.invite.label),
+      );
+    } else if (mounted) {
+      final error = ref.read(inviteStateProvider).error;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error ?? 'Failed to generate invite link')),
       );
     }
   }

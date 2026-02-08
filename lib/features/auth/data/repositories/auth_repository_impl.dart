@@ -14,9 +14,11 @@ class AuthRepositoryImpl implements AuthRepository {
     // Generate new keypair using ndr-ffi
     final keypair = await NdrFfi.generateKeypair();
 
-    // Store keys securely
-    await _storage.savePrivateKey(keypair.privateKeyHex);
-    await _storage.savePublicKey(keypair.publicKeyHex);
+    // Store keys securely (single-item identity to avoid multiple Keychain prompts).
+    await _storage.saveIdentity(
+      privkeyHex: keypair.privateKeyHex,
+      pubkeyHex: keypair.publicKeyHex,
+    );
 
     return Identity(
       pubkeyHex: keypair.publicKeyHex,
@@ -37,8 +39,7 @@ class AuthRepositoryImpl implements AuthRepository {
     final pubkeyHex = await _derivePublicKey(privkeyHex);
 
     // Store keys securely
-    await _storage.savePrivateKey(privkeyHex);
-    await _storage.savePublicKey(pubkeyHex);
+    await _storage.saveIdentity(privkeyHex: privkeyHex, pubkeyHex: pubkeyHex);
 
     return Identity(
       pubkeyHex: pubkeyHex,
@@ -63,8 +64,10 @@ class AuthRepositoryImpl implements AuthRepository {
     await _derivePublicKey(devicePrivkeyHex);
 
     // Store device private key + owner public key.
-    await _storage.savePrivateKey(devicePrivkeyHex);
-    await _storage.savePublicKey(ownerPubkeyHex);
+    await _storage.saveIdentity(
+      privkeyHex: devicePrivkeyHex,
+      pubkeyHex: ownerPubkeyHex,
+    );
 
     return Identity(
       pubkeyHex: ownerPubkeyHex,

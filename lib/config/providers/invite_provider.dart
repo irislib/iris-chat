@@ -5,6 +5,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/ffi/ndr_ffi.dart';
+import '../../core/services/error_service.dart';
 import '../../core/services/logger_service.dart';
 import '../../core/services/nostr_service.dart';
 import '../../core/utils/invite_url.dart';
@@ -42,8 +43,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
     try {
       final invites = await _datasource.getActiveInvites();
       state = state.copyWith(invites: invites, isLoading: false);
-    } catch (e) {
-      state = state.copyWith(isLoading: false, error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(isLoading: false, error: appError.message);
     }
   }
 
@@ -102,8 +104,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
       );
 
       return invite;
-    } catch (e) {
-      state = state.copyWith(isCreating: false, error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(isCreating: false, error: appError.message);
       return null;
     } finally {
       try {
@@ -190,8 +193,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
       state = state.copyWith(isAccepting: false);
       return sessionId;
-    } catch (e) {
-      state = state.copyWith(isAccepting: false, error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(isAccepting: false, error: appError.message);
       return null;
     } finally {
       try {
@@ -254,8 +258,9 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
       state = state.copyWith(isAccepting: false);
       return true;
-    } catch (e) {
-      state = state.copyWith(isAccepting: false, error: e.toString());
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(isAccepting: false, error: appError.message);
       return false;
     } finally {
       // We don't need the temporary link session/handle beyond the response + AppKeys publish.
@@ -274,16 +279,41 @@ class InviteNotifier extends StateNotifier<InviteState> {
     String root = 'https://iris.to',
   }) async {
     InviteHandle? inviteHandle;
+    Invite? invite;
     try {
-      final invite = await _datasource.getInvite(inviteId);
+      invite = await _datasource.getInvite(inviteId);
       if (invite?.serializedState == null) return null;
 
       inviteHandle = await NdrFfi.inviteDeserialize(
         invite!.serializedState!,
       );
       return await inviteHandle.toUrl(root);
-    } catch (e) {
-      state = state.copyWith(error: e.toString());
+    } catch (e, st) {
+      // Self-heal corrupted invite state (observed as `CryptoFailure("invalid HMAC")`).
+      if (_looksLikeInvalidHmacError(e)) {
+        try {
+          await deleteInvite(inviteId);
+        } catch (_) {}
+
+        // Best-effort: create a replacement invite so the user can copy/share immediately.
+        try {
+          final replacement = await createInvite(
+            label: invite?.label,
+            maxUses: invite?.maxUses,
+          );
+          if (replacement?.serializedState == null) return null;
+
+          inviteHandle = await NdrFfi.inviteDeserialize(
+            replacement!.serializedState!,
+          );
+          return await inviteHandle.toUrl(root);
+        } catch (_) {
+          // If regeneration fails, fall through to a generic error.
+        }
+      }
+
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
       return null;
     } finally {
       try {
@@ -448,7 +478,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
         error: e,
         data: {'inviteId': inviteId},
       );
-      state = state.copyWith(error: e.toString());
+      state = state.copyWith(error: AppError.from(e).message);
     } finally {
       try {
         await result?.session.dispose();
@@ -462,6 +492,11 @@ class InviteNotifier extends StateNotifier<InviteState> {
   /// Clear error state.
   void clearError() {
     state = state.copyWith(error: null);
+  }
+
+  static bool _looksLikeInvalidHmacError(Object error) {
+    final s = error.toString().toLowerCase();
+    return s.contains('invalid hmac') || s.contains('cryptofailure("invalid hmac")');
   }
 
   Future<void> _publishMergedAppKeys({

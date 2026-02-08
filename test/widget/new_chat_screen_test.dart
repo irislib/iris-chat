@@ -144,6 +144,61 @@ void main() {
     expect(sessionNotifier.state.sessions.first.id, testPubkeyHex);
   });
 
+  testWidgets('New Group card is below New Chat card', (tester) async {
+    final mockInvites = _MockInviteLocalDatasource();
+    final mockSessions = _MockSessionLocalDatasource();
+    final mockProfiles = _MockProfileService();
+
+    late _TestInviteNotifier inviteNotifier;
+
+    final initialInvites = [
+      Invite(
+        id: 'existing',
+        inviterPubkeyHex: 'pubkey',
+        createdAt: DateTime(2026, 1, 1),
+        serializedState: '{}',
+      ),
+    ];
+
+    await tester.pumpWidget(
+      createTestApp(
+        const NewChatScreen(),
+        overrides: [
+          inviteStateProvider.overrideWith((ref) {
+            inviteNotifier = _TestInviteNotifier(
+              mockInvites,
+              ref,
+              initialInvites: initialInvites,
+            );
+            return inviteNotifier;
+          }),
+          sessionStateProvider.overrideWith((ref) {
+            final notifier = SessionNotifier(mockSessions, mockProfiles);
+            notifier.state = const SessionState(sessions: []);
+            return notifier;
+          }),
+        ],
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    final join = find.text('Join Chat');
+    final newChat = find.text('New Chat');
+    final newGroup = find.text('New Group');
+
+    expect(join, findsOneWidget);
+    expect(newChat, findsOneWidget);
+    expect(newGroup, findsOneWidget);
+
+    final joinDy = tester.getTopLeft(join).dy;
+    final chatDy = tester.getTopLeft(newChat).dy;
+    final groupDy = tester.getTopLeft(newGroup).dy;
+
+    expect(joinDy, lessThan(chatDy));
+    expect(chatDy, lessThan(groupDy));
+  });
+
   testWidgets('Create New Invite button calls createInvite()', (tester) async {
     final mockInvites = _MockInviteLocalDatasource();
     final mockSessions = _MockSessionLocalDatasource();

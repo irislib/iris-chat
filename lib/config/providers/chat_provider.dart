@@ -1206,6 +1206,171 @@ class GroupNotifier extends StateNotifier<GroupState> {
     }
   }
 
+  Future<void> renameGroup(String groupId, String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+
+    final group = await getGroup(groupId);
+    if (group == null) return;
+
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) {
+      state = state.copyWith(error: 'Not logged in');
+      return;
+    }
+    if (!isGroupAdmin(group, myPubkeyHex)) {
+      state = state.copyWith(error: 'Only group admins can edit the group.');
+      return;
+    }
+
+    if (group.name == trimmed) return;
+
+    try {
+      final updated = group.copyWith(name: trimmed);
+      await _groupDatasource.saveGroup(updated);
+      state = state.copyWith(
+        groups: state.groups.map((g) => g.id == groupId ? updated : g).toList(),
+        error: null,
+      );
+
+      await _fanOutGroupEvent(
+        group: updated,
+        kind: _kGroupMetadataKind,
+        content: buildGroupMetadataContent(updated),
+        tags: [
+          [kGroupTagName, updated.id],
+        ],
+      );
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  Future<void> addGroupMembers(
+    String groupId,
+    List<String> memberPubkeysHex,
+  ) async {
+    if (memberPubkeysHex.isEmpty) return;
+
+    final group = await getGroup(groupId);
+    if (group == null) return;
+
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) {
+      state = state.copyWith(error: 'Not logged in');
+      return;
+    }
+    if (!isGroupAdmin(group, myPubkeyHex)) {
+      state = state.copyWith(error: 'Only group admins can edit the group.');
+      return;
+    }
+
+    final toAdd = <String>[];
+    final seen = <String>{};
+    for (final raw in memberPubkeysHex) {
+      final pk = raw.toLowerCase().trim();
+      if (pk.isEmpty) continue;
+      if (pk == myPubkeyHex) continue;
+      if (group.members.contains(pk)) continue;
+      if (!seen.add(pk)) continue;
+      toAdd.add(pk);
+    }
+    if (toAdd.isEmpty) return;
+
+    try {
+      final updated = group.copyWith(members: [...group.members, ...toAdd]);
+      await _groupDatasource.saveGroup(updated);
+      state = state.copyWith(
+        groups: state.groups.map((g) => g.id == groupId ? updated : g).toList(),
+        error: null,
+      );
+
+      await _fanOutGroupEvent(
+        group: updated,
+        kind: _kGroupMetadataKind,
+        content: buildGroupMetadataContent(updated),
+        tags: [
+          [kGroupTagName, updated.id],
+        ],
+      );
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  Future<void> removeGroupMember(
+    String groupId,
+    String memberPubkeyHex,
+  ) async {
+    final group = await getGroup(groupId);
+    if (group == null) return;
+
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) {
+      state = state.copyWith(error: 'Not logged in');
+      return;
+    }
+    if (!isGroupAdmin(group, myPubkeyHex)) {
+      state = state.copyWith(error: 'Only group admins can edit the group.');
+      return;
+    }
+
+    final member = memberPubkeyHex.toLowerCase().trim();
+    if (member.isEmpty) return;
+    if (!group.members.contains(member)) return;
+    if (member == myPubkeyHex) {
+      state = state.copyWith(error: 'You cannot remove yourself from the group.');
+      return;
+    }
+
+    final updatedMembers = group.members.where((m) => m != member).toList();
+    if (updatedMembers.isEmpty) return;
+    final updatedAdmins = group.admins.where((a) => a != member).toList();
+
+    // Rotate the shared secret so removed members cannot decrypt future group messages
+    // in clients that use SharedChannel (matches iris-chat semantics).
+    final rotatedSecret = generateGroupSecretHex();
+
+    final updated = group.copyWith(
+      members: updatedMembers,
+      admins: updatedAdmins.isNotEmpty ? updatedAdmins : [myPubkeyHex],
+      secret: rotatedSecret,
+    );
+
+    try {
+      await _groupDatasource.saveGroup(updated);
+      state = state.copyWith(
+        groups: state.groups.map((g) => g.id == groupId ? updated : g).toList(),
+        error: null,
+      );
+
+      // Send updated metadata (with rotated secret) to remaining members.
+      await _fanOutGroupEvent(
+        group: updated,
+        kind: _kGroupMetadataKind,
+        content: buildGroupMetadataContent(updated),
+        tags: [
+          [kGroupTagName, updated.id],
+        ],
+      );
+
+      // Notify the removed member; omit secret.
+      await _sendGroupEventToRecipients(
+        recipients: [member],
+        kind: _kGroupMetadataKind,
+        content: buildGroupMetadataContent(updated, excludeSecret: true),
+        tags: [
+          [kGroupTagName, updated.id],
+        ],
+      );
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
   Future<void> deleteGroup(String groupId) async {
     try {
       await _groupDatasource.deleteGroup(groupId);
@@ -1678,12 +1843,34 @@ class GroupNotifier extends StateNotifier<GroupState> {
     if (myPubkeyHex == null || myPubkeyHex.isEmpty) return null;
 
     final recipients = group.members.where((m) => m != myPubkeyHex).toList();
-    if (recipients.isEmpty) return null;
+    return _sendGroupEventToRecipients(
+      recipients: recipients,
+      kind: kind,
+      content: content,
+      tags: tags,
+      createdAtSeconds: createdAtSeconds,
+    );
+  }
 
+  Future<String?> _sendGroupEventToRecipients({
+    required List<String> recipients,
+    required int kind,
+    required String content,
+    required List<List<String>> tags,
+    int? createdAtSeconds,
+  }) async {
+    final myPubkeyHex = _myPubkeyHex();
+    if (myPubkeyHex == null || myPubkeyHex.isEmpty) return null;
+
+    if (recipients.isEmpty) return null;
     final tagsJson = jsonEncode(tags);
 
     String? innerId;
-    for (final member in recipients) {
+    for (final raw in recipients) {
+      final member = raw.toLowerCase().trim();
+      if (member.isEmpty) continue;
+      if (member == myPubkeyHex) continue;
+
       final sendResult = await _sessionManagerService.sendEventWithInnerId(
         recipientPubkeyHex: member,
         kind: kind,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../../config/providers/chat_provider.dart';
 import '../../../../shared/utils/formatters.dart';
@@ -105,6 +106,11 @@ class _GroupChatScreenState extends ConsumerState<GroupChatScreen> {
       appBar: AppBar(
         title: Text(group.name),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: 'Group info',
+            onPressed: () => context.push('/groups/${group!.id}/info'),
+          ),
           if (!group.accepted)
             Padding(
               padding: const EdgeInsets.only(right: 12),
