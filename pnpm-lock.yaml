@@ -36,8 +36,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: 0.0.54
-        version: 0.0.54(typescript@5.9.3)
+        specifier: 0.0.59
+        version: 0.0.59(typescript@5.9.3)
       nostr-tools:
         specifier: ^2.19.3
         version: 2.20.0(typescript@5.9.3)
@@ -2223,8 +2223,8 @@ packages:
   node-releases@2.0.27:
     resolution: {integrity: sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA==}
 
-  nostr-double-ratchet@0.0.54:
-    resolution: {integrity: sha512-1N8/L4QqJnIUupqiGTPwxDdJCUcIDl6PE3fv8GwYL+SSPta0SGB+0doNPBGEHs9WIJvqy6Aunxbhm26kLxeatw==}
+  nostr-double-ratchet@0.0.59:
+    resolution: {integrity: sha512-XrMUtw+3TxygdhLXyDcqJB+9gfM2owFdm95OvZAyluGFJP7+E8YBZIqJ4RVfjmxxdtiSNJ0vFTPOBA9bvsSq4g==}
 
   nostr-tools@2.20.0:
     resolution: {integrity: sha512-Kq/2lMyeOdGvpDsYH2an8HP4H0aFCqwKythhTzxfgZTVv4L3NOgrJw2SxH8jkWlH8xPhWxGfN6lFtC+EAa2qYQ==}
@@ -5366,7 +5366,7 @@ snapshots:
 
   node-releases@2.0.27: {}
 
-  nostr-double-ratchet@0.0.54(typescript@5.9.3):
+  nostr-double-ratchet@0.0.59(typescript@5.9.3):
     dependencies:
       nostr-tools: 2.20.0(typescript@5.9.3)
     transitivePeerDependencies:

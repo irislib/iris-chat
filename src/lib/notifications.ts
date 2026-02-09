@@ -10,7 +10,7 @@ import { getSessionManager } from './privateChats'
 const KIND_HTTP_AUTH = 27235
 
 // Double ratchet message kinds - imported values from nostr-double-ratchet
-import { MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+import { MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet'
 
 export interface WebPushSubscription {
   endpoint: string

@@ -3,7 +3,7 @@
 import Dexie, { type Table } from 'dexie'
 
 // Re-export serialization functions from nostr-double-ratchet
-export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet'
 
 export interface StoredSession {
   id: string
@@ -25,6 +25,7 @@ export interface StoredMessage {
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: 'delivered' | 'seen'
   senderPubkey?: string  // pubkey of sender (for group messages)
+  expiresAt?: number  // Unix timestamp in seconds when message expires (NIP-40)
 }
 
 export interface StoredGroup {

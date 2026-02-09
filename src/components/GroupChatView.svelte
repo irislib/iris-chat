@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, type Group, type GroupMessage } from '../lib/groups'
+  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, isAdmin, type Group, type GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
@@ -9,11 +9,15 @@
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
   import { getPubkey } from '../lib/identity'
   import { deleteMessage as deleteMessageFromDb } from '../lib/storage'
+  import { expirationStore } from '../lib/expirationStore'
+  import { setGroupDisappearingMessages } from '../lib/disappearingMessages'
+  import { getExpirationLabel } from '../lib/expiration'
   import MessageBubble from './MessageBubble.svelte'
   import MediaModal from './MediaModal.svelte'
   import VoiceRecorder from './VoiceRecorder.svelte'
   import Name from './Name.svelte'
   import GroupAvatar from './GroupAvatar.svelte'
+  import DisappearingMessagesModal from './DisappearingMessagesModal.svelte'
 
   interface Props {
     group: Group
@@ -44,6 +48,17 @@
   // svelte-ignore state_referenced_locally
   let activeGroupId = $state(group.id)
   let replyingTo = $state<GroupMessage | null>(null)
+  let showDisappearingModal = $state(false)
+
+  let currentTtl = $derived($expirationStore.expirations[group.id])
+  let canChangeDisappearing = $derived((() => {
+    const pk = getPubkey()
+    return pk ? isAdmin(group, pk) : false
+  })())
+
+  async function handleSetDisappearing(ttlSeconds: number | null) {
+    await setGroupDisappearingMessages(group.id, ttlSeconds)
+  }
 
   // Set current group id
   $effect(() => {
@@ -342,7 +357,7 @@
       </button>
 
       {#if showMenu}
-        <div class="absolute right-0 top-full mt-1 w-40 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50">
+        <div class="absolute right-0 top-full mt-1 w-56 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50">
           {#if onViewDetails}
             <button
               class="btn-ghost w-full text-left flex items-center gap-2"
@@ -350,6 +365,18 @@
             >
               <span class="i-carbon-information"></span>
               Group info
+            </button>
+          {/if}
+          {#if canChangeDisappearing}
+            <button
+              class="btn-ghost w-full text-left flex items-center gap-2"
+              onclick={() => { showMenu = false; showDisappearingModal = true }}
+            >
+              <span class="i-carbon-time"></span>
+              Disappearing messages
+              {#if currentTtl}
+                <span class="ml-auto text-xs text-primary">{getExpirationLabel(currentTtl)}</span>
+              {/if}
             </button>
           {/if}
           <button
@@ -607,6 +634,15 @@
     </div>
   </div>
 </div>
+
+<!-- Disappearing Messages Modal -->
+{#if showDisappearingModal}
+  <DisappearingMessagesModal
+    currentTtlSeconds={currentTtl}
+    onclose={() => showDisappearingModal = false}
+    onselect={handleSetDisappearing}
+  />
+{/if}
 
 <!-- Media Modal -->
 {#if $mediaModal.open}

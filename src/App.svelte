@@ -9,6 +9,8 @@
   import InstallPrompt from './components/InstallPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
   import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, saveSessionToStorage, initSessionManagerEvents } from './lib/chat'
+  import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
+  import { syncDisappearingMessagesToSessionManager } from './lib/disappearingMessages'
   import type { ChatSession } from './lib/chat'
   import { loadGroupsFromStorage, groups, groupMessages, currentGroupId, setSaveSessionFn, type Group } from './lib/groups'
   import { get } from 'svelte/store'
@@ -239,6 +241,10 @@
       // Load and monitor saved invites
       await loadAndMonitorInvites()
 
+      // Start message expiration cleanup and sync settings
+      startMessageExpirationCleanup()
+      syncDisappearingMessagesToSessionManager().catch(() => {})
+
       loggedIn = true
 
       // If there's an invite in URL, show main view to handle it
@@ -323,6 +329,10 @@
 
     // Load and monitor saved invites
     await loadAndMonitorInvites()
+
+    // Start message expiration cleanup and sync settings
+    startMessageExpirationCleanup()
+    syncDisappearingMessagesToSessionManager().catch(() => {})
   }
 
   function handleSelectGroup(groupId: string) {
@@ -441,6 +451,7 @@
   }
 
   async function handleLogout() {
+    stopMessageExpirationCleanup()
     logout()
     leaveChat()
     await clearChatData()

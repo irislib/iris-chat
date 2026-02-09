@@ -1,5 +1,5 @@
 import { writable, derived, get } from 'svelte/store'
-import type { DeviceEntry } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+import type { DeviceEntry } from 'nostr-double-ratchet'
 
 export interface DeviceState {
   identityPubkey: string | null

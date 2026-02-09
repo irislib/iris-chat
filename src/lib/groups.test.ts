@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
-import type { Rumor } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+import type { Rumor } from 'nostr-double-ratchet'
 
 // --- Mocks ---
 
@@ -47,8 +47,8 @@ vi.mock('@nostr-dev-kit/ndk', () => ({
   }))
 }))
 
-vi.mock('nostr-double-ratchet/dist/nostr-double-ratchet.es.js', async () => {
-  const actual = await import('nostr-double-ratchet/dist/nostr-double-ratchet.es.js')
+vi.mock('nostr-double-ratchet', async () => {
+  const actual = await import('nostr-double-ratchet')
   return {
     ...(actual as object),
     isGroupAdmin: (group: { admins?: string[] }, pubkey: string) => {

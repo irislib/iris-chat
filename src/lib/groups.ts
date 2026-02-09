@@ -17,8 +17,9 @@ import {
   updateGroupData,
   addGroupAdmin as libAddAdmin,
   removeGroupAdmin as libRemoveAdmin,
-} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
-import type { Rumor } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+  getExpirationTimestampSeconds,
+} from 'nostr-double-ratchet'
+import type { Rumor } from 'nostr-double-ratchet'
 import { ndk, getPubkey } from './identity'
 import { chats, type ChatMessage, type ChatSession } from './chat'
 import { getSessionManager } from './privateChats'
@@ -36,6 +37,7 @@ import {
 } from './storage'
 import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
 import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
+import { expirationStore } from './expirationStore'
 
 export { GROUP_METADATA_KIND }
 export type Group = GroupData
@@ -449,6 +451,14 @@ export function handleGroupEvent(rumor: Rumor, senderPubkey: string, _outerEvent
   }
 }
 
+export function fanOutGroupMetadata(groupId: string, content: string): void {
+  fanOutToMembers(groupId, {
+    content,
+    kind: GROUP_METADATA_KIND,
+    tags: []
+  })
+}
+
 function handleGroupMetadata(rumor: Rumor, senderPubkey: string): void {
   const metadata = parseGroupMetadata(rumor.content)
   if (!metadata) return
@@ -478,6 +488,21 @@ function handleGroupMetadata(rumor: Rumor, senderPubkey: string): void {
     if (secretChanged && updated.accepted) {
       teardownGroupChannel(metadata.id)
       setupGroupChannel(updated)
+    }
+
+    // Sync messageTtlSeconds from group metadata
+    try {
+      const raw = JSON.parse(rumor.content) as Record<string, unknown>
+      if ('messageTtlSeconds' in raw) {
+        const ttl = raw.messageTtlSeconds
+        if (ttl === null || ttl === undefined) {
+          expirationStore.setExpiration(metadata.id, null)
+        } else if (typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0) {
+          expirationStore.setExpiration(metadata.id, Math.floor(ttl))
+        }
+      }
+    } catch {
+      // ignore parse errors
     }
   } else {
     if (!validateMetadataCreation(metadata, senderPubkey, myPubkey)) return
@@ -516,13 +541,16 @@ function handleGroupMessage(groupId: string, rumor: Rumor, senderPubkey: string)
     (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
   )?.[1]
 
+  const expiresAt = getExpirationTimestampSeconds(rumor)
+
   const message: GroupMessage = {
     id: rumor.id,
     content: rumor.content,
     timestamp: rumor.created_at * 1000,
     isMine: false,
     senderPubkey,
-    ...(replyTag && { replyTo: replyTag })
+    ...(replyTag && { replyTo: replyTag }),
+    ...(expiresAt !== undefined && { expiresAt }),
   }
 
   groupMessages.update(gm => {
@@ -581,7 +609,8 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
       ...(message.replyTo && { replyTo: message.replyTo }),
       reactions,
       status: message.status,
-      senderPubkey: message.senderPubkey
+      senderPubkey: message.senderPubkey,
+      ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
     await saveMessageToDb(storedMessage)
   } catch (e) {
@@ -621,7 +650,8 @@ export async function loadGroupsFromStorage(): Promise<void> {
           senderPubkey: m.senderPubkey,
           ...(m.replyTo && { replyTo: m.replyTo }),
           reactions: m.reactions,
-          status: m.status
+          status: m.status,
+          ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
         }))
         .sort((a, b) => a.timestamp - b.timestamp)
 

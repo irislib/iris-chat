@@ -3,6 +3,7 @@
   import DOMPurify from 'dompurify'
   import type { ChatMessage } from '../lib/chat'
   import { FILE_LINK_REGEX, parseFileLink } from '../lib/hashtree'
+  import { formatExpirationTime } from '../lib/expiration'
   import FileAttachment from './FileAttachment.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
   import Name from './Name.svelte'
@@ -214,6 +215,29 @@
       : `${base} rounded-r-2xl rounded-l-sm`
   }
 
+  // Expiration countdown - update every few seconds
+  let expirationLabel = $state('')
+  let expirationInterval: ReturnType<typeof setInterval> | null = null
+
+  $effect(() => {
+    if (expirationInterval) {
+      clearInterval(expirationInterval)
+      expirationInterval = null
+    }
+    if (message.expiresAt) {
+      const update = () => {
+        expirationLabel = formatExpirationTime(message.expiresAt!)
+      }
+      update()
+      expirationInterval = setInterval(update, 10000)
+      return () => {
+        if (expirationInterval) clearInterval(expirationInterval)
+      }
+    } else {
+      expirationLabel = ''
+    }
+  })
+
   let actionsVisible = $derived(showEmojiPicker || showMenu)
 </script>
 
@@ -328,6 +352,12 @@
                   </div>
                 {/if}
                 <div class="flex items-center gap-1 ml-auto">
+                  {#if expirationLabel}
+                    <span class="text-[10px] {expirationLabel === 'Expired' ? 'text-red-400' : message.isMine ? 'text-white/50' : 'text-gray-500'}" title="Disappearing message">
+                      <span class="i-carbon-time inline-block align-middle text-[9px]"></span>
+                      {expirationLabel}
+                    </span>
+                  {/if}
                   <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
                   {#if message.isMine}
                     <StatusIndicator status={message.status} variant="bubble" />

@@ -11,7 +11,7 @@ import {
   type NostrSubscribe,
   type NostrPublish,
   decryptInviteResponse,
-} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+} from 'nostr-double-ratchet'
 import { finalizeEvent } from 'nostr-tools'
 import { ndk, identity, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'

@@ -3,7 +3,7 @@ import {
   shouldAdvanceReceiptStatus,
   type ReceiptPayload as NdrReceiptPayload,
   type ReceiptType,
-} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+} from 'nostr-double-ratchet'
 
 export type MessageStatus = ReceiptType
 export type ReceiptPayload = NdrReceiptPayload

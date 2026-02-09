@@ -11,10 +11,12 @@ import {
   REACTION_KIND,
   RECEIPT_KIND,
   CHAT_MESSAGE_KIND,
+  CHAT_SETTINGS_KIND,
   parseReaction,
   isTyping,
-} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
-export type { Invite } from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+  getExpirationTimestampSeconds,
+} from 'nostr-double-ratchet'
+export type { Invite } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getEventHash, nip19 } from 'nostr-tools'
 import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
@@ -134,6 +136,8 @@ import { parseReceipt, shouldAdvanceStatus, type ReceiptPayload, type MessageSta
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
 import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
+import { expirationStore } from './expirationStore'
+import { parseChatSettingsContent } from './chatSettings'
 
 export interface ChatMessage {
   id: string
@@ -144,6 +148,7 @@ export interface ChatMessage {
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: MessageStatus
   senderPubkey?: string  // pubkey of sender (for group messages)
+  expiresAt?: number  // Unix timestamp in seconds when message expires (NIP-40)
 }
 
 export interface ChatSession {
@@ -664,6 +669,7 @@ async function ensureManagerChat(recipientPubkey: string): Promise<ChatSession> 
       reactions: m.reactions,
       status: m.status,
       senderPubkey: m.senderPubkey,
+      ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
     }))
     .sort((a, b) => a.timestamp - b.timestamp)
 
@@ -910,6 +916,15 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
     return
   }
 
+  if (rumor.kind === CHAT_SETTINGS_KIND) {
+    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+    const settings = parseChatSettingsContent(rumor.content)
+    if (settings) {
+      expirationStore.setExpiration(sessionId, settings.messageTtlSeconds)
+    }
+    return
+  }
+
   if (isTyping(rumor)) {
     saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
     const ageMs = Date.now() - rumor.created_at * 1000
@@ -934,6 +949,9 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
   // Auto-set delivered status for incoming messages
   const shouldAckDelivered = !isMine && get(receiptSettings).sendDeliveryReceipts
 
+  // Extract NIP-40 expiration tag
+  const expiresAt = getExpirationTimestampSeconds(rumor)
+
   const message: ChatMessage = {
     id: processedId,
     content: rumor.content,
@@ -941,6 +959,7 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
     isMine,
     ...(replyTag && { replyTo: replyTag }),
     ...(shouldAckDelivered && { status: 'delivered' as const }),
+    ...(expiresAt !== undefined && { expiresAt }),
   }
 
   // Check if message already exists
@@ -1414,7 +1433,8 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       ...(message.replyTo && { replyTo: message.replyTo }),
       reactions,
       status: message.status,
-      ...(message.senderPubkey && { senderPubkey: message.senderPubkey })
+      ...(message.senderPubkey && { senderPubkey: message.senderPubkey }),
+      ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
     await saveMessageToDb(storedMessage)
   } catch (e) {
@@ -1443,7 +1463,8 @@ export async function loadChatsFromStorage(): Promise<void> {
             ...(m.replyTo && { replyTo: m.replyTo }),
             reactions: m.reactions,
             status: m.status,
-            senderPubkey: m.senderPubkey
+            senderPubkey: m.senderPubkey,
+            ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
           }))
           .sort((a, b) => a.timestamp - b.timestamp)
 

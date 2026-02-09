@@ -7,11 +7,15 @@
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
   import { getErrorMessage, formatDayLabel, isDifferentDay } from '../lib/utils'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
+  import { expirationStore } from '../lib/expirationStore'
+  import { setDmDisappearingMessages } from '../lib/disappearingMessages'
+  import { getExpirationLabel } from '../lib/expiration'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
   import MediaModal from './MediaModal.svelte'
   import VoiceRecorder from './VoiceRecorder.svelte'
+  import DisappearingMessagesModal from './DisappearingMessagesModal.svelte'
 
   interface Props {
     chat: ChatSession
@@ -43,6 +47,13 @@
   // svelte-ignore state_referenced_locally
   let activeChatId = $state(chat.id)
   let replyingTo = $state<ChatMessage | null>(null)
+  let showDisappearingModal = $state(false)
+
+  let currentTtl = $derived($expirationStore.expirations[chat.id])
+
+  async function handleSetDisappearing(ttlSeconds: number | null) {
+    await setDmDisappearingMessages(chat.id, ttlSeconds)
+  }
 
   // Throttled typing event sender - recreated per chat
   let sendThrottledTyping = $derived(createTypingThrottle(() => sendTypingEvent(chat), 3000))
@@ -352,7 +363,17 @@
       </button>
 
       {#if showMenu}
-        <div class="absolute right-0 top-full mt-1 w-40 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50">
+        <div class="absolute right-0 top-full mt-1 w-56 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50">
+          <button
+            class="btn-ghost w-full text-left flex items-center gap-2"
+            onclick={() => { showMenu = false; showDisappearingModal = true }}
+          >
+            <span class="i-carbon-time"></span>
+            Disappearing messages
+            {#if currentTtl}
+              <span class="ml-auto text-xs text-primary">{getExpirationLabel(currentTtl)}</span>
+            {/if}
+          </button>
           <button
             class="btn-ghost w-full text-left text-red-400 flex items-center gap-2"
             onclick={handleDelete}
@@ -589,6 +610,15 @@
     </div>
   </div>
 </div>
+
+<!-- Disappearing Messages Modal -->
+{#if showDisappearingModal}
+  <DisappearingMessagesModal
+    currentTtlSeconds={currentTtl}
+    onclose={() => showDisappearingModal = false}
+    onselect={handleSetDisappearing}
+  />
+{/if}
 
 <!-- Media Modal -->
 {#if $mediaModal.open}

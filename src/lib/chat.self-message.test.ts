@@ -1,6 +1,6 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {get} from 'svelte/store'
-import {CHAT_MESSAGE_KIND} from 'nostr-double-ratchet/dist/nostr-double-ratchet.es.js'
+import {CHAT_MESSAGE_KIND} from 'nostr-double-ratchet'
 
 const MY_PUBKEY = 'a'.repeat(64)
 
