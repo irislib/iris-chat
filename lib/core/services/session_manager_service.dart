@@ -85,6 +85,7 @@ class SessionManagerService {
   Future<List<String>> sendText({
     required String recipientPubkeyHex,
     required String text,
+    int? expiresAtSeconds,
   }) async {
     final manager = _manager;
     if (manager == null) {
@@ -93,6 +94,7 @@ class SessionManagerService {
     final eventIds = await manager.sendText(
       recipientPubkeyHex: recipientPubkeyHex,
       text: text,
+      expiresAtSeconds: expiresAtSeconds,
     );
     await _drainEvents();
     return eventIds;
@@ -101,6 +103,7 @@ class SessionManagerService {
   Future<SendTextWithInnerIdResult> sendTextWithInnerId({
     required String recipientPubkeyHex,
     required String text,
+    int? expiresAtSeconds,
   }) async {
     final manager = _manager;
     if (manager == null) {
@@ -109,6 +112,7 @@ class SessionManagerService {
     final sendResult = await manager.sendTextWithInnerId(
       recipientPubkeyHex: recipientPubkeyHex,
       text: text,
+      expiresAtSeconds: expiresAtSeconds,
     );
     await _drainEvents();
     return sendResult;

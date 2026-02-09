@@ -31,8 +31,10 @@ class GroupMessageLocalDatasource {
   }) async {
     final db = await _db;
 
-    String? where = 'group_id = ?';
-    List<dynamic> whereArgs = [groupId];
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    String? where = 'group_id = ? AND (expires_at IS NULL OR expires_at > ?)';
+    List<dynamic> whereArgs = [groupId, nowSeconds];
 
     if (beforeId != null) {
       // Get the timestamp of the reference message.
@@ -45,8 +47,9 @@ class GroupMessageLocalDatasource {
       );
       if (refMsg.isNotEmpty) {
         final refTimestamp = refMsg.first['timestamp'] as int;
-        where = 'group_id = ? AND timestamp < ?';
-        whereArgs = [groupId, refTimestamp];
+        where =
+            'group_id = ? AND timestamp < ? AND (expires_at IS NULL OR expires_at > ?)';
+        whereArgs = [groupId, refTimestamp, nowSeconds];
       }
     }
 
@@ -59,7 +62,11 @@ class GroupMessageLocalDatasource {
     );
 
     // Return in chronological order.
-    return maps.map((m) => _messageFromMap(groupId, m)).toList().reversed.toList();
+    return maps
+        .map((m) => _messageFromMap(groupId, m))
+        .toList()
+        .reversed
+        .toList();
   }
 
   /// Save a message.
@@ -95,7 +102,49 @@ class GroupMessageLocalDatasource {
   /// Delete all messages for a group.
   Future<void> deleteMessagesForGroup(String groupId) async {
     final db = await _db;
-    await db.delete('group_messages', where: 'group_id = ?', whereArgs: [groupId]);
+    await db.delete(
+      'group_messages',
+      where: 'group_id = ?',
+      whereArgs: [groupId],
+    );
+  }
+
+  /// Return the earliest known expiration timestamp (unix seconds) across all group messages.
+  Future<int?> getNextExpirationSeconds() async {
+    final db = await _db;
+    final result = await db.rawQuery(
+      'SELECT MIN(expires_at) as min_expires_at FROM group_messages WHERE expires_at IS NOT NULL',
+    );
+    if (result.isEmpty) return null;
+    final v = result.first['min_expires_at'];
+    return v is int ? v : null;
+  }
+
+  /// Delete all group messages whose `expires_at` is <= [nowSeconds].
+  ///
+  /// Returns the group ids that were affected.
+  Future<List<String>> deleteExpiredMessages(int nowSeconds) async {
+    final db = await _db;
+
+    final affected = await db.rawQuery(
+      '''
+SELECT DISTINCT group_id
+FROM group_messages
+WHERE expires_at IS NOT NULL
+  AND expires_at <= ?
+''',
+      [nowSeconds],
+    );
+
+    if (affected.isEmpty) return const <String>[];
+
+    await db.delete(
+      'group_messages',
+      where: 'expires_at IS NOT NULL AND expires_at <= ?',
+      whereArgs: [nowSeconds],
+    );
+
+    return affected.map((row) => row['group_id'].toString()).toList();
   }
 
   /// Check if a message with the given id/eventId/rumorId exists.
@@ -105,7 +154,11 @@ class GroupMessageLocalDatasource {
       'group_messages',
       columns: ['id'],
       where: 'id = ? OR rumor_id = ? OR event_id = ?',
-      whereArgs: [idOrEventIdOrRumorId, idOrEventIdOrRumorId, idOrEventIdOrRumorId],
+      whereArgs: [
+        idOrEventIdOrRumorId,
+        idOrEventIdOrRumorId,
+        idOrEventIdOrRumorId,
+      ],
       limit: 1,
     );
     return result.isNotEmpty;
@@ -116,7 +169,9 @@ class GroupMessageLocalDatasource {
     final reactionsJson = map['reactions'] as String?;
     if (reactionsJson != null && reactionsJson.isNotEmpty) {
       final decoded = jsonDecode(reactionsJson) as Map<String, dynamic>;
-      reactions = decoded.map((k, v) => MapEntry(k, (v as List).cast<String>()));
+      reactions = decoded.map(
+        (k, v) => MapEntry(k, (v as List).cast<String>()),
+      );
     }
 
     return ChatMessage(
@@ -124,6 +179,7 @@ class GroupMessageLocalDatasource {
       sessionId: groupSessionId(groupId),
       text: map['text'] as String,
       timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp'] as int),
+      expiresAt: map['expires_at'] as int?,
       direction: MessageDirection.values.byName(map['direction'] as String),
       status: MessageStatus.values.byName(map['status'] as String),
       eventId: map['event_id'] as String?,
@@ -145,7 +201,10 @@ class GroupMessageLocalDatasource {
       'event_id': message.eventId,
       'rumor_id': message.rumorId,
       'reply_to_id': message.replyToId,
-      'reactions': message.reactions.isEmpty ? null : jsonEncode(message.reactions),
+      'reactions': message.reactions.isEmpty
+          ? null
+          : jsonEncode(message.reactions),
+      'expires_at': message.expiresAt,
       'sender_pubkey_hex': message.senderPubkeyHex,
     };
   }

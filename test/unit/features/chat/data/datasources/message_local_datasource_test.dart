@@ -25,13 +25,15 @@ void main() {
   group('MessageLocalDatasource', () {
     group('getMessagesForSession', () {
       test('returns empty list when no messages', () async {
-        when(() => mockDb.query(
-              'messages',
-              where: 'session_id = ?',
-              whereArgs: ['session-1'],
-              orderBy: 'timestamp DESC',
-              limit: 50,
-            )).thenAnswer((_) async => []);
+        when(
+          () => mockDb.query(
+            'messages',
+            where: 'session_id = ? AND (expires_at IS NULL OR expires_at > ?)',
+            whereArgs: any(named: 'whereArgs'),
+            orderBy: 'timestamp DESC',
+            limit: 50,
+          ),
+        ).thenAnswer((_) async => []);
 
         final messages = await datasource.getMessagesForSession(
           'session-1',
@@ -43,36 +45,41 @@ void main() {
 
       test('returns messages in chronological order', () async {
         final now = DateTime.now();
-        when(() => mockDb.query(
-              'messages',
-              where: 'session_id = ?',
-              whereArgs: ['session-1'],
-              orderBy: 'timestamp DESC',
-              limit: 50,
-            )).thenAnswer((_) async => [
-              // Returned in DESC order from DB
-              {
-                'id': 'msg-2',
-                'session_id': 'session-1',
-                'text': 'Second',
-                'timestamp':
-                    now.add(const Duration(minutes: 1)).millisecondsSinceEpoch,
-                'direction': 'incoming',
-                'status': 'delivered',
-                'event_id': 'event-2',
-                'reply_to_id': null,
-              },
-              {
-                'id': 'msg-1',
-                'session_id': 'session-1',
-                'text': 'First',
-                'timestamp': now.millisecondsSinceEpoch,
-                'direction': 'outgoing',
-                'status': 'sent',
-                'event_id': 'event-1',
-                'reply_to_id': null,
-              },
-            ]);
+        when(
+          () => mockDb.query(
+            'messages',
+            where: 'session_id = ? AND (expires_at IS NULL OR expires_at > ?)',
+            whereArgs: any(named: 'whereArgs'),
+            orderBy: 'timestamp DESC',
+            limit: 50,
+          ),
+        ).thenAnswer(
+          (_) async => [
+            // Returned in DESC order from DB
+            {
+              'id': 'msg-2',
+              'session_id': 'session-1',
+              'text': 'Second',
+              'timestamp': now
+                  .add(const Duration(minutes: 1))
+                  .millisecondsSinceEpoch,
+              'direction': 'incoming',
+              'status': 'delivered',
+              'event_id': 'event-2',
+              'reply_to_id': null,
+            },
+            {
+              'id': 'msg-1',
+              'session_id': 'session-1',
+              'text': 'First',
+              'timestamp': now.millisecondsSinceEpoch,
+              'direction': 'outgoing',
+              'status': 'sent',
+              'event_id': 'event-1',
+              'reply_to_id': null,
+            },
+          ],
+        );
 
         final messages = await datasource.getMessagesForSession(
           'session-1',
@@ -87,24 +94,28 @@ void main() {
 
       test('parses message fields correctly', () async {
         final timestamp = DateTime.now();
-        when(() => mockDb.query(
-              'messages',
-              where: 'session_id = ?',
-              whereArgs: ['session-1'],
-              orderBy: 'timestamp DESC',
-              limit: any(named: 'limit'),
-            )).thenAnswer((_) async => [
-              {
-                'id': 'msg-1',
-                'session_id': 'session-1',
-                'text': 'Hello!',
-                'timestamp': timestamp.millisecondsSinceEpoch,
-                'direction': 'outgoing',
-                'status': 'pending',
-                'event_id': null,
-                'reply_to_id': 'parent-msg',
-              },
-            ]);
+        when(
+          () => mockDb.query(
+            'messages',
+            where: 'session_id = ? AND (expires_at IS NULL OR expires_at > ?)',
+            whereArgs: any(named: 'whereArgs'),
+            orderBy: 'timestamp DESC',
+            limit: any(named: 'limit'),
+          ),
+        ).thenAnswer(
+          (_) async => [
+            {
+              'id': 'msg-1',
+              'session_id': 'session-1',
+              'text': 'Hello!',
+              'timestamp': timestamp.millisecondsSinceEpoch,
+              'direction': 'outgoing',
+              'status': 'pending',
+              'event_id': null,
+              'reply_to_id': 'parent-msg',
+            },
+          ],
+        );
 
         final messages = await datasource.getMessagesForSession('session-1');
 
@@ -128,107 +139,125 @@ void main() {
           status: MessageStatus.pending,
         );
 
-        when(() => mockDb.insert(
-              'messages',
-              any(),
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            )).thenAnswer((_) async => 1);
+        when(
+          () => mockDb.insert(
+            'messages',
+            any(),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          ),
+        ).thenAnswer((_) async => 1);
 
         await datasource.saveMessage(message);
 
-        verify(() => mockDb.insert(
-              'messages',
-              any(),
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            )).called(1);
+        verify(
+          () => mockDb.insert(
+            'messages',
+            any(),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          ),
+        ).called(1);
       });
     });
 
     group('updateMessageStatus', () {
       test('updates status by ID', () async {
-        when(() => mockDb.update(
-              'messages',
-              {'status': 'sent'},
-              where: 'id = ?',
-              whereArgs: ['msg-1'],
-            )).thenAnswer((_) async => 1);
+        when(
+          () => mockDb.update(
+            'messages',
+            {'status': 'sent'},
+            where: 'id = ?',
+            whereArgs: ['msg-1'],
+          ),
+        ).thenAnswer((_) async => 1);
 
         await datasource.updateMessageStatus('msg-1', MessageStatus.sent);
 
-        verify(() => mockDb.update(
-              'messages',
-              {'status': 'sent'},
-              where: 'id = ?',
-              whereArgs: ['msg-1'],
-            )).called(1);
+        verify(
+          () => mockDb.update(
+            'messages',
+            {'status': 'sent'},
+            where: 'id = ?',
+            whereArgs: ['msg-1'],
+          ),
+        ).called(1);
       });
 
       test('updates to failed status', () async {
-        when(() => mockDb.update(
-              'messages',
-              {'status': 'failed'},
-              where: 'id = ?',
-              whereArgs: ['msg-1'],
-            )).thenAnswer((_) async => 1);
+        when(
+          () => mockDb.update(
+            'messages',
+            {'status': 'failed'},
+            where: 'id = ?',
+            whereArgs: ['msg-1'],
+          ),
+        ).thenAnswer((_) async => 1);
 
         await datasource.updateMessageStatus('msg-1', MessageStatus.failed);
 
-        verify(() => mockDb.update(
-              'messages',
-              {'status': 'failed'},
-              where: 'id = ?',
-              whereArgs: ['msg-1'],
-            )).called(1);
+        verify(
+          () => mockDb.update(
+            'messages',
+            {'status': 'failed'},
+            where: 'id = ?',
+            whereArgs: ['msg-1'],
+          ),
+        ).called(1);
       });
     });
 
     group('deleteMessage', () {
       test('deletes message by ID', () async {
-        when(() => mockDb.delete(
-              'messages',
-              where: 'id = ?',
-              whereArgs: ['msg-1'],
-            )).thenAnswer((_) async => 1);
+        when(
+          () =>
+              mockDb.delete('messages', where: 'id = ?', whereArgs: ['msg-1']),
+        ).thenAnswer((_) async => 1);
 
         await datasource.deleteMessage('msg-1');
 
-        verify(() => mockDb.delete(
-              'messages',
-              where: 'id = ?',
-              whereArgs: ['msg-1'],
-            )).called(1);
+        verify(
+          () =>
+              mockDb.delete('messages', where: 'id = ?', whereArgs: ['msg-1']),
+        ).called(1);
       });
     });
 
     group('deleteMessagesForSession', () {
       test('deletes all messages for session', () async {
-        when(() => mockDb.delete(
-              'messages',
-              where: 'session_id = ?',
-              whereArgs: ['session-1'],
-            )).thenAnswer((_) async => 5);
+        when(
+          () => mockDb.delete(
+            'messages',
+            where: 'session_id = ?',
+            whereArgs: ['session-1'],
+          ),
+        ).thenAnswer((_) async => 5);
 
         await datasource.deleteMessagesForSession('session-1');
 
-        verify(() => mockDb.delete(
-              'messages',
-              where: 'session_id = ?',
-              whereArgs: ['session-1'],
-            )).called(1);
+        verify(
+          () => mockDb.delete(
+            'messages',
+            where: 'session_id = ?',
+            whereArgs: ['session-1'],
+          ),
+        ).called(1);
       });
     });
 
     group('messageExists', () {
       test('returns true when message with eventId exists', () async {
-        when(() => mockDb.query(
-              'messages',
-              columns: ['id'],
-              where: 'id = ? OR rumor_id = ? OR event_id = ?',
-              whereArgs: ['event-123', 'event-123', 'event-123'],
-              limit: 1,
-            )).thenAnswer((_) async => [
-              {'id': 'msg-1'},
-            ]);
+        when(
+          () => mockDb.query(
+            'messages',
+            columns: ['id'],
+            where: 'id = ? OR rumor_id = ? OR event_id = ?',
+            whereArgs: ['event-123', 'event-123', 'event-123'],
+            limit: 1,
+          ),
+        ).thenAnswer(
+          (_) async => [
+            {'id': 'msg-1'},
+          ],
+        );
 
         final exists = await datasource.messageExists('event-123');
 
@@ -236,13 +265,15 @@ void main() {
       });
 
       test('returns false when message with eventId does not exist', () async {
-        when(() => mockDb.query(
-              'messages',
-              columns: ['id'],
-              where: 'id = ? OR rumor_id = ? OR event_id = ?',
-              whereArgs: ['nonexistent', 'nonexistent', 'nonexistent'],
-              limit: 1,
-            )).thenAnswer((_) async => []);
+        when(
+          () => mockDb.query(
+            'messages',
+            columns: ['id'],
+            where: 'id = ? OR rumor_id = ? OR event_id = ?',
+            whereArgs: ['nonexistent', 'nonexistent', 'nonexistent'],
+            limit: 1,
+          ),
+        ).thenAnswer((_) async => []);
 
         final exists = await datasource.messageExists('nonexistent');
 

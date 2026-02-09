@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../../../../core/services/database_service.dart';
+import '../../domain/models/message.dart';
 import '../../domain/models/session.dart';
 
 /// Local data source for chat sessions.
@@ -100,6 +101,58 @@ class SessionLocalDatasource {
     }
   }
 
+  /// Recompute `last_message_*` and `unread_count` from the messages table.
+  ///
+  /// Useful after purging expired messages.
+  Future<void> recomputeDerivedFieldsFromMessages(String id) async {
+    final db = await _db;
+
+    // Last message (already excludes purged/expired rows since those are deleted).
+    final last = await db.query(
+      'messages',
+      columns: ['text', 'timestamp'],
+      where: 'session_id = ?',
+      whereArgs: [id],
+      orderBy: 'timestamp DESC',
+      limit: 1,
+    );
+
+    final unreadResult = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM messages WHERE session_id = ? AND direction = ? AND status != ?',
+      [id, MessageDirection.incoming.name, MessageStatus.seen.name],
+    );
+    final unread = Sqflite.firstIntValue(unreadResult) ?? 0;
+
+    if (last.isEmpty) {
+      await db.update(
+        'sessions',
+        <String, Object?>{
+          'last_message_at': null,
+          'last_message_preview': null,
+          'unread_count': unread,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      return;
+    }
+
+    final text = last.first['text']?.toString() ?? '';
+    final preview = text.length > 50 ? '${text.substring(0, 50)}...' : text;
+    final ts = last.first['timestamp'] as int?;
+
+    await db.update(
+      'sessions',
+      <String, Object?>{
+        'last_message_at': ts,
+        'last_message_preview': preview,
+        'unread_count': unread,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   /// Get the serialized state for a session.
   Future<String?> getSessionState(String id) async {
     final db = await _db;
@@ -139,6 +192,7 @@ class SessionLocalDatasource {
       inviteId: map['invite_id'] as String?,
       isInitiator: (map['is_initiator'] as int? ?? 0) == 1,
       serializedState: map['serialized_state'] as String?,
+      messageTtlSeconds: map['message_ttl_seconds'] as int?,
     );
   }
 
@@ -154,6 +208,7 @@ class SessionLocalDatasource {
       'invite_id': session.inviteId,
       'is_initiator': session.isInitiator ? 1 : 0,
       'serialized_state': session.serializedState,
+      'message_ttl_seconds': session.messageTtlSeconds,
     };
   }
 }

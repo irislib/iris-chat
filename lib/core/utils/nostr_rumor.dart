@@ -28,7 +28,8 @@ class NostrRumor {
     try {
       final decoded = jsonDecode(jsonString);
       if (decoded is! Map<String, dynamic>) return null;
-      if (!decoded.containsKey('id') || !decoded.containsKey('pubkey')) return null;
+      if (!decoded.containsKey('id') || !decoded.containsKey('pubkey'))
+        return null;
       return NostrRumor.fromJsonMap(decoded);
     } catch (_) {
       return null;
@@ -64,6 +65,17 @@ List<String> getTagValues(List<List<String>> tags, String name) {
   return out;
 }
 
+/// Extract a NIP-40 expiration timestamp (unix seconds) from tags.
+///
+/// Tag format: `["expiration", "<unix seconds>"]`
+int? getExpirationTimestampSeconds(List<List<String>> tags) {
+  final raw = getFirstTagValue(tags, 'expiration');
+  if (raw == null || raw.isEmpty) return null;
+  final v = int.tryParse(raw);
+  if (v == null || v <= 0) return null;
+  return v;
+}
+
 int? getMillisecondTimestamp(List<List<String>> tags) {
   final ms = getFirstTagValue(tags, 'ms');
   if (ms == null) return null;
@@ -91,4 +103,3 @@ String? resolveRumorPeerPubkey({
   }
   return rumor.pubkey;
 }
-

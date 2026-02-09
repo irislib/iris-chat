@@ -48,7 +48,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _onScroll() {
-    final isAtBottom = _scrollController.position.pixels >=
+    final isAtBottom =
+        _scrollController.position.pixels >=
         _scrollController.position.maxScrollExtent - 50;
     if (isAtBottom != _isAtBottom) {
       setState(() => _isAtBottom = isAtBottom);
@@ -75,19 +76,48 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
     // Send message via provider (handles optimistic update, encryption, and Nostr)
-    await ref.read(chatStateProvider.notifier).sendMessage(
-          widget.sessionId,
-          text,
-        );
+    await ref
+        .read(chatStateProvider.notifier)
+        .sendMessage(widget.sessionId, text);
 
     // Update session metadata
     final messages = ref.read(sessionMessagesProvider(widget.sessionId));
     if (messages.isNotEmpty) {
-      await ref.read(sessionStateProvider.notifier).updateSessionWithMessage(
-            widget.sessionId,
-            messages.last,
-          );
+      await ref
+          .read(sessionStateProvider.notifier)
+          .updateSessionWithMessage(widget.sessionId, messages.last);
     }
+  }
+
+  static const _expirationOptions = <int>[
+    5 * 60, // 5 minutes
+    60 * 60, // 1 hour
+    24 * 60 * 60, // 24 hours
+    7 * 24 * 60 * 60, // 1 week
+    30 * 24 * 60 * 60, // 1 month
+    90 * 24 * 60 * 60, // 3 months
+  ];
+
+  static String _ttlLabel(int? ttlSeconds) {
+    if (ttlSeconds == null || ttlSeconds <= 0) return 'Off';
+
+    return switch (ttlSeconds) {
+      300 => '5 minutes',
+      3600 => '1 hour',
+      86400 => '24 hours',
+      604800 => '1 week',
+      2592000 => '1 month',
+      7776000 => '3 months',
+      _ => () {
+        const minute = 60;
+        const hour = 60 * minute;
+        const day = 24 * hour;
+        if (ttlSeconds < minute) return '$ttlSeconds seconds';
+        if (ttlSeconds < hour) return '${ttlSeconds ~/ minute} minutes';
+        if (ttlSeconds < day) return '${ttlSeconds ~/ hour} hours';
+        return '${ttlSeconds ~/ day} days';
+      }(),
+    };
   }
 
   @override
@@ -115,6 +145,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         title: Text(session.displayName),
         actions: [
           IconButton(
+            icon: const Icon(Icons.timer_outlined),
+            tooltip: 'Disappearing messages',
+            onPressed: () => _showDisappearingMessages(context, session),
+          ),
+          IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showSessionInfo(context, session),
           ),
@@ -136,7 +171,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     addAutomaticKeepAlives: true,
                     itemBuilder: (context, index) {
                       final message = messages[index];
-                      final showDate = index == 0 ||
+                      final showDate =
+                          index == 0 ||
                           !_isSameDay(
                             messages[index - 1].timestamp,
                             message.timestamp,
@@ -144,8 +180,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
                       return Column(
                         children: [
-                          if (showDate)
-                            _DateSeparator(date: message.timestamp),
+                          if (showDate) _DateSeparator(date: message.timestamp),
                           _MessageBubble(
                             key: ValueKey(message.id),
                             message: message,
@@ -187,7 +222,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             autofocus: true,
             onChanged: (text) {
               if (text.trim().isEmpty) return;
-              ref.read(chatStateProvider.notifier).notifyTyping(widget.sessionId);
+              ref
+                  .read(chatStateProvider.notifier)
+                  .notifyTyping(widget.sessionId);
             },
           ),
         ],
@@ -208,10 +245,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               color: theme.colorScheme.outline,
             ),
             const SizedBox(height: 16),
-            Text(
-              'End-to-end encrypted',
-              style: theme.textTheme.titleMedium,
-            ),
+            Text('End-to-end encrypted', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
               'Messages in this chat are secured with Double Ratchet encryption.',
@@ -235,97 +269,198 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (context) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: theme.colorScheme.primaryContainer,
-                    child: Text(
-                      session.displayName.isNotEmpty
-                          ? session.displayName[0].toUpperCase()
-                          : '?',
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        color: theme.colorScheme.onPrimaryContainer,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 28,
+                      backgroundColor: theme.colorScheme.primaryContainer,
+                      child: Text(
+                        session.displayName.isNotEmpty
+                            ? session.displayName[0].toUpperCase()
+                            : '?',
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          color: theme.colorScheme.onPrimaryContainer,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          session.displayName,
-                          style: theme.textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.lock,
-                              size: 14,
-                              color: theme.colorScheme.primary,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              'End-to-end encrypted',
-                              style: theme.textTheme.bodySmall?.copyWith(
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            session.displayName,
+                            style: theme.textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.lock,
+                                size: 14,
                                 color: theme.colorScheme.primary,
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
+                              const SizedBox(width: 4),
+                              Text(
+                                'End-to-end encrypted',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              _InfoRow(
-                label: 'Public Key',
-                value: session.recipientPubkeyHex,
-                copyable: true,
-              ),
-              const SizedBox(height: 12),
-              _InfoRow(
-                label: 'Session Created',
-                value: formatDate(session.createdAt),
-              ),
-              if (session.inviteId != null) ...[
+                  ],
+                ),
+                const SizedBox(height: 24),
+                _InfoRow(
+                  label: 'Public Key',
+                  value: session.recipientPubkeyHex,
+                  copyable: true,
+                ),
                 const SizedBox(height: 12),
                 _InfoRow(
-                  label: 'Invite ID',
-                  value: session.inviteId!,
+                  label: 'Session Created',
+                  value: formatDate(session.createdAt),
+                ),
+                const SizedBox(height: 12),
+                _InfoRow(
+                  label: 'Disappearing messages',
+                  value: _ttlLabel(session.messageTtlSeconds),
+                ),
+                if (session.inviteId != null) ...[
+                  const SizedBox(height: 12),
+                  _InfoRow(label: 'Invite ID', value: session.inviteId!),
+                ],
+                const SizedBox(height: 12),
+                _InfoRow(
+                  label: 'Role',
+                  value: session.isInitiator ? 'Initiator' : 'Responder',
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                    label: const Text('Close'),
+                  ),
                 ),
               ],
-              const SizedBox(height: 12),
-              _InfoRow(
-                label: 'Role',
-                value: session.isInitiator ? 'Initiator' : 'Responder',
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                  label: const Text('Close'),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 
+  void _showDisappearingMessages(BuildContext context, ChatSession session) {
+    final theme = Theme.of(context);
+    final current = session.messageTtlSeconds;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Disappearing messages',
+                  style: theme.textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'New messages will disappear after the selected time.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Current: ${_ttlLabel(current)}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _ExpirationOptionTile(
+                  label: 'Off',
+                  selected: current == null,
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await ref
+                        .read(sessionStateProvider.notifier)
+                        .setMessageTtlSeconds(session.id, null);
+                    await ref
+                        .read(chatStateProvider.notifier)
+                        .sendChatSettingsSignal(session.id, null);
+                  },
+                ),
+                const Divider(),
+                ..._expirationOptions.map((ttl) {
+                  return _ExpirationOptionTile(
+                    label: _ttlLabel(ttl),
+                    selected: current == ttl,
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await ref
+                          .read(sessionStateProvider.notifier)
+                          .setMessageTtlSeconds(session.id, ttl);
+                      await ref
+                          .read(chatStateProvider.notifier)
+                          .sendChatSettingsSignal(session.id, ttl);
+                    },
+                  );
+                }),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpirationOptionTile extends StatelessWidget {
+  const _ExpirationOptionTile({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(label),
+      trailing: selected
+          ? Icon(Icons.check, color: theme.colorScheme.primary)
+          : null,
+      onTap: onTap,
+    );
+  }
 }
 
 class _DateSeparator extends StatelessWidget {
@@ -334,7 +469,10 @@ class _DateSeparator extends StatelessWidget {
   final DateTime date;
 
   static const _padding = EdgeInsets.symmetric(vertical: 16);
-  static const _containerPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 4);
+  static const _containerPadding = EdgeInsets.symmetric(
+    horizontal: 12,
+    vertical: 4,
+  );
   static const _borderRadius = BorderRadius.all(Radius.circular(12));
 
   @override
@@ -404,12 +542,14 @@ class _MessageBubbleState extends ConsumerState<_MessageBubble> {
   Future<void> _onReact(String emoji) async {
     setState(() => _showEmojiPicker = false);
     final myPubkey = ref.read(authStateProvider).pubkeyHex ?? 'me';
-    await ref.read(chatStateProvider.notifier).sendReaction(
-      widget.message.sessionId,
-      widget.message.id,
-      emoji,
-      myPubkey,
-    );
+    await ref
+        .read(chatStateProvider.notifier)
+        .sendReaction(
+          widget.message.sessionId,
+          widget.message.id,
+          emoji,
+          myPubkey,
+        );
   }
 
   @override
@@ -424,7 +564,9 @@ class _MessageBubbleState extends ConsumerState<_MessageBubble> {
       child: Align(
         alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
         child: Column(
-          crossAxisAlignment: isOutgoing ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isOutgoing
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             // Emoji picker
             if (_showEmojiPicker)
@@ -445,7 +587,9 @@ class _MessageBubbleState extends ConsumerState<_MessageBubble> {
                 color: isOutgoing
                     ? theme.colorScheme.primaryContainer
                     : theme.colorScheme.surfaceContainerHighest,
-                borderRadius: isOutgoing ? _outgoingBorderRadius : _incomingBorderRadius,
+                borderRadius: isOutgoing
+                    ? _outgoingBorderRadius
+                    : _incomingBorderRadius,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
@@ -466,7 +610,9 @@ class _MessageBubbleState extends ConsumerState<_MessageBubble> {
                         formatTime(message.timestamp),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: isOutgoing
-                              ? theme.colorScheme.onPrimaryContainer.withValues(alpha: 179)
+                              ? theme.colorScheme.onPrimaryContainer.withValues(
+                                  alpha: 179,
+                                )
                               : theme.colorScheme.onSurfaceVariant,
                           fontSize: 11,
                         ),
@@ -532,18 +678,24 @@ class _EmojiPicker extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          ...emojis.map((emoji) => GestureDetector(
-            onTap: () => onSelect(emoji),
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Text(emoji, style: const TextStyle(fontSize: 24)),
+          ...emojis.map(
+            (emoji) => GestureDetector(
+              onTap: () => onSelect(emoji),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Text(emoji, style: const TextStyle(fontSize: 24)),
+              ),
             ),
-          )),
+          ),
           GestureDetector(
             onTap: onDismiss,
             child: Padding(
               padding: const EdgeInsets.all(4),
-              child: Icon(Icons.close, size: 20, color: theme.colorScheme.onSurfaceVariant),
+              child: Icon(
+                Icons.close,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ],
@@ -571,7 +723,9 @@ class _ReactionsDisplay extends StatelessWidget {
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: theme.colorScheme.onSurface.withValues(alpha: 0.15)),
+            border: Border.all(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.15),
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -600,13 +754,19 @@ class _StatusIcon extends StatelessWidget {
   final MessageStatus status;
 
   // Const icons for better performance - avoid recreating icons on every build
-  static const _queuedIcon = Icon(Icons.cloud_queue, size: 14, color: Colors.orange);
+  static const _queuedIcon = Icon(
+    Icons.cloud_queue,
+    size: 14,
+    color: Colors.orange,
+  );
   static const _iconSize = 14.0;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final baseColor = theme.colorScheme.onPrimaryContainer.withValues(alpha: 179);
+    final baseColor = theme.colorScheme.onPrimaryContainer.withValues(
+      alpha: 179,
+    );
 
     switch (status) {
       case MessageStatus.pending:
@@ -621,7 +781,11 @@ class _StatusIcon extends StatelessWidget {
       case MessageStatus.seen:
         return const Icon(Icons.done_all, size: _iconSize, color: Colors.blue);
       case MessageStatus.failed:
-        return Icon(Icons.error_outline, size: _iconSize, color: theme.colorScheme.error);
+        return Icon(
+          Icons.error_outline,
+          size: _iconSize,
+          color: theme.colorScheme.error,
+        );
     }
   }
 }

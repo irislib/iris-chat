@@ -625,7 +625,8 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         guard let manager = sessionManagerHandles[id] else {
             throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
         }
-        result(try manager.sendText(recipientPubkeyHex: recipientPubkeyHex, text: text, expiresAtSeconds: nil))
+        let expiresAtSeconds = (args["expiresAtSeconds"] as? NSNumber)?.uint64Value
+        result(try manager.sendText(recipientPubkeyHex: recipientPubkeyHex, text: text, expiresAtSeconds: expiresAtSeconds))
     }
 
     private func handleSessionManagerSendTextWithInnerId(call: FlutterMethodCall, result: FlutterResult) throws {
@@ -639,7 +640,8 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
             throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
         }
 
-        let sendResult = try manager.sendTextWithInnerId(recipientPubkeyHex: recipientPubkeyHex, text: text, expiresAtSeconds: nil)
+        let expiresAtSeconds = (args["expiresAtSeconds"] as? NSNumber)?.uint64Value
+        let sendResult = try manager.sendTextWithInnerId(recipientPubkeyHex: recipientPubkeyHex, text: text, expiresAtSeconds: expiresAtSeconds)
         result([
             "innerId": sendResult.innerId,
             "outerEventIds": sendResult.outerEventIds,

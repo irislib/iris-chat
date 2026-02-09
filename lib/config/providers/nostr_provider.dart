@@ -9,6 +9,7 @@ import '../../core/services/profile_service.dart';
 import '../../core/services/session_manager_service.dart';
 import '../../core/utils/invite_url.dart';
 import '../../core/utils/nostr_rumor.dart';
+import '../../features/chat/domain/utils/chat_settings.dart';
 import 'auth_provider.dart';
 import 'chat_provider.dart';
 import 'invite_provider.dart';
@@ -60,6 +61,10 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
   final service = ref.watch(sessionManagerServiceProvider);
   final nostrService = ref.watch(nostrServiceProvider);
   final inviteDatasource = ref.watch(inviteDatasourceProvider);
+  final sessionDatasource = ref.watch(sessionDatasourceProvider);
+  final messageDatasource = ref.watch(messageDatasourceProvider);
+  final groupDatasource = ref.watch(groupDatasourceProvider);
+  final groupMessageDatasource = ref.watch(groupMessageDatasourceProvider);
 
   const inviteResponsesSubId = 'app-invite-responses';
 
@@ -69,6 +74,78 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
   void schedule(Future<void> Function() task) {
     serial = serial.then((_) => task()).catchError((_, __) {});
   }
+
+  Timer? expirationTimer;
+
+  void scheduleExpirationTick(Duration delay) {
+    expirationTimer?.cancel();
+    expirationTimer = Timer(delay, () {
+      schedule(() async {
+        final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        var nextDelayMs = 60000;
+
+        try {
+          // Purge expired messages from persistent storage first.
+          final affectedSessions = await messageDatasource
+              .deleteExpiredMessages(nowSeconds);
+          final affectedGroups = await groupMessageDatasource
+              .deleteExpiredMessages(nowSeconds);
+
+          // Purge expired messages from in-memory UI stores.
+          ref
+              .read(chatStateProvider.notifier)
+              .purgeExpiredFromState(nowSeconds);
+          ref
+              .read(groupStateProvider.notifier)
+              .purgeExpiredFromState(nowSeconds);
+
+          final sessionNotifier = ref.read(sessionStateProvider.notifier);
+          for (final sessionId in affectedSessions) {
+            await sessionDatasource.recomputeDerivedFieldsFromMessages(
+              sessionId,
+            );
+            await sessionNotifier.refreshSession(sessionId);
+          }
+
+          final groupNotifier = ref.read(groupStateProvider.notifier);
+          for (final groupId in affectedGroups) {
+            await groupDatasource.recomputeDerivedFieldsFromMessages(groupId);
+            await groupNotifier.refreshGroup(groupId);
+          }
+
+          // Schedule next tick based on the next soonest expiration.
+          final nextDm = await messageDatasource.getNextExpirationSeconds();
+          final nextGroup = await groupMessageDatasource
+              .getNextExpirationSeconds();
+
+          int? next;
+          if (nextDm != null && nextGroup != null) {
+            next = nextDm < nextGroup ? nextDm : nextGroup;
+          } else {
+            next = nextDm ?? nextGroup;
+          }
+
+          if (next != null) {
+            nextDelayMs = (next - nowSeconds) * 1000;
+          }
+        } catch (_) {
+          // Best-effort; try again later.
+        }
+
+        final clampedMs = nextDelayMs < 1000
+            ? 1000
+            : (nextDelayMs > 60000 ? 60000 : nextDelayMs);
+        scheduleExpirationTick(Duration(milliseconds: clampedMs));
+      });
+    });
+  }
+
+  // Start a little after hydration so initial loads don't race the DB.
+  scheduleExpirationTick(const Duration(seconds: 2));
+  ref.onDispose(() {
+    expirationTimer?.cancel();
+    expirationTimer = null;
+  });
 
   // Coalesce refresh work so repeated invite state changes don't build up an
   // unbounded Future chain (which can lead to runaway memory usage).
@@ -184,6 +261,25 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
               );
           return;
         }
+
+        if (rumor.kind == kChatSettingsKind) {
+          final settings = parseChatSettingsContent(rumor.content);
+          if (settings == null) return;
+
+          final owner = service.ownerPubkeyHex;
+          final peer = owner != null
+              ? resolveRumorPeerPubkey(ownerPubkeyHex: owner, rumor: rumor)
+              : message.senderPubkeyHex;
+          if (peer == null || peer.isEmpty) return;
+
+          final sessionNotifier = ref.read(sessionStateProvider.notifier);
+          final session = await sessionNotifier.ensureSessionForRecipient(peer);
+          await sessionNotifier.setMessageTtlSeconds(
+            session.id,
+            settings.messageTtlSeconds,
+          );
+          return;
+        }
       }
 
       final chatMessage = await ref
@@ -231,7 +327,9 @@ final messageSubscriptionProvider = Provider<SessionManagerService>((ref) {
         if (invite.serializedState == null) continue;
         try {
           final serialized = invite.serializedState!;
-          final ephemeralPubkey = await resolveInviteEphemeralPubkey(serialized);
+          final ephemeralPubkey = await resolveInviteEphemeralPubkey(
+            serialized,
+          );
           if (ephemeralPubkey == null || ephemeralPubkey.isEmpty) continue;
           if (!pTags.contains(ephemeralPubkey)) continue;
 

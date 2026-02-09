@@ -18,6 +18,7 @@ import '../../features/chat/domain/models/group.dart';
 import '../../features/chat/domain/models/message.dart';
 import '../../features/chat/domain/models/session.dart';
 import '../../features/chat/domain/repositories/chat_repository.dart';
+import '../../features/chat/domain/utils/chat_settings.dart';
 import '../../features/chat/domain/utils/group_metadata.dart';
 import '../../features/chat/domain/utils/message_status_utils.dart';
 import 'nostr_provider.dart';
@@ -209,6 +210,51 @@ class SessionNotifier extends StateNotifier<SessionState> {
     }());
   }
 
+  /// Update per-chat disappearing messages timer (in seconds).
+  Future<void> setMessageTtlSeconds(
+    String sessionId,
+    int? messageTtlSeconds,
+  ) async {
+    final normalized = (messageTtlSeconds != null && messageTtlSeconds > 0)
+        ? messageTtlSeconds
+        : null;
+
+    // Fast-path: update in-memory session if present.
+    final index = state.sessions.indexWhere((s) => s.id == sessionId);
+    if (index != -1) {
+      final current = state.sessions[index];
+      if (current.messageTtlSeconds == normalized) return;
+      final updated = current.copyWith(messageTtlSeconds: normalized);
+      _upsertSessionInState(updated);
+      unawaited(() async {
+        try {
+          await _sessionDatasource.saveSession(updated);
+        } catch (_) {}
+      }());
+      return;
+    }
+
+    // Fallback: load from DB and upsert.
+    final existing = await _sessionDatasource.getSession(sessionId);
+    if (existing == null) return;
+    final updated = existing.copyWith(messageTtlSeconds: normalized);
+    _upsertSessionInState(updated);
+    unawaited(() async {
+      try {
+        await _sessionDatasource.saveSession(updated);
+      } catch (_) {}
+    }());
+  }
+
+  /// Reload a session from DB and upsert into state.
+  Future<void> refreshSession(String sessionId) async {
+    try {
+      final s = await _sessionDatasource.getSession(sessionId);
+      if (s == null) return;
+      _upsertSessionInState(s);
+    } catch (_) {}
+  }
+
   /// Delete a session.
   Future<void> deleteSession(String id) async {
     await _sessionDatasource.deleteSession(id);
@@ -378,6 +424,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
   }
 
+  /// Remove expired messages from in-memory state.
+  ///
+  /// Persistent storage cleanup is handled elsewhere; this only updates UI state.
+  void purgeExpiredFromState(int nowSeconds) {
+    if (state.messages.isEmpty) return;
+
+    var changed = false;
+    final updatedBySession = <String, List<ChatMessage>>{};
+
+    for (final entry in state.messages.entries) {
+      final filtered = entry.value
+          .where((m) => m.expiresAt == null || m.expiresAt! > nowSeconds)
+          .toList();
+      if (filtered.length != entry.value.length) changed = true;
+      updatedBySession[entry.key] = filtered;
+    }
+
+    if (!changed) return;
+    state = state.copyWith(messages: updatedBySession);
+  }
+
   /// Add a message optimistically.
   void addMessageOptimistic(ChatMessage message) {
     final sessionId = message.sessionId;
@@ -438,6 +505,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   Future<void> _sendMessageInternal(ChatMessage message) async {
+    int? expiresAtSeconds;
     try {
       final session = await _sessionDatasource.getSession(message.sessionId);
       if (session == null) {
@@ -448,10 +516,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
         );
       }
 
+      final ttlSeconds = session.messageTtlSeconds;
+      expiresAtSeconds = (ttlSeconds != null && ttlSeconds > 0)
+          ? (DateTime.now().millisecondsSinceEpoch ~/ 1000 + ttlSeconds)
+          : null;
+
       // Send via session manager (publishes through pubsub bridge)
       final sendResult = await _sessionManagerService.sendTextWithInnerId(
         recipientPubkeyHex: session.recipientPubkeyHex,
         text: message.text,
+        expiresAtSeconds: expiresAtSeconds,
       );
 
       // Update session state from manager
@@ -474,6 +548,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         status: MessageStatus.sent,
         eventId: eventId,
         rumorId: rumorId,
+        expiresAt: expiresAtSeconds,
       );
       await updateMessage(sentMessage);
     } catch (e, st) {
@@ -481,7 +556,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final appError = e is AppError ? e : AppError.from(e, st);
 
       // Update message with failure
-      final failedMessage = message.copyWith(status: MessageStatus.failed);
+      final failedMessage = message.copyWith(
+        status: MessageStatus.failed,
+        expiresAt: expiresAtSeconds ?? message.expiresAt,
+      );
       await updateMessage(failedMessage);
       state = state.copyWith(error: appError.message);
 
@@ -646,11 +724,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
         return null;
       }
 
+      final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final expiresAtSeconds = getExpirationTimestampSeconds(rumor.tags);
+      if (expiresAtSeconds != null && expiresAtSeconds <= nowSeconds) {
+        // Ignore already-expired messages; they may still be delivered by relays,
+        // but clients should not surface them.
+        return null;
+      }
+
       final message = ChatMessage(
         id: rumor.id,
         sessionId: sessionId,
         text: rumor.content,
         timestamp: rumorTimestamp(rumor),
+        expiresAt: expiresAtSeconds,
         direction: isMine
             ? MessageDirection.outgoing
             : MessageDirection.incoming,
@@ -914,12 +1001,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
           (message.eventId != null && message.eventId!.isNotEmpty)
           ? message.eventId!
           : (message.rumorId != null && message.rumorId!.isNotEmpty)
-              ? message.rumorId!
-              : null;
+          ? message.rumorId!
+          : null;
       if (reactionMessageId == null) {
         throw const AppError(
           type: AppErrorType.unknown,
-          message: 'Message not yet ready for reactions. Try again in a moment.',
+          message:
+              'Message not yet ready for reactions. Try again in a moment.',
           isRetryable: true,
         );
       }
@@ -949,6 +1037,54 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // Update reaction optimistically (use internal ID for state management)
       _applyReaction(sessionId, messageId, emoji, myPubkey);
+    } catch (e, st) {
+      final appError = e is AppError ? e : AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  /// Send a 1:1 "chat-settings" rumor (kind 10448) to coordinate disappearing messages.
+  ///
+  /// This does not update local state; callers should persist `messageTtlSeconds`
+  /// on the session separately (so sending can apply the setting immediately).
+  Future<void> sendChatSettingsSignal(
+    String sessionId,
+    int? messageTtlSeconds,
+  ) async {
+    try {
+      final session = await _sessionDatasource.getSession(sessionId);
+      if (session == null) {
+        throw const AppError(
+          type: AppErrorType.sessionExpired,
+          message: 'Session not found. Please start a new conversation.',
+          isRetryable: false,
+        );
+      }
+
+      final normalized = (messageTtlSeconds != null && messageTtlSeconds > 0)
+          ? messageTtlSeconds
+          : null;
+      final content = buildChatSettingsContent(messageTtlSeconds: normalized);
+
+      // Required for self-sync/outgoing copies so we can resolve the peer from the rumor.
+      final tagsJson = jsonEncode([
+        ['p', session.recipientPubkeyHex],
+      ]);
+
+      await _sessionManagerService.sendEventWithInnerId(
+        recipientPubkeyHex: session.recipientPubkeyHex,
+        kind: kChatSettingsKind,
+        content: content,
+        tagsJson: tagsJson,
+        createdAtSeconds: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      );
+
+      final newState = await _sessionManagerService.getActiveSessionState(
+        session.recipientPubkeyHex,
+      );
+      if (newState != null) {
+        await _sessionDatasource.saveSessionState(sessionId, newState);
+      }
     } catch (e, st) {
       final appError = e is AppError ? e : AppError.from(e, st);
       state = state.copyWith(error: appError.message);
@@ -1149,6 +1285,45 @@ class GroupNotifier extends StateNotifier<GroupState> {
     return _groupDatasource.getGroup(groupId);
   }
 
+  /// Reload a group from storage and merge it into state.
+  Future<void> refreshGroup(String groupId) async {
+    try {
+      final g = await _groupDatasource.getGroup(groupId);
+      if (g == null) return;
+
+      final idx = state.groups.indexWhere((e) => e.id == groupId);
+      if (idx == -1) {
+        state = state.copyWith(groups: [g, ...state.groups]);
+        return;
+      }
+
+      final next = [...state.groups];
+      next[idx] = g;
+      state = state.copyWith(groups: next);
+    } catch (_) {}
+  }
+
+  /// Remove expired group messages from in-memory state.
+  ///
+  /// Persistent storage cleanup is handled elsewhere; this only updates UI state.
+  void purgeExpiredFromState(int nowSeconds) {
+    if (state.messages.isEmpty) return;
+
+    var changed = false;
+    final updatedByGroup = <String, List<ChatMessage>>{};
+
+    for (final entry in state.messages.entries) {
+      final filtered = entry.value
+          .where((m) => m.expiresAt == null || m.expiresAt! > nowSeconds)
+          .toList();
+      if (filtered.length != entry.value.length) changed = true;
+      updatedByGroup[entry.key] = filtered;
+    }
+
+    if (!changed) return;
+    state = state.copyWith(messages: updatedByGroup);
+  }
+
   Future<String?> createGroup({
     required String name,
     required List<String> memberPubkeysHex,
@@ -1300,10 +1475,7 @@ class GroupNotifier extends StateNotifier<GroupState> {
     }
   }
 
-  Future<void> removeGroupMember(
-    String groupId,
-    String memberPubkeyHex,
-  ) async {
+  Future<void> removeGroupMember(String groupId, String memberPubkeyHex) async {
     final group = await getGroup(groupId);
     if (group == null) return;
 
@@ -1321,7 +1493,9 @@ class GroupNotifier extends StateNotifier<GroupState> {
     if (member.isEmpty) return;
     if (!group.members.contains(member)) return;
     if (member == myPubkeyHex) {
-      state = state.copyWith(error: 'You cannot remove yourself from the group.');
+      state = state.copyWith(
+        error: 'You cannot remove yourself from the group.',
+      );
       return;
     }
 
@@ -1404,7 +1578,10 @@ class GroupNotifier extends StateNotifier<GroupState> {
       try {
         for (final m in updated) {
           if (!m.isIncoming) continue;
-          await _groupMessageDatasource.updateMessageStatus(m.id, MessageStatus.seen);
+          await _groupMessageDatasource.updateMessageStatus(
+            m.id,
+            MessageStatus.seen,
+          );
         }
       } catch (_) {}
     }());
@@ -1412,7 +1589,9 @@ class GroupNotifier extends StateNotifier<GroupState> {
     // Clear unread counter.
     final updatedGroup = group.copyWith(unreadCount: 0);
     state = state.copyWith(
-      groups: state.groups.map((g) => g.id == groupId ? updatedGroup : g).toList(),
+      groups: state.groups
+          .map((g) => g.id == groupId ? updatedGroup : g)
+          .toList(),
     );
     unawaited(() async {
       try {
@@ -1421,7 +1600,11 @@ class GroupNotifier extends StateNotifier<GroupState> {
     }());
   }
 
-  Future<void> sendGroupMessage(String groupId, String text, {String? replyToId}) async {
+  Future<void> sendGroupMessage(
+    String groupId,
+    String text, {
+    String? replyToId,
+  }) async {
     final group = await getGroup(groupId);
     if (group == null) return;
     if (!group.accepted) {
@@ -1435,9 +1618,9 @@ class GroupNotifier extends StateNotifier<GroupState> {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
 
-	    try {
-	      final nowMs = DateTime.now().millisecondsSinceEpoch;
-	      final createdAtSec = nowMs ~/ 1000;
+    try {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final createdAtSec = nowMs ~/ 1000;
 
       final tags = <List<String>>[
         [kGroupTagName, groupId],
@@ -1454,7 +1637,8 @@ class GroupNotifier extends StateNotifier<GroupState> {
         createdAtSeconds: createdAtSec,
       );
 
-      final rumorId = sendInnerId ?? DateTime.now().microsecondsSinceEpoch.toString();
+      final rumorId =
+          sendInnerId ?? DateTime.now().microsecondsSinceEpoch.toString();
 
       final message = ChatMessage(
         id: rumorId,
@@ -1470,7 +1654,10 @@ class GroupNotifier extends StateNotifier<GroupState> {
       // Update UI state.
       final current = state.messages[groupId] ?? const <ChatMessage>[];
       state = state.copyWith(
-        messages: {...state.messages, groupId: [...current, message]},
+        messages: {
+          ...state.messages,
+          groupId: [...current, message],
+        },
       );
 
       // Persist best-effort.
@@ -1519,8 +1706,8 @@ class GroupNotifier extends StateNotifier<GroupState> {
     // Optimistic update.
     _applyGroupReaction(groupId, messageId, trimmed, myPubkeyHex);
 
-	    final nowMs = DateTime.now().millisecondsSinceEpoch;
-	    final createdAtSec = nowMs ~/ 1000;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final createdAtSec = nowMs ~/ 1000;
     final tags = <List<String>>[
       [kGroupTagName, groupId],
       ['ms', nowMs.toString()],
@@ -1551,13 +1738,13 @@ class GroupNotifier extends StateNotifier<GroupState> {
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final last = _lastTypingSentAtMs[groupId] ?? 0;
-	    if (nowMs - last < _kTypingThrottle.inMilliseconds) return;
-	    _lastTypingSentAtMs[groupId] = nowMs;
-	    final createdAtSec = nowMs ~/ 1000;
-	    final tags = <List<String>>[
-	      [kGroupTagName, groupId],
-	      ['ms', nowMs.toString()],
-	    ];
+    if (nowMs - last < _kTypingThrottle.inMilliseconds) return;
+    _lastTypingSentAtMs[groupId] = nowMs;
+    final createdAtSec = nowMs ~/ 1000;
+    final tags = <List<String>>[
+      [kGroupTagName, groupId],
+      ['ms', nowMs.toString()],
+    ];
 
     try {
       await _fanOutGroupEvent(
@@ -1570,7 +1757,10 @@ class GroupNotifier extends StateNotifier<GroupState> {
     } catch (_) {}
   }
 
-  Future<void> handleIncomingGroupRumorJson(String rumorJson, {String? eventId}) async {
+  Future<void> handleIncomingGroupRumorJson(
+    String rumorJson, {
+    String? eventId,
+  }) async {
     final rumor = NostrRumor.tryParse(rumorJson);
     if (rumor == null) return;
     await _handleGroupRumor(rumor, eventId: eventId);
@@ -1578,9 +1768,11 @@ class GroupNotifier extends StateNotifier<GroupState> {
 
   Future<void> _handleGroupRumor(NostrRumor rumor, {String? eventId}) async {
     final groupTag = getFirstTagValue(rumor.tags, kGroupTagName);
-    final groupId = groupTag ?? (rumor.kind == _kGroupMetadataKind
-        ? parseGroupMetadata(rumor.content)?.id
-        : null);
+    final groupId =
+        groupTag ??
+        (rumor.kind == _kGroupMetadataKind
+            ? parseGroupMetadata(rumor.content)?.id
+            : null);
     if (groupId == null || groupId.isEmpty) return;
 
     if (rumor.kind == _kGroupMetadataKind) {
@@ -1649,10 +1841,15 @@ class GroupNotifier extends StateNotifier<GroupState> {
         return;
       }
 
-      final updated = applyMetadataUpdate(existing: existing, metadata: metadata);
+      final updated = applyMetadataUpdate(
+        existing: existing,
+        metadata: metadata,
+      );
       await _groupDatasource.saveGroup(updated);
       state = state.copyWith(
-        groups: state.groups.map((g) => g.id == updated.id ? updated : g).toList(),
+        groups: state.groups
+            .map((g) => g.id == updated.id ? updated : g)
+            .toList(),
       );
       return;
     }
@@ -1679,7 +1876,9 @@ class GroupNotifier extends StateNotifier<GroupState> {
     );
 
     await _groupDatasource.saveGroup(group);
-    state = state.copyWith(groups: [group, ...state.groups.where((g) => g.id != group.id)]);
+    state = state.copyWith(
+      groups: [group, ...state.groups.where((g) => g.id != group.id)],
+    );
 
     // Flush any pending events for this group.
     await _flushPending(group.id);
@@ -1697,6 +1896,12 @@ class GroupNotifier extends StateNotifier<GroupState> {
     // Persist first to avoid duplicates across UI rebuilds.
     if (await _groupMessageDatasource.messageExists(rumor.id)) return;
 
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final expiresAtSeconds = getExpirationTimestampSeconds(rumor.tags);
+    if (expiresAtSeconds != null && expiresAtSeconds <= nowSeconds) {
+      return;
+    }
+
     final replyToId = _resolveReplyToId(rumor.tags);
 
     final message = ChatMessage(
@@ -1704,6 +1909,7 @@ class GroupNotifier extends StateNotifier<GroupState> {
       sessionId: groupSessionId(groupId),
       text: rumor.content,
       timestamp: rumorTimestamp(rumor),
+      expiresAt: expiresAtSeconds,
       direction: isMine ? MessageDirection.outgoing : MessageDirection.incoming,
       status: isMine ? MessageStatus.sent : MessageStatus.delivered,
       eventId: eventId,
@@ -1717,10 +1923,13 @@ class GroupNotifier extends StateNotifier<GroupState> {
     // Update in-memory list.
     final current = state.messages[groupId] ?? const <ChatMessage>[];
     if (current.any((m) => m.id == message.id)) return;
-    final updated = [...current, message]..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final updated = [...current, message]
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     state = state.copyWith(messages: {...state.messages, groupId: updated});
 
-    final lastPreview = message.text.length > 50 ? '${message.text.substring(0, 50)}...' : message.text;
+    final lastPreview = message.text.length > 50
+        ? '${message.text.substring(0, 50)}...'
+        : message.text;
 
     // Update group last message + unread.
     final incUnread = !isMine;
@@ -1758,7 +1967,9 @@ class GroupNotifier extends StateNotifier<GroupState> {
     if (tsMs <= lastMsgAt) return;
 
     _typingExpiryTimers[groupId]?.cancel();
-    state = state.copyWith(typingStates: {...state.typingStates, groupId: true});
+    state = state.copyWith(
+      typingStates: {...state.typingStates, groupId: true},
+    );
     _typingExpiryTimers[groupId] = Timer(_kTypingExpiry, () {
       _typingExpiryTimers.remove(groupId);
       final next = {...state.typingStates}..remove(groupId);
@@ -1766,7 +1977,12 @@ class GroupNotifier extends StateNotifier<GroupState> {
     });
   }
 
-  void _applyGroupReaction(String groupId, String messageId, String emoji, String pubkeyHex) {
+  void _applyGroupReaction(
+    String groupId,
+    String messageId,
+    String emoji,
+    String pubkeyHex,
+  ) {
     final current = state.messages[groupId] ?? const <ChatMessage>[];
     var idx = current.indexWhere((m) => m.id == messageId);
     if (idx == -1) {
@@ -1801,7 +2017,10 @@ class GroupNotifier extends StateNotifier<GroupState> {
     required String rumorJson,
     String? eventId,
   }) {
-    final list = _pendingByGroupId.putIfAbsent(groupId, () => <_PendingGroupEvent>[]);
+    final list = _pendingByGroupId.putIfAbsent(
+      groupId,
+      () => <_PendingGroupEvent>[],
+    );
     if (list.length >= _kMaxPendingPerGroup) return;
     if (list.any((p) => p.rumorId == rumorId)) return;
     list.add(
@@ -1898,8 +2117,8 @@ class GroupNotifier extends StateNotifier<GroupState> {
       final nextUnread = resetUnread
           ? 0
           : incrementUnread
-              ? (g.unreadCount + 1)
-              : g.unreadCount;
+          ? (g.unreadCount + 1)
+          : g.unreadCount;
 
       return g.copyWith(
         lastMessageAt: lastMessageAt,
@@ -1956,7 +2175,9 @@ final groupDatasourceProvider = Provider<GroupLocalDatasource>((ref) {
   return GroupLocalDatasource(db);
 });
 
-final groupMessageDatasourceProvider = Provider<GroupMessageLocalDatasource>((ref) {
+final groupMessageDatasourceProvider = Provider<GroupMessageLocalDatasource>((
+  ref,
+) {
   final db = ref.watch(databaseServiceProvider);
   return GroupMessageLocalDatasource(db);
 });
@@ -1991,15 +2212,28 @@ final chatStateProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   );
 });
 
-final groupStateProvider = StateNotifierProvider<GroupNotifier, GroupState>((ref) {
+final groupStateProvider = StateNotifierProvider<GroupNotifier, GroupState>((
+  ref,
+) {
   final groupDatasource = ref.watch(groupDatasourceProvider);
   final groupMessageDatasource = ref.watch(groupMessageDatasourceProvider);
   final sessionManagerService = ref.watch(sessionManagerServiceProvider);
-  return GroupNotifier(groupDatasource, groupMessageDatasource, sessionManagerService);
+  return GroupNotifier(
+    groupDatasource,
+    groupMessageDatasource,
+    sessionManagerService,
+  );
 });
 
-final groupMessagesProvider = Provider.family<List<ChatMessage>, String>((ref, groupId) {
-  return ref.watch(groupStateProvider.select((s) => s.messages[groupId] ?? const <ChatMessage>[]));
+final groupMessagesProvider = Provider.family<List<ChatMessage>, String>((
+  ref,
+  groupId,
+) {
+  return ref.watch(
+    groupStateProvider.select(
+      (s) => s.messages[groupId] ?? const <ChatMessage>[],
+    ),
+  );
 });
 
 /// Provider for messages in a specific session.

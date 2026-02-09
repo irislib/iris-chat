@@ -53,4 +53,41 @@ void main() {
 
     expect(resolveRumorPeerPubkey(ownerPubkeyHex: 'me', rumor: rumor), 'peer');
   });
+
+  test('getExpirationTimestampSeconds parses NIP-40 expiration tag', () {
+    final rumor = NostrRumor.fromJsonMap({
+      'id': 'abc',
+      'pubkey': 'peer',
+      'created_at': 1,
+      'kind': 14,
+      'content': 'hi',
+      'tags': [
+        ['expiration', '1704067260'],
+      ],
+    });
+
+    expect(getExpirationTimestampSeconds(rumor.tags), 1704067260);
+  });
+
+  test('getExpirationTimestampSeconds returns null for invalid values', () {
+    expect(getExpirationTimestampSeconds(const []), isNull);
+    expect(
+      getExpirationTimestampSeconds([
+        ['expiration', 'not-a-number'],
+      ]),
+      isNull,
+    );
+    expect(
+      getExpirationTimestampSeconds([
+        ['expiration', '0'],
+      ]),
+      isNull,
+    );
+    expect(
+      getExpirationTimestampSeconds([
+        ['expiration', '-5'],
+      ]),
+      isNull,
+    );
+  });
 }

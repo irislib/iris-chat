@@ -11,7 +11,7 @@ class DatabaseService {
   final String? _dbPathOverride;
 
   static const _dbName = 'iris_chat.db';
-  static const _dbVersion = 5;
+  static const _dbVersion = 6;
 
   /// Get the database instance, initializing if necessary.
   Future<Database> get database {
@@ -73,7 +73,8 @@ class DatabaseService {
         unread_count INTEGER DEFAULT 0,
         invite_id TEXT,
         is_initiator INTEGER DEFAULT 0,
-        serialized_state TEXT
+        serialized_state TEXT,
+        message_ttl_seconds INTEGER
       )
     ''');
 
@@ -90,6 +91,7 @@ class DatabaseService {
         rumor_id TEXT,
         reply_to_id TEXT,
         reactions TEXT,
+        expires_at INTEGER,
         sender_pubkey_hex TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
       )
@@ -126,6 +128,7 @@ class DatabaseService {
         rumor_id TEXT,
         reply_to_id TEXT,
         reactions TEXT,
+        expires_at INTEGER,
         sender_pubkey_hex TEXT,
         FOREIGN KEY (group_id) REFERENCES groups (id) ON DELETE CASCADE
       )
@@ -156,6 +159,9 @@ class DatabaseService {
       'CREATE INDEX idx_messages_rumor_id ON messages (rumor_id)',
     );
     await db.execute(
+      'CREATE INDEX idx_messages_expires_at ON messages (expires_at)',
+    );
+    await db.execute(
       'CREATE INDEX idx_sessions_last_message ON sessions (last_message_at DESC)',
     );
     await db.execute(
@@ -169,6 +175,9 @@ class DatabaseService {
     );
     await db.execute(
       'CREATE INDEX idx_group_messages_rumor_id ON group_messages (rumor_id)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_group_messages_expires_at ON group_messages (expires_at)',
     );
   }
 
@@ -186,7 +195,9 @@ class DatabaseService {
     }
     if (oldVersion < 4) {
       // Add sender pubkey column for group messages.
-      await db.execute('ALTER TABLE messages ADD COLUMN sender_pubkey_hex TEXT');
+      await db.execute(
+        'ALTER TABLE messages ADD COLUMN sender_pubkey_hex TEXT',
+      );
 
       // Add groups table.
       await db.execute('''
@@ -234,6 +245,21 @@ class DatabaseService {
       );
       await db.execute(
         'CREATE INDEX idx_group_messages_rumor_id ON group_messages (rumor_id)',
+      );
+    }
+    if (oldVersion < 6) {
+      await db.execute(
+        'ALTER TABLE sessions ADD COLUMN message_ttl_seconds INTEGER',
+      );
+      await db.execute('ALTER TABLE messages ADD COLUMN expires_at INTEGER');
+      await db.execute(
+        'CREATE INDEX idx_messages_expires_at ON messages (expires_at)',
+      );
+      await db.execute(
+        'ALTER TABLE group_messages ADD COLUMN expires_at INTEGER',
+      );
+      await db.execute(
+        'CREATE INDEX idx_group_messages_expires_at ON group_messages (expires_at)',
       );
     }
   }

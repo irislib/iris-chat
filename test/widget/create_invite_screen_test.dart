@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iris_chat/config/providers/auth_provider.dart';
 import 'package:iris_chat/config/providers/invite_provider.dart';
@@ -14,6 +15,53 @@ class MockInviteLocalDatasource extends Mock implements InviteLocalDatasource {}
 
 class MockAuthRepository extends Mock implements AuthRepository {}
 
+class TestInviteNotifier extends InviteNotifier {
+  // ignore: use_super_parameters
+  TestInviteNotifier(InviteLocalDatasource datasource, Ref ref)
+    : super(datasource, ref);
+
+  @override
+  Future<Invite?> createInvite({String? label, int? maxUses}) async {
+    // Avoid calling NdrFfi in widget tests; CreateInviteScreen should still
+    // behave as if an invite was created successfully.
+    final invite = Invite(
+      id: 'test-invite-id',
+      inviterPubkeyHex: testPubkeyHex,
+      label: label,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+      maxUses: maxUses ?? 1,
+      serializedState: 'test-serialized-state',
+    );
+
+    state = state.copyWith(
+      invites: [invite, ...state.invites],
+      isCreating: false,
+      error: null,
+    );
+
+    return invite;
+  }
+
+  @override
+  Future<String?> getInviteUrl(
+    String inviteId, {
+    String root = 'https://iris.to',
+  }) {
+    return Future.value('$root/invite/$inviteId');
+  }
+
+  @override
+  Future<void> updateLabel(String id, String label) async {
+    final index = state.invites.indexWhere((i) => i.id == id);
+    if (index < 0) return;
+
+    final updated = state.invites[index].copyWith(label: label);
+    final invites = [...state.invites];
+    invites[index] = updated;
+    state = state.copyWith(invites: invites);
+  }
+}
+
 void main() {
   late MockInviteLocalDatasource mockInviteDatasource;
   late MockAuthRepository mockAuthRepo;
@@ -24,11 +72,13 @@ void main() {
   });
 
   setUpAll(() {
-    registerFallbackValue(Invite(
-      id: 'fallback',
-      inviterPubkeyHex: 'pubkey',
-      createdAt: DateTime.now(),
-    ));
+    registerFallbackValue(
+      Invite(
+        id: 'fallback',
+        inviterPubkeyHex: 'pubkey',
+        createdAt: DateTime.now(),
+      ),
+    );
   });
 
   Widget buildCreateInviteScreen({
@@ -52,11 +102,8 @@ void main() {
         }),
         inviteStateProvider.overrideWith((ref) {
           // Create a notifier with the mock datasource
-          final notifier = InviteNotifier(mockInviteDatasource, ref);
-          notifier.state = InviteState(
-            isCreating: isCreating,
-            error: error,
-          );
+          final notifier = TestInviteNotifier(mockInviteDatasource, ref);
+          notifier.state = InviteState(isCreating: isCreating, error: error);
           return notifier;
         }),
       ],
@@ -101,8 +148,9 @@ void main() {
     });
 
     group('loading state', () {
-      testWidgets('shows loading indicator when creating invite',
-          (tester) async {
+      testWidgets('shows loading indicator when creating invite', (
+        tester,
+      ) async {
         await tester.pumpWidget(buildCreateInviteScreen(isCreating: true));
         await tester.pump();
 
@@ -116,8 +164,7 @@ void main() {
         await tester.pump();
 
         expect(
-          find.textContaining(
-              'Share this invite link or QR code'),
+          find.textContaining('Share this invite link or QR code'),
           findsOneWidget,
         );
       });
@@ -131,8 +178,9 @@ void main() {
     });
 
     group('error handling', () {
-      testWidgets('error container is displayed when error state is set',
-          (tester) async {
+      testWidgets('error container is displayed when error state is set', (
+        tester,
+      ) async {
         // Note: Error display depends on state being set correctly
         // The CreateInviteScreen auto-creates an invite on init, so testing
         // error state requires a more complex setup
@@ -182,15 +230,22 @@ void main() {
         serializedState: 'mock-serialized-state',
       );
 
-      when(() => mockInviteDatasource.saveInvite(any()))
-          .thenAnswer((_) async {});
-      when(() => mockInviteDatasource.getInvite(any()))
-          .thenAnswer((_) async => testInvite);
+      when(
+        () => mockInviteDatasource.saveInvite(any()),
+      ).thenAnswer((_) async {});
+      when(
+        () => mockInviteDatasource.getInvite(any()),
+      ).thenAnswer((_) async => testInvite);
 
       return createTestApp(
         const CreateInviteScreen(),
         overrides: [
           inviteDatasourceProvider.overrideWithValue(mockInviteDatasource),
+          inviteStateProvider.overrideWith((ref) {
+            // Avoid NdrFfi calls in widget tests.
+            final notifier = TestInviteNotifier(mockInviteDatasource, ref);
+            return notifier;
+          }),
           authRepositoryProvider.overrideWithValue(mockAuthRepo),
           authStateProvider.overrideWith((ref) {
             final notifier = AuthNotifier(mockAuthRepo);
@@ -217,8 +272,9 @@ void main() {
     });
 
     group('action buttons', () {
-      testWidgets('screen has copy and share button placeholders',
-          (tester) async {
+      testWidgets('screen has copy and share button placeholders', (
+        tester,
+      ) async {
         await tester.pumpWidget(buildScreenWithInvite());
         await tester.pump();
 

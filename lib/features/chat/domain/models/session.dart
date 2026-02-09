@@ -38,6 +38,11 @@ abstract class ChatSession with _$ChatSession {
 
     /// Serialized session state for persistence.
     String? serializedState,
+
+    /// Per-chat disappearing message timer in seconds (Iris "chat-settings").
+    ///
+    /// `null` means "Off".
+    int? messageTtlSeconds,
   }) = _ChatSession;
 
   const ChatSession._();

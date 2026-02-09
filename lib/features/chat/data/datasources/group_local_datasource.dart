@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../../../core/services/database_service.dart';
 import '../../domain/models/group.dart';
+import '../../domain/models/message.dart';
 
 /// Local data source for private group chats.
 class GroupLocalDatasource {
@@ -79,6 +80,57 @@ class GroupLocalDatasource {
     }
   }
 
+  /// Recompute `last_message_*` and `unread_count` from the group_messages table.
+  ///
+  /// Useful after purging expired messages.
+  Future<void> recomputeDerivedFieldsFromMessages(String id) async {
+    final db = await _db;
+
+    final last = await db.query(
+      'group_messages',
+      columns: ['text', 'timestamp'],
+      where: 'group_id = ?',
+      whereArgs: [id],
+      orderBy: 'timestamp DESC',
+      limit: 1,
+    );
+
+    final unreadResult = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM group_messages WHERE group_id = ? AND direction = ? AND status != ?',
+      [id, MessageDirection.incoming.name, MessageStatus.seen.name],
+    );
+    final unread = Sqflite.firstIntValue(unreadResult) ?? 0;
+
+    if (last.isEmpty) {
+      await db.update(
+        'groups',
+        <String, Object?>{
+          'last_message_at': null,
+          'last_message_preview': null,
+          'unread_count': unread,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      return;
+    }
+
+    final text = last.first['text']?.toString() ?? '';
+    final preview = text.length > 50 ? '${text.substring(0, 50)}...' : text;
+    final ts = last.first['timestamp'] as int?;
+
+    await db.update(
+      'groups',
+      <String, Object?>{
+        'last_message_at': ts,
+        'last_message_preview': preview,
+        'unread_count': unread,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   ChatGroup _groupFromMap(Map<String, dynamic> map) {
     final membersJson = map['members'] as String;
     final adminsJson = map['admins'] as String;
@@ -88,8 +140,12 @@ class GroupLocalDatasource {
       name: map['name'] as String,
       description: map['description'] as String?,
       picture: map['picture'] as String?,
-      members: (jsonDecode(membersJson) as List).map((e) => e.toString()).toList(),
-      admins: (jsonDecode(adminsJson) as List).map((e) => e.toString()).toList(),
+      members: (jsonDecode(membersJson) as List)
+          .map((e) => e.toString())
+          .toList(),
+      admins: (jsonDecode(adminsJson) as List)
+          .map((e) => e.toString())
+          .toList(),
       createdAt: DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int),
       secret: map['secret'] as String?,
       accepted: (map['accepted'] as int? ?? 0) == 1,
@@ -118,4 +174,3 @@ class GroupLocalDatasource {
     };
   }
 }
-

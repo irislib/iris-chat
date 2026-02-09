@@ -38,9 +38,10 @@ class NdrFfi {
         throw NdrException.invalidKey('Failed to generate keypair');
       }
       final keypair = FfiKeyPair.fromMap(Map<String, dynamic>.from(result));
-      Logger.cryptoSuccess('generateKeypair', data: {
-        'pubkey': keypair.publicKeyHex.substring(0, 8),
-      });
+      Logger.cryptoSuccess(
+        'generateKeypair',
+        data: {'pubkey': keypair.publicKeyHex.substring(0, 8)},
+      );
       return keypair;
     } catch (e, st) {
       Logger.cryptoError('generateKeypair', e, stackTrace: st);
@@ -92,10 +93,7 @@ class NdrFfi {
 
   /// Parse an invite from a URL.
   static Future<InviteHandle> inviteFromUrl(String url) async {
-    Logger.debug(
-      'Parsing invite from URL',
-      category: LogCategory.invite,
-    );
+    Logger.debug('Parsing invite from URL', category: LogCategory.invite);
     try {
       final result = await _channel.invokeMethod<Map>('inviteFromUrl', {
         'url': url,
@@ -180,9 +178,10 @@ class NdrFfi {
       if (result == null) {
         throw NdrException.invalidKey('Failed to derive public key');
       }
-      Logger.cryptoSuccess('derivePublicKey', data: {
-        'pubkey': result.substring(0, 8),
-      });
+      Logger.cryptoSuccess(
+        'derivePublicKey',
+        data: {'pubkey': result.substring(0, 8)},
+      );
       return result;
     } catch (e, st) {
       Logger.cryptoError('derivePublicKey', e, stackTrace: st);
@@ -196,14 +195,12 @@ class NdrFfi {
     required String ownerPrivkeyHex,
     required List<FfiDeviceEntry> devices,
   }) async {
-    final result = await _channel.invokeMethod<String>(
-      'createSignedAppKeysEvent',
-      {
-        'ownerPubkeyHex': ownerPubkeyHex,
-        'ownerPrivkeyHex': ownerPrivkeyHex,
-        'devices': devices.map((d) => d.toMap()).toList(),
-      },
-    );
+    final result = await _channel
+        .invokeMethod<String>('createSignedAppKeysEvent', {
+          'ownerPubkeyHex': ownerPubkeyHex,
+          'ownerPrivkeyHex': ownerPrivkeyHex,
+          'devices': devices.map((d) => d.toMap()).toList(),
+        });
     if (result == null) {
       throw NdrException.serialization('Failed to create AppKeys event');
     }
@@ -211,16 +208,15 @@ class NdrFfi {
   }
 
   /// Parse a signed AppKeys event JSON into device entries.
-  static Future<List<FfiDeviceEntry>> parseAppKeysEvent(String eventJson) async {
-    final result = await _channel.invokeMethod<List>(
-      'parseAppKeysEvent',
-      {'eventJson': eventJson},
-    );
+  static Future<List<FfiDeviceEntry>> parseAppKeysEvent(
+    String eventJson,
+  ) async {
+    final result = await _channel.invokeMethod<List>('parseAppKeysEvent', {
+      'eventJson': eventJson,
+    });
     if (result == null) return [];
     return result
-        .map(
-          (e) => FfiDeviceEntry.fromMap(Map<String, dynamic>.from(e as Map)),
-        )
+        .map((e) => FfiDeviceEntry.fromMap(Map<String, dynamic>.from(e as Map)))
         .toList();
   }
 
@@ -269,8 +265,9 @@ class NdrFfi {
     String? ownerPubkeyHex,
     String? storagePath,
   }) async {
-    final method =
-        storagePath == null ? 'sessionManagerNew' : 'sessionManagerNewWithStoragePath';
+    final method = storagePath == null
+        ? 'sessionManagerNew'
+        : 'sessionManagerNewWithStoragePath';
     final result = await _channel.invokeMethod<Map>(method, {
       'ourPubkeyHex': ourPubkeyHex,
       'ourIdentityPrivkeyHex': ourIdentityPrivkeyHex,
@@ -362,8 +359,9 @@ class InviteHandle {
       if (result == null) {
         throw NdrException.inviteError('Failed to accept invite');
       }
-      final acceptResult =
-          InviteAcceptResult._fromMap(Map<String, dynamic>.from(result));
+      final acceptResult = InviteAcceptResult._fromMap(
+        Map<String, dynamic>.from(result),
+      );
       Logger.sessionEvent(
         'Session established from invite',
         sessionId: acceptResult.session._id,
@@ -420,10 +418,10 @@ class InviteHandle {
 
   /// Get the inviter's public key as hex.
   Future<String> getInviterPubkeyHex() async {
-    final result =
-        await _channel.invokeMethod<String>('inviteGetInviterPubkeyHex', {
-      'id': _id,
-    });
+    final result = await _channel.invokeMethod<String>(
+      'inviteGetInviterPubkeyHex',
+      {'id': _id},
+    );
     if (result == null) {
       throw NdrException.inviteError('Failed to get inviter pubkey');
     }
@@ -432,10 +430,10 @@ class InviteHandle {
 
   /// Get the shared secret as hex.
   Future<String> getSharedSecretHex() async {
-    final result =
-        await _channel.invokeMethod<String>('inviteGetSharedSecretHex', {
-      'id': _id,
-    });
+    final result = await _channel.invokeMethod<String>(
+      'inviteGetSharedSecretHex',
+      {'id': _id},
+    );
     if (result == null) {
       throw NdrException.inviteError('Failed to get shared secret');
     }
@@ -465,8 +463,9 @@ class InviteHandle {
       if (result == null) {
         return null;
       }
-      final responseResult =
-          InviteResponseResult._fromMap(Map<String, dynamic>.from(result));
+      final responseResult = InviteResponseResult._fromMap(
+        Map<String, dynamic>.from(result),
+      );
       Logger.sessionEvent(
         'Session established from invite response',
         sessionId: responseResult.session._id,
@@ -529,10 +528,10 @@ class SessionHandle {
   /// Returns a [SendResult] containing the encrypted outer event
   /// and the original inner event.
   Future<SendResult> sendText(String text) async {
-    Logger.cryptoStart('sendText', data: {
-      'sessionId': _id,
-      'textLength': text.length,
-    });
+    Logger.cryptoStart(
+      'sendText',
+      data: {'sessionId': _id, 'textLength': text.length},
+    );
     try {
       final result = await _channel.invokeMethod<Map>('sessionSendText', {
         'id': _id,
@@ -550,7 +549,12 @@ class SessionHandle {
       );
       return sendResult;
     } catch (e, st) {
-      Logger.cryptoError('sendText', e, stackTrace: st, data: {'sessionId': _id});
+      Logger.cryptoError(
+        'sendText',
+        e,
+        stackTrace: st,
+        data: {'sessionId': _id},
+      );
       rethrow;
     }
   }
@@ -568,8 +572,9 @@ class SessionHandle {
       if (result == null) {
         throw NdrException.cryptoFailure('Failed to decrypt event');
       }
-      final decryptResult =
-          DecryptResult.fromMap(Map<String, dynamic>.from(result));
+      final decryptResult = DecryptResult.fromMap(
+        Map<String, dynamic>.from(result),
+      );
       Logger.cryptoSuccess('decryptEvent', data: {'sessionId': _id});
       Logger.messageEvent(
         'Message decrypted',
@@ -578,7 +583,12 @@ class SessionHandle {
       );
       return decryptResult;
     } catch (e, st) {
-      Logger.cryptoError('decryptEvent', e, stackTrace: st, data: {'sessionId': _id});
+      Logger.cryptoError(
+        'decryptEvent',
+        e,
+        stackTrace: st,
+        data: {'sessionId': _id},
+      );
       rethrow;
     }
   }
@@ -637,20 +647,20 @@ class SessionManagerHandle {
 
   /// Initialize the session manager (loads state, creates invite, subscribes).
   Future<void> init() async {
-    await _channel.invokeMethod<void>('sessionManagerInit', {
-      'id': _id,
-    });
+    await _channel.invokeMethod<void>('sessionManagerInit', {'id': _id});
   }
 
   /// Send a text message to a recipient.
   Future<List<String>> sendText({
     required String recipientPubkeyHex,
     required String text,
+    int? expiresAtSeconds,
   }) async {
     final result = await _channel.invokeMethod<List>('sessionManagerSendText', {
       'id': _id,
       'recipientPubkeyHex': recipientPubkeyHex,
       'text': text,
+      'expiresAtSeconds': expiresAtSeconds,
     });
     if (result == null) {
       return [];
@@ -662,15 +672,15 @@ class SessionManagerHandle {
   Future<SendTextWithInnerIdResult> sendTextWithInnerId({
     required String recipientPubkeyHex,
     required String text,
+    int? expiresAtSeconds,
   }) async {
-    final result = await _channel.invokeMethod<Map>(
-      'sessionManagerSendTextWithInnerId',
-      {
-        'id': _id,
-        'recipientPubkeyHex': recipientPubkeyHex,
-        'text': text,
-      },
-    );
+    final result = await _channel
+        .invokeMethod<Map>('sessionManagerSendTextWithInnerId', {
+          'id': _id,
+          'recipientPubkeyHex': recipientPubkeyHex,
+          'text': text,
+          'expiresAtSeconds': expiresAtSeconds,
+        });
     if (result == null) {
       throw NdrException.sessionNotReady('Failed to send message');
     }
@@ -689,17 +699,15 @@ class SessionManagerHandle {
     required String tagsJson,
     int? createdAtSeconds,
   }) async {
-    final result = await _channel.invokeMethod<Map>(
-      'sessionManagerSendEventWithInnerId',
-      {
-        'id': _id,
-        'recipientPubkeyHex': recipientPubkeyHex,
-        'kind': kind,
-        'content': content,
-        'tagsJson': tagsJson,
-        'createdAtSeconds': createdAtSeconds,
-      },
-    );
+    final result = await _channel
+        .invokeMethod<Map>('sessionManagerSendEventWithInnerId', {
+          'id': _id,
+          'recipientPubkeyHex': recipientPubkeyHex,
+          'kind': kind,
+          'content': content,
+          'tagsJson': tagsJson,
+          'createdAtSeconds': createdAtSeconds,
+        });
     if (result == null) {
       throw NdrException.sessionNotReady('Failed to send event');
     }
@@ -712,29 +720,22 @@ class SessionManagerHandle {
     required String receiptType,
     required List<String> messageIds,
   }) async {
-    final result = await _channel.invokeMethod<List>(
-      'sessionManagerSendReceipt',
-      {
-        'id': _id,
-        'recipientPubkeyHex': recipientPubkeyHex,
-        'receiptType': receiptType,
-        'messageIds': messageIds,
-      },
-    );
+    final result = await _channel
+        .invokeMethod<List>('sessionManagerSendReceipt', {
+          'id': _id,
+          'recipientPubkeyHex': recipientPubkeyHex,
+          'receiptType': receiptType,
+          'messageIds': messageIds,
+        });
     if (result == null) return [];
     return result.map((e) => e.toString()).toList();
   }
 
   /// Send a typing indicator.
-  Future<List<String>> sendTyping({
-    required String recipientPubkeyHex,
-  }) async {
+  Future<List<String>> sendTyping({required String recipientPubkeyHex}) async {
     final result = await _channel.invokeMethod<List>(
       'sessionManagerSendTyping',
-      {
-        'id': _id,
-        'recipientPubkeyHex': recipientPubkeyHex,
-      },
+      {'id': _id, 'recipientPubkeyHex': recipientPubkeyHex},
     );
     if (result == null) return [];
     return result.map((e) => e.toString()).toList();
@@ -746,15 +747,13 @@ class SessionManagerHandle {
     required String messageId,
     required String emoji,
   }) async {
-    final result = await _channel.invokeMethod<List>(
-      'sessionManagerSendReaction',
-      {
-        'id': _id,
-        'recipientPubkeyHex': recipientPubkeyHex,
-        'messageId': messageId,
-        'emoji': emoji,
-      },
-    );
+    final result = await _channel
+        .invokeMethod<List>('sessionManagerSendReaction', {
+          'id': _id,
+          'recipientPubkeyHex': recipientPubkeyHex,
+          'messageId': messageId,
+          'emoji': emoji,
+        });
     if (result == null) return [];
     return result.map((e) => e.toString()).toList();
   }
@@ -775,11 +774,10 @@ class SessionManagerHandle {
 
   /// Export the active session state for a peer.
   Future<String?> getActiveSessionState(String peerPubkeyHex) async {
-    final result =
-        await _channel.invokeMethod<String>('sessionManagerGetActiveSessionState', {
-      'id': _id,
-      'peerPubkeyHex': peerPubkeyHex,
-    });
+    final result = await _channel.invokeMethod<String>(
+      'sessionManagerGetActiveSessionState',
+      {'id': _id, 'peerPubkeyHex': peerPubkeyHex},
+    );
     return result;
   }
 
@@ -793,9 +791,10 @@ class SessionManagerHandle {
 
   /// Drain pending pubsub events from the native queue.
   Future<List<PubSubEvent>> drainEvents() async {
-    final result = await _channel.invokeMethod<List>('sessionManagerDrainEvents', {
-      'id': _id,
-    });
+    final result = await _channel.invokeMethod<List>(
+      'sessionManagerDrainEvents',
+      {'id': _id},
+    );
     if (result == null) return [];
     return result
         .map((e) => PubSubEvent.fromMap(Map<String, dynamic>.from(e as Map)))
@@ -804,34 +803,37 @@ class SessionManagerHandle {
 
   /// Get the device id used by this session manager.
   Future<String> getDeviceId() async {
-    final result = await _channel.invokeMethod<String>('sessionManagerGetDeviceId', {
-      'id': _id,
-    });
+    final result = await _channel.invokeMethod<String>(
+      'sessionManagerGetDeviceId',
+      {'id': _id},
+    );
     return result ?? '';
   }
 
   /// Get our public key as hex.
   Future<String> getOurPubkeyHex() async {
-    final result = await _channel.invokeMethod<String>('sessionManagerGetOurPubkeyHex', {
-      'id': _id,
-    });
+    final result = await _channel.invokeMethod<String>(
+      'sessionManagerGetOurPubkeyHex',
+      {'id': _id},
+    );
     return result ?? '';
   }
 
   /// Get owner public key as hex.
   Future<String> getOwnerPubkeyHex() async {
-    final result =
-        await _channel.invokeMethod<String>('sessionManagerGetOwnerPubkeyHex', {
-      'id': _id,
-    });
+    final result = await _channel.invokeMethod<String>(
+      'sessionManagerGetOwnerPubkeyHex',
+      {'id': _id},
+    );
     return result ?? '';
   }
 
   /// Get total active sessions.
   Future<int> getTotalSessions() async {
-    final result = await _channel.invokeMethod<int>('sessionManagerGetTotalSessions', {
-      'id': _id,
-    });
+    final result = await _channel.invokeMethod<int>(
+      'sessionManagerGetTotalSessions',
+      {'id': _id},
+    );
     return result ?? 0;
   }
 
@@ -843,10 +845,7 @@ class SessionManagerHandle {
 
 /// Result of accepting an invite.
 class InviteAcceptResult {
-  InviteAcceptResult({
-    required this.session,
-    required this.responseEventJson,
-  });
+  InviteAcceptResult({required this.session, required this.responseEventJson});
 
   factory InviteAcceptResult._fromMap(Map<String, dynamic> map) {
     return InviteAcceptResult(

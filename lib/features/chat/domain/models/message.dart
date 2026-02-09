@@ -19,6 +19,11 @@ abstract class ChatMessage with _$ChatMessage {
     /// When the message was created.
     required DateTime timestamp,
 
+    /// Unix timestamp in seconds when this message expires (NIP-40).
+    ///
+    /// `null` means it does not expire.
+    int? expiresAt,
+
     /// Direction of the message.
     required MessageDirection direction,
 
@@ -54,12 +59,14 @@ abstract class ChatMessage with _$ChatMessage {
     required String sessionId,
     required String text,
     String? replyToId,
+    int? expiresAt,
   }) {
     return ChatMessage(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       sessionId: sessionId,
       text: text,
       timestamp: DateTime.now(),
+      expiresAt: expiresAt,
       direction: MessageDirection.outgoing,
       status: MessageStatus.pending,
       rumorId: null,
@@ -74,6 +81,7 @@ abstract class ChatMessage with _$ChatMessage {
     required String eventId,
     required String rumorId,
     DateTime? timestamp,
+    int? expiresAt,
     String? senderPubkeyHex,
   }) {
     return ChatMessage(
@@ -81,6 +89,7 @@ abstract class ChatMessage with _$ChatMessage {
       sessionId: sessionId,
       text: text,
       timestamp: timestamp ?? DateTime.now(),
+      expiresAt: expiresAt,
       direction: MessageDirection.incoming,
       status: MessageStatus.delivered,
       eventId: eventId,
@@ -103,10 +112,7 @@ abstract class ChatMessage with _$ChatMessage {
 }
 
 /// Direction of a message.
-enum MessageDirection {
-  incoming,
-  outgoing,
-}
+enum MessageDirection { incoming, outgoing }
 
 /// Status of a message.
 enum MessageStatus {
