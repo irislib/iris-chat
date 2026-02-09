@@ -7,6 +7,7 @@ import '../../../../config/providers/chat_provider.dart';
 import '../../../../shared/utils/formatters.dart';
 import '../../domain/models/message.dart';
 import '../../domain/models/session.dart';
+import '../widgets/chat_message_bubble.dart';
 import '../widgets/message_input.dart';
 
 /// Estimated height for a typical message bubble.
@@ -25,6 +26,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final _composerFocusNode = FocusNode();
   bool _isAtBottom = true;
 
   @override
@@ -44,6 +46,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void dispose() {
     _messageController.dispose();
     _scrollController.dispose();
+    _composerFocusNode.dispose();
     super.dispose();
   }
 
@@ -87,6 +90,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           .read(sessionStateProvider.notifier)
           .updateSessionWithMessage(widget.sessionId, messages.last);
     }
+  }
+
+  void _quoteReply(ChatMessage message) {
+    final quoted = message.text.split('\n').map((line) => '> $line').join('\n');
+    final prefix = '$quoted\n';
+
+    final existing = _messageController.text;
+    final nextText = existing.trim().isEmpty ? prefix : '$prefix$existing';
+    _messageController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+    );
+    _composerFocusNode.requestFocus();
   }
 
   static const _expirationOptions = <int>[
@@ -181,9 +197,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       return Column(
                         children: [
                           if (showDate) _DateSeparator(date: message.timestamp),
-                          _MessageBubble(
+                          ChatMessageBubble(
                             key: ValueKey(message.id),
                             message: message,
+                            onReply: () => _quoteReply(message),
+                            onReact: (emoji) async {
+                              final myPubkey =
+                                  ref.read(authStateProvider).pubkeyHex ?? 'me';
+                              await ref
+                                  .read(chatStateProvider.notifier)
+                                  .sendReaction(
+                                    widget.sessionId,
+                                    message.id,
+                                    emoji,
+                                    myPubkey,
+                                  );
+                            },
+                            onDeleteLocal: () async {
+                              await ref
+                                  .read(chatStateProvider.notifier)
+                                  .deleteMessageLocal(
+                                    widget.sessionId,
+                                    message.id,
+                                  );
+                              await ref
+                                  .read(sessionStateProvider.notifier)
+                                  .refreshSession(widget.sessionId);
+                            },
                           ),
                         ],
                       );
@@ -220,6 +260,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             controller: _messageController,
             onSend: _sendMessage,
             autofocus: true,
+            focusNode: _composerFocusNode,
             onChanged: (text) {
               if (text.trim().isEmpty) return;
               ref
@@ -508,285 +549,6 @@ class _DateSeparator extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _MessageBubble extends ConsumerStatefulWidget {
-  const _MessageBubble({super.key, required this.message});
-
-  final ChatMessage message;
-
-  @override
-  ConsumerState<_MessageBubble> createState() => _MessageBubbleState();
-}
-
-class _MessageBubbleState extends ConsumerState<_MessageBubble> {
-  bool _showEmojiPicker = false;
-
-  static const _quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏'];
-  static const _margin = EdgeInsets.symmetric(vertical: 4);
-  static const _padding = EdgeInsets.symmetric(horizontal: 12, vertical: 8);
-  static const _outgoingBorderRadius = BorderRadius.only(
-    topLeft: Radius.circular(16),
-    topRight: Radius.circular(16),
-    bottomLeft: Radius.circular(16),
-    bottomRight: Radius.circular(4),
-  );
-  static const _incomingBorderRadius = BorderRadius.only(
-    topLeft: Radius.circular(16),
-    topRight: Radius.circular(16),
-    bottomLeft: Radius.circular(4),
-    bottomRight: Radius.circular(16),
-  );
-
-  Future<void> _onReact(String emoji) async {
-    setState(() => _showEmojiPicker = false);
-    final myPubkey = ref.read(authStateProvider).pubkeyHex ?? 'me';
-    await ref
-        .read(chatStateProvider.notifier)
-        .sendReaction(
-          widget.message.sessionId,
-          widget.message.id,
-          emoji,
-          myPubkey,
-        );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final message = widget.message;
-    final isOutgoing = message.isOutgoing;
-    final hasReactions = message.reactions.isNotEmpty;
-
-    return GestureDetector(
-      onLongPress: () => setState(() => _showEmojiPicker = true),
-      child: Align(
-        alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
-        child: Column(
-          crossAxisAlignment: isOutgoing
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            // Emoji picker
-            if (_showEmojiPicker)
-              _EmojiPicker(
-                emojis: _quickEmojis,
-                onSelect: _onReact,
-                onDismiss: () => setState(() => _showEmojiPicker = false),
-                isOutgoing: isOutgoing,
-              ),
-            // Message bubble
-            Container(
-              margin: _margin.copyWith(bottom: hasReactions ? 0 : 4),
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.sizeOf(context).width * 0.75,
-              ),
-              padding: _padding,
-              decoration: BoxDecoration(
-                color: isOutgoing
-                    ? theme.colorScheme.primaryContainer
-                    : theme.colorScheme.surfaceContainerHighest,
-                borderRadius: isOutgoing
-                    ? _outgoingBorderRadius
-                    : _incomingBorderRadius,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    message.text,
-                    style: TextStyle(
-                      color: isOutgoing
-                          ? theme.colorScheme.onPrimaryContainer
-                          : theme.colorScheme.onSurface,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        formatTime(message.timestamp),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: isOutgoing
-                              ? theme.colorScheme.onPrimaryContainer.withValues(
-                                  alpha: 179,
-                                )
-                              : theme.colorScheme.onSurfaceVariant,
-                          fontSize: 11,
-                        ),
-                      ),
-                      if (isOutgoing) ...[
-                        const SizedBox(width: 4),
-                        _StatusIcon(status: message.status),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            // Reactions display
-            if (hasReactions)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Transform.translate(
-                  offset: const Offset(0, -8),
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: _ReactionsDisplay(reactions: message.reactions),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmojiPicker extends StatelessWidget {
-  const _EmojiPicker({
-    required this.emojis,
-    required this.onSelect,
-    required this.onDismiss,
-    required this.isOutgoing,
-  });
-
-  final List<String> emojis;
-  final ValueChanged<String> onSelect;
-  final VoidCallback onDismiss;
-  final bool isOutgoing;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 51),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ...emojis.map(
-            (emoji) => GestureDetector(
-              onTap: () => onSelect(emoji),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Text(emoji, style: const TextStyle(fontSize: 24)),
-              ),
-            ),
-          ),
-          GestureDetector(
-            onTap: onDismiss,
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Icon(
-                Icons.close,
-                size: 20,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ReactionsDisplay extends StatelessWidget {
-  const _ReactionsDisplay({required this.reactions});
-
-  final Map<String, List<String>> reactions;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Wrap(
-      alignment: WrapAlignment.end,
-      spacing: 4,
-      children: reactions.entries.map((entry) {
-        final emoji = entry.key;
-        final count = entry.value.length;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.15),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(emoji, style: const TextStyle(fontSize: 14)),
-              if (count > 1) ...[
-                const SizedBox(width: 2),
-                Text(
-                  count.toString(),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-}
-
-class _StatusIcon extends StatelessWidget {
-  const _StatusIcon({required this.status});
-
-  final MessageStatus status;
-
-  // Const icons for better performance - avoid recreating icons on every build
-  static const _queuedIcon = Icon(
-    Icons.cloud_queue,
-    size: 14,
-    color: Colors.orange,
-  );
-  static const _iconSize = 14.0;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final baseColor = theme.colorScheme.onPrimaryContainer.withValues(
-      alpha: 179,
-    );
-
-    switch (status) {
-      case MessageStatus.pending:
-        // Keep UI calm: pending means "not yet confirmed", not "spin forever".
-        return Icon(Icons.schedule, size: _iconSize, color: baseColor);
-      case MessageStatus.queued:
-        return _queuedIcon;
-      case MessageStatus.sent:
-        return Icon(Icons.check, size: _iconSize, color: baseColor);
-      case MessageStatus.delivered:
-        return Icon(Icons.done_all, size: _iconSize, color: baseColor);
-      case MessageStatus.seen:
-        return const Icon(Icons.done_all, size: _iconSize, color: Colors.blue);
-      case MessageStatus.failed:
-        return Icon(
-          Icons.error_outline,
-          size: _iconSize,
-          color: theme.colorScheme.error,
-        );
-    }
   }
 }
 

@@ -13,34 +13,55 @@ class MessageInput extends StatefulWidget {
     required this.onSend,
     this.onChanged,
     this.autofocus = false,
+    this.focusNode,
   });
 
   final TextEditingController controller;
   final VoidCallback onSend;
   final ValueChanged<String>? onChanged;
   final bool autofocus;
+  final FocusNode? focusNode;
 
   @override
   State<MessageInput> createState() => _MessageInputState();
 }
 
 class _MessageInputState extends State<MessageInput> {
-  late final FocusNode _focusNode;
+  FocusNode? _ownedFocusNode;
+
+  FocusNode get _focusNode => widget.focusNode ?? _ownedFocusNode!;
 
   static const _inputBorderRadius = BorderRadius.all(Radius.circular(24));
-  static const _contentPadding = EdgeInsets.symmetric(horizontal: 16, vertical: 10);
+  static const _contentPadding = EdgeInsets.symmetric(
+    horizontal: 16,
+    vertical: 10,
+  );
   static const _spacing = SizedBox(width: 8);
   static const _sendIcon = Icon(Icons.send);
 
   @override
   void initState() {
     super.initState();
-    _focusNode = FocusNode(onKeyEvent: _handleKeyEvent);
+    if (widget.focusNode != null) {
+      // Preserve "Enter sends" behavior even when a screen provides its own FocusNode.
+      widget.focusNode!.onKeyEvent = _handleKeyEvent;
+      _ownedFocusNode = null;
+    } else {
+      _ownedFocusNode = FocusNode(onKeyEvent: _handleKeyEvent);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant MessageInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusNode != widget.focusNode && widget.focusNode != null) {
+      widget.focusNode!.onKeyEvent = _handleKeyEvent;
+    }
   }
 
   @override
   void dispose() {
-    _focusNode.dispose();
+    _ownedFocusNode?.dispose();
     super.dispose();
   }
 
@@ -49,12 +70,16 @@ class _MessageInputState extends State<MessageInput> {
 
     final key = event.logicalKey;
     final isEnter =
-        key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter;
+        key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter;
     if (!isEnter) return KeyEventResult.ignored;
 
     final hk = HardwareKeyboard.instance;
     final hasModifier =
-        hk.isShiftPressed || hk.isControlPressed || hk.isAltPressed || hk.isMetaPressed;
+        hk.isShiftPressed ||
+        hk.isControlPressed ||
+        hk.isAltPressed ||
+        hk.isMetaPressed;
     if (hasModifier) {
       _insertNewline();
       return KeyEventResult.handled;
@@ -100,9 +125,7 @@ class _MessageInputState extends State<MessageInput> {
         top: 8,
         bottom: MediaQuery.paddingOf(context).bottom + 8,
       ),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-      ),
+      decoration: BoxDecoration(color: theme.colorScheme.surface),
       child: Row(
         children: [
           Expanded(
@@ -129,10 +152,7 @@ class _MessageInputState extends State<MessageInput> {
             ),
           ),
           _spacing,
-          IconButton.filled(
-            onPressed: widget.onSend,
-            icon: _sendIcon,
-          ),
+          IconButton.filled(onPressed: widget.onSend, icon: _sendIcon),
         ],
       ),
     );

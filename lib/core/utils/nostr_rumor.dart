@@ -28,8 +28,9 @@ class NostrRumor {
     try {
       final decoded = jsonDecode(jsonString);
       if (decoded is! Map<String, dynamic>) return null;
-      if (!decoded.containsKey('id') || !decoded.containsKey('pubkey'))
+      if (!decoded.containsKey('id') || !decoded.containsKey('pubkey')) {
         return null;
+      }
       return NostrRumor.fromJsonMap(decoded);
     } catch (_) {
       return null;

@@ -470,6 +470,32 @@ class ChatNotifier extends StateNotifier<ChatState> {
     await _sendMessageInternal(message);
   }
 
+  /// Delete a message locally (UI + local DB only).
+  Future<void> deleteMessageLocal(String sessionId, String messageId) async {
+    final current = state.messages[sessionId] ?? const <ChatMessage>[];
+    if (current.isEmpty) return;
+
+    final updated = current.where((m) => m.id != messageId).toList();
+    final nextMessages = {...state.messages};
+    if (updated.isEmpty) {
+      nextMessages.remove(sessionId);
+    } else {
+      nextMessages[sessionId] = updated;
+    }
+
+    final nextSending = {...state.sendingStates}..remove(messageId);
+    state = state.copyWith(messages: nextMessages, sendingStates: nextSending);
+
+    try {
+      await _messageDatasource.deleteMessage(messageId);
+      // Keep session list consistent if the last message was deleted.
+      await _sessionDatasource.recomputeDerivedFieldsFromMessages(sessionId);
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
   /// Send a queued message (called by OfflineQueueService).
   Future<void> sendQueuedMessage(
     String sessionId,
@@ -1553,6 +1579,30 @@ class GroupNotifier extends StateNotifier<GroupState> {
       final nextGroups = state.groups.where((g) => g.id != groupId).toList();
       final nextMessages = {...state.messages}..remove(groupId);
       state = state.copyWith(groups: nextGroups, messages: nextMessages);
+    } catch (e, st) {
+      final appError = AppError.from(e, st);
+      state = state.copyWith(error: appError.message);
+    }
+  }
+
+  /// Delete a group message locally (UI + local DB only).
+  Future<void> deleteGroupMessageLocal(String groupId, String messageId) async {
+    final current = state.messages[groupId] ?? const <ChatMessage>[];
+    if (current.isEmpty) return;
+
+    final updated = current.where((m) => m.id != messageId).toList();
+    final nextMessages = {...state.messages};
+    if (updated.isEmpty) {
+      nextMessages.remove(groupId);
+    } else {
+      nextMessages[groupId] = updated;
+    }
+    state = state.copyWith(messages: nextMessages);
+
+    try {
+      await _groupMessageDatasource.deleteMessage(messageId);
+      await _groupDatasource.recomputeDerivedFieldsFromMessages(groupId);
+      await refreshGroup(groupId);
     } catch (e, st) {
       final appError = AppError.from(e, st);
       state = state.copyWith(error: appError.message);

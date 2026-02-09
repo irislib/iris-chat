@@ -99,6 +99,12 @@ class GroupMessageLocalDatasource {
     );
   }
 
+  /// Delete a single message by id.
+  Future<void> deleteMessage(String id) async {
+    final db = await _db;
+    await db.delete('group_messages', where: 'id = ?', whereArgs: [id]);
+  }
+
   /// Delete all messages for a group.
   Future<void> deleteMessagesForGroup(String groupId) async {
     final db = await _db;
