@@ -41,6 +41,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   bool _isHovering = false;
 
   static const _quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏'];
+  static const _dockSlotWidth = 132.0;
   static const _margin = EdgeInsets.symmetric(vertical: 4);
   static const _padding = EdgeInsets.symmetric(horizontal: 12, vertical: 8);
   static const _outgoingBorderRadius = BorderRadius.only(
@@ -59,6 +60,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   static const _kReplyKey = Key('chat_message_action_reply');
   static const _kReactKey = Key('chat_message_action_react');
   static const _kMoreKey = Key('chat_message_action_more');
+  static const _kRowKey = Key('chat_message_row');
 
   Future<void> _onReact(String emoji) async {
     setState(() => _showEmojiPicker = false);
@@ -240,10 +242,10 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         onLongPress: _onLongPress,
         onSecondaryTapDown: (d) =>
             _showContextMenu(globalPosition: d.globalPosition),
-        child: Align(
-          alignment: isOutgoing ? Alignment.centerRight : Alignment.centerLeft,
-          widthFactor: 1.0,
+        child: SizedBox(
+          width: double.infinity,
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: isOutgoing
                 ? CrossAxisAlignment.end
                 : CrossAxisAlignment.start,
@@ -264,81 +266,136 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                   onSelect: _onReact,
                   onDismiss: () => setState(() => _showEmojiPicker = false),
                 ),
-              Stack(
-                clipBehavior: Clip.none,
+              Row(
+                key: _kRowKey,
+                mainAxisAlignment: isOutgoing
+                    ? MainAxisAlignment.end
+                    : MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    margin: _margin.copyWith(bottom: hasReactions ? 0 : 4),
-                    constraints: BoxConstraints(
-                      maxWidth: MediaQuery.sizeOf(context).width * 0.75,
+                  if (isOutgoing)
+                    _DockSlot(
+                      width: _dockSlotWidth,
+                      visible: _isHovering,
+                      alignment: Alignment.topRight,
+                      child: actionDock,
                     ),
-                    padding: _padding,
-                    decoration: BoxDecoration(
-                      color: isOutgoing
-                          ? theme.colorScheme.primaryContainer
-                          : theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: isOutgoing
-                          ? _outgoingBorderRadius
-                          : _incomingBorderRadius,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          message.text,
-                          style: TextStyle(
-                            color: isOutgoing
-                                ? theme.colorScheme.onPrimaryContainer
-                                : theme.colorScheme.onSurface,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              formatTime(message.timestamp),
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: isOutgoing
-                                    ? theme.colorScheme.onPrimaryContainer
-                                          .withValues(alpha: 179)
-                                    : theme.colorScheme.onSurfaceVariant,
-                                fontSize: 11,
-                              ),
+                  Flexible(
+                    child: Container(
+                      margin: _margin.copyWith(bottom: hasReactions ? 0 : 4),
+                      constraints: BoxConstraints(
+                        maxWidth: MediaQuery.sizeOf(context).width * 0.75,
+                      ),
+                      padding: _padding,
+                      decoration: BoxDecoration(
+                        color: isOutgoing
+                            ? theme.colorScheme.primaryContainer
+                            : theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: isOutgoing
+                            ? _outgoingBorderRadius
+                            : _incomingBorderRadius,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            message.text,
+                            style: TextStyle(
+                              color: isOutgoing
+                                  ? theme.colorScheme.onPrimaryContainer
+                                  : theme.colorScheme.onSurface,
                             ),
-                            if (isOutgoing) ...[
-                              const SizedBox(width: 4),
-                              _StatusIcon(status: message.status),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                formatTime(message.timestamp),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: isOutgoing
+                                      ? theme.colorScheme.onPrimaryContainer
+                                            .withValues(alpha: 179)
+                                      : theme.colorScheme.onSurfaceVariant,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              if (isOutgoing) ...[
+                                const SizedBox(width: 4),
+                                _StatusIcon(status: message.status),
+                              ],
                             ],
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  if (_isHovering)
-                    Positioned(
-                      top: -6,
-                      left: isOutgoing ? -132 : null,
-                      right: isOutgoing ? null : -132,
+                  if (!isOutgoing)
+                    _DockSlot(
+                      width: _dockSlotWidth,
+                      visible: _isHovering,
+                      alignment: Alignment.topLeft,
                       child: actionDock,
                     ),
                 ],
               ),
               if (hasReactions)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Transform.translate(
-                    offset: const Offset(0, -8),
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: _ReactionsDisplay(reactions: message.reactions),
+                Row(
+                  mainAxisAlignment: isOutgoing
+                      ? MainAxisAlignment.end
+                      : MainAxisAlignment.start,
+                  children: [
+                    Transform.translate(
+                      offset: const Offset(0, -8),
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          right: isOutgoing ? 8 : 0,
+                          left: isOutgoing ? 0 : 8,
+                        ),
+                        child: _ReactionsDisplay(
+                          reactions: message.reactions,
+                          alignment: isOutgoing
+                              ? WrapAlignment.end
+                              : WrapAlignment.start,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _DockSlot extends StatelessWidget {
+  const _DockSlot({
+    required this.width,
+    required this.visible,
+    required this.alignment,
+    required this.child,
+  });
+
+  final double width;
+  final bool visible;
+  final Alignment alignment;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final targetWidth = visible ? width : 0.0;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+      width: targetWidth,
+      child: visible
+          ? Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Align(alignment: alignment, child: child),
+            )
+          : null,
     );
   }
 }
@@ -401,15 +458,19 @@ class _EmojiPicker extends StatelessWidget {
 }
 
 class _ReactionsDisplay extends StatelessWidget {
-  const _ReactionsDisplay({required this.reactions});
+  const _ReactionsDisplay({
+    required this.reactions,
+    this.alignment = WrapAlignment.end,
+  });
 
   final Map<String, List<String>> reactions;
+  final WrapAlignment alignment;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Wrap(
-      alignment: WrapAlignment.end,
+      alignment: alignment,
       spacing: 4,
       children: reactions.entries.map((entry) {
         final emoji = entry.key;

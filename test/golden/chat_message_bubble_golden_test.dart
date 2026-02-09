@@ -23,7 +23,14 @@ void main() {
         body: Center(
           child: RepaintBoundary(
             key: const Key('golden'),
-            child: SizedBox(width: 420, child: child),
+            child: SizedBox(
+              width: 420,
+              height: 260,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 32),
+                child: Align(alignment: Alignment.topCenter, child: child),
+              ),
+            ),
           ),
         ),
       ),
@@ -80,4 +87,3 @@ void main() {
     );
   });
 }
-

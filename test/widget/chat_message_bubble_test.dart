@@ -45,13 +45,16 @@ void main() {
       ),
     );
 
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer();
+    await mouse.moveTo(Offset.zero);
+    await tester.pump();
+
     expect(find.byKey(const Key('chat_message_action_reply')), findsNothing);
     expect(find.byKey(const Key('chat_message_action_react')), findsNothing);
     expect(find.byKey(const Key('chat_message_action_more')), findsNothing);
 
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    addTearDown(mouse.removePointer);
-    await mouse.addPointer();
     await mouse.moveTo(tester.getCenter(find.byType(ChatMessageBubble)));
     await tester.pump();
 

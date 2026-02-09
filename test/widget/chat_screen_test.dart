@@ -21,6 +21,7 @@ class MockMessageLocalDatasource extends Mock
     implements MessageLocalDatasource {}
 
 class MockNostrService extends Mock implements NostrService {}
+
 class MockSessionManagerService extends Mock implements SessionManagerService {}
 
 class MockProfileService extends Mock implements ProfileService {}
@@ -48,13 +49,15 @@ void main() {
   });
 
   setUpAll(() {
-    registerFallbackValue(ChatMessage(
-      id: 'fallback',
-      sessionId: 'session',
-      text: 'text',
-      timestamp: DateTime.now(),
-      direction: MessageDirection.outgoing,
-    ));
+    registerFallbackValue(
+      ChatMessage(
+        id: 'fallback',
+        sessionId: 'session',
+        text: 'text',
+        timestamp: DateTime.now(),
+        direction: MessageDirection.outgoing,
+      ),
+    );
     registerFallbackValue(MessageStatus.sent);
   });
 
@@ -64,31 +67,40 @@ void main() {
   }) {
     final effectiveSession = session ?? testSession;
 
-    when(() => mockSessionDatasource.getAllSessions()).thenAnswer(
-      (_) async => [effectiveSession],
-    );
-    when(() => mockSessionDatasource.getSession(any())).thenAnswer(
-      (_) async => effectiveSession,
-    );
-    when(() => mockMessageDatasource.getMessagesForSession(
-          any(),
-          limit: any(named: 'limit'),
-          beforeId: any(named: 'beforeId'),
-        )).thenAnswer((_) async => messages);
-    when(() => mockMessageDatasource.updateIncomingStatusByRumorId(any(), any()))
-        .thenAnswer((_) async {});
-    when(() => mockSessionManagerService.sendReceipt(
-          recipientPubkeyHex: any(named: 'recipientPubkeyHex'),
-          receiptType: any(named: 'receiptType'),
-          messageIds: any(named: 'messageIds'),
-        )).thenAnswer((_) async {});
-    when(() => mockSessionManagerService.sendTyping(
-          recipientPubkeyHex: any(named: 'recipientPubkeyHex'),
-        )).thenAnswer((_) async {});
-    when(() => mockSessionDatasource.updateMetadata(
-          any(),
-          unreadCount: any(named: 'unreadCount'),
-        )).thenAnswer((_) async {});
+    when(
+      () => mockSessionDatasource.getAllSessions(),
+    ).thenAnswer((_) async => [effectiveSession]);
+    when(
+      () => mockSessionDatasource.getSession(any()),
+    ).thenAnswer((_) async => effectiveSession);
+    when(
+      () => mockMessageDatasource.getMessagesForSession(
+        any(),
+        limit: any(named: 'limit'),
+        beforeId: any(named: 'beforeId'),
+      ),
+    ).thenAnswer((_) async => messages);
+    when(
+      () => mockMessageDatasource.updateIncomingStatusByRumorId(any(), any()),
+    ).thenAnswer((_) async {});
+    when(
+      () => mockSessionManagerService.sendReceipt(
+        recipientPubkeyHex: any(named: 'recipientPubkeyHex'),
+        receiptType: any(named: 'receiptType'),
+        messageIds: any(named: 'messageIds'),
+      ),
+    ).thenAnswer((_) async {});
+    when(
+      () => mockSessionManagerService.sendTyping(
+        recipientPubkeyHex: any(named: 'recipientPubkeyHex'),
+      ),
+    ).thenAnswer((_) async {});
+    when(
+      () => mockSessionDatasource.updateMetadata(
+        any(),
+        unreadCount: any(named: 'unreadCount'),
+      ),
+    ).thenAnswer((_) async {});
 
     return createTestApp(
       const ChatScreen(sessionId: testSessionId),
@@ -96,9 +108,14 @@ void main() {
         sessionDatasourceProvider.overrideWithValue(mockSessionDatasource),
         messageDatasourceProvider.overrideWithValue(mockMessageDatasource),
         nostrServiceProvider.overrideWithValue(mockNostrService),
-        sessionManagerServiceProvider.overrideWithValue(mockSessionManagerService),
+        sessionManagerServiceProvider.overrideWithValue(
+          mockSessionManagerService,
+        ),
         sessionStateProvider.overrideWith((ref) {
-          final notifier = SessionNotifier(mockSessionDatasource, MockProfileService());
+          final notifier = SessionNotifier(
+            mockSessionDatasource,
+            MockProfileService(),
+          );
           // Pre-populate the sessions
           notifier.state = SessionState(
             sessions: [effectiveSession],
@@ -194,11 +211,13 @@ void main() {
         await tester.pumpWidget(buildChatScreen(messages: messages));
         await tester.pumpAndSettle();
 
-        final align = tester.widget<Align>(find.ancestor(
-          of: find.text('Outgoing message'),
-          matching: find.byType(Align),
-        ).first);
-        expect(align.alignment, Alignment.centerRight);
+        final row = tester.widget<Row>(
+          find.descendant(
+            of: find.byKey(const ValueKey('msg-1')),
+            matching: find.byKey(const Key('chat_message_row')),
+          ),
+        );
+        expect(row.mainAxisAlignment, MainAxisAlignment.end);
       });
 
       testWidgets('incoming messages align left', (tester) async {
@@ -216,11 +235,13 @@ void main() {
         await tester.pumpWidget(buildChatScreen(messages: messages));
         await tester.pumpAndSettle();
 
-        final align = tester.widget<Align>(find.ancestor(
-          of: find.text('Incoming message'),
-          matching: find.byType(Align),
-        ).first);
-        expect(align.alignment, Alignment.centerLeft);
+        final row = tester.widget<Row>(
+          find.descendant(
+            of: find.byKey(const ValueKey('msg-1')),
+            matching: find.byKey(const Key('chat_message_row')),
+          ),
+        );
+        expect(row.mainAxisAlignment, MainAxisAlignment.start);
       });
 
       testWidgets('shows check icon for sent messages', (tester) async {
@@ -435,8 +456,9 @@ void main() {
     });
 
     group('date separators', () {
-      testWidgets('shows date separator between messages on different days',
-          (tester) async {
+      testWidgets('shows date separator between messages on different days', (
+        tester,
+      ) async {
         final yesterday = DateTime.now().subtract(const Duration(days: 1));
         final today = DateTime.now();
 
