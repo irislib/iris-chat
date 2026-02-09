@@ -77,6 +77,25 @@ async function runNdr(args: string[], dataDir: string): Promise<any> {
   })
 }
 
+async function runNdrRetry(
+  args: string[],
+  dataDir: string,
+  timeoutMs: number,
+  intervalMs: number
+): Promise<any> {
+  const deadline = Date.now() + timeoutMs
+  // NDR may race against Iris publishing its public invite on fresh logins.
+  // Retry for a bit to avoid flakes.
+  while (true) {
+    try {
+      return await runNdr(args, dataDir)
+    } catch (e) {
+      if (Date.now() >= deadline) throw e
+      await new Promise((r) => setTimeout(r, intervalMs))
+    }
+  }
+}
+
 function startNdrListen(dataDir: string) {
   const child = spawn(
     'cargo',
@@ -134,14 +153,6 @@ async function stopNdrListen(child: ReturnType<typeof startNdrListen>['child']) 
   })
 }
 
-async function getInviteUrlRaw(page: import('@playwright/test').Page): Promise<string> {
-  const copyButton = page.locator('button[title*="#"]').first()
-  await expect(copyButton).toBeVisible()
-  const url = await copyButton.getAttribute('title')
-  if (!url) throw new Error('Could not get invite URL')
-  return url
-}
-
 test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
   test.setTimeout(120000)
 
@@ -152,16 +163,15 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
     const login = await runNdr(['login', NDR_SECRET], dataDir)
     expect(login.status).toBe('ok')
 
+    const created = await runNdr(['invite', 'create'], dataDir)
+    expect(created.status).toBe('ok')
+    const inviteUrl: string | undefined = created.data?.url
+    expect(inviteUrl).toBeTruthy()
+
     await page.goto('/')
     await page.getByRole('button', { name: 'Go' }).click()
+
     await page.getByRole('button', { name: 'New Chat' }).click()
-
-    const inviteUrl = await getInviteUrlRaw(page)
-    const join = await runNdr(['chat', 'join', inviteUrl], dataDir)
-    expect(join.status).toBe('ok')
-
-    const irisPubkey = join.data?.their_pubkey
-    expect(irisPubkey).toBeTruthy()
 
     listener = startNdrListen(dataDir)
     await waitForNdrJson(
@@ -170,12 +180,13 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
       10000
     )
 
-    const ndrMessage = 'hello from ndr'
-    await runNdr(['send', irisPubkey, ndrMessage], dataDir)
+    await page.getByPlaceholder('Paste invite link').fill(inviteUrl!)
 
-    await expect(
-      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrMessage })
-    ).toBeVisible({ timeout: 10000 })
+    const createdSession = await waitForNdrJson(
+      listener.reader,
+      (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
+      20000
+    )
 
     const irisMessage = 'hello from iris'
     await page.getByPlaceholder('Type a message...').fill(irisMessage)
@@ -186,6 +197,13 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
       (json) => json.event === 'message' && json.content === irisMessage,
       15000
     )
+
+    const ndrMessage = 'hello from ndr'
+    await runNdrRetry(['send', createdSession.chat_id, ndrMessage], dataDir, 15000, 500)
+
+    await expect(
+      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrMessage })
+    ).toBeVisible({ timeout: 10000 })
   } finally {
     if (listener) {
       await stopNdrListen(listener.child)
