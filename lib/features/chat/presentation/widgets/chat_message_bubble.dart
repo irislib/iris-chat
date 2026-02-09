@@ -37,7 +37,6 @@ class ChatMessageBubble extends StatefulWidget {
 }
 
 class _ChatMessageBubbleState extends State<ChatMessageBubble> {
-  bool _showEmojiPicker = false;
   bool _isHovering = false;
 
   static const _quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏'];
@@ -63,7 +62,6 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   static const _kRowKey = Key('chat_message_row');
 
   Future<void> _onReact(String emoji) async {
-    setState(() => _showEmojiPicker = false);
     await widget.onReact(emoji);
   }
 
@@ -83,7 +81,6 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   Future<void> _deleteLocal() async {
     await widget.onDeleteLocal();
     if (!mounted) return;
-    setState(() => _showEmojiPicker = false);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Deleted locally'),
@@ -115,36 +112,59 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     return RelativeRect.fromRect(rect, Offset.zero & overlay.size);
   }
 
-  Future<void> _showContextMenu({Offset? globalPosition}) async {
+  bool get _useSheetForMenu {
+    switch (Theme.of(context).platform) {
+      case TargetPlatform.android:
+      case TargetPlatform.iOS:
+        return true;
+      case TargetPlatform.fuchsia:
+      case TargetPlatform.linux:
+      case TargetPlatform.macOS:
+      case TargetPlatform.windows:
+        return false;
+    }
+  }
+
+  Future<void> _showActionsMenu({Offset? globalPosition}) async {
     final position = globalPosition != null
         ? _menuPositionFromGlobal(globalPosition)
         : _menuPositionFromBubble();
 
-    final action = await showMenu<_MessageMenuAction>(
+    final result = await showMenu<Object>(
       context: context,
       position: position,
-      items: const [
-        PopupMenuItem(value: _MessageMenuAction.copy, child: Text('Copy')),
-        PopupMenuItem(
+      items: [
+        const _EmojiMenuEntry(emojis: _quickEmojis),
+        const PopupMenuDivider(),
+        const PopupMenuItem<Object>(
+          value: _MessageMenuAction.copy,
+          child: Text('Copy'),
+        ),
+        const PopupMenuItem<Object>(
           value: _MessageMenuAction.deleteLocal,
           child: Text('Delete locally'),
         ),
       ],
     );
 
-    switch (action) {
+    if (result is String) {
+      await _onReact(result);
+      return;
+    }
+
+    switch (result) {
       case _MessageMenuAction.copy:
         await _copyToClipboard();
         break;
       case _MessageMenuAction.deleteLocal:
         await _deleteLocal();
         break;
-      case null:
+      default:
         break;
     }
   }
 
-  Future<void> _showContextMenuSheet() async {
+  Future<void> _showActionsSheet() async {
     final theme = Theme.of(context);
     await showModalBottomSheet<void>(
       context: context,
@@ -154,6 +174,32 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, top: 4),
+              child: Wrap(
+                spacing: 8,
+                children: _quickEmojis
+                    .map(
+                      (emoji) => InkResponse(
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          unawaited(_onReact(emoji));
+                        },
+                        radius: 22,
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Text(
+                            emoji,
+                            style: const TextStyle(fontSize: 24),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.copy),
               title: const Text('Copy'),
@@ -183,9 +229,16 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
     );
   }
 
+  void _openActions({Offset? globalPosition}) {
+    if (_useSheetForMenu) {
+      unawaited(_showActionsSheet());
+    } else {
+      unawaited(_showActionsMenu(globalPosition: globalPosition));
+    }
+  }
+
   void _onLongPress() {
-    setState(() => _showEmojiPicker = true);
-    unawaited(_showContextMenuSheet());
+    _openActions();
   }
 
   @override
@@ -220,14 +273,14 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
             icon: const Icon(Icons.emoji_emotions_outlined, size: 18),
             tooltip: 'React',
             visualDensity: VisualDensity.compact,
-            onPressed: () => setState(() => _showEmojiPicker = true),
+            onPressed: _openActions,
           ),
           IconButton(
             key: _kMoreKey,
             icon: const Icon(Icons.more_horiz, size: 18),
             tooltip: 'More',
             visualDensity: VisualDensity.compact,
-            onPressed: _showContextMenu,
+            onPressed: _openActions,
           ),
         ],
       ),
@@ -241,7 +294,7 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
         behavior: HitTestBehavior.translucent,
         onLongPress: _onLongPress,
         onSecondaryTapDown: (d) =>
-            _showContextMenu(globalPosition: d.globalPosition),
+            _openActions(globalPosition: d.globalPosition),
         child: SizedBox(
           width: double.infinity,
           child: Column(
@@ -259,12 +312,6 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ),
-              if (_showEmojiPicker)
-                _EmojiPicker(
-                  emojis: _quickEmojis,
-                  onSelect: _onReact,
-                  onDismiss: () => setState(() => _showEmojiPicker = false),
                 ),
               Row(
                 key: _kRowKey,
@@ -370,6 +417,44 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
   }
 }
 
+class _EmojiMenuEntry extends PopupMenuEntry<Object> {
+  const _EmojiMenuEntry({required this.emojis});
+
+  final List<String> emojis;
+
+  @override
+  double get height => 48;
+
+  @override
+  bool represents(Object? value) => false;
+
+  @override
+  State<_EmojiMenuEntry> createState() => _EmojiMenuEntryState();
+}
+
+class _EmojiMenuEntryState extends State<_EmojiMenuEntry> {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final emoji in widget.emojis)
+            InkResponse(
+              onTap: () => Navigator.pop(context, emoji),
+              radius: 22,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                child: Text(emoji, style: const TextStyle(fontSize: 20)),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DockSlot extends StatelessWidget {
   const _DockSlot({
     required this.width,
@@ -396,63 +481,6 @@ class _DockSlot extends StatelessWidget {
               child: Align(alignment: alignment, child: child),
             )
           : null,
-    );
-  }
-}
-
-class _EmojiPicker extends StatelessWidget {
-  const _EmojiPicker({
-    required this.emojis,
-    required this.onSelect,
-    required this.onDismiss,
-  });
-
-  final List<String> emojis;
-  final ValueChanged<String> onSelect;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 51),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ...emojis.map(
-            (emoji) => GestureDetector(
-              onTap: () => onSelect(emoji),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Text(emoji, style: const TextStyle(fontSize: 24)),
-              ),
-            ),
-          ),
-          GestureDetector(
-            onTap: onDismiss,
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Icon(
-                Icons.close,
-                size: 20,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
