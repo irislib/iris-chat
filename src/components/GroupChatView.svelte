@@ -209,12 +209,27 @@
     isRecordingVoice = false
   }
 
-  async function handleFileSelect(e: Event) {
-    const input = e.target as HTMLInputElement
-    const file = input.files?.[0]
+  function hasFileData(dataTransfer: DataTransfer | null): boolean {
+    if (!dataTransfer) return false
+    return dataTransfer.files.length > 0 || Array.from(dataTransfer.types || []).includes('Files')
+  }
+
+  function getFirstFile(dataTransfer: DataTransfer | null): File | null {
+    if (!dataTransfer) return null
+    if (dataTransfer.files.length > 0) return dataTransfer.files[0]
+
+    for (const item of Array.from(dataTransfer.items || [])) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (file) return file
+    }
+
+    return null
+  }
+
+  async function attachFile(file: File) {
     if (!file) return
 
-    input.value = ''
     clearAttachment()
 
     let previewUrl: string | null = null
@@ -264,6 +279,35 @@
         }
       }
     }
+  }
+
+  async function handleFileSelect(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    input.value = ''
+    await attachFile(file)
+  }
+
+  function handleDrop(e: DragEvent) {
+    const file = getFirstFile(e.dataTransfer)
+    if (!file) return
+    e.preventDefault()
+    e.stopPropagation()
+    void attachFile(file)
+  }
+
+  function handleDragOver(e: DragEvent) {
+    if (!hasFileData(e.dataTransfer)) return
+    e.preventDefault()
+  }
+
+  function handlePaste(e: ClipboardEvent) {
+    const file = getFirstFile(e.clipboardData)
+    if (!file) return
+    e.preventDefault()
+    void attachFile(file)
   }
 
   onDestroy(() => {
@@ -575,7 +619,12 @@
     {/if}
 
     <!-- Input row -->
-    <div class="p-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))] flex gap-2 items-end">
+    <div
+      class="p-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))] flex gap-2 items-end"
+      role="presentation"
+      ondragover={handleDragOver}
+      ondrop={handleDrop}
+    >
       <input
         bind:this={fileInputRef}
         type="file"
@@ -604,6 +653,9 @@
           bind:this={inputRef}
           bind:value={messageText}
           onkeydown={handleKeydown}
+          ondragover={handleDragOver}
+          ondrop={handleDrop}
+          onpaste={handlePaste}
           oninput={handleTypingInput}
           placeholder="Type a message..."
           class="input-field flex-1 resize-none min-h-[44px] max-h-32 py-3"

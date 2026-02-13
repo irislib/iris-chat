@@ -1,6 +1,8 @@
 import { test, expect, useTestRelay } from './fixtures'
-import type { Page, BrowserContext } from '@playwright/test'
+import type { Page, BrowserContext, Locator } from '@playwright/test'
 import { nip19 } from 'nostr-tools'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 // Helper: reload page, retrying if navigation is aborted by background activity
 async function safeReload(page: Page) {
@@ -86,6 +88,34 @@ async function registerDevice(page: Page): Promise<void> {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+async function dispatchFileDrop(target: Locator, filePath: string, mimeType: string): Promise<void> {
+  const bytes = Array.from(readFileSync(filePath))
+  const fileName = filePath.split('/').pop() || 'attachment'
+
+  await target.evaluate((element, payload) => {
+    const dt = new DataTransfer()
+    dt.items.add(new File([new Uint8Array(payload.bytes)], payload.fileName, { type: payload.mimeType }))
+    element.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    element.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+  }, { bytes, fileName, mimeType })
+}
+
+async function dispatchFilePaste(target: Locator, filePath: string, mimeType: string): Promise<void> {
+  const bytes = Array.from(readFileSync(filePath))
+  const fileName = filePath.split('/').pop() || 'attachment'
+
+  await target.evaluate((element, payload) => {
+    const dt = new DataTransfer()
+    dt.items.add(new File([new Uint8Array(payload.bytes)], payload.fileName, { type: payload.mimeType }))
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: dt,
+      configurable: true,
+    })
+    element.dispatchEvent(pasteEvent)
+  }, { bytes, fileName, mimeType })
 }
 
 async function openChatFromList(page: Page, message: string): Promise<void> {
@@ -785,6 +815,78 @@ test.describe('iris chat', () => {
 
         // Attachment button should be visible
         await expect(page1.getByRole('button', { name: 'Attach file' })).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should attach a file when dropped on chat input', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        const fixturePath = fileURLToPath(new URL('./fixtures/test-blob.jpeg', import.meta.url))
+        const input = page1.getByPlaceholder('Type a message...')
+        await input.focus()
+        await dispatchFileDrop(input, fixturePath, 'image/jpeg')
+
+        await expect(page1.getByRole('button', { name: 'Remove attachment' })).toBeVisible()
+        await expect(page1.getByRole('button', { name: 'Send' })).toBeEnabled({ timeout: 30000 })
+
+        await page1.getByRole('button', { name: 'Send' }).click()
+        await expect(page2.locator('.file-attachment')).toBeVisible({ timeout: 30000 })
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should attach a file when pasted into chat input', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        const fixturePath = fileURLToPath(new URL('./fixtures/test-blob.jpeg', import.meta.url))
+        const input = page1.getByPlaceholder('Type a message...')
+        await input.focus()
+        await dispatchFilePaste(input, fixturePath, 'image/jpeg')
+
+        await expect(page1.getByRole('button', { name: 'Remove attachment' })).toBeVisible()
+        await expect(page1.getByRole('button', { name: 'Send' })).toBeEnabled({ timeout: 30000 })
+
+        await page1.getByRole('button', { name: 'Send' }).click()
+        await expect(page2.locator('.file-attachment')).toBeVisible({ timeout: 30000 })
       } finally {
         await context1.close()
         await context2.close()
