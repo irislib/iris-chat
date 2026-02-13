@@ -766,7 +766,7 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
       console.warn('[chat] rotateDeviceInvite failed:', e)
     )
   }
-  handleIncomingRumor(chatSession, rumor, undefined)
+  handleIncomingRumor(chatSession, rumor, undefined, effectiveFromPubkey === myPubkey)
 }
 
 // Accept an invite and create a session
@@ -903,7 +903,12 @@ export function listenForInviteAcceptance(invite: Invite, onSession: (session: C
   })
 }
 
-function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?: OuterEvent) {
+function handleIncomingRumor(
+  chatSession: ChatSession,
+  rumor: Rumor,
+  outerEvent?: OuterEvent,
+  isFromSelfOverride?: boolean
+) {
   const myPubkey = getPubkey()
   const sessionId = chatSession.id
 
@@ -911,6 +916,8 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
   const currentChats = get(chats)
   const currentSession = currentChats.get(sessionId)
   if (!currentSession) return
+
+  const isMine = isFromSelfOverride ?? rumor.pubkey === myPubkey
 
   // Route group events to group handler
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
@@ -929,7 +936,7 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
     saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
     const receipt = parseReceipt(rumor)
     if (!receipt) return
-    handleIncomingReceipt(currentSession, receipt)
+    handleIncomingReceipt(currentSession, receipt, isMine)
     return
   }
 
@@ -970,8 +977,6 @@ function handleIncomingRumor(chatSession: ChatSession, rumor: Rumor, outerEvent?
   )?.[1] || rumor.tags?.find(
     (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
   )?.[1]
-
-  const isMine = rumor.pubkey === myPubkey
 
   // Message requests:
   // - if requests are disabled (or sender rejected), ignore all incoming events for unaccepted chats.
@@ -1089,13 +1094,17 @@ function handleIncomingReaction(chatSession: ChatSession, reaction: { messageId:
   saveSessionToStorage(chatSession)
 }
 
-// Handle incoming receipt - updates status on own messages
-function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload) {
+// Handle incoming receipt:
+// - peer receipts advance status on our outgoing messages
+// - self/own-device receipts advance status on incoming messages (cross-session unread sync)
+function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload, isFromSelf: boolean) {
   let changed = false
   const updatedMessages = [...chatSession.messages]
 
   for (const messageId of receipt.messageIds) {
-    const index = updatedMessages.findIndex(m => m.id === messageId && m.isMine)
+    const index = updatedMessages.findIndex(
+      (m) => m.id === messageId && (isFromSelf ? !m.isMine : m.isMine)
+    )
     if (index === -1) continue
 
     const message = updatedMessages[index]
