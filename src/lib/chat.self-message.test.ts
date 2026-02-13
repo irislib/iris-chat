@@ -37,6 +37,13 @@ vi.mock('./notifications', () => ({
   updateDMSubscription: vi.fn(),
 }))
 
+vi.mock('./privateChats', () => ({
+  getSessionManager: () => null,
+  waitForSessionManager: () => Promise.reject(new Error('manager unavailable in test')),
+  ensureDeviceRegistered: vi.fn(),
+  rotateDeviceInvite: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('./groups', () => ({
   handleGroupEvent: vi.fn(),
 }))
@@ -123,5 +130,31 @@ describe('handleManagerEvent', () => {
     expect(selfChat).toBeTruthy()
     expect(selfChat?.messages).toHaveLength(1)
     expect(selfChat?.messages[0].content).toBe('hello from device')
+  })
+
+  it('marks sender-copy messages from another client as mine in peer chat', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const OTHER_CLIENT_PUBKEY = 'd'.repeat(64)
+
+    const rumor = {
+      id: 'msg-3',
+      pubkey: OTHER_CLIENT_PUBKEY,
+      content: 'hello from another client',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', PEER_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    // SessionManager can surface sender-copies under the peer record even when
+    // the inner rumor pubkey isn't known as one of our registered device keys.
+    await handleManagerEvent(rumor as never, PEER_PUBKEY)
+
+    const chatMap = get(chats)
+    const peerChat = chatMap.get(PEER_PUBKEY)
+
+    expect(peerChat).toBeTruthy()
+    expect(peerChat?.messages).toHaveLength(1)
+    expect(peerChat?.messages[0].content).toBe('hello from another client')
+    expect(peerChat?.messages[0].isMine).toBe(true)
   })
 })

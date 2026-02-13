@@ -156,6 +156,44 @@ describe('manager receipts', () => {
     expect(mocks.updateMessageStatus).toHaveBeenCalledWith('in-1', 'seen')
   })
 
+  it('treats sender-copy receipts from another client as self receipts', async () => {
+    const now = Date.now()
+    const createdAt = Math.floor(now / 1000)
+    const OTHER_CLIENT_PUBKEY = 'c'.repeat(64)
+
+    await handleManagerEvent(
+      {
+        id: 'in-2',
+        kind: CHAT_MESSAGE_KIND,
+        pubkey: THEIR_PUBKEY,
+        content: 'hello',
+        created_at: createdAt,
+        tags: [['p', MY_PUBKEY], ['ms', String(now)]],
+      } as never,
+      THEIR_PUBKEY
+    )
+
+    await handleManagerEvent(
+      {
+        id: 'rcpt-3',
+        kind: RECEIPT_KIND,
+        pubkey: OTHER_CLIENT_PUBKEY,
+        content: 'seen',
+        created_at: createdAt + 1,
+        tags: [['p', THEIR_PUBKEY], ['e', 'in-2'], ['ms', String(now + 1000)]],
+      } as never,
+      THEIR_PUBKEY
+    )
+
+    const chat = get(chats).get(THEIR_PUBKEY)
+    expect(chat?.messages[0]).toMatchObject({
+      id: 'in-2',
+      isMine: false,
+      status: 'seen',
+    })
+    expect(mocks.updateMessageStatus).toHaveBeenCalledWith('in-2', 'seen')
+  })
+
   it('keeps updating own outgoing messages when seen receipts arrive from peer', async () => {
     const now = Date.now()
     const createdAt = Math.floor(now / 1000)

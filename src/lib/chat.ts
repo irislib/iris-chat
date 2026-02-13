@@ -715,6 +715,29 @@ function resolveManagerSender(fromPubkey: string, myPubkey: string | null): stri
   return isOwnDevice ? myPubkey : fromPubkey
 }
 
+function isKnownOwnDevice(pubkey: string): boolean {
+  const deviceState = get(devices)
+  return (
+    deviceState.identityPubkey === pubkey ||
+    deviceState.registeredDevices.some((device) => device.identityPubkey === pubkey)
+  )
+}
+
+function resolveManagerIsFromSelf(
+  rumor: Rumor,
+  chatId: string,
+  effectiveFromPubkey: string,
+  myPubkey: string
+): boolean {
+  if (effectiveFromPubkey === myPubkey) return true
+  if (rumor.pubkey === myPubkey) return true
+  if (isKnownOwnDevice(rumor.pubkey)) return true
+
+  const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')?.[1]
+  // Sender copies from another client can be surfaced via the peer user record.
+  return !!pTag && pTag !== myPubkey && pTag === chatId
+}
+
 export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<void> {
   const myPubkey = getPubkey()
   if (!myPubkey) return
@@ -738,12 +761,13 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
       chatId = myPubkey
     }
   }
+  const isFromSelf = resolveManagerIsFromSelf(rumor, chatId, effectiveFromPubkey, myPubkey)
 
   const policyCtx = getMessageRequestPolicyContext()
   const existing = get(chats).get(chatId)
   const shouldIgnore = shouldIgnoreIncomingEvent(
     existing || { recipientPubkey: chatId, messages: [] },
-    effectiveFromPubkey === myPubkey,
+    isFromSelf,
     policyCtx
   )
   if (shouldIgnore) return
@@ -752,7 +776,7 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
 
   const isEmptyChat = (existing ? existing.messages.length : chatSession.messages.length) === 0
   const isFirstInboundMessage =
-    effectiveFromPubkey !== myPubkey &&
+    !isFromSelf &&
     rumor.kind === CHAT_MESSAGE_KIND &&
     isEmptyChat
 
@@ -766,7 +790,7 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
       console.warn('[chat] rotateDeviceInvite failed:', e)
     )
   }
-  handleIncomingRumor(chatSession, rumor, undefined, effectiveFromPubkey === myPubkey)
+  handleIncomingRumor(chatSession, rumor, undefined, isFromSelf)
 }
 
 // Accept an invite and create a session
