@@ -2,16 +2,14 @@ import { writable, get } from 'svelte/store'
 import {
   SharedChannel,
   Invite,
-  Session,
   SHARED_CHANNEL_KIND,
   type Rumor,
-  type NostrSubscribe,
 } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { NDKSubscription } from '@nostr-dev-kit/ndk'
 import type { Filter } from 'nostr-tools'
-import { ndk, getPubkey, getPrivkeyBytes, hexToBytes } from './identity'
-import { chats, saveSessionToStorage, type ChatSession } from './chat'
+import { ndk, getPubkey, hexToBytes } from './identity'
+import { chats, acceptInvite } from './chat'
 import type { Group } from './groups'
 
 const GROUP_INVITE_RUMOR_KIND = 10445
@@ -83,6 +81,7 @@ export function teardownGroupChannel(groupId: string): void {
 
 function publishOwnInvite(group: Group, channel: SharedChannel, myPubkey: string): void {
   const invite = Invite.createNew(myPubkey)
+  invite.ownerPubkey = myPubkey
   const inviteUrl = invite.getUrl()
 
   const rumor: Rumor = {
@@ -101,9 +100,6 @@ function publishOwnInvite(group: Group, channel: SharedChannel, myPubkey: string
   ndkPublishEvent.publish().catch(e =>
     console.error('[groupChannels] Failed to publish invite on channel:', e)
   )
-
-  // Listen for acceptance of our invite
-  listenForGroupInviteAcceptance(invite, group.id)
 }
 
 function handleChannelRumor(group: Group, rumor: Rumor, myPubkey: string): void {
@@ -143,108 +139,17 @@ function handleChannelRumor(group: Group, rumor: Rumor, myPubkey: string): void 
 }
 
 async function acceptGroupMemberInvite(inviteUrl: string, memberPubkey: string, groupId: string): Promise<void> {
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-
-  const privkeyBytes = getPrivkeyBytes()
-  if (!privkeyBytes) return
-
   try {
     const invite = Invite.fromUrl(inviteUrl)
-
-    const ndkInstance = get(ndk)
-    const nostrSubscribe: NostrSubscribe = (filter, callback) => {
-      const seenIds = new Set<string>()
-      const sub = ndkInstance.subscribe(filter, { closeOnEose: false })
-      sub.on('event', (ndkEvent) => {
-        const event = ndkEvent.rawEvent() as Parameters<typeof callback>[0]
-        if (seenIds.has(event.id)) return
-        seenIds.add(event.id)
-        callback(event)
-      })
-      return () => sub.stop()
+    if (!invite.ownerPubkey) {
+      invite.ownerPubkey = memberPubkey
     }
-
-    const { session, event } = await invite.accept(
-      nostrSubscribe,
-      myPubkey,
-      privkeyBytes,
-      myPubkey
-    )
-
-    const chatSession: ChatSession = {
-      id: memberPubkey,
-      recipientPubkey: memberPubkey,
-      mode: 'legacy',
-      session,
-      messages: []
-    }
-
-    // Subscribe to incoming messages
-    session.onEvent((rumor: Rumor) => {
-      // handled by chat.ts subscription
-    })
-
-    // Add to chats store
-    chats.update(c => {
-      c.set(chatSession.id, chatSession)
-      return c
-    })
-
-    // Publish the accept event
-    const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-    await ndkPublishEvent.publish()
-
-    // Save session to storage
-    await saveSessionToStorage(chatSession)
+    await acceptInvite({ type: 'legacy', invite })
 
     console.log('[groupChannels] Auto-accepted invite from group member:', memberPubkey.slice(0, 8), 'in group:', groupId.slice(0, 8))
   } catch (e) {
     console.error('[groupChannels] Failed to accept group member invite:', e)
   }
-}
-
-function listenForGroupInviteAcceptance(invite: Invite, groupId: string): void {
-  const privkeyBytes = getPrivkeyBytes()
-  if (!privkeyBytes) return
-
-  const ndkInstance = get(ndk)
-  const nostrSubscribe: NostrSubscribe = (filter, callback) => {
-    const seenIds = new Set<string>()
-    const sub = ndkInstance.subscribe(filter, { closeOnEose: false })
-    sub.on('event', (ndkEvent) => {
-      const event = ndkEvent.rawEvent() as Parameters<typeof callback>[0]
-      if (seenIds.has(event.id)) return
-      seenIds.add(event.id)
-      callback(event)
-    })
-    return () => sub.stop()
-  }
-
-  invite.listen(privkeyBytes, nostrSubscribe, (session: Session, identity: string) => {
-    // Check if we already have a session with this identity
-    const existingChats = get(chats)
-    if (existingChats.has(identity)) return
-
-    const chatSession: ChatSession = {
-      id: identity,
-      recipientPubkey: identity,
-      mode: 'legacy',
-      session,
-      messages: []
-    }
-
-    // Add to chats store
-    chats.update(c => {
-      c.set(chatSession.id, chatSession)
-      return c
-    })
-
-    // Save session to storage
-    saveSessionToStorage(chatSession)
-
-    console.log('[groupChannels] Invite accepted by group member:', identity.slice(0, 8), 'in group:', groupId.slice(0, 8))
-  })
 }
 
 /** Check if a 1:1 session exists with a given pubkey */

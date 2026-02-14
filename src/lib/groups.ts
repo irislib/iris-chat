@@ -1,5 +1,4 @@
 import { writable, get } from 'svelte/store'
-import { NDKEvent } from '@nostr-dev-kit/ndk'
 import {
   CHAT_MESSAGE_KIND, REACTION_KIND, TYPING_KIND, parseReaction,
   GROUP_METADATA_KIND,
@@ -20,8 +19,8 @@ import {
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
 import type { Rumor } from 'nostr-double-ratchet'
-import { ndk, getPubkey } from './identity'
-import { chats, type ChatMessage, type ChatSession } from './chat'
+import { getPubkey } from './identity'
+import { chats, type ChatMessage } from './chat'
 import { getSessionManager } from './privateChats'
 import { getEventHash } from 'nostr-tools'
 import {
@@ -83,13 +82,6 @@ function flushPendingEvents(groupId: string): void {
   }
 }
 
-// Save session state after fan-out rotates keys - imported dynamically to avoid circular deps
-let saveSessionToStorageFn: ((session: ChatSession) => Promise<void>) | null = null
-
-export function setSaveSessionFn(fn: (session: ChatSession) => Promise<void>): void {
-  saveSessionToStorageFn = fn
-}
-
 export const isAdmin = isGroupAdmin
 
 function buildGroupRumor(
@@ -130,10 +122,8 @@ function fanOutToMembers(groupId: string, partialEvent: { content: string, kind:
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const currentChats = get(chats)
-  const ndkInstance = get(ndk)
   const manager = getSessionManager()
-  const now = Math.floor(Date.now() / 1000)
+  if (!manager) return
 
   const tags = [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]]
   const recipients = recipientOverride || group.members
@@ -141,34 +131,9 @@ function fanOutToMembers(groupId: string, partialEvent: { content: string, kind:
   for (const memberPubkey of recipients) {
     if (memberPubkey === myPubkey) continue
 
-    const chatSession = currentChats.get(memberPubkey)
-
     try {
-      if (chatSession?.mode === 'legacy' && chatSession.session) {
-        const { event } = chatSession.session.sendEvent({
-          content: partialEvent.content,
-          kind: partialEvent.kind,
-          tags,
-          pubkey: myPubkey,
-          created_at: now
-        })
-
-        const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-        ndkPublishEvent.publish().catch(e =>
-          console.error('[groups] Failed to publish to', memberPubkey.slice(0, 8), e)
-        )
-
-        if (saveSessionToStorageFn) {
-          saveSessionToStorageFn(chatSession).catch(e =>
-            console.error('[groups] Failed to save session:', e)
-          )
-        }
-      } else if (manager) {
-        const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
-        manager.sendEvent(memberPubkey, rumor).catch(() => {})
-      } else {
-        console.warn('[groups] No session manager for member:', memberPubkey.slice(0, 8))
-      }
+      const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
+      manager.sendEvent(memberPubkey, rumor).catch(() => {})
     } catch (e) {
       console.error('[groups] Failed to send to member:', memberPubkey.slice(0, 8), e)
     }

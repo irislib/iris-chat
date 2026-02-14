@@ -8,11 +8,11 @@
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import InstallPrompt from './components/InstallPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, saveSessionToStorage, initSessionManagerEvents } from './lib/chat'
+  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initSessionManagerEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToSessionManager } from './lib/disappearingMessages'
   import type { ChatSession } from './lib/chat'
-  import { loadGroupsFromStorage, groups, groupMessages, currentGroupId, setSaveSessionFn, type Group } from './lib/groups'
+  import { loadGroupsFromStorage, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
   import { initMultiDevice, resetManagers } from './lib/privateChats'
   import { initFollowing } from './lib/following'
@@ -230,9 +230,6 @@
         )
       }
 
-      // Wire up groups -> chat session saving (before loading anything)
-      setSaveSessionFn(saveSessionToStorage)
-
       // Load groups FIRST so group events have somewhere to land
       // (chat sessions subscribe to relays on load — group messages arriving
       //  before the groups store is populated are silently dropped)
@@ -321,9 +318,6 @@
     }
 
     loggedIn = true
-
-    // Wire up groups -> chat session saving (before loading anything)
-    setSaveSessionFn(saveSessionToStorage)
 
     // Load groups FIRST (same reason as onMount — avoid race condition)
     await loadGroupsFromStorage()

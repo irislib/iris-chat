@@ -2,7 +2,7 @@
 import { get } from 'svelte/store'
 import { identity, ndk } from './identity'
 import { notificationSettings } from './notificationStore'
-import { chats, getInviteEphemeralPubkeys } from './chat'
+import { getInviteEphemeralPubkeys } from './chat'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getSessionManager } from './privateChats'
 
@@ -221,22 +221,7 @@ function getSessionAuthors(): string[] {
   const currentIdentity = get(identity)
   if (!currentIdentity) return []
 
-  const chatMap = get(chats)
   const authors: string[] = []
-
-  for (const [, chat] of chatMap) {
-    if (chat.mode === 'legacy' && chat.session) {
-      const state = chat.session.state
-      if (state) {
-        if (state.theirCurrentNostrPublicKey) {
-          authors.push(state.theirCurrentNostrPublicKey)
-        }
-        if (state.theirNextNostrPublicKey) {
-          authors.push(state.theirNextNostrPublicKey)
-        }
-      }
-    }
-  }
 
   const manager = getSessionManager()
   if (manager) {

@@ -23,16 +23,10 @@ const sendEventCalls: Array<{ recipient: string, event: unknown }> = []
 
 vi.mock('./chat', () => {
   const { writable } = require('svelte/store')
-  const mockSession = (pubkey: string) => ({
-    sendEvent: vi.fn((evt: unknown) => {
-      sendEventCalls.push({ recipient: pubkey, event: evt })
-      return { event: { id: Math.random().toString(36) } }
-    })
-  })
   const chatMap = new Map()
-  chatMap.set(MEMBER_B, { id: MEMBER_B, recipientPubkey: MEMBER_B, session: mockSession(MEMBER_B), messages: [], mode: 'legacy' })
-  chatMap.set(MEMBER_C, { id: MEMBER_C, recipientPubkey: MEMBER_C, session: mockSession(MEMBER_C), messages: [], mode: 'legacy' })
-  chatMap.set(NON_MEMBER, { id: NON_MEMBER, recipientPubkey: NON_MEMBER, session: mockSession(NON_MEMBER), messages: [], mode: 'legacy' })
+  chatMap.set(MEMBER_B, { id: MEMBER_B, recipientPubkey: MEMBER_B, messages: [], mode: 'manager' })
+  chatMap.set(MEMBER_C, { id: MEMBER_C, recipientPubkey: MEMBER_C, messages: [], mode: 'manager' })
+  chatMap.set(NON_MEMBER, { id: NON_MEMBER, recipientPubkey: NON_MEMBER, messages: [], mode: 'manager' })
 
   return {
     chats: writable(chatMap),
@@ -41,10 +35,13 @@ vi.mock('./chat', () => {
   }
 })
 
-vi.mock('@nostr-dev-kit/ndk', () => ({
-  NDKEvent: vi.fn().mockImplementation(() => ({
-    publish: vi.fn().mockResolvedValue(undefined)
-  }))
+vi.mock('./privateChats', () => ({
+  getSessionManager: () => ({
+    sendEvent: (recipient: string, event: unknown) => {
+      sendEventCalls.push({ recipient, event })
+      return Promise.resolve(undefined)
+    },
+  }),
 }))
 
 vi.mock('nostr-double-ratchet', async () => {
@@ -57,6 +54,10 @@ vi.mock('nostr-double-ratchet', async () => {
     parseReaction: (content: string) => ({ emoji: content, isRemoval: content === '-' }),
   }
 })
+
+vi.mock('nostr-tools', () => ({
+  getEventHash: () => Math.random().toString(36).slice(2),
+}))
 
 vi.mock('./storage', () => ({
   saveGroup: vi.fn().mockResolvedValue(undefined),

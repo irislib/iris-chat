@@ -1,12 +1,7 @@
 import { writable, get } from 'svelte/store'
 import {
   Invite,
-  Session,
   type Rumor,
-  type NostrSubscribe,
-  type EventCallback,
-  type EncryptFunction,
-  type DecryptFunction,
   type SessionManager,
   REACTION_KIND,
   RECEIPT_KIND,
@@ -17,104 +12,15 @@ import {
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
 export type { Invite } from 'nostr-double-ratchet'
-import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getEventHash, nip19 } from 'nostr-tools'
-import { ndk, getPrivkeyBytes, getPubkey, isNip07Login } from './identity'
+import { getPubkey } from './identity'
 import { devices } from './devices'
 import { getSessionManager, waitForSessionManager, ensureDeviceRegistered, rotateDeviceInvite } from './privateChats'
-
-type OuterEvent = Parameters<EventCallback>[1]
-
-// Get private key bytes OR null for NIP-07
-function getPrivkeyBytesOrNull(): Uint8Array | null {
-  const privkeyBytes = getPrivkeyBytes()
-  if (privkeyBytes) {
-    return privkeyBytes
-  }
-  return null
-}
-
-// Get encrypt function for NIP-07 or null for local key
-function getNip07Encrypt(): EncryptFunction | null {
-  if (isNip07Login() && window.nostr?.nip44) {
-    return async (plaintext: string, pubkey: string) => {
-      // Validate pubkey format (should be 64 hex chars)
-      const isValidPubkey = /^[0-9a-f]{64}$/i.test(pubkey)
-      console.log('[chat] NIP-07 encrypt called for pubkey:', pubkey, 'valid:', isValidPubkey, 'length:', pubkey.length)
-      if (!isValidPubkey) {
-        throw new Error(`Invalid pubkey format: expected 64 hex chars, got ${pubkey.length} chars`)
-      }
-      try {
-        // NIP-07 nip44.encrypt takes (peer pubkey, plaintext) per NIP-07 spec
-        const result = await window.nostr!.nip44!.encrypt(pubkey, plaintext)
-        console.log('[chat] NIP-07 encrypt success')
-        return result
-      } catch (e) {
-        console.error('[chat] NIP-07 encrypt error:', e)
-        throw e
-      }
-    }
-  }
-  return null
-}
-
-// Get decrypt function for NIP-07 or null for local key
-function getNip07Decrypt(): DecryptFunction | null {
-  if (isNip07Login() && window.nostr?.nip44) {
-    return async (ciphertext: string, pubkey: string) => {
-      console.log('[chat] NIP-07 decrypt called for pubkey:', pubkey.slice(0, 8))
-      try {
-        // NIP-07 nip44.decrypt takes (pubkey, ciphertext)
-        const result = await window.nostr!.nip44!.decrypt(pubkey, ciphertext)
-        console.log('[chat] NIP-07 decrypt success')
-        return result
-      } catch (e) {
-        console.error('[chat] NIP-07 decrypt error:', e)
-        throw e
-      }
-    }
-  }
-  return null
-}
-
-// Get encryptor (Uint8Array or EncryptFunction) for accept()
-function getEncryptor(): Uint8Array | EncryptFunction | null {
-  const privkeyBytes = getPrivkeyBytesOrNull()
-  if (privkeyBytes) {
-    console.log('[chat] Using local private key for encryption')
-    return privkeyBytes
-  }
-  const nip07Encrypt = getNip07Encrypt()
-  if (nip07Encrypt) {
-    console.log('[chat] Using NIP-07 nip44 for encryption')
-    return nip07Encrypt
-  }
-  console.log('[chat] No encryptor available, isNip07:', isNip07Login(), 'hasNip44:', !!window.nostr?.nip44)
-  return null
-}
-
-// Get decryptor (Uint8Array or DecryptFunction) for listen()
-function getDecryptor(): Uint8Array | DecryptFunction | null {
-  const privkeyBytes = getPrivkeyBytesOrNull()
-  if (privkeyBytes) {
-    console.log('[chat] Using local private key for decryption')
-    return privkeyBytes
-  }
-  const nip07Decrypt = getNip07Decrypt()
-  if (nip07Decrypt) {
-    console.log('[chat] Using NIP-07 nip44 for decryption')
-    return nip07Decrypt
-  }
-  console.log('[chat] No decryptor available, isNip07:', isNip07Login(), 'hasNip44:', !!window.nostr?.nip44)
-  return null
-}
 import {
   saveSession as saveSessionToDb,
   getAllSessions,
   saveMessage as saveMessageToDb,
   getMessagesForSession,
-  serializeSessionState,
-  deserializeSessionState,
   clearAllData,
   deleteSession as deleteSessionFromDb,
   deleteMessagesForSession,
@@ -123,7 +29,6 @@ import {
   getAllInvites,
   deleteInvite as deleteInviteFromDb,
   updateInviteLabel as updateInviteLabelInDb,
-  addInviteUsedBy as addInviteUsedByInDb,
   updateMessageStatus as updateMessageStatusInDb,
   saveProcessedEvent,
   type StoredSession,
@@ -140,7 +45,6 @@ import { expirationStore } from './expirationStore'
 import { parseChatSettingsContent } from './chatSettings'
 import { acceptChat } from './messageRequests'
 import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
-import { retryAsync } from './retry'
 
 export interface ChatMessage {
   id: string
@@ -157,10 +61,8 @@ export interface ChatMessage {
 export interface ChatSession {
   id: string
   recipientPubkey: string
-  mode: 'legacy' | 'manager'
-  session?: Session
+  mode: 'manager'
   messages: ChatMessage[]
-  invite?: Invite
   inviteId?: string      // ID of the invite that started this chat
   inviteLabel?: string   // Label of the invite that started this chat
 }
@@ -184,51 +86,6 @@ export const invites = writable<Map<string, ActiveInvite>>(new Map())
 let isInitialized = false
 let invitesInitialized = false
 let sessionManagerPoller: ReturnType<typeof setInterval> | null = null
-const PUBLISH_RETRY_DELAYS_MS = [200, 500, 1000, 2000]
-
-// Create a nostr subscribe function using NDK
-function createNostrSubscribe(): NostrSubscribe {
-  const ndkInstance = get(ndk)
-
-  return (filter, callback) => {
-    const seenIds = new Set<string>()
-    const sub = ndkInstance.subscribe(filter, { closeOnEose: false })
-
-    sub.on('event', (ndkEvent) => {
-      const event = ndkEvent.rawEvent() as Parameters<typeof callback>[0]
-      if (seenIds.has(event.id)) return
-      seenIds.add(event.id)
-      callback(event)
-    })
-
-    return () => sub.stop()
-  }
-}
-
-async function publishWithRetry(event: NDKEvent, context: string, eventId: string): Promise<void> {
-  const ndkInstance = get(ndk) as {
-    pool?: {
-      connectedRelays?: () => unknown[]
-      connect?: (timeoutMs?: number) => Promise<void>
-    }
-  }
-
-  try {
-    if (
-      ndkInstance?.pool?.connectedRelays &&
-      ndkInstance?.pool?.connect &&
-      ndkInstance.pool.connectedRelays().length === 0
-    ) {
-      await ndkInstance.pool.connect(5000)
-    }
-  } catch (e) {
-    console.warn(`[chat] Failed to establish relay connection before publishing ${context}:`, e)
-  }
-
-  await retryAsync(() => event.publish(), PUBLISH_RETRY_DELAYS_MS).catch((e) => {
-    console.error(`[chat] Failed to publish ${context}:`, eventId, e)
-  })
-}
 
 let sessionManagerSubscribed = false
 const pendingAutoOpenChats = new Set<string>()
@@ -591,7 +448,7 @@ export async function updateInviteLabel(id: string, label: string): Promise<void
 
 // Load all invites from storage and start monitoring
 export async function loadAndMonitorInvites(): Promise<void> {
-  console.log('[chat] loadAndMonitorInvites called, initialized:', invitesInitialized, 'isNip07:', isNip07Login())
+  console.log('[chat] loadAndMonitorInvites called, initialized:', invitesInitialized)
   if (invitesInitialized) {
     console.log('[chat] Already initialized, skipping')
     return
@@ -604,51 +461,7 @@ export async function loadAndMonitorInvites(): Promise<void> {
     for (const stored of storedInvites) {
       try {
         const invite = deserializeInvite(stored.inviteData)
-        const inviteId = stored.id
-        const inviteLabel = stored.label
-
-        console.log('[chat] Setting up listener for invite:', inviteId, inviteLabel)
-
-        let unsubscribe = () => {}
-        if (invite.type === 'legacy') {
-          const decryptor = getDecryptor()
-          if (!decryptor) {
-            console.error('[chat] Cannot load legacy invites - no decryptor available')
-          } else {
-            // Start listening for acceptance
-            unsubscribe = listenForInviteAcceptance(invite.invite, async (chatSession) => {
-              console.log('[chat] Invite', inviteId, 'accepted, calling callback')
-              // Track who used this invite
-              await addInviteUsedByInDb(inviteId, chatSession.recipientPubkey)
-
-              // Update invites store with the new usedBy
-              invites.update(i => {
-                const current = i.get(inviteId)
-                if (current) {
-                  const usedBy = current.usedBy || []
-                  if (!usedBy.includes(chatSession.recipientPubkey)) {
-                    i.set(inviteId, { ...current, usedBy: [...usedBy, chatSession.recipientPubkey] })
-                  }
-                }
-                return i
-              })
-
-              // Store invite info in chat session
-              chatSession.inviteId = inviteId
-              chatSession.inviteLabel = inviteLabel
-
-              // Update notification subscription
-              updateDMSubscription()
-
-              // Trigger navigation callback
-              if (inviteAcceptedCallback) {
-                inviteAcceptedCallback(chatSession)
-              }
-            })
-          }
-        }
-
-        console.log('[chat] Listener set up for invite:', inviteId)
+        const unsubscribe = () => {}
 
         const activeInvite: ActiveInvite = {
           id: stored.id,
@@ -817,7 +630,7 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
       console.warn('[chat] rotateDeviceInvite failed:', e)
     )
   }
-  handleIncomingRumor(chatSession, rumor, undefined, isFromSelf)
+  handleIncomingRumor(chatSession, rumor, isFromSelf)
 }
 
 // Accept an invite and create a session
@@ -842,159 +655,44 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   const managerWithInviteAccept = readyManager as
     | (SessionManager & {
         getDeviceId?: () => string
-        acceptInvite?: (
+        acceptInvite: (
           invite: Invite,
           options?: { ownerPublicKey?: string }
         ) => Promise<{ ownerPublicKey?: string }>
       })
     | null
 
-  if (managerWithInviteAccept?.acceptInvite) {
-    const ownerPublicKey = invite.invite.ownerPubkey || invite.invite.inviter
-    const existing = get(chats).get(ownerPublicKey)
-    const myPubkey = getPubkey()
-    const managerDeviceId = managerWithInviteAccept.getDeviceId?.()
-    const requiresOwnerRegistration =
-      !existing &&
-      !!myPubkey &&
-      !!managerDeviceId &&
-      managerDeviceId !== myPubkey
-
-    if (requiresOwnerRegistration) {
-      await ensureDeviceRegistered()
-    }
-
-    const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
-    const chatTarget = accepted.ownerPublicKey || ownerPublicKey
-
-    const chatSession = await ensureManagerChat(chatTarget)
-    acceptChat(chatSession.recipientPubkey)
-
-    updateDMSubscription()
-    return chatSession
+  if (!managerWithInviteAccept?.acceptInvite) {
+    throw new Error('SessionManager is not available')
   }
 
-  const pubkey = getPubkey()
-  if (!pubkey) {
-    throw new Error('Not logged in')
+  const ownerPublicKey = invite.invite.ownerPubkey || invite.invite.inviter
+  const existing = get(chats).get(ownerPublicKey)
+  const myPubkey = getPubkey()
+  const managerDeviceId = managerWithInviteAccept.getDeviceId?.()
+  const requiresOwnerRegistration =
+    !existing &&
+    !!myPubkey &&
+    !!managerDeviceId &&
+    managerDeviceId !== myPubkey
+
+  if (requiresOwnerRegistration) {
+    await ensureDeviceRegistered()
   }
 
-  const encryptor = getEncryptor()
-  if (!encryptor) {
-    // Provide more specific error for NIP-07 users without nip44 support
-    if (isNip07Login()) {
-      if (!window.nostr?.nip44) {
-        throw new Error('Your extension does not support NIP-44 encryption')
-      }
-      throw new Error('Encryption not available')
-    }
-    throw new Error('Not logged in')
-  }
+  const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
+  const chatTarget = accepted.ownerPublicKey || ownerPublicKey
 
-  const nostrSubscribe = createNostrSubscribe()
-
-  const legacyManager = getSessionManager()
-  const deviceId = legacyManager?.getDeviceId?.() || pubkey
-
-  const { session, event } = await invite.invite.accept(
-    nostrSubscribe,
-    deviceId,
-    encryptor,
-    pubkey
-  )
-
-  const chatSession: ChatSession = {
-    id: invite.invite.inviter,
-    recipientPubkey: invite.invite.inviter,
-    mode: 'legacy',
-    session,
-    messages: [],
-  }
-
-  // Subscribe to incoming messages
-  subscribeToSession(chatSession)
-
-  // Add to chats store immediately so UI updates
-  chats.update(c => {
-    c.set(chatSession.id, chatSession)
-    return c
-  })
-
-  // Do the rest in the background to not block UI
-  // Publish the accept event using NDKEvent
-  const ndkInstance = get(ndk)
-  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-  void publishWithRetry(ndkPublishEvent, 'accept event', event.id)
-
-  // Save to IndexedDB
-  saveSessionToStorage(chatSession).catch(e => console.error('[chat] Failed to save session:', e))
-
-  // Update notification subscription for new session
-  updateDMSubscription()
-
-  // User-initiated join: treat as accepted even before sending a message.
+  const chatSession = await ensureManagerChat(chatTarget)
   acceptChat(chatSession.recipientPubkey)
 
+  updateDMSubscription()
   return chatSession
-}
-
-// Listen for invite acceptance and create session
-export function listenForInviteAcceptance(invite: Invite, onSession: (session: ChatSession) => void): () => void {
-  const decryptor = getDecryptor()
-  if (!decryptor) {
-    console.error('[chat] No decryptor available for invite listening')
-    // Provide more specific error for NIP-07 users without nip44 support
-    if (isNip07Login()) {
-      if (!window.nostr?.nip44) {
-        throw new Error('Your extension does not support NIP-44 encryption')
-      }
-      throw new Error('Decryption not available')
-    }
-    throw new Error('Not logged in')
-  }
-
-  const nostrSubscribe = createNostrSubscribe()
-
-  return invite.listen(decryptor, nostrSubscribe, (session, identity) => {
-    // Check if we already have a session with this identity (e.g., loaded from storage)
-    const existingChats = get(chats)
-    if (existingChats.has(identity)) {
-      console.log('[chat] Session already exists for', identity, '- skipping')
-      return  // Session already exists, don't overwrite
-    }
-
-    const chatSession: ChatSession = {
-      id: identity,
-      recipientPubkey: identity,
-      mode: 'legacy',
-      session,
-      messages: [],
-      invite,
-    }
-
-    // Subscribe to incoming messages
-    subscribeToSession(chatSession)
-
-    // Add to chats store
-    chats.update(c => {
-      c.set(chatSession.id, chatSession)
-      return c
-    })
-
-    // Save to IndexedDB
-    saveSessionToStorage(chatSession)
-
-    // Update notification subscription for new session
-    updateDMSubscription()
-
-    onSession(chatSession)
-  })
 }
 
 function handleIncomingRumor(
   chatSession: ChatSession,
   rumor: Rumor,
-  outerEvent?: OuterEvent,
   isFromSelfOverride?: boolean
 ) {
   const myPubkey = getPubkey()
@@ -1010,14 +708,11 @@ function handleIncomingRumor(
   // Route group events to group handler
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
-    handleGroupEvent(rumor, chatSession.recipientPubkey, outerEvent)
-    if (currentSession.mode === 'legacy') {
-      saveSessionToStorage(currentSession)
-    }
+    handleGroupEvent(rumor, chatSession.recipientPubkey)
     return
   }
 
-  const processedId = outerEvent?.id || rumor.id
+  const processedId = rumor.id
 
   // Dispatch on inner event kind
   if (rumor.kind === RECEIPT_KIND) {
@@ -1070,10 +765,8 @@ function handleIncomingRumor(
   // - if requests are disabled (or sender rejected), ignore all incoming events for unaccepted chats.
   // - do not send receipts for unaccepted chats.
   const policyCtx = getMessageRequestPolicyContext()
-  if (chatSession.mode === 'legacy') {
-    const shouldIgnore = shouldIgnoreIncomingEvent(currentSession, isMine, policyCtx)
-    if (shouldIgnore) return
-  }
+  const shouldIgnore = shouldIgnoreIncomingEvent(currentSession, isMine, policyCtx)
+  if (shouldIgnore) return
   const chatAccepted = isChatAccepted(currentSession, policyCtx)
 
   // Auto-set delivered status for incoming messages
@@ -1112,11 +805,7 @@ function handleIncomingRumor(
 
   // Save message and updated session state to IndexedDB
   saveMessageToStorage(sessionId, message)
-  if (updatedSession.mode === 'legacy') {
-    saveSessionToStorage(updatedSession)
-  } else {
-    saveSessionToStorage(updatedSession)
-  }
+  saveSessionToStorage(updatedSession)
 
   // Send delivered receipt
   if (shouldAckDelivered) {
@@ -1125,14 +814,6 @@ function handleIncomingRumor(
 
   // Update notification subscription (debounced) since keys may have rotated
   updateDMSubscription()
-}
-
-// Subscribe to incoming messages for a session
-function subscribeToSession(chatSession: ChatSession) {
-  if (!chatSession.session) return
-  chatSession.session.onEvent((rumor: Rumor, outerEvent?: OuterEvent) => {
-    handleIncomingRumor(chatSession, rumor, outerEvent)
-  })
 }
 
 // Handle incoming reaction
@@ -1254,27 +935,14 @@ function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Ru
 function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
   if (messageIds.length === 0) return
 
-  if (chatSession.mode === 'manager') {
-    const manager = getSessionManager()
-    if (manager) {
-      manager.sendReceipt(chatSession.recipientPubkey, type, messageIds).catch(() => {})
-    } else {
-      waitForSessionManager()
-        .then((ready) => ready.sendReceipt(chatSession.recipientPubkey, type, messageIds))
-        .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
-    }
-    return
+  const manager = getSessionManager()
+  if (manager) {
+    manager.sendReceipt(chatSession.recipientPubkey, type, messageIds).catch(() => {})
+  } else {
+    waitForSessionManager()
+      .then((ready) => ready.sendReceipt(chatSession.recipientPubkey, type, messageIds))
+      .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
   }
-
-  if (!chatSession.session) return
-  const { event } = chatSession.session.sendReceipt(type, messageIds)
-
-  const ndkInstance = get(ndk)
-  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-  ndkPublishEvent.publish().catch(e => console.error('[chat] Failed to publish receipt:', e))
-
-  // Save session state since keys may have rotated
-  saveSessionToStorage(chatSession)
 }
 
 // Send seen receipts for incoming messages - called from ChatView
@@ -1326,30 +994,18 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   }
 
   let messageId = ''
-  let publishEvent: NDKEvent | null = null
-
-  if (chatSession.mode === 'manager') {
-    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
-      content: text,
-      kind: CHAT_MESSAGE_KIND,
-      tags,
-    })
-    messageId = rumor.id
-    // Always await SessionManager init. It is possible to have a non-null manager while
-    // `init()` is still in progress (e.g. immediately after login), and calling sendEvent()
-    // too early can fail and silently drop the message.
-    void waitForSessionManager()
-      .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
-      .catch((e) => console.error('[chat] Failed to send via SessionManager:', e))
-  } else {
-    if (!chatSession.session) return
-    const { event } = tags.length > 0
-      ? chatSession.session.sendEvent({ content: text, kind: CHAT_MESSAGE_KIND, tags })
-      : chatSession.session.send(text)
-    messageId = event.id
-    const ndkInstance = get(ndk)
-    publishEvent = new NDKEvent(ndkInstance, event)
-  }
+  const rumor = buildManagerRumor(chatSession.recipientPubkey, {
+    content: text,
+    kind: CHAT_MESSAGE_KIND,
+    tags,
+  })
+  messageId = rumor.id
+  // Always await SessionManager init. It is possible to have a non-null manager while
+  // `init()` is still in progress (e.g. immediately after login), and calling sendEvent()
+  // too early can fail and silently drop the message.
+  void waitForSessionManager()
+    .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
+    .catch((e) => console.error('[chat] Failed to send via SessionManager:', e))
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1391,30 +1047,18 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
 
   // Update notification subscription (debounced) since keys may have rotated
   updateDMSubscription()
-
-  if (publishEvent) {
-    void publishWithRetry(publishEvent, 'legacy message', messageId)
-  }
 }
 
 // Send a reaction to a message
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
-  if (chatSession.mode === 'manager') {
-    const manager = getSessionManager()
-    if (!manager) return
-    const rumor = buildManagerRumor(chatSession.recipientPubkey, {
-      content: emoji,
-      kind: REACTION_KIND,
-      tags: [['e', messageId]],
-    })
-    manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
-  } else {
-    if (!chatSession.session) return
-    const { event } = chatSession.session.sendReaction(messageId, emoji)
-    const ndkInstance = get(ndk)
-    const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-    await ndkPublishEvent.publish()
-  }
+  const manager = getSessionManager()
+  if (!manager) return
+  const rumor = buildManagerRumor(chatSession.recipientPubkey, {
+    content: emoji,
+    kind: REACTION_KIND,
+    tags: [['e', messageId]],
+  })
+  manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1499,10 +1143,6 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
 
 // Leave current chat
 export function leaveChat(): void {
-  const current = get(currentChat)
-  if (current) {
-    current.session?.close()
-  }
   currentChat.set(null)
   // Clear URL hash
   history.replaceState(null, '', window.location.pathname)
@@ -1510,13 +1150,8 @@ export function leaveChat(): void {
 
 // Delete a chat completely
 export function deleteChat(chatSession: ChatSession): void {
-  // Close the session
-  if (chatSession.mode === 'legacy') {
-    chatSession.session?.close()
-  } else {
-    const manager = getSessionManager()
-    manager?.deleteUser(chatSession.recipientPubkey).catch(() => {})
-  }
+  const manager = getSessionManager()
+  manager?.deleteUser(chatSession.recipientPubkey).catch(() => {})
 
   // Remove from store
   chats.update(c => {
@@ -1544,13 +1179,10 @@ export async function saveSessionToStorage(chatSession: ChatSession): Promise<vo
     const storedSession: StoredSession = {
       id: chatSession.id,
       recipientPubkey: chatSession.recipientPubkey,
-      sessionState: chatSession.mode === 'legacy' && chatSession.session
-        ? serializeSessionState(chatSession.session.state)
-        : undefined,
       createdAt: Date.now(),
       inviteId: chatSession.inviteId,
       inviteLabel: chatSession.inviteLabel,
-      mode: chatSession.mode,
+      mode: 'manager',
     }
     await saveSessionToDb(storedSession)
   } catch (e) {
@@ -1589,7 +1221,6 @@ export async function loadChatsFromStorage(): Promise<void> {
 
   try {
     const storedSessions = await getAllSessions()
-    const nostrSubscribe = createNostrSubscribe()
     initSessionManagerEvents()
 
     for (const stored of storedSessions) {
@@ -1609,33 +1240,13 @@ export async function loadChatsFromStorage(): Promise<void> {
           }))
           .sort((a, b) => a.timestamp - b.timestamp)
 
-        let chatSession: ChatSession
-        if (stored.sessionState) {
-          // Deserialize the session state
-          const sessionState = deserializeSessionState(stored.sessionState)
-          const session = new Session(nostrSubscribe, sessionState as never)
-
-          chatSession = {
-            id: stored.id,
-            recipientPubkey: stored.recipientPubkey,
-            mode: 'legacy',
-            session,
-            messages,
-            inviteId: stored.inviteId,
-            inviteLabel: stored.inviteLabel,
-          }
-
-          // Subscribe to incoming messages
-          subscribeToSession(chatSession)
-        } else {
-          chatSession = {
-            id: stored.id,
-            recipientPubkey: stored.recipientPubkey,
-            mode: stored.mode === 'legacy' ? 'legacy' : 'manager',
-            messages,
-            inviteId: stored.inviteId,
-            inviteLabel: stored.inviteLabel,
-          }
+        const chatSession: ChatSession = {
+          id: stored.id,
+          recipientPubkey: stored.recipientPubkey,
+          mode: 'manager',
+          messages,
+          inviteId: stored.inviteId,
+          inviteLabel: stored.inviteLabel,
         }
 
         // Add to chats store
@@ -1662,26 +1273,14 @@ export function sendTypingEvent(chatSession: ChatSession): void {
   const policyCtx = getMessageRequestPolicyContext()
   if (!isChatAccepted(chatSession, policyCtx)) return
 
-  if (chatSession.mode === 'manager') {
-    const manager = getSessionManager()
-    if (manager) {
-      manager.sendTyping(chatSession.recipientPubkey).catch(() => {})
-    } else {
-      waitForSessionManager()
-        .then((ready) => ready.sendTyping(chatSession.recipientPubkey))
-        .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
-    }
-    return
+  const manager = getSessionManager()
+  if (manager) {
+    manager.sendTyping(chatSession.recipientPubkey).catch(() => {})
+  } else {
+    waitForSessionManager()
+      .then((ready) => ready.sendTyping(chatSession.recipientPubkey))
+      .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
   }
-
-  if (!chatSession.session) return
-  const { event } = chatSession.session.sendTyping()
-
-  const ndkInstance = get(ndk)
-  const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-  ndkPublishEvent.publish().catch(e => console.error('[chat] Failed to publish typing event:', e))
-
-  saveSessionToStorage(chatSession)
 }
 
 // Clear all chat data (for logout)
