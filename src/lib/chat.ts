@@ -140,6 +140,7 @@ import { expirationStore } from './expirationStore'
 import { parseChatSettingsContent } from './chatSettings'
 import { acceptChat } from './messageRequests'
 import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
+import { retryAsync } from './retry'
 
 export interface ChatMessage {
   id: string
@@ -183,6 +184,7 @@ export const invites = writable<Map<string, ActiveInvite>>(new Map())
 let isInitialized = false
 let invitesInitialized = false
 let sessionManagerPoller: ReturnType<typeof setInterval> | null = null
+const PUBLISH_RETRY_DELAYS_MS = [200, 500, 1000, 2000]
 
 // Create a nostr subscribe function using NDK
 function createNostrSubscribe(): NostrSubscribe {
@@ -201,6 +203,31 @@ function createNostrSubscribe(): NostrSubscribe {
 
     return () => sub.stop()
   }
+}
+
+async function publishWithRetry(event: NDKEvent, context: string, eventId: string): Promise<void> {
+  const ndkInstance = get(ndk) as {
+    pool?: {
+      connectedRelays?: () => unknown[]
+      connect?: (timeoutMs?: number) => Promise<void>
+    }
+  }
+
+  try {
+    if (
+      ndkInstance?.pool?.connectedRelays &&
+      ndkInstance?.pool?.connect &&
+      ndkInstance.pool.connectedRelays().length === 0
+    ) {
+      await ndkInstance.pool.connect(5000)
+    }
+  } catch (e) {
+    console.warn(`[chat] Failed to establish relay connection before publishing ${context}:`, e)
+  }
+
+  await retryAsync(() => event.publish(), PUBLISH_RETRY_DELAYS_MS).catch((e) => {
+    console.error(`[chat] Failed to publish ${context}:`, eventId, e)
+  })
 }
 
 let sessionManagerSubscribed = false
@@ -810,6 +837,43 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     return chatSession
   }
 
+  const manager = getSessionManager()
+  const readyManager = manager || (await waitForSessionManager().catch(() => null))
+  const managerWithInviteAccept = readyManager as
+    | (SessionManager & {
+        getDeviceId?: () => string
+        acceptInvite?: (
+          invite: Invite,
+          options?: { ownerPublicKey?: string }
+        ) => Promise<{ ownerPublicKey?: string }>
+      })
+    | null
+
+  if (managerWithInviteAccept?.acceptInvite) {
+    const ownerPublicKey = invite.invite.ownerPubkey || invite.invite.inviter
+    const existing = get(chats).get(ownerPublicKey)
+    const myPubkey = getPubkey()
+    const managerDeviceId = managerWithInviteAccept.getDeviceId?.()
+    const requiresOwnerRegistration =
+      !existing &&
+      !!myPubkey &&
+      !!managerDeviceId &&
+      managerDeviceId !== myPubkey
+
+    if (requiresOwnerRegistration) {
+      await ensureDeviceRegistered()
+    }
+
+    const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
+    const chatTarget = accepted.ownerPublicKey || ownerPublicKey
+
+    const chatSession = await ensureManagerChat(chatTarget)
+    acceptChat(chatSession.recipientPubkey)
+
+    updateDMSubscription()
+    return chatSession
+  }
+
   const pubkey = getPubkey()
   if (!pubkey) {
     throw new Error('Not logged in')
@@ -829,8 +893,8 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
 
   const nostrSubscribe = createNostrSubscribe()
 
-  const manager = getSessionManager()
-  const deviceId = manager?.getDeviceId?.() || pubkey
+  const legacyManager = getSessionManager()
+  const deviceId = legacyManager?.getDeviceId?.() || pubkey
 
   const { session, event } = await invite.invite.accept(
     nostrSubscribe,
@@ -860,7 +924,7 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   // Publish the accept event using NDKEvent
   const ndkInstance = get(ndk)
   const ndkPublishEvent = new NDKEvent(ndkInstance, event)
-  ndkPublishEvent.publish().catch(e => console.error('[chat] Failed to publish accept event:', e))
+  void publishWithRetry(ndkPublishEvent, 'accept event', event.id)
 
   // Save to IndexedDB
   saveSessionToStorage(chatSession).catch(e => console.error('[chat] Failed to save session:', e))
@@ -1329,7 +1393,7 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   updateDMSubscription()
 
   if (publishEvent) {
-    publishEvent.publish()
+    void publishWithRetry(publishEvent, 'legacy message', messageId)
   }
 }
 

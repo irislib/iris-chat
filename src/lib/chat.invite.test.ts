@@ -1,12 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { nip19 } from 'nostr-tools'
 import { get } from 'svelte/store'
+import { Invite } from 'nostr-double-ratchet'
 
 const MY_PUBKEY = 'a'.repeat(64)
 
 const mocks = vi.hoisted(() => {
+  const state: { sessionManager: any | null } = { sessionManager: null }
   return {
     ensureDeviceRegistered: vi.fn(),
+    getSessionManager: vi.fn(() => state.sessionManager),
+    waitForSessionManager: vi.fn(() => Promise.resolve(state.sessionManager)),
+    setSessionManager: (value: any | null) => {
+      state.sessionManager = value
+    },
   }
 })
 
@@ -21,8 +28,8 @@ vi.mock('./identity', () => {
 })
 
 vi.mock('./privateChats', () => ({
-  getSessionManager: () => null,
-  waitForSessionManager: () => Promise.resolve(null),
+  getSessionManager: () => mocks.getSessionManager(),
+  waitForSessionManager: () => mocks.waitForSessionManager(),
   ensureDeviceRegistered: (...args: any[]) => mocks.ensureDeviceRegistered(...args),
 }))
 
@@ -88,6 +95,10 @@ import { acceptInvite, parseInviteFromUrl, chats, type ChatSession } from './cha
 beforeEach(() => {
   chats.set(new Map())
   mocks.ensureDeviceRegistered.mockReset()
+  mocks.ensureDeviceRegistered.mockResolvedValue(undefined)
+  mocks.getSessionManager.mockClear()
+  mocks.waitForSessionManager.mockClear()
+  mocks.setSessionManager(null)
 })
 
 function defer<T>() {
@@ -134,5 +145,28 @@ describe('Invite Parsing / Acceptance', () => {
     expect(get(chats).has(pubkey)).toBe(true)
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
   })
-})
 
+  it('acceptInvite(legacy) should use SessionManager.acceptInvite and open manager chat', async () => {
+    const ownerPubkey = 'd'.repeat(64)
+    const devicePubkey = 'e'.repeat(64)
+    const managerAccept = vi.fn().mockImplementation(async () => {
+      expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+      return { ownerPublicKey: ownerPubkey }
+    })
+    mocks.setSessionManager({
+      getDeviceId: () => devicePubkey,
+      acceptInvite: managerAccept,
+    })
+
+    const legacyInvite = Invite.createNew(devicePubkey)
+    legacyInvite.ownerPubkey = ownerPubkey
+
+    const session = await acceptInvite({ type: 'legacy', invite: legacyInvite })
+
+    expect(managerAccept).toHaveBeenCalledTimes(1)
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    expect(session.id).toBe(ownerPubkey)
+    expect(session.mode).toBe('manager')
+    expect(get(chats).has(ownerPubkey)).toBe(true)
+  })
+})

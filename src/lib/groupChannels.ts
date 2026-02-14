@@ -165,7 +165,12 @@ async function acceptGroupMemberInvite(inviteUrl: string, memberPubkey: string, 
       return () => sub.stop()
     }
 
-    const { session, event } = await invite.accept(nostrSubscribe, myPubkey, privkeyBytes)
+    const { session, event } = await invite.accept(
+      nostrSubscribe,
+      myPubkey,
+      privkeyBytes,
+      myPubkey
+    )
 
     const chatSession: ChatSession = {
       id: memberPubkey,
