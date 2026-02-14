@@ -1151,7 +1151,7 @@ export function leaveChat(): void {
 // Delete a chat completely
 export function deleteChat(chatSession: ChatSession): void {
   const manager = getSessionManager()
-  manager?.deleteUser(chatSession.recipientPubkey).catch(() => {})
+  manager?.deleteChat(chatSession.recipientPubkey).catch(() => {})
 
   // Remove from store
   chats.update(c => {
