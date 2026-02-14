@@ -56,6 +56,11 @@ interface SessionManagerRecord {
   value: unknown
 }
 
+interface SessionManagerStateEntry {
+  stateJson: string
+  chatId?: string
+}
+
 interface StoredSessionEntry {
   name: string
   state: string
@@ -139,21 +144,32 @@ async function getOwnerPubkeyFromSessionManager(): Promise<string | null> {
   return null
 }
 
-async function getSessionManagerStates(): Promise<string[]> {
-  const states: string[] = []
+function parseSessionManagerUserKey(key: string): string | null {
+  const prefix = 'v1/user/'
+  if (!key.startsWith(prefix)) return null
+  const rest = key.slice(prefix.length)
+  const slashIndex = rest.indexOf('/')
+  const candidate = (slashIndex >= 0 ? rest.slice(0, slashIndex) : rest).trim()
+  if (!/^[0-9a-f]{64}$/i.test(candidate)) return null
+  return candidate.toLowerCase()
+}
+
+async function getSessionManagerStates(): Promise<SessionManagerStateEntry[]> {
+  const states: SessionManagerStateEntry[] = []
   try {
     const records = await db.sessionManager
       .filter((record) => record.key.startsWith('v1/user/'))
       .toArray()
     for (const record of records) {
+      const chatId = parseSessionManagerUserKey(record.key) || undefined
       const data = record.value as StoredUserRecord | undefined
       if (!data?.devices) continue
       for (const device of data.devices) {
         if (device.activeSession?.state) {
-          states.push(device.activeSession.state)
+          states.push({ stateJson: device.activeSession.state, chatId })
         }
         for (const inactive of device.inactiveSessions || []) {
-          if (inactive.state) states.push(inactive.state)
+          if (inactive.state) states.push({ stateJson: inactive.state, chatId })
         }
       }
     }
@@ -227,8 +243,8 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
   }
 
   const managerStates = await getSessionManagerStates()
-  for (const stateJson of managerStates) {
-    sessionEntries.push({ stateJson })
+  for (const stateEntry of managerStates) {
+    sessionEntries.push(stateEntry)
   }
 
   for (const entry of sessionEntries) {
@@ -335,8 +351,13 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
   return { success: false }
 }
 
-// Check if a specific chat is currently open in a visible window
-async function isChatOpen(chatId: string): Promise<boolean> {
+type VisibleClientState = {
+  anyVisible: boolean
+  openChatId: string | null
+}
+
+// Find visible clients and ask them which chat is currently open.
+async function getVisibleClientState(): Promise<VisibleClientState> {
   const clients = await self.clients.matchAll({ type: 'window' })
 
   // Find visible clients
@@ -345,7 +366,7 @@ async function isChatOpen(chatId: string): Promise<boolean> {
   if (visibleClients.length === 0) {
     currentOpenChatId = null
     console.log('[sw] isChatOpen: no visible clients')
-    return false
+    return { anyVisible: false, openChatId: null }
   }
 
   // Ask visible clients what chat is currently open
@@ -368,8 +389,7 @@ async function isChatOpen(chatId: string): Promise<boolean> {
     }
   }
 
-  console.log('[sw] isChatOpen check:', { chatId, currentOpenChatId, match: currentOpenChatId === chatId })
-  return currentOpenChatId === chatId
+  return { anyVisible: true, openChatId: currentOpenChatId }
 }
 
 // Handle push notifications
@@ -425,8 +445,15 @@ self.addEventListener('push', (event) => {
         const result = await decryptPushMessage(payload.event)
 
         if (result.chatId) {
-          // Skip notification if this specific chat is already open
-          if (await isChatOpen(result.chatId)) {
+          const visible = await getVisibleClientState()
+
+          // When iris-chat is already visible, suppress system notifications.
+          // The app UI itself handles unread badges/message rendering.
+          if (visible.anyVisible) {
+            console.log('[sw] suppressing notification because app is visible', {
+              chatId: result.chatId,
+              openChatId: visible.openChatId,
+            })
             await showSilentNotification()
             return
           }
