@@ -4,6 +4,7 @@ import { Session, type Rumor, type NostrSubscribe, deserializeSessionState, MESS
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'
+import { shouldShowInviteResponseNotification, shouldShowSystemNotificationForMessagePush } from './lib/swNotificationPolicy'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -358,7 +359,9 @@ type VisibleClientState = {
 
 // Find visible clients and ask them which chat is currently open.
 async function getVisibleClientState(): Promise<VisibleClientState> {
-  const clients = await self.clients.matchAll({ type: 'window' })
+  // includeUncontrolled ensures we still detect already-open tabs/windows
+  // after an SW restart/update before the page is fully controlled.
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
 
   // Find visible clients
   const visibleClients = clients.filter(c => c.visibilityState === 'visible')
@@ -410,6 +413,12 @@ self.addEventListener('push', (event) => {
       if (eventKind === INVITE_RESPONSE_KIND) {
         console.log('[sw] received invite response notification')
 
+        const visible = await getVisibleClientState()
+        if (!shouldShowInviteResponseNotification({ anyVisibleClient: visible.anyVisible })) {
+          console.log('[sw] suppressing invite response notification because app is visible')
+          return
+        }
+
         // Try to find the invite label from the p-tag (recipient pubkey)
         let inviteLabel: string | undefined
         const pTag = payload.event.tags?.find((t: string[]) => t[0] === 'p')
@@ -445,24 +454,21 @@ self.addEventListener('push', (event) => {
         const result = await decryptPushMessage(payload.event)
 
         if (result.chatId) {
+          // Suppress notifications when iris-chat is already visible or the inner
+          // event is non-user-facing (typing/receipts/etc.). Brave can surface
+          // "silent" placeholder notifications, so we avoid them entirely.
+          if (result.silent) {
+            return
+          }
           const visible = await getVisibleClientState()
-
-          // When iris-chat is already visible, suppress system notifications.
-          // The app UI itself handles unread badges/message rendering.
-          if (visible.anyVisible) {
-            console.log('[sw] suppressing notification because app is visible', {
+          if (!shouldShowSystemNotificationForMessagePush({
+            anyVisibleClient: visible.anyVisible,
+            silentEvent: false,
+          })) {
+            console.log('[sw] suppressing notification', {
               chatId: result.chatId,
               openChatId: visible.openChatId,
             })
-            await showSilentNotification()
-            return
-          }
-
-          // Suppress notifications for typing, receipts, etc.
-          // Must still show+close a notification to satisfy browser push requirements
-          // (otherwise Chrome shows "updated in the background")
-          if (result.silent) {
-            await showSilentNotification()
             return
           }
 
@@ -498,16 +504,6 @@ self.addEventListener('push', (event) => {
 
   event.waitUntil(handlePush())
 })
-
-async function showSilentNotification() {
-  // Show and immediately close a notification to satisfy browser push event requirements
-  // (browsers require showNotification to be called for every push, otherwise they
-  //  show a default "updated in the background" notification)
-  const tag = 'silent-event'
-  await self.registration.showNotification('', { tag, silent: true })
-  const notifications = await self.registration.getNotifications({ tag })
-  notifications.forEach(n => n.close())
-}
 
 async function showFallbackNotification() {
   await self.registration.showNotification('iris chat', {
