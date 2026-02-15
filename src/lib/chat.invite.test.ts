@@ -163,10 +163,44 @@ describe('Invite Parsing / Acceptance', () => {
 
     const session = await acceptInvite({ type: 'legacy', invite: legacyInvite })
 
-    expect(managerAccept).toHaveBeenCalledTimes(1)
-    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
     expect(session.id).toBe(ownerPubkey)
     expect(session.mode).toBe('manager')
     expect(get(chats).has(ownerPubkey)).toBe(true)
+    await vi.waitFor(() => expect(managerAccept).toHaveBeenCalledTimes(1))
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+  })
+
+  it('acceptInvite(legacy) should not block UI navigation on registration and handshake', async () => {
+    const ownerPubkey = 'f'.repeat(64)
+    const devicePubkey = 'g'.repeat(64)
+    const registration = defer<void>()
+    const handshake = defer<{ ownerPublicKey?: string }>()
+    const managerAccept = vi.fn().mockReturnValue(handshake.promise)
+    mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
+    mocks.setSessionManager({
+      getDeviceId: () => devicePubkey,
+      acceptInvite: managerAccept,
+    })
+
+    const legacyInvite = Invite.createNew(devicePubkey)
+    legacyInvite.ownerPubkey = ownerPubkey
+
+    let session: ChatSession | undefined
+    try {
+      session = await Promise.race([
+        acceptInvite({ type: 'legacy', invite: legacyInvite }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('timeout')), 25)
+        ),
+      ])
+    } finally {
+      registration.resolve()
+      handshake.resolve({ ownerPublicKey: ownerPubkey })
+    }
+
+    expect(session?.id).toBe(ownerPubkey)
+    expect(get(chats).has(ownerPubkey)).toBe(true)
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(managerAccept).toHaveBeenCalledTimes(1))
   })
 })

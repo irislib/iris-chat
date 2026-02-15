@@ -650,43 +650,54 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     return chatSession
   }
 
-  const manager = getSessionManager()
-  const readyManager = manager || (await waitForSessionManager().catch(() => null))
-  const managerWithInviteAccept = readyManager as
-    | (SessionManager & {
-        getDeviceId?: () => string
-        acceptInvite: (
-          invite: Invite,
-          options?: { ownerPublicKey?: string }
-        ) => Promise<{ ownerPublicKey?: string }>
-      })
-    | null
-
-  if (!managerWithInviteAccept?.acceptInvite) {
-    throw new Error('SessionManager is not available')
-  }
-
   const ownerPublicKey = invite.invite.ownerPubkey || invite.invite.inviter
   const existing = get(chats).get(ownerPublicKey)
-  const myPubkey = getPubkey()
-  const managerDeviceId = managerWithInviteAccept.getDeviceId?.()
-  const requiresOwnerRegistration =
-    !existing &&
-    !!myPubkey &&
-    !!managerDeviceId &&
-    managerDeviceId !== myPubkey
-
-  if (requiresOwnerRegistration) {
-    await ensureDeviceRegistered()
-  }
-
-  const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
-  const chatTarget = accepted.ownerPublicKey || ownerPublicKey
-
-  const chatSession = await ensureManagerChat(chatTarget)
+  // Open the chat immediately for better UX; slower legacy handshake continues in background.
+  const chatSession = await ensureManagerChat(ownerPublicKey)
   acceptChat(chatSession.recipientPubkey)
 
-  updateDMSubscription()
+  void (async () => {
+    const manager = getSessionManager()
+    const readyManager = manager || (await waitForSessionManager().catch(() => null))
+    const managerWithInviteAccept = readyManager as
+      | (SessionManager & {
+          getDeviceId?: () => string
+          acceptInvite: (
+            invite: Invite,
+            options?: { ownerPublicKey?: string }
+          ) => Promise<{ ownerPublicKey?: string }>
+        })
+      | null
+
+    if (!managerWithInviteAccept?.acceptInvite) {
+      throw new Error('SessionManager is not available')
+    }
+
+    const myPubkey = getPubkey()
+    const managerDeviceId = managerWithInviteAccept.getDeviceId?.()
+    const requiresOwnerRegistration =
+      !existing &&
+      !!myPubkey &&
+      !!managerDeviceId &&
+      managerDeviceId !== myPubkey
+
+    if (requiresOwnerRegistration) {
+      await ensureDeviceRegistered()
+    }
+
+    const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
+    const chatTarget = accepted.ownerPublicKey || ownerPublicKey
+
+    if (chatTarget !== chatSession.id) {
+      await ensureManagerChat(chatTarget)
+      acceptChat(chatTarget)
+    }
+
+    updateDMSubscription()
+  })().catch((e) => {
+    console.error('[chat] Failed to complete legacy invite acceptance:', e)
+  })
+
   return chatSession
 }
 
