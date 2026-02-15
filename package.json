@@ -55,5 +55,10 @@
     "nostr-double-ratchet": "0.0.66",
     "nostr-tools": "^2.19.3",
     "qrcode": "^1.5.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "@isaacs/brace-expansion": "5.0.1"
+    }
   }
 }
