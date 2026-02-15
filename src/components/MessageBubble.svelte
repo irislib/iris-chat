@@ -3,6 +3,7 @@
   import DOMPurify from 'dompurify'
   import type { ChatMessage } from '../lib/chat'
   import { FILE_LINK_REGEX, parseFileLink } from '../lib/hashtree'
+  import { openMediaModal } from '../lib/mediaModal'
   import { formatExpirationTime } from '../lib/expiration'
   import FileAttachment from './FileAttachment.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
@@ -194,6 +195,38 @@
     return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  function getMarkdownImageName(src: string, alt: string | null): string {
+    const trimmedAlt = alt?.trim()
+    if (trimmedAlt) return trimmedAlt
+
+    try {
+      const url = new URL(src, window.location.href)
+      const name = url.pathname.split('/').filter(Boolean).pop()
+      if (name) return decodeURIComponent(name)
+    } catch {
+      // Ignore invalid URLs and fall back to default label.
+    }
+
+    return 'Image'
+  }
+
+  function handleMessageContentClick(event: MouseEvent) {
+    const target = event.target
+    const current = event.currentTarget
+    if (!(target instanceof HTMLElement) || !(current instanceof HTMLElement)) return
+
+    const imageEl = target.closest('img')
+    if (!(imageEl instanceof HTMLImageElement)) return
+    if (!current.contains(imageEl)) return
+
+    const src = imageEl.currentSrc || imageEl.src
+    if (!src) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    openMediaModal(src, getMarkdownImageName(src, imageEl.getAttribute('alt')), 'image')
+  }
+
   function getBubbleClass(isOwn: boolean, isFirst: boolean, isLast: boolean): string {
     const base = isOwn ? 'bg-primary text-white' : 'bg-surface-light text-gray-200'
 
@@ -346,7 +379,9 @@
               <!-- Content + time (inline for short messages, wraps for long) -->
               <div class="flex flex-wrap items-end gap-x-2 px-3 {htmlContent ? 'pt-1.5' : 'pt-0.5'} pb-1">
                 {#if htmlContent}
-                  <div class="text-sm overflow-hidden message-content min-w-0">
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="text-sm overflow-hidden message-content min-w-0" onclick={handleMessageContentClick}>
                     <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
                     {@html htmlContent}
                   </div>
@@ -575,6 +610,7 @@
   .message-content :global(img) {
     max-width: 100%;
     border-radius: 0.5em;
+    cursor: zoom-in;
   }
   .message-content :global(table) {
     border-collapse: collapse;

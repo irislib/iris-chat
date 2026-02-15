@@ -3,10 +3,14 @@
   import { subscribeToDMNotifications, unsubscribeFromDMNotifications, NotificationService, type NotificationSubscription } from '../lib/notifications'
   import { identity, getPrivkeyHex } from '../lib/identity'
   import { nip19 } from 'nostr-tools'
+  import { minidenticon } from 'minidenticons'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import CopyButton from './CopyButton.svelte'
+  import MediaModal from './MediaModal.svelte'
   import QRScanner from './QRScanner.svelte'
+  import { createProfileStore, getProfileName } from '../lib/profile'
+  import { generateProxyUrl } from '../lib/imgproxy'
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
@@ -60,6 +64,19 @@
   let linkInviteError = $state('')
   let linkInviteShowScanner = $state(false)
   let linkInviteLastAutoAttempt = $state('')
+  let showPictureModal = $state(false)
+  let proxiedFullPicture = $state<string | null>(null)
+
+  let profileStore = $derived($identity?.pubkey ? createProfileStore($identity.pubkey) : undefined)
+  let profile = $derived(profileStore ? $profileStore ?? undefined : undefined)
+  let profilePicture = $derived(profile?.picture)
+  let profilePictureName = $derived(getProfileName(profile) || $identity?.displayName || 'Profile picture')
+  let fallbackProfilePicture = $derived.by(() => {
+    if (!$identity?.pubkey) return null
+    const identicon = minidenticon($identity.pubkey, 90, 50)
+    return `data:image/svg+xml;utf8,${encodeURIComponent(identicon)}`
+  })
+  let modalPicture = $derived((proxiedFullPicture || profilePicture || fallbackProfilePicture) ?? null)
 
   // Device state
   let deviceState = $state($devices)
@@ -203,6 +220,16 @@
 
     linkInviteLastAutoAttempt = linkInviteInput
     void handleAcceptLinkInvite(linkInviteInput)
+  })
+
+  $effect(() => {
+    const pic = profilePicture
+    proxiedFullPicture = null
+    if (pic) {
+      generateProxyUrl(pic, { width: 800 }).then(url => {
+        proxiedFullPicture = url
+      })
+    }
   })
 
   // Get npub for public key
@@ -384,6 +411,12 @@
       return endpoint.slice(0, 20) + '...'
     }
   }
+
+  function handleAvatarClick() {
+    if (modalPicture) {
+      showPictureModal = true
+    }
+  }
 </script>
 
 <div class="h-full flex flex-col bg-[#0a0a0a]">
@@ -413,7 +446,13 @@
       {#if $identity}
         <div class="bg-surface rounded-lg p-4">
           <div class="flex items-center gap-4">
-            <Avatar pubkey={$identity.pubkey} size={64} />
+            <button
+              class="rounded-full overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+              onclick={handleAvatarClick}
+              aria-label="View profile picture"
+            >
+              <Avatar pubkey={$identity.pubkey} size={64} />
+            </button>
             <div class="flex-1 min-w-0">
               <h2 class="font-medium text-lg truncate">
                 <Name pubkey={$identity.pubkey} />
@@ -1019,3 +1058,13 @@
     </div>
   </div>
 </div>
+
+{#if showPictureModal && modalPicture}
+  <MediaModal
+    src={modalPicture}
+    nhash={null}
+    filename={profilePictureName}
+    type="image"
+    onclose={() => showPictureModal = false}
+  />
+{/if}

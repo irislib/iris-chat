@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatFileLink, parseFileLink, FILE_LINK_REGEX } from './hashtree'
+import { formatFileLink, parseFileLink, FILE_LINK_REGEX, isImageFile, getMimeType } from './hashtree'
 
 describe('hashtree file links', () => {
   describe('formatFileLink', () => {
@@ -90,6 +90,16 @@ describe('hashtree file links', () => {
       const link = formatFileLink('nhash1abc123', original)
       const parsed = parseFileLink(link)
       expect(parsed?.filename).toBe(original)
+    })
+  })
+
+  describe('media type detection', () => {
+    it('should treat AVIF files as images', () => {
+      expect(isImageFile('photo.avif')).toBe(true)
+    })
+
+    it('should return AVIF mime type', () => {
+      expect(getMimeType('photo.avif')).toBe('image/avif')
     })
   })
 })

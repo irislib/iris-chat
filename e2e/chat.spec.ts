@@ -671,6 +671,87 @@ test.describe('iris chat', () => {
       }
     })
 
+    test('should open markdown image URL in modal overlay when clicked', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        const markdownImage = '![markdown image](https://example.com/test.jpg)'
+        await page2.getByPlaceholder('Type a message...').fill(markdownImage)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        const markdownImageEl = page1.locator('.message-content img[alt="markdown image"]').first()
+        await expect(markdownImageEl).toHaveCount(1)
+
+        await expect(page1.locator('[data-testid="media-modal"]')).not.toBeVisible()
+        await page1.evaluate(() => {
+          const el = document.querySelector('.message-content img[alt="markdown image"]') as HTMLImageElement | null
+          if (!el) throw new Error('Markdown image not found')
+          el.click()
+        })
+
+        await expect(page1.locator('[data-testid="media-modal"]')).toBeVisible()
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
+    test('should open video attachment in modal overlay when clicked', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        // Setup: Create chat between two users
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        // User 2 sends a message with a fake video nhash
+        const fakeNhash = 'nhash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr5thfd'
+        await page2.getByPlaceholder('Type a message...').fill(`${fakeNhash}/clip.mp4`)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        // Wait for file attachment to appear and open video modal
+        await expect(page1.locator('.file-attachment')).toBeVisible()
+        await page1.locator('.file-attachment button').first().click()
+
+        // Modal overlay should appear with filename
+        await expect(page1.locator('[data-testid="media-modal"]')).toBeVisible()
+        await expect(page1.locator('[data-testid="media-modal"]')).toContainText('clip.mp4')
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
+
     test('should close modal when clicking backdrop', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)
       const context2 = await createContext(browser, testRelayUrl)
@@ -1190,6 +1271,18 @@ test.describe('iris chat', () => {
         await context1.close()
         await context2.close()
       }
+    })
+  })
+
+  test.describe('Settings page', () => {
+    test('should open own profile picture in media modal', async ({ page }) => {
+      await page.goto('/')
+      await page.getByRole('button', { name: 'Go' }).click()
+      await page.getByRole('button', { name: 'Settings' }).click()
+      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+
+      await page.getByRole('button', { name: 'View profile picture' }).click()
+      await expect(page.locator('[data-testid="media-modal"]')).toBeVisible()
     })
   })
 

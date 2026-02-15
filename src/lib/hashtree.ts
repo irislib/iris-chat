@@ -181,7 +181,7 @@ export const FILE_LINK_REGEX = /(?:htree:\/\/)?(nhash1[a-z0-9]+)\/([^\s]+)/gi
  */
 export function isImageFile(filename: string): boolean {
   const ext = filename.split('.').pop()?.toLowerCase()
-  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext || '')
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'avif'].includes(ext || '')
 }
 
 /**
@@ -212,6 +212,7 @@ export function getMimeType(filename: string): string {
     png: 'image/png',
     gif: 'image/gif',
     webp: 'image/webp',
+    avif: 'image/avif',
     svg: 'image/svg+xml',
     bmp: 'image/bmp',
     // Video
