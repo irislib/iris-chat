@@ -77,6 +77,8 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
                 "sessionManagerNew" -> handleSessionManagerNew(call, result)
                 "sessionManagerNewWithStoragePath" -> handleSessionManagerNewWithStoragePath(call, result)
                 "sessionManagerInit" -> handleSessionManagerInit(call, result)
+                "sessionManagerAcceptInviteFromUrl" -> handleSessionManagerAcceptInviteFromUrl(call, result)
+                "sessionManagerAcceptInviteFromEventJson" -> handleSessionManagerAcceptInviteFromEventJson(call, result)
                 "sessionManagerSendText" -> handleSessionManagerSendText(call, result)
                 "sessionManagerSendTextWithInnerId" -> handleSessionManagerSendTextWithInnerId(call, result)
                 "sessionManagerSendEventWithInnerId" -> handleSessionManagerSendEventWithInnerId(call, result)
@@ -505,6 +507,46 @@ class NdrFfiPlugin : FlutterPlugin, MethodCallHandler {
             ?: throw IllegalArgumentException("SessionManager handle not found: $id")
         manager.init()
         result.success(null)
+    }
+
+    private fun handleSessionManagerAcceptInviteFromUrl(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val inviteUrl = call.argument<String>("inviteUrl")
+            ?: throw IllegalArgumentException("Missing inviteUrl")
+        val ownerPubkeyHintHex = call.argument<String>("ownerPubkeyHintHex")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        val acceptResult = manager.acceptInviteFromUrl(inviteUrl, ownerPubkeyHintHex)
+        result.success(
+            mapOf(
+                "ownerPubkeyHex" to acceptResult.ownerPubkeyHex,
+                "inviterDevicePubkeyHex" to acceptResult.inviterDevicePubkeyHex,
+                "deviceId" to acceptResult.deviceId,
+                "createdNewSession" to acceptResult.createdNewSession,
+            ),
+        )
+    }
+
+    private fun handleSessionManagerAcceptInviteFromEventJson(call: MethodCall, result: Result) {
+        val id = call.argument<String>("id")
+            ?: throw IllegalArgumentException("Missing id")
+        val eventJson = call.argument<String>("eventJson")
+            ?: throw IllegalArgumentException("Missing eventJson")
+        val ownerPubkeyHintHex = call.argument<String>("ownerPubkeyHintHex")
+
+        val manager = sessionManagerHandles[id]
+            ?: throw IllegalArgumentException("SessionManager handle not found: $id")
+        val acceptResult = manager.acceptInviteFromEventJson(eventJson, ownerPubkeyHintHex)
+        result.success(
+            mapOf(
+                "ownerPubkeyHex" to acceptResult.ownerPubkeyHex,
+                "inviterDevicePubkeyHex" to acceptResult.inviterDevicePubkeyHex,
+                "deviceId" to acceptResult.deviceId,
+                "createdNewSession" to acceptResult.createdNewSession,
+            ),
+        )
     }
 
     private fun handleSessionManagerSendText(call: MethodCall, result: Result) {

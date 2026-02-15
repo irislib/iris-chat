@@ -118,39 +118,27 @@ class InviteNotifier extends StateNotifier<InviteState> {
   /// Accept an invite from a URL.
   Future<String?> acceptInviteFromUrl(String url) async {
     state = state.copyWith(isAccepting: true, error: null);
-    InviteHandle? inviteHandle;
-    InviteAcceptResult? acceptResult;
     try {
       final authState = _ref.read(authStateProvider);
       if (!authState.isAuthenticated || authState.pubkeyHex == null) {
         throw Exception('Not authenticated');
       }
 
-      // Get private key from storage
-      final authRepo = _ref.read(authRepositoryProvider);
-      final devicePrivkeyHex = await authRepo.getPrivateKey();
-      if (devicePrivkeyHex == null) {
-        throw Exception('Private key not found');
-      }
-      final devicePubkeyHex = await NdrFfi.derivePublicKey(devicePrivkeyHex);
-      final ownerPubkeyHex = authState.pubkeyHex!;
-
-      // Parse and accept invite
-      inviteHandle = await NdrFfi.inviteFromUrl(url);
-      acceptResult = await inviteHandle.acceptWithOwner(
-        inviteePubkeyHex: devicePubkeyHex,
-        inviteePrivkeyHex: devicePrivkeyHex,
-        deviceId: devicePubkeyHex,
-        ownerPubkeyHex: ownerPubkeyHex,
+      final ownerHintPubkeyHex = extractInviteOwnerPubkeyHex(url);
+      final sessionManager = _ref.read(sessionManagerServiceProvider);
+      final acceptResult = await sessionManager.acceptInviteFromUrl(
+        inviteUrl: url,
+        ownerPubkeyHintHex: ownerHintPubkeyHex,
       );
-
-      // Get inviter pubkey
-      final inviterDevicePubkey = await inviteHandle.getInviterPubkeyHex();
-      final inviterOwnerPubkey =
-          extractInviteOwnerPubkeyHex(url) ?? inviterDevicePubkey;
+      final inviterOwnerPubkey = acceptResult.ownerPubkeyHex;
 
       // Serialize session state
-      final sessionState = await acceptResult.session.stateJson();
+      final sessionState = await sessionManager.getActiveSessionState(
+        inviterOwnerPubkey,
+      );
+      if (sessionState == null || sessionState.isEmpty) {
+        throw Exception('No active session state after invite acceptance');
+      }
 
       // Store sessions keyed by peer owner pubkey for stable routing/deduping.
       final sessionDatasource = _ref.read(sessionDatasourceProvider);
@@ -176,18 +164,6 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
       await sessionNotifier.addSession(session);
 
-      // Import session into the session manager (so it can subscribe/decrypt)
-      final sessionManager = _ref.read(sessionManagerServiceProvider);
-      await sessionManager.importSessionState(
-        peerPubkeyHex: inviterOwnerPubkey,
-        stateJson: sessionState,
-        deviceId: inviterDevicePubkey,
-      );
-
-      // Publish response event to Nostr relays
-      final nostrService = _ref.read(nostrServiceProvider);
-      await nostrService.publishEvent(acceptResult.responseEventJson);
-
       // Refresh subscription to listen for messages from the new session
       await sessionManager.refreshSubscription();
 
@@ -197,13 +173,6 @@ class InviteNotifier extends StateNotifier<InviteState> {
       final appError = AppError.from(e, st);
       state = state.copyWith(isAccepting: false, error: appError.message);
       return null;
-    } finally {
-      try {
-        await acceptResult?.session.dispose();
-      } catch (_) {}
-      try {
-        await inviteHandle?.dispose();
-      } catch (_) {}
     }
   }
 
@@ -212,8 +181,6 @@ class InviteNotifier extends StateNotifier<InviteState> {
   /// Returns true on success.
   Future<bool> acceptLinkInviteFromUrl(String url) async {
     state = state.copyWith(isAccepting: true, error: null);
-    InviteHandle? inviteHandle;
-    InviteAcceptResult? acceptResult;
     try {
       final authState = _ref.read(authStateProvider);
       if (!authState.isAuthenticated || authState.pubkeyHex == null) {
@@ -232,19 +199,12 @@ class InviteNotifier extends StateNotifier<InviteState> {
       final ownerPubkeyHex = authState.pubkeyHex!;
       final devicePubkeyHex = await NdrFfi.derivePublicKey(ownerPrivkeyHex);
 
-      inviteHandle = await NdrFfi.inviteFromUrl(url);
-      acceptResult = await inviteHandle.acceptWithOwner(
-        inviteePubkeyHex: devicePubkeyHex,
-        inviteePrivkeyHex: ownerPrivkeyHex,
-        deviceId: devicePubkeyHex,
-        ownerPubkeyHex: ownerPubkeyHex,
+      final sessionManager = _ref.read(sessionManagerServiceProvider);
+      final acceptResult = await sessionManager.acceptInviteFromUrl(
+        inviteUrl: url,
+        ownerPubkeyHintHex: ownerPubkeyHex,
       );
-
-      final linkedDevicePubkeyHex = await inviteHandle.getInviterPubkeyHex();
-
-      // Publish response event so the linking device can complete the flow.
-      final nostrService = _ref.read(nostrServiceProvider);
-      await nostrService.publishEvent(acceptResult.responseEventJson);
+      final linkedDevicePubkeyHex = acceptResult.inviterDevicePubkeyHex;
 
       // Publish updated AppKeys authorizing the new device.
       await _publishMergedAppKeys(
@@ -262,14 +222,6 @@ class InviteNotifier extends StateNotifier<InviteState> {
       final appError = AppError.from(e, st);
       state = state.copyWith(isAccepting: false, error: appError.message);
       return false;
-    } finally {
-      // We don't need the temporary link session/handle beyond the response + AppKeys publish.
-      try {
-        await acceptResult?.session.dispose();
-      } catch (_) {}
-      try {
-        await inviteHandle?.dispose();
-      } catch (_) {}
     }
   }
 
@@ -284,9 +236,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
       invite = await _datasource.getInvite(inviteId);
       if (invite?.serializedState == null) return null;
 
-      inviteHandle = await NdrFfi.inviteDeserialize(
-        invite!.serializedState!,
-      );
+      inviteHandle = await NdrFfi.inviteDeserialize(invite!.serializedState!);
       return await inviteHandle.toUrl(root);
     } catch (e, st) {
       // Self-heal corrupted invite state (observed as `CryptoFailure("invalid HMAC")`).
@@ -375,9 +325,7 @@ class InviteNotifier extends StateNotifier<InviteState> {
       }
 
       // Process invite response
-      inviteHandle = await NdrFfi.inviteDeserialize(
-        invite!.serializedState!,
-      );
+      inviteHandle = await NdrFfi.inviteDeserialize(invite!.serializedState!);
       result = await inviteHandle.processResponse(
         eventJson: eventJson,
         inviterPrivkeyHex: devicePrivkeyHex,
@@ -496,7 +444,8 @@ class InviteNotifier extends StateNotifier<InviteState> {
 
   static bool _looksLikeInvalidHmacError(Object error) {
     final s = error.toString().toLowerCase();
-    return s.contains('invalid hmac') || s.contains('cryptofailure("invalid hmac")');
+    return s.contains('invalid hmac') ||
+        s.contains('cryptofailure("invalid hmac")');
   }
 
   Future<void> _publishMergedAppKeys({

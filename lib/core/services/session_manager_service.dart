@@ -203,6 +203,38 @@ class SessionManagerService {
     return manager.getTotalSessions();
   }
 
+  Future<SessionManagerAcceptInviteResult> acceptInviteFromUrl({
+    required String inviteUrl,
+    String? ownerPubkeyHintHex,
+  }) async {
+    final manager = _manager;
+    if (manager == null) {
+      throw const NostrException('Session manager not initialized');
+    }
+    final result = await manager.acceptInviteFromUrl(
+      inviteUrl: inviteUrl,
+      ownerPubkeyHintHex: ownerPubkeyHintHex,
+    );
+    await _drainEvents();
+    return result;
+  }
+
+  Future<SessionManagerAcceptInviteResult> acceptInviteFromEventJson({
+    required String eventJson,
+    String? ownerPubkeyHintHex,
+  }) async {
+    final manager = _manager;
+    if (manager == null) {
+      throw const NostrException('Session manager not initialized');
+    }
+    final result = await manager.acceptInviteFromEventJson(
+      eventJson: eventJson,
+      ownerPubkeyHintHex: ownerPubkeyHintHex,
+    );
+    await _drainEvents();
+    return result;
+  }
+
   Future<void> _initManager() async {
     final identity = await _authRepository.getCurrentIdentity();
     final devicePrivkeyHex = await _authRepository.getPrivateKey();

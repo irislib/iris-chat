@@ -804,6 +804,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -881,6 +885,10 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_ndr_ffi_fn_constructor_sessionmanagerhandle_new_with_storage_path(`ourPubkeyHex`: RustBuffer.ByValue,`ourIdentityPrivkeyHex`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`storagePath`: RustBuffer.ByValue,`ownerPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_accept_invite_from_event_json(`ptr`: Pointer,`eventJson`: RustBuffer.ByValue,`ownerPubkeyHintHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_accept_invite_from_url(`ptr`: Pointer,`inviteUrl`: RustBuffer.ByValue,`ownerPubkeyHintHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_drain_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_ndr_ffi_fn_method_sessionmanagerhandle_get_active_session_state(`ptr`: Pointer,`peerPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1073,6 +1081,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionhandle_state_json(
     ): Short
+    fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_accept_invite_from_event_json(
+    ): Short
+    fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_accept_invite_from_url(
+    ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_drain_events(
     ): Short
     fun uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_get_active_session_state(
@@ -1194,6 +1206,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ndr_ffi_checksum_method_sessionhandle_state_json() != 62261.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_accept_invite_from_event_json() != 10447.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_accept_invite_from_url() != 1488.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_drain_events() != 33023.toShort()) {
@@ -2458,6 +2476,19 @@ public object FfiConverterTypeSessionHandle: FfiConverter<SessionHandle, Pointer
 public interface SessionManagerHandleInterface {
     
     /**
+     * Accept an invite event JSON using SessionManager's owner-aware routing/auth checks.
+     */
+    fun `acceptInviteFromEventJson`(`eventJson`: kotlin.String, `ownerPubkeyHintHex`: kotlin.String?): SessionManagerAcceptInviteResult
+    
+    /**
+     * Accept an invite URL using SessionManager's owner-aware routing/auth checks.
+     *
+     * This flow also emits the signed invite response via SessionManager pubsub events,
+     * so hosts should continue draining and publishing `publish_signed` events.
+     */
+    fun `acceptInviteFromUrl`(`inviteUrl`: kotlin.String, `ownerPubkeyHintHex`: kotlin.String?): SessionManagerAcceptInviteResult
+    
+    /**
      * Drain pending pubsub events from the internal queue.
      */
     fun `drainEvents`(): List<PubSubEvent>
@@ -2636,6 +2667,41 @@ open class SessionManagerHandle: Disposable, AutoCloseable, SessionManagerHandle
             UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_clone_sessionmanagerhandle(pointer!!, status)
         }
     }
+
+    
+    /**
+     * Accept an invite event JSON using SessionManager's owner-aware routing/auth checks.
+     */
+    @Throws(NdrException::class)override fun `acceptInviteFromEventJson`(`eventJson`: kotlin.String, `ownerPubkeyHintHex`: kotlin.String?): SessionManagerAcceptInviteResult {
+            return FfiConverterTypeSessionManagerAcceptInviteResult.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NdrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_accept_invite_from_event_json(
+        it, FfiConverterString.lower(`eventJson`),FfiConverterOptionalString.lower(`ownerPubkeyHintHex`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Accept an invite URL using SessionManager's owner-aware routing/auth checks.
+     *
+     * This flow also emits the signed invite response via SessionManager pubsub events,
+     * so hosts should continue draining and publishing `publish_signed` events.
+     */
+    @Throws(NdrException::class)override fun `acceptInviteFromUrl`(`inviteUrl`: kotlin.String, `ownerPubkeyHintHex`: kotlin.String?): SessionManagerAcceptInviteResult {
+            return FfiConverterTypeSessionManagerAcceptInviteResult.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NdrException) { _status ->
+    UniffiLib.INSTANCE.uniffi_ndr_ffi_fn_method_sessionmanagerhandle_accept_invite_from_url(
+        it, FfiConverterString.lower(`inviteUrl`),FfiConverterOptionalString.lower(`ownerPubkeyHintHex`),_status)
+}
+    }
+    )
+    }
+    
 
     
     /**
@@ -3256,6 +3322,49 @@ public object FfiConverterTypeSendTextResult: FfiConverterRustBuffer<SendTextRes
     override fun write(value: SendTextResult, buf: ByteBuffer) {
             FfiConverterString.write(value.`innerId`, buf)
             FfiConverterSequenceString.write(value.`outerEventIds`, buf)
+    }
+}
+
+
+
+/**
+ * Result of accepting an invite through SessionManager.
+ */
+data class SessionManagerAcceptInviteResult (
+    var `ownerPubkeyHex`: kotlin.String, 
+    var `inviterDevicePubkeyHex`: kotlin.String, 
+    var `deviceId`: kotlin.String, 
+    var `createdNewSession`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSessionManagerAcceptInviteResult: FfiConverterRustBuffer<SessionManagerAcceptInviteResult> {
+    override fun read(buf: ByteBuffer): SessionManagerAcceptInviteResult {
+        return SessionManagerAcceptInviteResult(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SessionManagerAcceptInviteResult) = (
+            FfiConverterString.allocationSize(value.`ownerPubkeyHex`) +
+            FfiConverterString.allocationSize(value.`inviterDevicePubkeyHex`) +
+            FfiConverterString.allocationSize(value.`deviceId`) +
+            FfiConverterBoolean.allocationSize(value.`createdNewSession`)
+    )
+
+    override fun write(value: SessionManagerAcceptInviteResult, buf: ByteBuffer) {
+            FfiConverterString.write(value.`ownerPubkeyHex`, buf)
+            FfiConverterString.write(value.`inviterDevicePubkeyHex`, buf)
+            FfiConverterString.write(value.`deviceId`, buf)
+            FfiConverterBoolean.write(value.`createdNewSession`, buf)
     }
 }
 

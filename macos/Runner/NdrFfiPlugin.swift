@@ -93,6 +93,10 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
                 try handleSessionManagerNewWithStoragePath(call: call, result: result)
             case "sessionManagerInit":
                 try handleSessionManagerInit(call: call, result: result)
+            case "sessionManagerAcceptInviteFromUrl":
+                try handleSessionManagerAcceptInviteFromUrl(call: call, result: result)
+            case "sessionManagerAcceptInviteFromEventJson":
+                try handleSessionManagerAcceptInviteFromEventJson(call: call, result: result)
             case "sessionManagerSendText":
                 try handleSessionManagerSendText(call: call, result: result)
             case "sessionManagerSendTextWithInnerId":
@@ -613,6 +617,54 @@ public class NdrFfiPlugin: NSObject, FlutterPlugin {
         }
         try manager.`init`()
         result(nil)
+    }
+
+    private func handleSessionManagerAcceptInviteFromUrl(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let inviteUrl = args["inviteUrl"] as? String else {
+            throw PluginError.invalidArguments("Missing id or inviteUrl")
+        }
+        let ownerPubkeyHintHex = args["ownerPubkeyHintHex"] as? String
+
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+
+        let acceptResult = try manager.acceptInviteFromUrl(
+            inviteUrl: inviteUrl,
+            ownerPubkeyHintHex: ownerPubkeyHintHex
+        )
+        result([
+            "ownerPubkeyHex": acceptResult.ownerPubkeyHex,
+            "inviterDevicePubkeyHex": acceptResult.inviterDevicePubkeyHex,
+            "deviceId": acceptResult.deviceId,
+            "createdNewSession": acceptResult.createdNewSession,
+        ])
+    }
+
+    private func handleSessionManagerAcceptInviteFromEventJson(call: FlutterMethodCall, result: FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let id = args["id"] as? String,
+              let eventJson = args["eventJson"] as? String else {
+            throw PluginError.invalidArguments("Missing id or eventJson")
+        }
+        let ownerPubkeyHintHex = args["ownerPubkeyHintHex"] as? String
+
+        guard let manager = sessionManagerHandles[id] else {
+            throw PluginError.handleNotFound("SessionManager handle not found: \(id)")
+        }
+
+        let acceptResult = try manager.acceptInviteFromEventJson(
+            eventJson: eventJson,
+            ownerPubkeyHintHex: ownerPubkeyHintHex
+        )
+        result([
+            "ownerPubkeyHex": acceptResult.ownerPubkeyHex,
+            "inviterDevicePubkeyHex": acceptResult.inviterDevicePubkeyHex,
+            "deviceId": acceptResult.deviceId,
+            "createdNewSession": acceptResult.createdNewSession,
+        ])
     }
 
     private func handleSessionManagerSendText(call: FlutterMethodCall, result: FlutterResult) throws {

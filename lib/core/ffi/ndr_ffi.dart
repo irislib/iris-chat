@@ -650,6 +650,50 @@ class SessionManagerHandle {
     await _channel.invokeMethod<void>('sessionManagerInit', {'id': _id});
   }
 
+  /// Accept an invite URL through SessionManager's owner-aware invite flow.
+  ///
+  /// This flow publishes invite responses through SessionManager pubsub events.
+  Future<SessionManagerAcceptInviteResult> acceptInviteFromUrl({
+    required String inviteUrl,
+    String? ownerPubkeyHintHex,
+  }) async {
+    final result = await _channel.invokeMethod<Map>(
+      'sessionManagerAcceptInviteFromUrl',
+      {
+        'id': _id,
+        'inviteUrl': inviteUrl,
+        'ownerPubkeyHintHex': ownerPubkeyHintHex,
+      },
+    );
+    if (result == null) {
+      throw NdrException.inviteError('Failed to accept invite URL');
+    }
+    return SessionManagerAcceptInviteResult._fromMap(
+      Map<String, dynamic>.from(result),
+    );
+  }
+
+  /// Accept an invite event JSON through SessionManager's owner-aware invite flow.
+  Future<SessionManagerAcceptInviteResult> acceptInviteFromEventJson({
+    required String eventJson,
+    String? ownerPubkeyHintHex,
+  }) async {
+    final result = await _channel.invokeMethod<Map>(
+      'sessionManagerAcceptInviteFromEventJson',
+      {
+        'id': _id,
+        'eventJson': eventJson,
+        'ownerPubkeyHintHex': ownerPubkeyHintHex,
+      },
+    );
+    if (result == null) {
+      throw NdrException.inviteError('Failed to accept invite event');
+    }
+    return SessionManagerAcceptInviteResult._fromMap(
+      Map<String, dynamic>.from(result),
+    );
+  }
+
   /// Send a text message to a recipient.
   Future<List<String>> sendText({
     required String recipientPubkeyHex,
@@ -884,4 +928,28 @@ class InviteResponseResult {
   final String inviteePubkeyHex;
   final String? deviceId;
   final String? ownerPubkeyHex;
+}
+
+/// Result of accepting an invite via SessionManager.
+class SessionManagerAcceptInviteResult {
+  SessionManagerAcceptInviteResult({
+    required this.ownerPubkeyHex,
+    required this.inviterDevicePubkeyHex,
+    required this.deviceId,
+    required this.createdNewSession,
+  });
+
+  factory SessionManagerAcceptInviteResult._fromMap(Map<String, dynamic> map) {
+    return SessionManagerAcceptInviteResult(
+      ownerPubkeyHex: map['ownerPubkeyHex'] as String,
+      inviterDevicePubkeyHex: map['inviterDevicePubkeyHex'] as String,
+      deviceId: map['deviceId'] as String,
+      createdNewSession: map['createdNewSession'] as bool,
+    );
+  }
+
+  final String ownerPubkeyHex;
+  final String inviterDevicePubkeyHex;
+  final String deviceId;
+  final bool createdNewSession;
 }

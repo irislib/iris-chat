@@ -1050,6 +1050,19 @@ public func FfiConverterTypeSessionHandle_lower(_ value: SessionHandle) -> Unsaf
 public protocol SessionManagerHandleProtocol : AnyObject {
     
     /**
+     * Accept an invite event JSON using SessionManager's owner-aware routing/auth checks.
+     */
+    func acceptInviteFromEventJson(eventJson: String, ownerPubkeyHintHex: String?) throws  -> SessionManagerAcceptInviteResult
+    
+    /**
+     * Accept an invite URL using SessionManager's owner-aware routing/auth checks.
+     *
+     * This flow also emits the signed invite response via SessionManager pubsub events,
+     * so hosts should continue draining and publishing `publish_signed` events.
+     */
+    func acceptInviteFromUrl(inviteUrl: String, ownerPubkeyHintHex: String?) throws  -> SessionManagerAcceptInviteResult
+    
+    /**
      * Drain pending pubsub events from the internal queue.
      */
     func drainEvents() throws  -> [PubSubEvent]
@@ -1215,6 +1228,33 @@ public static func newWithStoragePath(ourPubkeyHex: String, ourIdentityPrivkeyHe
 }
     
 
+    
+    /**
+     * Accept an invite event JSON using SessionManager's owner-aware routing/auth checks.
+     */
+open func acceptInviteFromEventJson(eventJson: String, ownerPubkeyHintHex: String?)throws  -> SessionManagerAcceptInviteResult {
+    return try  FfiConverterTypeSessionManagerAcceptInviteResult.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_accept_invite_from_event_json(self.uniffiClonePointer(),
+        FfiConverterString.lower(eventJson),
+        FfiConverterOptionString.lower(ownerPubkeyHintHex),$0
+    )
+})
+}
+    
+    /**
+     * Accept an invite URL using SessionManager's owner-aware routing/auth checks.
+     *
+     * This flow also emits the signed invite response via SessionManager pubsub events,
+     * so hosts should continue draining and publishing `publish_signed` events.
+     */
+open func acceptInviteFromUrl(inviteUrl: String, ownerPubkeyHintHex: String?)throws  -> SessionManagerAcceptInviteResult {
+    return try  FfiConverterTypeSessionManagerAcceptInviteResult.lift(try rustCallWithError(FfiConverterTypeNdrError.lift) {
+    uniffi_ndr_ffi_fn_method_sessionmanagerhandle_accept_invite_from_url(self.uniffiClonePointer(),
+        FfiConverterString.lower(inviteUrl),
+        FfiConverterOptionString.lower(ownerPubkeyHintHex),$0
+    )
+})
+}
     
     /**
      * Drain pending pubsub events from the internal queue.
@@ -2017,6 +2057,91 @@ public func FfiConverterTypeSendTextResult_lower(_ value: SendTextResult) -> Rus
 
 
 /**
+ * Result of accepting an invite through SessionManager.
+ */
+public struct SessionManagerAcceptInviteResult {
+    public var ownerPubkeyHex: String
+    public var inviterDevicePubkeyHex: String
+    public var deviceId: String
+    public var createdNewSession: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(ownerPubkeyHex: String, inviterDevicePubkeyHex: String, deviceId: String, createdNewSession: Bool) {
+        self.ownerPubkeyHex = ownerPubkeyHex
+        self.inviterDevicePubkeyHex = inviterDevicePubkeyHex
+        self.deviceId = deviceId
+        self.createdNewSession = createdNewSession
+    }
+}
+
+
+
+extension SessionManagerAcceptInviteResult: Equatable, Hashable {
+    public static func ==(lhs: SessionManagerAcceptInviteResult, rhs: SessionManagerAcceptInviteResult) -> Bool {
+        if lhs.ownerPubkeyHex != rhs.ownerPubkeyHex {
+            return false
+        }
+        if lhs.inviterDevicePubkeyHex != rhs.inviterDevicePubkeyHex {
+            return false
+        }
+        if lhs.deviceId != rhs.deviceId {
+            return false
+        }
+        if lhs.createdNewSession != rhs.createdNewSession {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(ownerPubkeyHex)
+        hasher.combine(inviterDevicePubkeyHex)
+        hasher.combine(deviceId)
+        hasher.combine(createdNewSession)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionManagerAcceptInviteResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionManagerAcceptInviteResult {
+        return
+            try SessionManagerAcceptInviteResult(
+                ownerPubkeyHex: FfiConverterString.read(from: &buf), 
+                inviterDevicePubkeyHex: FfiConverterString.read(from: &buf), 
+                deviceId: FfiConverterString.read(from: &buf), 
+                createdNewSession: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionManagerAcceptInviteResult, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.ownerPubkeyHex, into: &buf)
+        FfiConverterString.write(value.inviterDevicePubkeyHex, into: &buf)
+        FfiConverterString.write(value.deviceId, into: &buf)
+        FfiConverterBool.write(value.createdNewSession, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionManagerAcceptInviteResult_lift(_ buf: RustBuffer) throws -> SessionManagerAcceptInviteResult {
+    return try FfiConverterTypeSessionManagerAcceptInviteResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionManagerAcceptInviteResult_lower(_ value: SessionManagerAcceptInviteResult) -> RustBuffer {
+    return FfiConverterTypeSessionManagerAcceptInviteResult.lower(value)
+}
+
+
+/**
  * FFI-friendly error type.
  */
 public enum NdrError {
@@ -2427,6 +2552,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_method_sessionhandle_state_json() != 62261) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_accept_invite_from_event_json() != 10447) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_accept_invite_from_url() != 1488) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ndr_ffi_checksum_method_sessionmanagerhandle_drain_events() != 33023) {
