@@ -8,6 +8,7 @@
   import FileAttachment from './FileAttachment.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
   import Name from './Name.svelte'
+  import MessageInfoModal from './MessageInfoModal.svelte'
 
   interface Props {
     message: ChatMessage
@@ -18,13 +19,32 @@
     showSenderName?: boolean
     senderName?: string
     senderPubkey?: string
+    myPubkey?: string | null
+    recipientPubkey?: string | null
+    groupMembers?: string[]
     replyToMessage?: ChatMessage | null
     onreact?: (messageId: string, emoji: string) => Promise<void>
     ondelete?: (messageId: string) => void
     onreply?: (message: ChatMessage) => void
   }
 
-  let { message, isFirst, isLast, prevHasReactions = false, hasReactions = false, showSenderName = false, senderName, senderPubkey, replyToMessage = null, onreact, ondelete, onreply }: Props = $props()
+  let {
+    message,
+    isFirst,
+    isLast,
+    prevHasReactions = false,
+    hasReactions = false,
+    showSenderName = false,
+    senderName,
+    senderPubkey,
+    myPubkey = null,
+    recipientPubkey = null,
+    groupMembers = [],
+    replyToMessage = null,
+    onreact,
+    ondelete,
+    onreply,
+  }: Props = $props()
 
   function handleReply() {
     onreply?.(message)
@@ -45,6 +65,7 @@
 
   let showEmojiPicker = $state(false)
   let showMenu = $state(false)
+  let showInfoModal = $state(false)
   let openUpward = $state(true)
   let openLeft = $state(false)
   let menuButton = $state<HTMLButtonElement | null>(null)
@@ -89,6 +110,11 @@
 
   function handleDelete() {
     ondelete?.(message.id)
+    showMenu = false
+  }
+
+  function handleInfo() {
+    showInfoModal = true
     showMenu = false
   }
 
@@ -157,6 +183,9 @@
       }
       if (showMenu) {
         showMenu = false
+      }
+      if (showInfoModal) {
+        showInfoModal = false
       }
     }
   }
@@ -314,6 +343,13 @@
                 class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32"
                 bind:this={menuContent}
               >
+                <button
+                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+                  onclick={handleInfo}
+                >
+                  <span class="i-carbon-information text-base"></span>
+                  Info
+                </button>
                 <button
                   class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
                   onclick={handleCopy}
@@ -490,6 +526,13 @@
               >
                 <button
                   class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+                  onclick={handleInfo}
+                >
+                  <span class="i-carbon-information text-base"></span>
+                  Info
+                </button>
+                <button
+                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
                   onclick={handleCopy}
                 >
                   <span class="i-carbon-copy text-base"></span>
@@ -510,6 +553,16 @@
     </div>
   </div>
 </div>
+
+{#if showInfoModal}
+  <MessageInfoModal
+    {message}
+    {myPubkey}
+    {recipientPubkey}
+    {groupMembers}
+    onclose={() => showInfoModal = false}
+  />
+{/if}
 
 <style>
   /* Highlight animation for scrolling to replied message */

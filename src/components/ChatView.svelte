@@ -55,6 +55,7 @@
   let showDisappearingModal = $state(false)
 
   let currentTtl = $derived($expirationStore.expirations[chat.id])
+  let myPubkey = $derived($identity?.pubkey || null)
 
   async function handleSetDisappearing(ttlSeconds: number | null) {
     await setDmDisappearingMessages(chat.id, ttlSeconds)
@@ -522,7 +523,19 @@
             </span>
           </div>
         {/if}
-        <MessageBubble {message} {isFirst} {isLast} {prevHasReactions} {hasReactions} {replyToMessage} onreact={handleReact} ondelete={handleDeleteMessage} onreply={handleReply} />
+        <MessageBubble
+          {message}
+          {isFirst}
+          {isLast}
+          {prevHasReactions}
+          {hasReactions}
+          {replyToMessage}
+          {myPubkey}
+          recipientPubkey={chat.recipientPubkey}
+          onreact={handleReact}
+          ondelete={handleDeleteMessage}
+          onreply={handleReply}
+        />
       {/each}
     {/if}
 

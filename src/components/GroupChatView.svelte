@@ -507,6 +507,8 @@
           {hasReactions}
           {showSenderName}
           senderPubkey={message.senderPubkey}
+          {myPubkey}
+          groupMembers={group.members}
           {replyToMessage}
           onreact={handleReact}
           ondelete={handleDeleteMessage}

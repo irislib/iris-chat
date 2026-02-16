@@ -1,0 +1,103 @@
+import { describe, it, expect } from 'vitest'
+import { deriveMessageReceiptInfo } from './messageInfo'
+
+describe('messageInfo', () => {
+  describe('deriveMessageReceiptInfo', () => {
+    it('marks recipient as received and seen for outgoing seen DMs', () => {
+      const info = deriveMessageReceiptInfo(
+        {
+          isMine: true,
+          status: 'seen',
+        },
+        {
+          myPubkey: 'me',
+          recipientPubkey: 'alice',
+        }
+      )
+
+      expect(info.scope).toBe('dm')
+      expect(info.participants).toEqual(['me', 'alice'])
+      expect(info.potentialRecipients).toEqual(['alice'])
+      expect(info.receivedBy).toEqual(['alice'])
+      expect(info.seenBy).toEqual(['alice'])
+      expect(info.notes).toEqual([])
+    })
+
+    it('keeps outgoing DMs without receipts empty and adds a note', () => {
+      const info = deriveMessageReceiptInfo(
+        {
+          isMine: true,
+        },
+        {
+          myPubkey: 'me',
+          recipientPubkey: 'alice',
+        }
+      )
+
+      expect(info.scope).toBe('dm')
+      expect(info.receivedBy).toEqual([])
+      expect(info.seenBy).toEqual([])
+      expect(info.notes).toContain('No delivery receipt yet.')
+    })
+
+    it('marks local user as received and seen for incoming seen DMs', () => {
+      const info = deriveMessageReceiptInfo(
+        {
+          isMine: false,
+          status: 'seen',
+          senderPubkey: 'alice',
+        },
+        {
+          myPubkey: 'me',
+          recipientPubkey: 'alice',
+        }
+      )
+
+      expect(info.scope).toBe('dm')
+      expect(info.participants).toEqual(['me', 'alice'])
+      expect(info.potentialRecipients).toEqual(['me'])
+      expect(info.receivedBy).toEqual(['me'])
+      expect(info.seenBy).toEqual(['me'])
+    })
+
+    it('shows only local seen state for incoming group messages', () => {
+      const info = deriveMessageReceiptInfo(
+        {
+          isMine: false,
+          status: 'seen',
+          senderPubkey: 'alice',
+        },
+        {
+          myPubkey: 'me',
+          groupMembers: ['me', 'alice', 'bob'],
+        }
+      )
+
+      expect(info.scope).toBe('group')
+      expect(info.participants).toEqual(['me', 'alice', 'bob'])
+      expect(info.potentialRecipients).toEqual(['me', 'bob'])
+      expect(info.receivedBy).toEqual(['me'])
+      expect(info.seenBy).toEqual(['me'])
+      expect(info.notes).toContain('Group chats currently expose only local seen state.')
+    })
+
+    it('shows potential group recipients for outgoing messages without claiming remote receipts', () => {
+      const info = deriveMessageReceiptInfo(
+        {
+          isMine: true,
+          senderPubkey: 'me',
+        },
+        {
+          myPubkey: 'me',
+          groupMembers: ['me', 'alice', 'bob'],
+        }
+      )
+
+      expect(info.scope).toBe('group')
+      expect(info.potentialRecipients).toEqual(['alice', 'bob'])
+      expect(info.receivedBy).toEqual([])
+      expect(info.seenBy).toEqual([])
+      expect(info.notes).toContain('Remote per-member delivery/read receipts are not tracked yet.')
+    })
+  })
+})
