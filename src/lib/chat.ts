@@ -107,8 +107,8 @@ export function initSessionManagerEvents(): void {
   const subscribe = (manager: SessionManager) => {
     if (sessionManagerSubscribed) return
     sessionManagerSubscribed = true
-    manager.onEvent((rumor, from) => {
-      handleManagerEvent(rumor, from).catch((e) =>
+    manager.onEvent((rumor, from, meta) => {
+      handleManagerEvent(rumor, from, meta).catch((e) =>
         console.error('[chat] Failed to handle SessionManager event:', e)
       )
     })
@@ -578,7 +578,11 @@ function resolveManagerIsFromSelf(
   return !!pTag && pTag !== myPubkey && pTag === chatId
 }
 
-export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Promise<void> {
+export async function handleManagerEvent(
+  rumor: Rumor,
+  fromPubkey: string,
+  meta?: { fromDeviceId?: string }
+): Promise<void> {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
@@ -586,7 +590,7 @@ export async function handleManagerEvent(rumor: Rumor, fromPubkey: string): Prom
 
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
-    handleGroupEvent(rumor, effectiveFromPubkey)
+    handleGroupEvent(rumor, effectiveFromPubkey, undefined, meta?.fromDeviceId)
     return
   }
 
@@ -719,7 +723,7 @@ function handleIncomingRumor(
   // Route group events to group handler
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
-    handleGroupEvent(rumor, chatSession.recipientPubkey)
+    handleGroupEvent(rumor, chatSession.recipientPubkey, undefined, rumor.pubkey)
     return
   }
 
