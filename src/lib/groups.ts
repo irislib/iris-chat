@@ -114,10 +114,11 @@ function resolveNativeSenderPubkey(
 
 function createNativeGroupSubscribe(): NostrSubscribe | undefined {
   const ndkInstance = get(ndk) as { subscribe?: (...args: unknown[]) => unknown } | undefined
-  if (!ndkInstance || typeof ndkInstance.subscribe !== 'function') return undefined
+  const subscribe = ndkInstance?.subscribe
+  if (typeof subscribe !== 'function') return undefined
 
   return (filter, onEvent) => {
-    const subscription = ndkInstance.subscribe(
+    const subscription = subscribe(
       filter,
       { closeOnEose: false },
     ) as {
@@ -128,7 +129,7 @@ function createNativeGroupSubscribe(): NostrSubscribe | undefined {
     }
 
     const onNdkEvent = (event: NDKEvent): void => {
-      const rawEvent = event.rawEvent?.() as OuterEvent | undefined
+      const rawEvent = event.rawEvent?.() as Parameters<typeof onEvent>[0] | undefined
       if (!rawEvent) return
       onEvent(rawEvent)
     }

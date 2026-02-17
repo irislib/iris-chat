@@ -24,6 +24,11 @@ export interface MessageReceiptInfo {
   notes: string[]
 }
 
+export interface ReceiptStagePartition {
+  deliveredBy: string[]
+  seenBy: string[]
+}
+
 function uniquePubkeys(values: Array<string | null | undefined>): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -36,6 +41,17 @@ function uniquePubkeys(values: Array<string | null | undefined>): string[] {
   }
 
   return out
+}
+
+export function partitionReceiptStages(receivedBy: string[], seenBy: string[]): ReceiptStagePartition {
+  const uniqueSeenBy = uniquePubkeys(seenBy)
+  const seenSet = new Set(uniqueSeenBy)
+  const deliveredBy = uniquePubkeys(receivedBy).filter((pubkey) => !seenSet.has(pubkey))
+
+  return {
+    deliveredBy,
+    seenBy: uniqueSeenBy,
+  }
 }
 
 function isGroupContext(context: MessageInfoContext): boolean {

@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { ChatMessage } from '../lib/chat'
   import { copyToClipboard } from '../lib/utils'
-  import { deriveMessageReceiptInfo } from '../lib/messageInfo'
+  import { deriveMessageReceiptInfo, partitionReceiptStages } from '../lib/messageInfo'
+  import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
 
   interface Props {
@@ -24,6 +25,7 @@
       groupMembers,
     })
   )
+  let receiptStages = $derived(partitionReceiptStages(receiptInfo.receivedBy, receiptInfo.seenBy))
 
   let messageScopeLabel = $derived(
     receiptInfo.scope === 'dm'
@@ -134,14 +136,15 @@
       </div>
 
       <div class="space-y-2">
-        <p class="text-sm text-gray-400">Received By</p>
-        {#if receiptInfo.receivedBy.length === 0}
-          <p class="text-sm text-gray-500">No confirmed recipients yet.</p>
+        <p class="text-sm text-gray-400">Delivered To</p>
+        {#if receiptStages.deliveredBy.length === 0}
+          <p class="text-sm text-gray-500">No delivered-only recipients.</p>
         {:else}
           <div class="space-y-1">
-            {#each receiptInfo.receivedBy as pubkey}
+            {#each receiptStages.deliveredBy as pubkey}
               <div class="flex items-center justify-between gap-3 rounded-lg bg-surface-light px-3 py-2">
-                <div class="min-w-0 text-sm truncate">
+                <div class="min-w-0 text-sm truncate flex items-center gap-2">
+                  <Avatar {pubkey} size={20} />
                   <Name {pubkey} />
                 </div>
                 <div class="flex items-center gap-2 flex-shrink-0">
@@ -158,13 +161,14 @@
 
       <div class="space-y-2">
         <p class="text-sm text-gray-400">Seen By</p>
-        {#if receiptInfo.seenBy.length === 0}
+        {#if receiptStages.seenBy.length === 0}
           <p class="text-sm text-gray-500">No confirmed readers yet.</p>
         {:else}
           <div class="space-y-1">
-            {#each receiptInfo.seenBy as pubkey}
+            {#each receiptStages.seenBy as pubkey}
               <div class="flex items-center justify-between gap-3 rounded-lg bg-surface-light px-3 py-2">
-                <div class="min-w-0 text-sm truncate">
+                <div class="min-w-0 text-sm truncate flex items-center gap-2">
+                  <Avatar {pubkey} size={20} />
                   <Name {pubkey} />
                 </div>
                 <div class="flex items-center gap-2 flex-shrink-0">
@@ -185,7 +189,8 @@
           <div class="space-y-1">
             {#each receiptInfo.potentialRecipients as pubkey}
               <div class="flex items-center justify-between gap-3 rounded-lg bg-surface-light/60 px-3 py-2">
-                <div class="min-w-0 text-sm truncate">
+                <div class="min-w-0 text-sm truncate flex items-center gap-2">
+                  <Avatar {pubkey} size={20} />
                   <Name {pubkey} />
                 </div>
                 <div class="flex items-center gap-2 flex-shrink-0">

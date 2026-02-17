@@ -1,7 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { deriveMessageReceiptInfo } from './messageInfo'
+import { deriveMessageReceiptInfo, partitionReceiptStages } from './messageInfo'
 
 describe('messageInfo', () => {
+  describe('partitionReceiptStages', () => {
+    it('keeps seen users out of delivered list', () => {
+      const lists = partitionReceiptStages(['alice', 'bob'], ['bob'])
+      expect(lists.deliveredBy).toEqual(['alice'])
+      expect(lists.seenBy).toEqual(['bob'])
+    })
+
+    it('deduplicates users while preserving first-seen order', () => {
+      const lists = partitionReceiptStages(
+        ['alice', 'alice', 'bob', 'carol'],
+        ['bob', 'bob', 'dave', 'carol']
+      )
+      expect(lists.deliveredBy).toEqual(['alice'])
+      expect(lists.seenBy).toEqual(['bob', 'dave', 'carol'])
+    })
+  })
+
   describe('deriveMessageReceiptInfo', () => {
     it('marks recipient as received and seen for outgoing seen DMs', () => {
       const info = deriveMessageReceiptInfo(
