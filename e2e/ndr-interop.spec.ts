@@ -154,7 +154,7 @@ async function stopNdrListen(child: ReturnType<typeof startNdrListen>['child']) 
 }
 
 test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
-  test.setTimeout(120000)
+  test.setTimeout(180000)
 
   const dataDir = createNdrDataDir(testRelayUrl)
   let listener: ReturnType<typeof startNdrListen> | null = null

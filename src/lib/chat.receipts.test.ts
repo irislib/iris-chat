@@ -35,6 +35,7 @@ vi.mock('./identity', () => {
     ndk: writable({}),
     getPrivkeyBytes: () => null,
     getPubkey: () => MY_PUBKEY,
+    hasNip44Support: () => true,
     isNip07Login: () => false,
   }
 })

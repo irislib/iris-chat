@@ -23,6 +23,7 @@ vi.mock('./identity', () => {
     ndk: writable({}),
     getPrivkeyBytes: () => null,
     getPubkey: () => MY_PUBKEY,
+    hasNip44Support: () => true,
     isNip07Login: () => false,
   }
 })
@@ -170,13 +171,10 @@ describe('Invite Parsing / Acceptance', () => {
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
   })
 
-  it('acceptInvite(legacy) should not block UI navigation on registration and handshake', async () => {
+  it('acceptInvite(legacy) should surface handshake errors', async () => {
     const ownerPubkey = 'f'.repeat(64)
     const devicePubkey = 'g'.repeat(64)
-    const registration = defer<void>()
-    const handshake = defer<{ ownerPublicKey?: string }>()
-    const managerAccept = vi.fn().mockReturnValue(handshake.promise)
-    mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
+    const managerAccept = vi.fn().mockRejectedValue(new Error('Extension does not support NIP-44'))
     mocks.setSessionManager({
       getDeviceId: () => devicePubkey,
       acceptInvite: managerAccept,
@@ -185,22 +183,11 @@ describe('Invite Parsing / Acceptance', () => {
     const legacyInvite = Invite.createNew(devicePubkey)
     legacyInvite.ownerPubkey = ownerPubkey
 
-    let session: ChatSession | undefined
-    try {
-      session = await Promise.race([
-        acceptInvite({ type: 'legacy', invite: legacyInvite }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), 25)
-        ),
-      ])
-    } finally {
-      registration.resolve()
-      handshake.resolve({ ownerPublicKey: ownerPubkey })
-    }
-
-    expect(session?.id).toBe(ownerPubkey)
-    expect(get(chats).has(ownerPubkey)).toBe(true)
+    await expect(acceptInvite({ type: 'legacy', invite: legacyInvite })).rejects.toThrow(
+      'NIP-44'
+    )
+    expect(get(chats).has(ownerPubkey)).toBe(false)
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(managerAccept).toHaveBeenCalledTimes(1))
+    expect(managerAccept).toHaveBeenCalledTimes(1)
   })
 })

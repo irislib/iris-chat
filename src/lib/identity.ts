@@ -290,6 +290,14 @@ export function hasNip07(): boolean {
   return typeof window !== 'undefined' && !!window.nostr
 }
 
+export function hasNip44Support(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.nostr?.nip44?.encrypt === 'function' &&
+    typeof window.nostr?.nip44?.decrypt === 'function'
+  )
+}
+
 // Get the private key hex from current identity (only works for non-NIP07)
 export function getPrivkeyHex(): string | null {
   const currentIdentity = get(identity)
