@@ -3,8 +3,7 @@ import {
   CHAT_MESSAGE_KIND, REACTION_KIND, TYPING_KIND, parseReaction,
   GROUP_METADATA_KIND,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
-  MESSAGE_EVENT_KIND,
-  Group as NativeGroup,
+  GroupManager,
   type GroupData,
   isGroupAdmin,
   createGroupData,
@@ -20,7 +19,7 @@ import {
   removeGroupAdmin as libRemoveAdmin,
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
-import type { Rumor } from 'nostr-double-ratchet'
+import type { Rumor, NostrSubscribe, GroupDecryptedEvent } from 'nostr-double-ratchet'
 import type { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getPubkey, ndk } from './identity'
 import { devices } from './devices'
@@ -63,14 +62,12 @@ const MAX_PENDING_PER_GROUP = 50
 const PENDING_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
 
 type NativeGroupRuntime = {
-  group: NativeGroup
+  manager: GroupManager
   ownerPubkey: string
   devicePubkey: string
-  subscribedAuthors: string[]
-  unsubscribeOuter?: () => void
 }
 
-const nativeGroupRuntime = new Map<string, NativeGroupRuntime>()
+let nativeGroupRuntime: NativeGroupRuntime | null = null
 const nativeGroupStorage = new DexieStorageAdapter()
 
 function queuePendingEvent(groupId: string, rumor: Rumor, senderPubkey: string, senderDevicePubkey?: string): void {
@@ -98,14 +95,6 @@ function flushPendingEvents(groupId: string): void {
   }
 }
 
-function toSortedUnique(values: string[]): string[] {
-  return Array.from(new Set(values)).sort()
-}
-
-function sameStringArray(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((value, index) => value === b[index])
-}
-
 function resolveOurDevicePubkey(): string | null {
   const devicePubkey = get(devices).identityPubkey?.trim()
   if (devicePubkey) return devicePubkey
@@ -113,133 +102,107 @@ function resolveOurDevicePubkey(): string | null {
   return ownerPubkey || null
 }
 
-function teardownNativeGroupRuntime(groupId: string): void {
-  const runtime = nativeGroupRuntime.get(groupId)
-  if (!runtime) return
+function resolveNativeSenderPubkey(
+  event: GroupDecryptedEvent,
+  ownerPubkey: string,
+  devicePubkey: string,
+): string {
+  if (event.senderOwnerPubkey) return event.senderOwnerPubkey
+  if (event.senderDevicePubkey === devicePubkey) return ownerPubkey
+  return event.senderDevicePubkey
+}
+
+function createNativeGroupSubscribe(): NostrSubscribe | undefined {
+  const ndkInstance = get(ndk) as { subscribe?: (...args: unknown[]) => unknown } | undefined
+  if (!ndkInstance || typeof ndkInstance.subscribe !== 'function') return undefined
+
+  return (filter, onEvent) => {
+    const subscription = ndkInstance.subscribe(
+      filter,
+      { closeOnEose: false },
+    ) as {
+      on?: (name: 'event', cb: (event: NDKEvent) => void) => void
+      off?: (name: 'event', cb: (event: NDKEvent) => void) => void
+      start?: () => void
+      stop?: () => void
+    }
+
+    const onNdkEvent = (event: NDKEvent): void => {
+      const rawEvent = event.rawEvent?.() as OuterEvent | undefined
+      if (!rawEvent) return
+      onEvent(rawEvent)
+    }
+
+    subscription.on?.('event', onNdkEvent)
+    subscription.start?.()
+
+    return () => {
+      subscription.off?.('event', onNdkEvent)
+      subscription.stop?.()
+    }
+  }
+}
+
+function teardownNativeGroupManager(): void {
+  if (!nativeGroupRuntime) return
   try {
-    runtime.unsubscribeOuter?.()
+    nativeGroupRuntime.manager.destroy()
   } catch {
     // Ignore best-effort teardown failures.
   }
-  nativeGroupRuntime.delete(groupId)
+  nativeGroupRuntime = null
 }
 
-function ensureNativeGroupRuntime(groupId: string): NativeGroupRuntime | null {
-  const groupData = get(groups).get(groupId)
-  if (!groupData) {
-    teardownNativeGroupRuntime(groupId)
-    return null
-  }
-
+function ensureNativeGroupRuntime(): NativeGroupRuntime | null {
   const ownerPubkey = getPubkey()?.trim()
   const devicePubkey = resolveOurDevicePubkey()
   if (!ownerPubkey || !devicePubkey) return null
 
-  const existing = nativeGroupRuntime.get(groupId)
+  const existing = nativeGroupRuntime
   if (
     existing &&
     existing.ownerPubkey === ownerPubkey &&
     existing.devicePubkey === devicePubkey
   ) {
-    existing.group.setData(groupData)
     return existing
   }
 
   if (existing) {
-    try {
-      existing.unsubscribeOuter?.()
-    } catch {
-      // Ignore best-effort teardown failures.
-    }
+    teardownNativeGroupManager()
   }
 
+  const nostrSubscribe = createNativeGroupSubscribe()
+
   const runtime: NativeGroupRuntime = {
-    group: new NativeGroup({
-      data: groupData,
+    manager: new GroupManager({
       ourOwnerPubkey: ownerPubkey,
       ourDevicePubkey: devicePubkey,
       storage: nativeGroupStorage,
+      ...(nostrSubscribe ? { nostrSubscribe } : {}),
+      onDecryptedEvent: (event) => {
+        const senderPubkey = resolveNativeSenderPubkey(
+          event,
+          ownerPubkey,
+          devicePubkey,
+        )
+        handleGroupEvent(
+          event.inner,
+          senderPubkey,
+          undefined,
+          event.senderDevicePubkey,
+        )
+      },
     }),
     ownerPubkey,
     devicePubkey,
-    subscribedAuthors: [],
   }
 
-  nativeGroupRuntime.set(groupId, runtime)
+  nativeGroupRuntime = runtime
   return runtime
 }
 
-async function processNativeOuterEvent(groupId: string, outerEvent: OuterEvent): Promise<void> {
-  const runtime = ensureNativeGroupRuntime(groupId)
-  if (!runtime) return
-
-  const decrypted = await runtime.group.handleOuterEvent(outerEvent).catch(() => null)
-  if (!decrypted) return
-
-  const senderPubkey =
-    decrypted.senderOwnerPubkey ||
-    decrypted.senderDevicePubkey ||
-    outerEvent.pubkey
-
-  handleGroupEvent(
-    decrypted.inner,
-    senderPubkey,
-    outerEvent,
-    decrypted.senderDevicePubkey,
-  )
-}
-
-async function refreshNativeGroupOuterSubscription(groupId: string): Promise<void> {
-  const runtime = ensureNativeGroupRuntime(groupId)
-  if (!runtime) return
-
-  let senderEventPubkeys: string[]
-  try {
-    senderEventPubkeys = toSortedUnique(await runtime.group.listSenderEventPubkeys())
-  } catch {
-    return
-  }
-  if (sameStringArray(runtime.subscribedAuthors, senderEventPubkeys)) return
-
-  try {
-    runtime.unsubscribeOuter?.()
-  } catch {
-    // Ignore best-effort teardown failures.
-  }
-  runtime.unsubscribeOuter = undefined
-  runtime.subscribedAuthors = senderEventPubkeys
-
-  if (senderEventPubkeys.length === 0) return
-
-  const ndkInstance = get(ndk) as { subscribe?: (...args: unknown[]) => unknown } | undefined
-  if (!ndkInstance || typeof ndkInstance.subscribe !== 'function') return
-
-  const subscription = ndkInstance.subscribe(
-    {
-      kinds: [MESSAGE_EVENT_KIND],
-      authors: senderEventPubkeys,
-    },
-    { closeOnEose: false }
-  ) as {
-    on?: (name: 'event', cb: (event: NDKEvent) => void) => void
-    off?: (name: 'event', cb: (event: NDKEvent) => void) => void
-    start?: () => void
-    stop?: () => void
-  }
-
-  const onEvent = (event: NDKEvent): void => {
-    const rawEvent = event.rawEvent?.() as OuterEvent | undefined
-    if (!rawEvent) return
-    void processNativeOuterEvent(groupId, rawEvent)
-  }
-
-  subscription.on?.('event', onEvent)
-  subscription.start?.()
-
-  runtime.unsubscribeOuter = () => {
-    subscription.off?.('event', onEvent)
-    subscription.stop?.()
-  }
+function teardownNativeGroupRuntime(groupId: string): void {
+  nativeGroupRuntime?.manager.removeGroup(groupId)
 }
 
 async function processSenderKeyDistribution(
@@ -248,35 +211,32 @@ async function processSenderKeyDistribution(
   senderOwnerPubkey: string,
   senderDevicePubkey?: string,
 ): Promise<void> {
-  const runtime = ensureNativeGroupRuntime(groupId)
+  const runtime = ensureNativeGroupRuntime()
   if (!runtime) return
+  const groupData = get(groups).get(groupId)
+  if (!groupData) return
+
+  await runtime.manager.upsertGroup(groupData).catch(() => {})
 
   const resolvedSenderDevice = senderDevicePubkey || rumor.pubkey
-  let drained: Awaited<ReturnType<NativeGroup['handleIncomingSessionEvent']>>
-  try {
-    drained = await runtime.group.handleIncomingSessionEvent(
-      rumor,
-      senderOwnerPubkey,
-      resolvedSenderDevice,
-    )
-  } catch {
-    return
-  }
-
-  await refreshNativeGroupOuterSubscription(groupId)
-
-  for (const event of drained) {
-    handleGroupEvent(
-      event.inner,
-      event.senderOwnerPubkey || event.senderDevicePubkey || senderOwnerPubkey,
-      undefined,
-      event.senderDevicePubkey,
-    )
-  }
+  await runtime.manager.handleIncomingSessionEvent(
+    rumor,
+    senderOwnerPubkey,
+    resolvedSenderDevice,
+  )
 }
 
 function syncNativeGroupTransport(groupId: string): void {
-  void refreshNativeGroupOuterSubscription(groupId).catch(() => {})
+  const runtime = ensureNativeGroupRuntime()
+  if (!runtime) return
+
+  const groupData = get(groups).get(groupId)
+  if (!groupData) {
+    runtime.manager.removeGroup(groupId)
+    return
+  }
+
+  void runtime.manager.upsertGroup(groupData).catch(() => {})
 }
 
 export const isAdmin = isGroupAdmin

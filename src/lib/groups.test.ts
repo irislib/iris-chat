@@ -48,6 +48,7 @@ vi.mock('nostr-double-ratchet', async () => {
   const actual = await import('nostr-double-ratchet')
   return {
     ...(actual as object),
+    GroupManager: actual.GroupManager,
     isGroupAdmin: (group: { admins?: string[] }, pubkey: string) => {
       return Array.isArray(group.admins) && group.admins.includes(pubkey)
     },
