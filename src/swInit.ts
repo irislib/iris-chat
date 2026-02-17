@@ -1,6 +1,8 @@
 export function initServiceWorker() {
   if (!('serviceWorker' in navigator)) return
 
+  const UPDATE_INTERVAL_MS = 10 * 60 * 1000
+
   // Prevent infinite reload loops
   const reloadKey = 'sw-reload'
   if (sessionStorage.getItem(reloadKey)) {
@@ -18,7 +20,7 @@ export function initServiceWorker() {
   navigator.serviceWorker.ready.then((registration) => {
     console.log('[sw] ready')
     setInterval(() => {
-      registration.update()
-    }, 60 * 1000)
+      registration.update().catch(() => {})
+    }, UPDATE_INTERVAL_MS)
   })
 }
