@@ -15,6 +15,7 @@
   import { expirationStore } from '../lib/expirationStore'
   import { setDmDisappearingMessages } from '../lib/disappearingMessages'
   import { getExpirationLabel } from '../lib/expiration'
+  import { buildDisappearingNotice, normalizeDisappearingTtl } from '../lib/disappearingNotice'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
@@ -55,6 +56,9 @@
   let showDisappearingModal = $state(false)
 
   let currentTtl = $derived($expirationStore.expirations[chat.id])
+  let disappearingNotice = $state<string | null>(null)
+  let lastSeenDisappearingTtl = $state<number | null | undefined>(undefined)
+  let disappearingNoticeTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   let myPubkey = $derived($identity?.pubkey || null)
 
   async function handleSetDisappearing(ttlSeconds: number | null) {
@@ -344,6 +348,27 @@
     if (pendingAttachment?.previewUrl) {
       URL.revokeObjectURL(pendingAttachment.previewUrl)
     }
+    if (disappearingNoticeTimer) {
+      clearTimeout(disappearingNoticeTimer)
+      disappearingNoticeTimer = null
+    }
+  })
+
+  $effect(() => {
+    const normalizedTtl = normalizeDisappearingTtl(currentTtl)
+    if (lastSeenDisappearingTtl === undefined) {
+      lastSeenDisappearingTtl = normalizedTtl
+      return
+    }
+    if (lastSeenDisappearingTtl === normalizedTtl) return
+    lastSeenDisappearingTtl = normalizedTtl
+
+    disappearingNotice = buildDisappearingNotice(normalizedTtl)
+    if (disappearingNoticeTimer) clearTimeout(disappearingNoticeTimer)
+    disappearingNoticeTimer = setTimeout(() => {
+      disappearingNotice = null
+      disappearingNoticeTimer = null
+    }, 3000)
   })
 
   // Track whether user is scrolled near the bottom
@@ -456,6 +481,12 @@
       {/if}
     </div>
   </header>
+
+  {#if disappearingNotice}
+    <div class="px-4 py-2 border-b border-surface-lighter bg-surface text-sm text-primary">
+      {disappearingNotice}
+    </div>
+  {/if}
 
   {#if isRequest}
     <div class="px-4 py-3 border-b border-surface-lighter bg-surface flex items-center justify-between gap-3">

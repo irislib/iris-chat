@@ -12,6 +12,7 @@
   import { expirationStore } from '../lib/expirationStore'
   import { setGroupDisappearingMessages } from '../lib/disappearingMessages'
   import { getExpirationLabel } from '../lib/expiration'
+  import { buildDisappearingNotice, normalizeDisappearingTtl } from '../lib/disappearingNotice'
   import MessageBubble from './MessageBubble.svelte'
   import MediaModal from './MediaModal.svelte'
   import VoiceRecorder from './VoiceRecorder.svelte'
@@ -51,6 +52,9 @@
   let showDisappearingModal = $state(false)
 
   let currentTtl = $derived($expirationStore.expirations[group.id])
+  let disappearingNotice = $state<string | null>(null)
+  let lastSeenDisappearingTtl = $state<number | null | undefined>(undefined)
+  let disappearingNoticeTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   let canChangeDisappearing = $derived((() => {
     const pk = getPubkey()
     return pk ? isAdmin(group, pk) : false
@@ -314,6 +318,27 @@
     if (pendingAttachment?.previewUrl) {
       URL.revokeObjectURL(pendingAttachment.previewUrl)
     }
+    if (disappearingNoticeTimer) {
+      clearTimeout(disappearingNoticeTimer)
+      disappearingNoticeTimer = null
+    }
+  })
+
+  $effect(() => {
+    const normalizedTtl = normalizeDisappearingTtl(currentTtl)
+    if (lastSeenDisappearingTtl === undefined) {
+      lastSeenDisappearingTtl = normalizedTtl
+      return
+    }
+    if (lastSeenDisappearingTtl === normalizedTtl) return
+    lastSeenDisappearingTtl = normalizedTtl
+
+    disappearingNotice = buildDisappearingNotice(normalizedTtl)
+    if (disappearingNoticeTimer) clearTimeout(disappearingNoticeTimer)
+    disappearingNoticeTimer = setTimeout(() => {
+      disappearingNotice = null
+      disappearingNoticeTimer = null
+    }, 3000)
   })
 
   let isAtBottom = $state(true)
@@ -434,6 +459,12 @@
       {/if}
     </div>
   </header>
+
+  {#if disappearingNotice}
+    <div class="px-4 py-2 border-b border-surface-lighter bg-surface text-sm text-primary">
+      {disappearingNotice}
+    </div>
+  {/if}
 
   {#if showMenu}
     <button
