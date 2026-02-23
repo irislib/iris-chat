@@ -40,7 +40,7 @@ import { handleGroupEvent } from './groups'
 import { parseReceipt, shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
-import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
+import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { expirationStore } from './expirationStore'
 import { parseChatSettingsContent } from './chatSettings'
 import { acceptChat } from './messageRequests'
@@ -751,15 +751,14 @@ function handleIncomingRumor(
 
   if (isTyping(rumor)) {
     saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
-    const ageMs = Date.now() - rumor.created_at * 1000
-    if (ageMs < TYPING_EXPIRY_MS) {
-      setRemoteTyping(sessionId, rumor.created_at)
-    }
+    setRemoteTyping(sessionId, rumor.created_at)
     return
   }
 
   // Incoming message clears typing indicator
-  clearRemoteTyping(sessionId, rumor.created_at)
+  if (!isMine) {
+    clearRemoteTyping(sessionId, rumor.created_at)
+  }
 
   // Extract reply tag if present
   const replyTag = rumor.tags?.find(

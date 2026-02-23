@@ -38,7 +38,7 @@ import {
   type StoredGroup,
   type StoredMessage
 } from './storage'
-import { setRemoteTyping, clearRemoteTyping, TYPING_EXPIRY_MS } from './typingState'
+import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
 import { expirationStore } from './expirationStore'
 
@@ -572,10 +572,7 @@ export function handleGroupEvent(
   }
 
   if (rumor.kind === TYPING_KIND) {
-    const ageMs = Date.now() - rumor.created_at * 1000
-    if (ageMs < TYPING_EXPIRY_MS) {
-      setRemoteTyping(`group:${groupId}`, rumor.created_at)
-    }
+    setRemoteTyping(`group:${groupId}`, rumor.created_at)
     return
   }
 
@@ -585,7 +582,10 @@ export function handleGroupEvent(
   }
 
   if (rumor.kind === CHAT_MESSAGE_KIND) {
-    clearRemoteTyping(`group:${groupId}`, rumor.created_at)
+    const myPubkey = getPubkey()
+    if (!myPubkey || senderPubkey !== myPubkey) {
+      clearRemoteTyping(`group:${groupId}`, rumor.created_at)
+    }
     handleGroupMessage(groupId, rumor, senderPubkey)
     return
   }

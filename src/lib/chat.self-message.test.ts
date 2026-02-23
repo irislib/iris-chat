@@ -1,6 +1,6 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {get} from 'svelte/store'
-import {CHAT_MESSAGE_KIND} from 'nostr-double-ratchet'
+import { CHAT_MESSAGE_KIND, TYPING_KIND } from 'nostr-double-ratchet'
 
 const MY_PUBKEY = 'a'.repeat(64)
 
@@ -49,9 +49,14 @@ vi.mock('./groups', () => ({
   handleGroupEvent: vi.fn(),
 }))
 
-vi.mock('./typingState', () => ({
+const typingMocks = vi.hoisted(() => ({
   setRemoteTyping: vi.fn(),
   clearRemoteTyping: vi.fn(),
+}))
+
+vi.mock('./typingState', () => ({
+  setRemoteTyping: (...args: [string, number?]) => typingMocks.setRemoteTyping(...args),
+  clearRemoteTyping: (...args: [string, number?]) => typingMocks.clearRemoteTyping(...args),
   TYPING_EXPIRY_MS: 10000,
 }))
 
@@ -85,6 +90,8 @@ import {devices} from './devices'
 beforeEach(() => {
   chats.set(new Map())
   devices.reset()
+  typingMocks.setRemoteTyping.mockClear()
+  typingMocks.clearRemoteTyping.mockClear()
 })
 
 describe('handleManagerEvent', () => {
@@ -157,5 +164,41 @@ describe('handleManagerEvent', () => {
     expect(peerChat?.messages).toHaveLength(1)
     expect(peerChat?.messages[0].content).toBe('hello from another client')
     expect(peerChat?.messages[0].isMine).toBe(true)
+  })
+
+  it('does not clear remote typing when processing own outgoing message copies', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+
+    const rumor = {
+      id: 'msg-self-typing-1',
+      pubkey: MY_PUBKEY,
+      content: 'my own message',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', PEER_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, MY_PUBKEY)
+
+    expect(typingMocks.clearRemoteTyping).not.toHaveBeenCalled()
+  })
+
+  it('accepts typing events despite local clock skew', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const rumor = {
+      id: 'typing-skew-1',
+      pubkey: PEER_PUBKEY,
+      content: 'typing',
+      kind: TYPING_KIND,
+      created_at: Math.floor(Date.now() / 1000) - 120,
+      tags: [['p', MY_PUBKEY], ['ms', String(Date.now() - 120000)]],
+    }
+
+    await handleManagerEvent(rumor as never, PEER_PUBKEY)
+
+    expect(typingMocks.setRemoteTyping).toHaveBeenCalledWith(
+      PEER_PUBKEY,
+      rumor.created_at
+    )
   })
 })
