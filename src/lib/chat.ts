@@ -751,7 +751,13 @@ function handleIncomingRumor(
 
   if (isTyping(rumor)) {
     saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
-    setRemoteTyping(sessionId, rumor.created_at)
+    const expiresAt = getExpirationTimestampSeconds(rumor)
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    if (expiresAt !== undefined && expiresAt <= nowSeconds) {
+      clearRemoteTyping(sessionId)
+    } else {
+      setRemoteTyping(sessionId, rumor.created_at)
+    }
     return
   }
 

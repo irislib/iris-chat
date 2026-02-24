@@ -4,9 +4,20 @@ import { get } from 'svelte/store'
 // We need to reset the module for each test since expirationStore is
 // a singleton that reads from localStorage on module load.
 
+const store: Record<string, string> = {}
+const localStorageMock = {
+  getItem: vi.fn((key: string) => store[key] ?? null),
+  setItem: vi.fn((key: string, value: string) => { store[key] = value }),
+  removeItem: vi.fn((key: string) => { delete store[key] }),
+  clear: vi.fn(() => { for (const k of Object.keys(store)) delete store[k] }),
+  key: vi.fn(),
+  length: 0,
+}
+Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true, configurable: true })
+
 describe('expirationStore', () => {
   beforeEach(() => {
-    localStorage.clear()
+    localStorageMock.clear()
     vi.resetModules()
   })
 

@@ -201,4 +201,21 @@ describe('handleManagerEvent', () => {
       rumor.created_at
     )
   })
+
+  it('clears typing indicator when receiving typing turn-off rumor', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const rumor = {
+      id: 'typing-stop-1',
+      pubkey: PEER_PUBKEY,
+      content: 'typing',
+      kind: TYPING_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', MY_PUBKEY], ['expiration', '1'], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, PEER_PUBKEY)
+
+    expect(typingMocks.setRemoteTyping).not.toHaveBeenCalled()
+    expect(typingMocks.clearRemoteTyping).toHaveBeenCalledWith(PEER_PUBKEY)
+  })
 })

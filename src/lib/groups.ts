@@ -572,7 +572,13 @@ export function handleGroupEvent(
   }
 
   if (rumor.kind === TYPING_KIND) {
-    setRemoteTyping(`group:${groupId}`, rumor.created_at)
+    const expiresAt = getExpirationTimestampSeconds(rumor)
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    if (expiresAt !== undefined && expiresAt <= nowSeconds) {
+      clearRemoteTyping(`group:${groupId}`)
+    } else {
+      setRemoteTyping(`group:${groupId}`, rumor.created_at)
+    }
     return
   }
 

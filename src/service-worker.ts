@@ -333,8 +333,9 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           }
         }
 
-        // Suppress notifications for typing and receipts
-        const silent = innerEvent.kind === KIND_RECEIPT || innerEvent.kind === KIND_TYPING
+        // Suppress notifications for typing, receipts, and our own messages from other devices
+        const isSelfMessage = ownerPubkey != null && innerEvent.pubkey === ownerPubkey
+        const silent = innerEvent.kind === KIND_RECEIPT || innerEvent.kind === KIND_TYPING || isSelfMessage
         return {
           success: true,
           content: innerEvent.kind === KIND_REACTION

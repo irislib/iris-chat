@@ -226,7 +226,9 @@ function getSessionAuthors(): string[] {
   const manager = getSessionManager()
   if (manager) {
     const userRecords = manager.getUserRecords()
-    for (const record of userRecords.values()) {
+    for (const [userPubkey, record] of userRecords.entries()) {
+      // Skip self-sessions (our own devices) to avoid notifications for our own messages
+      if (userPubkey === currentIdentity.pubkey) continue
       for (const device of record.devices.values()) {
         const sessions = [
           ...(device.activeSession ? [device.activeSession] : []),

@@ -90,6 +90,9 @@ describe('groups', () => {
     groups.set(new Map())
     groupMessages.set(new Map())
     currentGroupId.set(null)
+    const typingState = await import('./typingState')
+    vi.mocked(typingState.setRemoteTyping).mockClear()
+    vi.mocked(typingState.clearRemoteTyping).mockClear()
   })
 
   describe('createGroup', () => {
@@ -526,6 +529,33 @@ describe('groups', () => {
       const echo = msgs.find(m => m.content === 'My own echo' && !m.isMine)
       expect(echo).toBeUndefined()
     })
+
+    it('sets typing indicator for group typing rumor', async () => {
+      const { createGroup, handleGroupEvent } = await import('./groups')
+      const typingState = await import('./typingState')
+      const group = createGroup('Typing Test', [MEMBER_B])
+
+      const rumor = makeTypingRumor(group.id, MEMBER_B)
+      handleGroupEvent(rumor, MEMBER_B)
+
+      expect(typingState.setRemoteTyping).toHaveBeenCalledWith(
+        `group:${group.id}`,
+        rumor.created_at
+      )
+      expect(typingState.clearRemoteTyping).not.toHaveBeenCalled()
+    })
+
+    it('clears typing indicator for group typing turn-off rumor', async () => {
+      const { createGroup, handleGroupEvent } = await import('./groups')
+      const typingState = await import('./typingState')
+      const group = createGroup('Typing Off Test', [MEMBER_B])
+
+      const rumor = makeTypingRumor(group.id, MEMBER_B, [['expiration', '1']])
+      handleGroupEvent(rumor, MEMBER_B)
+
+      expect(typingState.setRemoteTyping).not.toHaveBeenCalled()
+      expect(typingState.clearRemoteTyping).toHaveBeenCalledWith(`group:${group.id}`)
+    })
   })
 
   describe('deleteGroup', () => {
@@ -731,5 +761,16 @@ function makeMessageRumor(groupId: string, content: string, pubkey: string): Rum
     pubkey,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['l', groupId]],
+  } as Rumor
+}
+
+function makeTypingRumor(groupId: string, pubkey: string, extraTags: string[][] = []): Rumor {
+  return {
+    id: Math.random().toString(36).slice(2),
+    kind: 25,
+    content: 'typing',
+    pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['l', groupId], ...extraTags],
   } as Rumor
 }
