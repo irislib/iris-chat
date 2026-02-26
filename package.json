@@ -52,7 +52,7 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "0.0.72",
+    "nostr-double-ratchet": "0.0.75",
     "nostr-tools": "^2.19.3",
     "qrcode": "^1.5.4"
   },

@@ -314,11 +314,26 @@ function saveGroupState(group: Group): void {
   saveGroupToDb(storedGroup).catch(e => console.error('[groups] Failed to save group:', e))
 }
 
-export function createGroup(name: string, memberPubkeys: string[]): Group {
+export async function createGroup(name: string, memberPubkeys: string[]): Promise<Group> {
   const myPubkey = getPubkey()
   if (!myPubkey) throw new Error('Not logged in')
 
-  const group = createGroupData(name, myPubkey, memberPubkeys)
+  const runtime = ensureNativeGroupRuntime()
+  const sessionManager = getSessionManager()
+  const group = runtime
+    ? (
+        await runtime.manager.createGroup(name, memberPubkeys, {
+          fanoutMetadata: Boolean(sessionManager),
+          ...(sessionManager
+            ? {
+                sendPairwise: async (recipientOwnerPubkey, rumor) => {
+                  await sessionManager.sendEvent(recipientOwnerPubkey, rumor)
+                },
+              }
+            : {}),
+        })
+      ).group
+    : createGroupData(name, myPubkey, memberPubkeys)
 
   groups.update(g => {
     g.set(group.id, group)
@@ -331,11 +346,13 @@ export function createGroup(name: string, memberPubkeys: string[]): Group {
 
   saveGroupState(group)
 
-  fanOutToMembers(group.id, {
-    content: buildGroupMetadataContent(group),
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  })
+  if (!runtime) {
+    fanOutToMembers(group.id, {
+      content: buildGroupMetadataContent(group),
+      kind: GROUP_METADATA_KIND,
+      tags: []
+    })
+  }
 
   setupGroupChannel(group)
   syncNativeGroupTransport(group.id)

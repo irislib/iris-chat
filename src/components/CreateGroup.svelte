@@ -39,11 +39,11 @@
     }
   }
 
-  function handleCreate() {
+  async function handleCreate() {
     const name = groupName.trim()
     if (!name || selectedMembers.size === 0) return
 
-    const group = createGroup(name, Array.from(selectedMembers))
+    const group = await createGroup(name, Array.from(selectedMembers))
     onGroupCreated(group)
   }
 

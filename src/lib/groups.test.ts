@@ -98,7 +98,7 @@ describe('groups', () => {
   describe('createGroup', () => {
     it('creates a group with the creator as admin', async () => {
       const { createGroup, groups } = await import('./groups')
-      const group = createGroup('Test Group', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('Test Group', [MEMBER_B, MEMBER_C])
 
       expect(group.name).toBe('Test Group')
       expect(group.members).toContain(MY_PUBKEY)
@@ -113,7 +113,7 @@ describe('groups', () => {
 
     it('fans out metadata to all members', async () => {
       const { createGroup } = await import('./groups')
-      createGroup('Fan Out Test', [MEMBER_B])
+      await createGroup('Fan Out Test', [MEMBER_B])
 
       // Should have sent to MEMBER_B (not to self)
       expect(sendEventCalls.length).toBeGreaterThanOrEqual(1)
@@ -125,7 +125,7 @@ describe('groups', () => {
 
     it('deduplicates creator from member list', async () => {
       const { createGroup } = await import('./groups')
-      const group = createGroup('Dedup Test', [MY_PUBKEY, MEMBER_B])
+      const group = await createGroup('Dedup Test', [MY_PUBKEY, MEMBER_B])
 
       const myCount = group.members.filter(m => m === MY_PUBKEY).length
       expect(myCount).toBe(1)
@@ -135,7 +135,7 @@ describe('groups', () => {
   describe('admin enforcement', () => {
     it('allows admin to update group name', async () => {
       const { createGroup, updateGroupInfo, groups } = await import('./groups')
-      const group = createGroup('Original', [MEMBER_B])
+      const group = await createGroup('Original', [MEMBER_B])
 
       updateGroupInfo(group.id, { name: 'Updated' })
 
@@ -145,7 +145,7 @@ describe('groups', () => {
 
     it('allows admin to update group description', async () => {
       const { createGroup, updateGroupInfo, groups } = await import('./groups')
-      const group = createGroup('Desc Test', [MEMBER_B])
+      const group = await createGroup('Desc Test', [MEMBER_B])
 
       updateGroupInfo(group.id, { description: 'A test group' })
 
@@ -155,7 +155,7 @@ describe('groups', () => {
 
     it('allows admin to update group picture', async () => {
       const { createGroup, updateGroupInfo, groups } = await import('./groups')
-      const group = createGroup('Pic Test', [MEMBER_B])
+      const group = await createGroup('Pic Test', [MEMBER_B])
 
       updateGroupInfo(group.id, { picture: 'nhash://nhash1abc/pic.jpg' })
 
@@ -167,7 +167,7 @@ describe('groups', () => {
   describe('addGroupMember', () => {
     it('admin can add a new member', async () => {
       const { createGroup, addGroupMember, groups } = await import('./groups')
-      const group = createGroup('Add Test', [MEMBER_B])
+      const group = await createGroup('Add Test', [MEMBER_B])
 
       addGroupMember(group.id, MEMBER_C)
 
@@ -177,7 +177,7 @@ describe('groups', () => {
 
     it('does not add a member who is already in the group', async () => {
       const { createGroup, addGroupMember, groups } = await import('./groups')
-      const group = createGroup('Dup Add Test', [MEMBER_B])
+      const group = await createGroup('Dup Add Test', [MEMBER_B])
 
       addGroupMember(group.id, MEMBER_B)
 
@@ -189,7 +189,7 @@ describe('groups', () => {
     it('does not add a member without a chat session', async () => {
       const { createGroup, addGroupMember, groups } = await import('./groups')
       const NO_SESSION = 'eeee'.repeat(16)
-      const group = createGroup('No Session Test', [MEMBER_B])
+      const group = await createGroup('No Session Test', [MEMBER_B])
 
       addGroupMember(group.id, NO_SESSION)
 
@@ -199,7 +199,7 @@ describe('groups', () => {
 
     it('fans out metadata update to all members including new one', async () => {
       const { createGroup, addGroupMember } = await import('./groups')
-      const group = createGroup('Fan Add Test', [MEMBER_B])
+      const group = await createGroup('Fan Add Test', [MEMBER_B])
       sendEventCalls.length = 0
 
       addGroupMember(group.id, MEMBER_C)
@@ -215,7 +215,7 @@ describe('groups', () => {
   describe('removeGroupMember', () => {
     it('admin can remove a member', async () => {
       const { createGroup, removeGroupMember, groups } = await import('./groups')
-      const group = createGroup('Remove Test', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('Remove Test', [MEMBER_B, MEMBER_C])
 
       removeGroupMember(group.id, MEMBER_C)
 
@@ -225,7 +225,7 @@ describe('groups', () => {
 
     it('removing a member also removes their admin status', async () => {
       const { createGroup, addGroupAdmin, removeGroupMember, groups } = await import('./groups')
-      const group = createGroup('Remove Admin Test', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('Remove Admin Test', [MEMBER_B, MEMBER_C])
 
       addGroupAdmin(group.id, MEMBER_B)
       let updated = get(groups).get(group.id)
@@ -239,7 +239,7 @@ describe('groups', () => {
 
     it('admin cannot remove themselves', async () => {
       const { createGroup, removeGroupMember, groups } = await import('./groups')
-      const group = createGroup('Self Remove Test', [MEMBER_B])
+      const group = await createGroup('Self Remove Test', [MEMBER_B])
 
       removeGroupMember(group.id, MY_PUBKEY)
 
@@ -249,7 +249,7 @@ describe('groups', () => {
 
     it('fans out to removed member so they learn of removal', async () => {
       const { createGroup, removeGroupMember } = await import('./groups')
-      const group = createGroup('Fan Remove Test', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('Fan Remove Test', [MEMBER_B, MEMBER_C])
       sendEventCalls.length = 0
 
       removeGroupMember(group.id, MEMBER_C)
@@ -263,7 +263,7 @@ describe('groups', () => {
   describe('admin management', () => {
     it('admin can promote another member to admin', async () => {
       const { createGroup, addGroupAdmin, groups } = await import('./groups')
-      const group = createGroup('Promote Test', [MEMBER_B])
+      const group = await createGroup('Promote Test', [MEMBER_B])
 
       addGroupAdmin(group.id, MEMBER_B)
 
@@ -273,7 +273,7 @@ describe('groups', () => {
 
     it('admin can demote another admin', async () => {
       const { createGroup, addGroupAdmin, removeGroupAdmin, groups } = await import('./groups')
-      const group = createGroup('Demote Test', [MEMBER_B])
+      const group = await createGroup('Demote Test', [MEMBER_B])
       addGroupAdmin(group.id, MEMBER_B)
 
       removeGroupAdmin(group.id, MEMBER_B)
@@ -284,7 +284,7 @@ describe('groups', () => {
 
     it('cannot remove the last admin', async () => {
       const { createGroup, removeGroupAdmin, groups } = await import('./groups')
-      const group = createGroup('Last Admin Test', [MEMBER_B])
+      const group = await createGroup('Last Admin Test', [MEMBER_B])
 
       removeGroupAdmin(group.id, MY_PUBKEY)
 
@@ -294,7 +294,7 @@ describe('groups', () => {
 
     it('cannot promote a non-member to admin', async () => {
       const { createGroup, addGroupAdmin, groups } = await import('./groups')
-      const group = createGroup('Non-member Admin Test', [MEMBER_B])
+      const group = await createGroup('Non-member Admin Test', [MEMBER_B])
       const stranger = 'ffff'.repeat(16)
 
       addGroupAdmin(group.id, stranger)
@@ -465,7 +465,7 @@ describe('groups', () => {
   describe('sendGroupMessage', () => {
     it('adds message to group messages store', async () => {
       const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
-      const group = createGroup('Msg Test', [MEMBER_B])
+      const group = await createGroup('Msg Test', [MEMBER_B])
 
       sendGroupMessage(group.id, 'Hello group!')
 
@@ -478,7 +478,7 @@ describe('groups', () => {
 
     it('fans out message to all members', async () => {
       const { createGroup, sendGroupMessage } = await import('./groups')
-      const group = createGroup('Fan Msg Test', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('Fan Msg Test', [MEMBER_B, MEMBER_C])
       sendEventCalls.length = 0
 
       sendGroupMessage(group.id, 'Hello all!')
@@ -492,7 +492,7 @@ describe('groups', () => {
     it('applies group disappearing TTL to outgoing messages', async () => {
       const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
       const { expirationStore } = await import('./expirationStore')
-      const group = createGroup('TTL Msg Test', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('TTL Msg Test', [MEMBER_B, MEMBER_C])
       expirationStore.setExpiration(group.id, 60)
       sendEventCalls.length = 0
 
@@ -522,7 +522,7 @@ describe('groups', () => {
   describe('handleGroupEvent - messages', () => {
     it('adds incoming message from group member', async () => {
       const { createGroup, handleGroupEvent, groupMessages } = await import('./groups')
-      const group = createGroup('Recv Test', [MEMBER_B])
+      const group = await createGroup('Recv Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'Hi from B!', MEMBER_B)
       handleGroupEvent(rumor, MEMBER_B)
@@ -536,7 +536,7 @@ describe('groups', () => {
 
     it('deduplicates messages by id', async () => {
       const { createGroup, handleGroupEvent, groupMessages } = await import('./groups')
-      const group = createGroup('Dedup Msg Test', [MEMBER_B])
+      const group = await createGroup('Dedup Msg Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'Duplicate!', MEMBER_B)
       handleGroupEvent(rumor, MEMBER_B)
@@ -549,7 +549,7 @@ describe('groups', () => {
 
     it('ignores own messages coming back', async () => {
       const { createGroup, handleGroupEvent, groupMessages } = await import('./groups')
-      const group = createGroup('Echo Test', [MEMBER_B])
+      const group = await createGroup('Echo Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'My own echo', MY_PUBKEY)
       handleGroupEvent(rumor, MY_PUBKEY)
@@ -562,7 +562,7 @@ describe('groups', () => {
     it('sets typing indicator for group typing rumor', async () => {
       const { createGroup, handleGroupEvent } = await import('./groups')
       const typingState = await import('./typingState')
-      const group = createGroup('Typing Test', [MEMBER_B])
+      const group = await createGroup('Typing Test', [MEMBER_B])
 
       const rumor = makeTypingRumor(group.id, MEMBER_B)
       handleGroupEvent(rumor, MEMBER_B)
@@ -577,7 +577,7 @@ describe('groups', () => {
     it('clears typing indicator for group typing turn-off rumor', async () => {
       const { createGroup, handleGroupEvent } = await import('./groups')
       const typingState = await import('./typingState')
-      const group = createGroup('Typing Off Test', [MEMBER_B])
+      const group = await createGroup('Typing Off Test', [MEMBER_B])
 
       const rumor = makeTypingRumor(group.id, MEMBER_B, [['expiration', '1']])
       handleGroupEvent(rumor, MEMBER_B)
@@ -590,7 +590,7 @@ describe('groups', () => {
   describe('deleteGroup', () => {
     it('removes group from store', async () => {
       const { createGroup, deleteGroup, groups, groupMessages } = await import('./groups')
-      const group = createGroup('Delete Test', [MEMBER_B])
+      const group = await createGroup('Delete Test', [MEMBER_B])
 
       await deleteGroup(group.id)
 
@@ -602,14 +602,14 @@ describe('groups', () => {
   describe('isAdmin', () => {
     it('returns true for admin', async () => {
       const { createGroup, isAdmin } = await import('./groups')
-      const group = createGroup('Admin Check', [MEMBER_B])
+      const group = await createGroup('Admin Check', [MEMBER_B])
 
       expect(isAdmin(group, MY_PUBKEY)).toBe(true)
     })
 
     it('returns false for non-admin member', async () => {
       const { createGroup, isAdmin } = await import('./groups')
-      const group = createGroup('Non-admin Check', [MEMBER_B])
+      const group = await createGroup('Non-admin Check', [MEMBER_B])
 
       expect(isAdmin(group, MEMBER_B)).toBe(false)
     })
@@ -618,7 +618,7 @@ describe('groups', () => {
   describe('group secret', () => {
     it('createGroup includes a secret', async () => {
       const { createGroup } = await import('./groups')
-      const group = createGroup('Secret Test', [MEMBER_B])
+      const group = await createGroup('Secret Test', [MEMBER_B])
 
       expect(group.secret).toBeDefined()
       expect(group.secret!.length).toBe(64) // 32 bytes in hex
@@ -626,14 +626,14 @@ describe('groups', () => {
 
     it('createGroup sets accepted to true', async () => {
       const { createGroup } = await import('./groups')
-      const group = createGroup('Accepted Test', [MEMBER_B])
+      const group = await createGroup('Accepted Test', [MEMBER_B])
 
       expect(group.accepted).toBe(true)
     })
 
     it('secret rotates on addGroupMember', async () => {
       const { createGroup, addGroupMember, groups } = await import('./groups')
-      const group = createGroup('Rotate Add', [MEMBER_B])
+      const group = await createGroup('Rotate Add', [MEMBER_B])
       const originalSecret = group.secret
 
       addGroupMember(group.id, MEMBER_C)
@@ -645,7 +645,7 @@ describe('groups', () => {
 
     it('secret rotates on removeGroupMember', async () => {
       const { createGroup, removeGroupMember, groups } = await import('./groups')
-      const group = createGroup('Rotate Remove', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('Rotate Remove', [MEMBER_B, MEMBER_C])
       const originalSecret = group.secret
 
       removeGroupMember(group.id, MEMBER_C)
@@ -657,7 +657,7 @@ describe('groups', () => {
 
     it('removed member does not receive new secret', async () => {
       const { createGroup, removeGroupMember, groups } = await import('./groups')
-      const group = createGroup('No Secret For Removed', [MEMBER_B, MEMBER_C])
+      const group = await createGroup('No Secret For Removed', [MEMBER_B, MEMBER_C])
       sendEventCalls.length = 0
 
       removeGroupMember(group.id, MEMBER_C)
