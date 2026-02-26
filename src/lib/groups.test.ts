@@ -488,6 +488,35 @@ describe('groups', () => {
       expect(sentToB).toBe(true)
       expect(sentToC).toBe(true)
     })
+
+    it('applies group disappearing TTL to outgoing messages', async () => {
+      const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
+      const { expirationStore } = await import('./expirationStore')
+      const group = createGroup('TTL Msg Test', [MEMBER_B, MEMBER_C])
+      expirationStore.setExpiration(group.id, 60)
+      sendEventCalls.length = 0
+
+      const before = Math.floor(Date.now() / 1000)
+      sendGroupMessage(group.id, 'TTL hello')
+      const after = Math.floor(Date.now() / 1000)
+
+      const msgs = get(groupMessages).get(group.id)!
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0].expiresAt).toBeDefined()
+      expect(msgs[0].expiresAt).toBeGreaterThanOrEqual(before + 60)
+      expect(msgs[0].expiresAt).toBeLessThanOrEqual(after + 60)
+
+      expect(sendEventCalls.length).toBeGreaterThan(0)
+      for (const call of sendEventCalls) {
+        const event = call.event as { tags?: string[][] }
+        const expirationTag = event.tags?.find((t) => t[0] === 'expiration')
+        expect(expirationTag).toBeDefined()
+        expect(expirationTag?.[1]).toMatch(/^\d+$/)
+        const expiresAt = Number(expirationTag?.[1])
+        expect(expiresAt).toBeGreaterThanOrEqual(before + 60)
+        expect(expiresAt).toBeLessThanOrEqual(after + 60)
+      }
+    })
   })
 
   describe('handleGroupEvent - messages', () => {

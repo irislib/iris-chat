@@ -469,13 +469,30 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
     tags.push(['e', replyTo, '', 'reply'])
   }
 
+  const configuredTtlSeconds = expirationStore.getExpiration(groupId)
+  const normalizedTtlSeconds =
+    typeof configuredTtlSeconds === 'number' &&
+    Number.isFinite(configuredTtlSeconds) &&
+    configuredTtlSeconds > 0
+      ? Math.floor(configuredTtlSeconds)
+      : undefined
+  const expiresAt =
+    normalizedTtlSeconds !== undefined
+      ? Math.floor(Date.now() / 1000) + normalizedTtlSeconds
+      : undefined
+
+  if (expiresAt !== undefined) {
+    tags.push(['expiration', String(expiresAt)])
+  }
+
   const message: GroupMessage = {
     id: crypto.randomUUID(),
     content: text,
     timestamp: Date.now(),
     isMine: true,
     senderPubkey: myPubkey,
-    ...(replyTo && { replyTo })
+    ...(replyTo && { replyTo }),
+    ...(expiresAt !== undefined && { expiresAt }),
   }
 
   groupMessages.update(gm => {
