@@ -8,6 +8,7 @@ const MY_PUBKEY = 'aaaa'.repeat(16)
 const MEMBER_B = 'bbbb'.repeat(16)
 const MEMBER_C = 'cccc'.repeat(16)
 const NON_MEMBER = 'dddd'.repeat(16)
+const OTHER_DEVICE = 'eeee'.repeat(16)
 
 vi.mock('./identity', () => {
   const { writable } = require('svelte/store')
@@ -483,8 +484,10 @@ describe('groups', () => {
 
       sendGroupMessage(group.id, 'Hello all!')
 
+      const sentToSelf = sendEventCalls.some(c => c.recipient === MY_PUBKEY)
       const sentToB = sendEventCalls.some(c => c.recipient === MEMBER_B)
       const sentToC = sendEventCalls.some(c => c.recipient === MEMBER_C)
+      expect(sentToSelf).toBe(true)
       expect(sentToB).toBe(true)
       expect(sentToC).toBe(true)
     })
@@ -547,16 +550,30 @@ describe('groups', () => {
       expect(dupes.length).toBe(1)
     })
 
-    it('ignores own messages coming back', async () => {
+    it('ignores own messages coming back from the same device', async () => {
       const { createGroup, handleGroupEvent, groupMessages } = await import('./groups')
       const group = await createGroup('Echo Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'My own echo', MY_PUBKEY)
-      handleGroupEvent(rumor, MY_PUBKEY)
+      handleGroupEvent(rumor, MY_PUBKEY, undefined, MY_PUBKEY)
 
       const msgs = get(groupMessages).get(group.id)!
       const echo = msgs.find(m => m.content === 'My own echo' && !m.isMine)
       expect(echo).toBeUndefined()
+    })
+
+    it('accepts own messages coming from another device', async () => {
+      const { createGroup, handleGroupEvent, groupMessages } = await import('./groups')
+      const group = await createGroup('Cross Device Echo Test', [MEMBER_B])
+
+      const rumor = makeMessageRumor(group.id, 'My other device echo', MY_PUBKEY)
+      handleGroupEvent(rumor, MY_PUBKEY, undefined, OTHER_DEVICE)
+
+      const msgs = get(groupMessages).get(group.id)!
+      const echo = msgs.find(m => m.content === 'My other device echo')
+      expect(echo).toBeDefined()
+      expect(echo!.isMine).toBe(true)
+      expect(echo!.senderPubkey).toBe(MY_PUBKEY)
     })
 
     it('sets typing indicator for group typing rumor', async () => {

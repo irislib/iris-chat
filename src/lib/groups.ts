@@ -272,7 +272,12 @@ function buildGroupRumor(
   return rumor
 }
 
-function fanOutToMembers(groupId: string, partialEvent: { content: string, kind: number, tags: string[][] }, recipientOverride?: string[]): void {
+function fanOutToMembers(
+  groupId: string,
+  partialEvent: { content: string, kind: number, tags: string[][] },
+  recipientOverride?: string[],
+  options?: { includeSelf?: boolean },
+): void {
   const currentGroups = get(groups)
   const group = currentGroups.get(groupId)
   if (!group) return
@@ -285,9 +290,10 @@ function fanOutToMembers(groupId: string, partialEvent: { content: string, kind:
 
   const tags = [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]]
   const recipients = recipientOverride || group.members
+  const includeSelf = options?.includeSelf === true
 
   for (const memberPubkey of recipients) {
-    if (memberPubkey === myPubkey) continue
+    if (!includeSelf && memberPubkey === myPubkey) continue
 
     try {
       const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
@@ -524,7 +530,7 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
     content: text,
     kind: CHAT_MESSAGE_KIND,
     tags
-  })
+  }, undefined, { includeSelf: true })
 }
 
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {
@@ -626,7 +632,7 @@ export function handleGroupEvent(
     if (!myPubkey || senderPubkey !== myPubkey) {
       clearRemoteTyping(`group:${groupId}`, rumor.created_at)
     }
-    handleGroupMessage(groupId, rumor, senderPubkey)
+    handleGroupMessage(groupId, rumor, senderPubkey, senderDevicePubkey)
     return
   }
 }
@@ -711,10 +717,21 @@ function handleGroupMetadata(rumor: Rumor, senderPubkey: string): void {
   }
 }
 
-function handleGroupMessage(groupId: string, rumor: Rumor, senderPubkey: string): void {
+function handleGroupMessage(
+  groupId: string,
+  rumor: Rumor,
+  senderPubkey: string,
+  senderDevicePubkey?: string,
+): void {
   const myPubkey = getPubkey()
-  const isMine = senderPubkey === myPubkey
-  if (isMine) return
+  const isOwnOwnerMessage = !!myPubkey && senderPubkey === myPubkey
+  if (isOwnOwnerMessage) {
+    const ourDevicePubkey = resolveOurDevicePubkey()
+    const resolvedSenderDevicePubkey = senderDevicePubkey || rumor.pubkey
+    if (ourDevicePubkey && resolvedSenderDevicePubkey === ourDevicePubkey) {
+      return
+    }
+  }
 
   const replyTag = rumor.tags?.find(
     (tag: string[]) => tag[0] === 'e' && tag[3] === 'reply'
@@ -728,7 +745,7 @@ function handleGroupMessage(groupId: string, rumor: Rumor, senderPubkey: string)
     id: rumor.id,
     content: rumor.content,
     timestamp: rumor.created_at * 1000,
-    isMine: false,
+    isMine: isOwnOwnerMessage,
     senderPubkey,
     ...(replyTag && { replyTo: replyTag }),
     ...(expiresAt !== undefined && { expiresAt }),

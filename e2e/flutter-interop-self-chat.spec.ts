@@ -14,6 +14,8 @@ const __dirname = path.dirname(__filename)
 const RUN_FLUTTER_INTEROP = process.env.IRIS_FLUTTER_INTEROP === '1'
 const FLUTTER_REPO = path.resolve(__dirname, '../../iris-chat-flutter')
 
+test.describe.configure({ mode: 'serial' })
+
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
@@ -293,3 +295,98 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
   }
 })
 
+test('group interop (same key) between web and flutter', async ({ browser, testRelayUrl }) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(240000)
+
+  const secretKey = generateSecretKey()
+  const privkeyHex = toHex(secretKey)
+  const privateKeyNsec = nip19.nsecEncode(secretKey)
+  const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
+  const groupName = `interop-group-${Date.now()}`
+
+  const context = await browser.newContext()
+  await useTestRelay(context, testRelayUrl)
+  await setIdentity(context, privkeyHex)
+  const page = await context.newPage()
+
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec)
+
+  try {
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+
+    await loginWithStoredKey(page)
+
+    // Bootstrap a self-session first so Flutter can sender-copy group metadata
+    // across clients via pairwise transport.
+    const dmBootstrapInvite = await bridge.command<{ inviteUrl: string }>(
+      'create_invite',
+      { maxUses: 5 },
+      30000
+    )
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(dmBootstrapInvite.inviteUrl)
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+    const dmBootstrapText = 'group-bootstrap-self-session'
+    await page.getByPlaceholder('Type a message...').fill(dmBootstrapText)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await bridge.command('wait_for_message', { text: dmBootstrapText, timeoutMs: 30000 }, 40000)
+
+    const pubkey = await bridge.command<{ pubkeyHex: string }>('get_pubkey', {}, 10000)
+    const created = await bridge.command<{ groupId: string }>(
+      'create_group',
+      {
+        name: groupName,
+        memberPubkeysHex: [pubkey.pubkeyHex],
+      },
+      30000
+    )
+
+    await page.getByTestId('sidebar-tab-all').click()
+    const groupListItem = page
+      .getByTestId('sidebar-chat-list')
+      .getByRole('button', { name: new RegExp(groupName) })
+      .first()
+    await expect(groupListItem).toBeVisible({ timeout: 30000 })
+    await groupListItem.click()
+
+    const acceptButton = page.getByRole('button', { name: 'Accept' })
+    if (await acceptButton.isVisible().catch(() => false)) {
+      await acceptButton.click()
+    }
+
+    const flutterMessage = 'flutter->web group interop'
+    await bridge.command(
+      'send_group_message',
+      {
+        groupId: created.groupId,
+        text: flutterMessage,
+      },
+      30000
+    )
+
+    await expect(
+      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
+    ).toBeVisible({ timeout: 30000 })
+
+    const webMessage = 'web->flutter group interop'
+    await page.getByPlaceholder('Type a message...').fill(webMessage)
+    await page.getByRole('button', { name: 'Send' }).click()
+
+    await bridge.command(
+      'wait_for_group_message',
+      {
+        groupId: created.groupId,
+        text: webMessage,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+  } finally {
+    await context.close()
+    await bridge.stop()
+  }
+})
