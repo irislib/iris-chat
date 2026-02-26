@@ -1,0 +1,295 @@
+import { test, expect, useTestRelay } from './fixtures'
+import type { BrowserContext, Page } from '@playwright/test'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import fs from 'node:fs'
+import * as fsp from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+const RUN_FLUTTER_INTEROP = process.env.IRIS_FLUTTER_INTEROP === '1'
+const FLUTTER_REPO = path.resolve(__dirname, '../../iris-chat-flutter')
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+async function setIdentity(context: BrowserContext, privkeyHex: string) {
+  await context.addInitScript((key: string) => {
+    try {
+      window.localStorage.setItem('iris-chat-identity', key)
+    } catch {
+      // ignore opaque origins (about:blank)
+    }
+  }, privkeyHex)
+}
+
+async function loginWithStoredKey(page: Page) {
+  await page.goto('/')
+  const newChat = page.getByRole('button', { name: 'New Chat' })
+  try {
+    await expect(newChat).toBeVisible({ timeout: 30000 })
+  } catch {
+    const [identity, relays, bodyText] = await Promise.all([
+      page.evaluate(() => localStorage.getItem('iris-chat-identity')),
+      page.evaluate(() => localStorage.getItem('iris-chat-relays')),
+      page.evaluate(() => document.body?.innerText?.slice(0, 500) || ''),
+    ])
+    throw new Error(
+      `Login timeout. identity=${identity} relays=${relays} bodyText=${bodyText}`
+    )
+  }
+}
+
+type BridgeEvent =
+  | { type: 'ready'; data?: { pubkeyHex?: string; relayUrl?: string } }
+  | { type: 'response'; id?: string; ok?: boolean; data?: unknown; error?: string }
+  | { type: string; id?: string; ok?: boolean; data?: unknown; error?: string }
+
+class FlutterInteropBridge {
+  private bridgeDir: string | null = null
+  private commandsFile: string | null = null
+  private eventsFile: string | null = null
+  private child: ChildProcessWithoutNullStreams | null = null
+  private cmdSeq = 0
+  private stdout = ''
+  private stderr = ''
+
+  constructor(
+    private readonly relayUrl: string,
+    private readonly privateKeyNsec: string
+  ) {}
+
+  async start(): Promise<{ pubkeyHex: string }> {
+    this.bridgeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iris-flutter-interop-'))
+    this.commandsFile = path.join(this.bridgeDir, 'commands.jsonl')
+    this.eventsFile = path.join(this.bridgeDir, 'events.jsonl')
+
+    this.child = spawn(
+      'flutter',
+      [
+        'test',
+        'integration_test/flutter_interop_bridge_macos_suite.dart',
+        '-d',
+        'macos',
+        `--dart-define=IRIS_INTEROP_RELAY_URL=${this.relayUrl}`,
+        `--dart-define=IRIS_INTEROP_BRIDGE_DIR=${this.bridgeDir}`,
+        `--dart-define=IRIS_INTEROP_PRIVATE_KEY_NSEC=${this.privateKeyNsec}`,
+      ],
+      {
+        cwd: FLUTTER_REPO,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: process.env,
+      }
+    )
+
+    this.child.stdout.on('data', (chunk) => {
+      this.stdout += chunk.toString()
+      if (this.stdout.length > 50000) {
+        this.stdout = this.stdout.slice(-50000)
+      }
+    })
+    this.child.stderr.on('data', (chunk) => {
+      this.stderr += chunk.toString()
+      if (this.stderr.length > 50000) {
+        this.stderr = this.stderr.slice(-50000)
+      }
+    })
+
+    const ready = await this.waitForEvent(
+      (event) => event.type === 'ready' && typeof event.data?.pubkeyHex === 'string',
+      120000
+    )
+
+    return { pubkeyHex: (ready.data?.pubkeyHex as string).toLowerCase() }
+  }
+
+  async stop(): Promise<void> {
+    if (this.child) {
+      try {
+        await this.command('shutdown', {}, 5000)
+      } catch {
+        // best effort
+      }
+    }
+
+    await this.waitForProcessExit(5000).catch(() => {
+      if (!this.child) return
+      this.child.kill('SIGTERM')
+    })
+
+    if (this.bridgeDir) {
+      await fsp.rm(this.bridgeDir, { recursive: true, force: true }).catch(() => {})
+    }
+
+    this.child = null
+    this.bridgeDir = null
+    this.commandsFile = null
+    this.eventsFile = null
+  }
+
+  async command<T = Record<string, unknown>>(
+    type: string,
+    payload: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<T> {
+    if (!this.commandsFile) {
+      throw new Error('Bridge not started: commands file missing')
+    }
+
+    const id = `cmd-${++this.cmdSeq}`
+    const line = JSON.stringify({ id, type, payload }) + '\n'
+    await fsp.appendFile(this.commandsFile, line)
+
+    const response = await this.waitForEvent(
+      (event) => event.type === 'response' && event.id === id,
+      timeoutMs
+    )
+
+    if (!response.ok) {
+      throw new Error(`Flutter bridge command failed (${type}): ${response.error}`)
+    }
+
+    return (response.data ?? {}) as T
+  }
+
+  private async waitForEvent(
+    predicate: (event: BridgeEvent) => boolean,
+    timeoutMs: number
+  ): Promise<BridgeEvent> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      for (const event of await this.readEvents()) {
+        if (predicate(event)) return event
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      if (this.child && this.child.exitCode !== null) {
+        throw new Error(
+          `Flutter bridge exited early code=${this.child.exitCode}\nstdout:\n${this.stdout}\nstderr:\n${this.stderr}`
+        )
+      }
+    }
+
+    throw new Error(
+      `Timed out waiting for Flutter bridge event after ${timeoutMs}ms\nstdout:\n${this.stdout}\nstderr:\n${this.stderr}`
+    )
+  }
+
+  private async waitForProcessExit(timeoutMs: number): Promise<void> {
+    if (!this.child) return
+    if (this.child.exitCode !== null) return
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup()
+        reject(new Error('Timed out waiting for flutter process exit'))
+      }, timeoutMs)
+
+      const onExit = () => {
+        cleanup()
+        resolve()
+      }
+
+      const cleanup = () => {
+        clearTimeout(timer)
+        this.child?.off('exit', onExit)
+      }
+
+      this.child.on('exit', onExit)
+    })
+  }
+
+  private async readEvents(): Promise<BridgeEvent[]> {
+    if (!this.eventsFile || !fs.existsSync(this.eventsFile)) {
+      return []
+    }
+
+    const content = await fsp.readFile(this.eventsFile, 'utf8')
+    if (!content.trim()) return []
+
+    const events: BridgeEvent[] = []
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        events.push(JSON.parse(trimmed) as BridgeEvent)
+      } catch {
+        // ignore malformed
+      }
+    }
+    return events
+  }
+}
+
+test('self-chat interop (same key) between web and flutter', async ({ browser, testRelayUrl }) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(240000)
+
+  const secretKey = generateSecretKey()
+  const privkeyHex = toHex(secretKey)
+  const privateKeyNsec = nip19.nsecEncode(secretKey)
+  const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
+
+  const context = await browser.newContext()
+  await useTestRelay(context, testRelayUrl)
+  await setIdentity(context, privkeyHex)
+  const page = await context.newPage()
+
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec)
+
+  try {
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+
+    await loginWithStoredKey(page)
+
+    const created = await bridge.command<{ inviteUrl: string }>(
+      'create_invite',
+      { maxUses: 5 },
+      30000
+    )
+
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(created.inviteUrl)
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+
+    const webMessage = 'web->flutter self interop'
+    await page.getByPlaceholder('Type a message...').fill(webMessage)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await bridge.command('wait_for_message', { text: webMessage, timeoutMs: 30000 }, 40000)
+
+    const pubkey = await bridge.command<{ pubkeyHex: string }>('get_pubkey', {}, 10000)
+    const session = await bridge.command<{ sessionId: string }>(
+      'wait_for_session',
+      {
+        recipientPubkeyHex: pubkey.pubkeyHex,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+
+    const flutterMessage = 'flutter->web self interop'
+    await bridge.command(
+      'send_message',
+      {
+        sessionId: session.sessionId,
+        text: flutterMessage,
+      },
+      30000
+    )
+
+    await expect(
+      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
+    ).toBeVisible({ timeout: 30000 })
+  } finally {
+    await context.close()
+    await bridge.stop()
+  }
+})
+

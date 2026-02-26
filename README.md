@@ -32,6 +32,19 @@ npm run build
 npm run preview
 ```
 
+## Tests
+
+```bash
+pnpm test
+pnpm test:e2e
+```
+
+Cross-repo self-chat interop (web + Flutter, same key):
+
+```bash
+pnpm test:e2e:flutter-interop
+```
+
 ## Source
 
 [View source on iris files](https://files.iris.to/#/npub1xndmdgymsf4a34rzr7346vp8qcptxf75pjqweh8naa8rklgxpfqqmfjtce/iris-chat)
