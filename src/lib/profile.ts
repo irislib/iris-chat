@@ -31,32 +31,71 @@ function loadLocalProfile(): Profile | null {
   return null
 }
 
-// Save local profile rumor
-export function saveLocalProfile(pubkey: string, name: string): Profile {
-  const profile: Profile = {
-    pubkey,
-    name,
-    display_name: name,
+function normalizeProfile(profile: Profile): Profile {
+  const normalized: Profile = { ...profile }
+  const normalize = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim()
+    return trimmed ? trimmed : undefined
   }
+
+  normalized.name = normalize(normalized.name)
+  normalized.display_name = normalize(normalized.display_name)
+  normalized.picture = normalize(normalized.picture)
+  normalized.nip05 = normalize(normalized.nip05)
+  normalized.about = normalize(normalized.about)
+
+  if (!normalized.display_name && normalized.name) {
+    normalized.display_name = normalized.name
+  }
+  if (!normalized.name && normalized.display_name) {
+    normalized.name = normalized.display_name
+  }
+
+  return normalized
+}
+
+function persistProfile(profile: Profile): void {
   try {
     localStorage.setItem(LOCAL_PROFILE_KEY, JSON.stringify(profile))
   } catch {
     // ignore
   }
-  // Also add to cache
-  profileCache.set(pubkey, profile)
-  notifyListeners(pubkey, profile)
+
+  profileCache.set(profile.pubkey, profile)
+  notifyListeners(profile.pubkey, profile)
 
   // Save to IndexedDB for service worker access
   saveProfileToStorage({
-    pubkey,
+    pubkey: profile.pubkey,
     name: profile.name,
     display_name: profile.display_name,
     picture: profile.picture,
     updatedAt: Date.now()
   }).catch(e => console.error('[profile] failed to save local profile to IndexedDB', e))
 
-  return profile
+}
+
+// Save local profile rumor
+export function saveLocalProfile(pubkey: string, name: string): Profile {
+  return updateLocalProfile(pubkey, {
+    name,
+    display_name: name,
+  })
+}
+
+// Merge profile fields into local profile rumor
+export function updateLocalProfile(
+  pubkey: string,
+  updates: Partial<Omit<Profile, 'pubkey'>>
+): Profile {
+  const existing = loadLocalProfile()
+  const merged: Profile = normalizeProfile({
+    ...(existing ?? { pubkey }),
+    pubkey,
+    ...updates,
+  })
+  persistProfile(merged)
+  return merged
 }
 
 // Get the local profile rumor (for sending to peers)

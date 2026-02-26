@@ -1,7 +1,13 @@
 import NDK, { NDKPrivateKeySigner, NDKNip07Signer } from '@nostr-dev-kit/ndk'
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { writable, derived, get } from 'svelte/store'
-import { saveLocalProfile, clearLocalProfile, getLocalProfile } from './profile'
+import {
+  saveLocalProfile,
+  clearLocalProfile,
+  getLocalProfile,
+  updateLocalProfile,
+  type Profile,
+} from './profile'
 import { relayStore } from './relayStore'
 
 // Helper functions
@@ -284,6 +290,77 @@ export function logout(): void {
   identity.set(null)
   clearStoredIdentity()
   clearLocalProfile()
+}
+
+export async function updateOwnProfile(input: {
+  name?: string
+  picture?: string
+  baseProfile?: Profile
+}): Promise<Profile> {
+  const currentIdentity = get(identity)
+  if (!currentIdentity) {
+    throw new Error('Not logged in')
+  }
+
+  const name = input.name?.trim()
+  const picture = input.picture?.trim()
+
+  if (input.name !== undefined && !name) {
+    throw new Error('Name cannot be empty')
+  }
+  if (input.picture !== undefined && !picture) {
+    throw new Error('Picture URL cannot be empty')
+  }
+  if (input.name === undefined && input.picture === undefined) {
+    throw new Error('No profile changes provided')
+  }
+
+  const base =
+    input.baseProfile && input.baseProfile.pubkey === currentIdentity.pubkey
+      ? input.baseProfile
+      : (getLocalProfile() ?? { pubkey: currentIdentity.pubkey })
+
+  const patch: Partial<Omit<Profile, 'pubkey'>> = {}
+  if (base.name !== undefined) patch.name = base.name
+  if (base.display_name !== undefined) patch.display_name = base.display_name
+  if (base.username !== undefined) patch.username = base.username
+  if (base.picture !== undefined) patch.picture = base.picture
+  if (base.nip05 !== undefined) patch.nip05 = base.nip05
+  if (base.about !== undefined) patch.about = base.about
+
+  if (name) {
+    patch.name = name
+    patch.display_name = name
+  }
+  if (picture) {
+    patch.picture = picture
+  }
+
+  const updatedProfile = updateLocalProfile(currentIdentity.pubkey, patch)
+
+  identity.update((value) => {
+    if (!value || value.pubkey !== currentIdentity.pubkey) return value
+    return {
+      ...value,
+      displayName: updatedProfile.display_name || updatedProfile.name || null,
+    }
+  })
+
+  const ndkProfile: Record<string, string | number> = {}
+  for (const [key, value] of Object.entries(updatedProfile)) {
+    if (key === 'pubkey' || value === undefined) continue
+    if (key === 'display_name') {
+      ndkProfile.displayName = value
+      continue
+    }
+    ndkProfile[key] = value
+  }
+
+  const ndkUser = ndkInstance.getUser({ pubkey: currentIdentity.pubkey })
+  ndkUser.profile = ndkProfile
+  await ndkUser.publish()
+
+  return updatedProfile
 }
 
 export function hasNip07(): boolean {

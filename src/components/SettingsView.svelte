@@ -1,7 +1,7 @@
 <script lang="ts">
   import { notificationSettings } from '../lib/notificationStore'
   import { subscribeToDMNotifications, unsubscribeFromDMNotifications, NotificationService, type NotificationSubscription } from '../lib/notifications'
-  import { identity, getPrivkeyHex } from '../lib/identity'
+  import { identity, getPrivkeyHex, updateOwnProfile } from '../lib/identity'
   import { nip19 } from 'nostr-tools'
   import { minidenticon } from 'minidenticons'
   import Avatar from './Avatar.svelte'
@@ -18,6 +18,7 @@
   import { devices } from '../lib/devices'
   import { parseLinkInviteInput } from '../lib/linkInvites'
   import { acceptLinkInvite, ensureDeviceRegistered, registerLinkedDevice, revokeDevice } from '../lib/privateChats'
+  import { uploadProfilePictureToBlossom } from '../lib/blossomUpload'
   import { getErrorMessage } from '../lib/utils'
 
   interface Props {
@@ -66,11 +67,24 @@
   let linkInviteLastAutoAttempt = $state('')
   let showPictureModal = $state(false)
   let proxiedFullPicture = $state<string | null>(null)
+  let profileNameInput = $state('')
+  let profileNameDirty = $state(false)
+  let savingProfileName = $state(false)
+  let uploadingProfilePicture = $state(false)
+  let profileUploadProgress = $state(0)
+  let profilePictureInputRef = $state<HTMLInputElement | null>(null)
 
   let profileStore = $derived($identity?.pubkey ? createProfileStore($identity.pubkey) : undefined)
   let profile = $derived(profileStore ? $profileStore ?? undefined : undefined)
   let profilePicture = $derived(profile?.picture)
   let profilePictureName = $derived(getProfileName(profile) || $identity?.displayName || 'Profile picture')
+  let canEditProfile = $derived(!($identity?.isLinkedDevice ?? false))
+  let canSaveProfileName = $derived.by(() => {
+    if (!canEditProfile) return false
+    const nextName = profileNameInput.trim()
+    const currentName = (profile?.display_name || profile?.name || '').trim()
+    return nextName.length > 0 && nextName !== currentName
+  })
   let fallbackProfilePicture = $derived.by(() => {
     if (!$identity?.pubkey) return null
     const identicon = minidenticon($identity.pubkey, 90, 50)
@@ -230,6 +244,11 @@
         proxiedFullPicture = url
       })
     }
+  })
+
+  $effect(() => {
+    if (profileNameDirty) return
+    profileNameInput = profile?.display_name || profile?.name || ''
   })
 
   // Get npub for public key
@@ -417,6 +436,68 @@
       showPictureModal = true
     }
   }
+
+  function handleProfileNameInput() {
+    profileNameDirty = true
+  }
+
+  async function handleSaveProfileName() {
+    if (!canEditProfile) {
+      statusMessage = { type: 'error', text: 'Edit your profile on your main device' }
+      return
+    }
+    if (!canSaveProfileName || savingProfileName) return
+
+    savingProfileName = true
+    statusMessage = null
+
+    try {
+      const name = profileNameInput.trim()
+      await updateOwnProfile({ name, baseProfile: profile })
+      profileNameDirty = false
+      statusMessage = { type: 'success', text: 'Profile name updated' }
+    } catch (e) {
+      statusMessage = { type: 'error', text: getErrorMessage(e, 'Failed to update profile') }
+    } finally {
+      savingProfileName = false
+    }
+  }
+
+  async function handleProfilePictureSelect(e: Event) {
+    if (!canEditProfile) {
+      statusMessage = { type: 'error', text: 'Edit your profile on your main device' }
+      return
+    }
+    if (uploadingProfilePicture) return
+
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    input.value = ''
+
+    uploadingProfilePicture = true
+    profileUploadProgress = 0
+    statusMessage = null
+
+    try {
+      const picture = await uploadProfilePictureToBlossom(file, {
+        onProgress: ({ bytesUploaded, totalBytes }) => {
+          if (totalBytes <= 0) return
+          profileUploadProgress = Math.round((bytesUploaded / totalBytes) * 100)
+        },
+      })
+      await updateOwnProfile({ picture, baseProfile: profile })
+      statusMessage = { type: 'success', text: 'Profile picture updated' }
+    } catch (error) {
+      statusMessage = {
+        type: 'error',
+        text: getErrorMessage(error, 'Failed to upload profile picture'),
+      }
+    } finally {
+      uploadingProfilePicture = false
+      profileUploadProgress = 0
+    }
+  }
 </script>
 
 <div class="h-full flex flex-col bg-[#0a0a0a]">
@@ -445,14 +526,36 @@
       <!-- Profile Section -->
       {#if $identity}
         <div class="bg-surface rounded-lg p-4">
+          <input
+            bind:this={profilePictureInputRef}
+            type="file"
+            class="hidden"
+            accept="image/*"
+            onchange={handleProfilePictureSelect}
+          />
+
           <div class="flex items-center gap-4">
-            <button
-              class="rounded-full overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
-              onclick={handleAvatarClick}
-              aria-label="View profile picture"
-            >
-              <Avatar pubkey={$identity.pubkey} size={64} />
-            </button>
+            <div class="relative">
+              <button
+                class="rounded-full overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+                onclick={handleAvatarClick}
+                aria-label="View profile picture"
+              >
+                <Avatar pubkey={$identity.pubkey} size={64} />
+              </button>
+              <button
+                class="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-surface-light border border-surface-lighter flex items-center justify-center text-gray-400 hover:text-white hover:bg-primary transition-colors"
+                onclick={() => profilePictureInputRef?.click()}
+                disabled={uploadingProfilePicture || !canEditProfile}
+                aria-label="Change profile picture"
+              >
+                {#if uploadingProfilePicture}
+                  <span class="text-[10px] font-medium">{profileUploadProgress}%</span>
+                {:else}
+                  <span class="i-carbon-camera text-sm"></span>
+                {/if}
+              </button>
+            </div>
             <div class="flex-1 min-w-0">
               <h2 class="font-medium text-lg truncate">
                 <Name pubkey={$identity.pubkey} />
@@ -461,6 +564,33 @@
                 {$identity.isNip07 ? 'Logged in with extension' : 'Logged in with secret key'}
               </p>
             </div>
+          </div>
+
+          <div class="mt-4 pt-4 border-t border-surface-lighter">
+            <label for="profile-name" class="text-sm text-gray-400 block mb-2">Display name</label>
+            <div class="flex items-center gap-2">
+              <input
+                id="profile-name"
+                type="text"
+                class="input-field flex-1"
+                bind:value={profileNameInput}
+                disabled={!canEditProfile || savingProfileName}
+                oninput={handleProfileNameInput}
+                onkeydown={(e) => e.key === 'Enter' && handleSaveProfileName()}
+              />
+              <button
+                class="btn-primary px-4 py-2 whitespace-nowrap disabled:opacity-40"
+                onclick={handleSaveProfileName}
+                disabled={!canSaveProfileName || savingProfileName}
+              >
+                {savingProfileName ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+            {#if !canEditProfile}
+              <p class="text-xs text-gray-500 mt-2">
+                Edit your profile on your main device.
+              </p>
+            {/if}
           </div>
 
           <!-- Public Key Section -->
