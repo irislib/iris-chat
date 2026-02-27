@@ -686,7 +686,10 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     managerDeviceId !== myPubkey
 
   if (requiresOwnerRegistration) {
-    await ensureDeviceRegistered()
+    // Keep invite acceptance responsive. Registration can involve relay waits.
+    void ensureDeviceRegistered().catch((e) =>
+      console.warn('[chat] ensureDeviceRegistered failed during legacy acceptInvite:', e)
+    )
   }
 
   const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
