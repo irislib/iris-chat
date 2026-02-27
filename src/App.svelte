@@ -411,7 +411,8 @@
   function handleNewChat() {
     selectedChat = null
     currentChat.set(null)
-    if (currentView !== 'chat') {
+    selectedGroupId = null
+    if (currentView !== 'chat' || window.location.hash.startsWith('#group-')) {
       navigateTo('chat')
     }
     mobileView = 'main'

@@ -56,7 +56,7 @@
   }
 </script>
 
-<div class="flex-1 flex flex-col min-h-0">
+<div class="flex-1 flex flex-col min-h-0" data-testid="create-group-view">
   <!-- Header -->
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
     <button
@@ -83,6 +83,7 @@
           <button
             class="w-full p-3 hover:bg-surface-light flex items-center gap-3 transition-colors text-left"
             onclick={() => toggleMember(contact.recipientPubkey)}
+            data-testid="create-group-member"
           >
             <div class="relative">
               <Avatar pubkey={contact.recipientPubkey} size={48} />
@@ -106,6 +107,7 @@
         class="btn-primary w-full"
         disabled={selectedMembers.size === 0}
         onclick={handleNext}
+        data-testid="create-group-next"
       >
         Next ({selectedMembers.size} selected)
       </button>
@@ -152,6 +154,7 @@
         class="btn-primary w-full"
         disabled={!groupName.trim() || selectedMembers.size === 0}
         onclick={handleCreate}
+        data-testid="create-group-submit"
       >
         Create Group
       </button>

@@ -462,6 +462,39 @@ test.describe('iris chat', () => {
       // Should still be logged in
       await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible()
     })
+
+    test('should switch from an open group to New Chat view', async ({ page }) => {
+      const groupName = `nav-group-${Date.now()}`
+      const npub = nip19.npubEncode('d'.repeat(64))
+
+      await page.goto('/')
+      await page.getByRole('button', { name: 'Go' }).click()
+      await registerDevice(page)
+
+      // Create a direct chat so "Create Group" becomes available.
+      await page.getByRole('button', { name: 'New Chat' }).click()
+      await page.getByPlaceholder('Paste invite link').fill(npub)
+      await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
+      await page.getByRole('button', { name: 'Back' }).click()
+
+      await expect(page.getByRole('button', { name: 'Create Group' })).toBeVisible()
+      await page.getByRole('button', { name: 'Create Group' }).click()
+      await expect(page.getByRole('heading', { name: 'Select Members' })).toBeVisible()
+      const createGroupView = page.getByTestId('create-group-view')
+
+      // Select the first available contact and create the group.
+      await createGroupView.getByTestId('create-group-member').first().click()
+      await createGroupView.getByTestId('create-group-next').click()
+      await page.getByPlaceholder('Enter group name...').fill(groupName)
+      await createGroupView.getByTestId('create-group-submit').click()
+
+      // Open group chat is visible.
+      await expect(page.getByText(groupName).first()).toBeVisible()
+
+      // Regression: this should leave group chat and show New Chat main view.
+      await page.getByRole('button', { name: 'New Chat' }).click()
+      await expect(page.getByRole('heading', { name: 'New Chat' })).toBeVisible()
+    })
   })
 
   test.describe('Invite', () => {
