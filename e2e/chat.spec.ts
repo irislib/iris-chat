@@ -1042,6 +1042,40 @@ test.describe('iris chat', () => {
         await context2.close()
       }
     })
+
+    test('should render text and image attachment in the same bubble', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        await page1.goto('/')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'Hello')
+        await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect(page2.getByPlaceholder('Type a message...')).toBeVisible()
+
+        const fakeNhash = 'nhash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqr5thfd'
+        const caption = 'Caption before image'
+        await page2.getByPlaceholder('Type a message...').fill(`${caption} ${fakeNhash}/test-image.jpg`)
+        await page2.getByRole('button', { name: 'Send' }).click()
+
+        const textBubble = page1.getByTestId('message-bubble-body').filter({ hasText: caption }).first()
+        await expect(textBubble).toBeVisible()
+        await expect(textBubble.locator('.file-attachment')).toHaveCount(1)
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
   })
 
   test.describe('Reactions', () => {

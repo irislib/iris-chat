@@ -161,6 +161,8 @@
     })
   })
 
+  let showCombinedTextAndFiles = $derived(Boolean(htmlContent && fileLinks.length > 0))
+
   // Check if content has any markdown formatting
   let hasMarkdown = $derived.by(() => {
     const content = textContent
@@ -377,7 +379,10 @@
       <div class="flex-1 min-w-0">
         <div class="overflow-hidden">
           {#if replyToMessage || htmlContent}
-            <div class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden">
+            <div
+              class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden"
+              data-testid="message-bubble-body"
+            >
               <!-- Reply preview -->
               {#if replyToMessage}
                 <button
@@ -388,30 +393,54 @@
                   <div class="truncate">{replyToMessage.content}</div>
                 </button>
               {/if}
-              <!-- Content + time (inline for short messages, wraps for long) -->
-              <div class="flex flex-wrap items-end gap-x-2 px-3 {htmlContent ? 'pt-1.5' : 'pt-0.5'} pb-1">
-                {#if htmlContent}
+              {#if showCombinedTextAndFiles}
+                <div class="px-3 pt-1.5">
                   <!-- svelte-ignore a11y_click_events_have_key_events -->
                   <!-- svelte-ignore a11y_no_static_element_interactions -->
                   <div class="text-sm overflow-hidden message-content min-w-0" onclick={handleMessageContentClick}>
                     <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
                     {@html htmlContent}
                   </div>
-                {/if}
-                <div class="flex items-center gap-1 ml-auto">
-                  <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
-                  {#if message.isMine}
-                    <StatusIndicator status={message.status} variant="bubble" />
-                  {/if}
                 </div>
-              </div>
+                <div class="px-3 pb-1">
+                  {#each fileLinks as link (link.nhash + link.filename)}
+                    <FileAttachment nhash={link.nhash} filename={link.filename} isMine={message.isMine} inBubble={true} />
+                  {/each}
+                  <div class="flex items-center justify-end gap-1 mt-1">
+                    <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
+                    {#if message.isMine}
+                      <StatusIndicator status={message.status} variant="bubble" />
+                    {/if}
+                  </div>
+                </div>
+              {:else}
+                <!-- Content + time (inline for short messages, wraps for long) -->
+                <div class="flex flex-wrap items-end gap-x-2 px-3 {htmlContent ? 'pt-1.5' : 'pt-0.5'} pb-1">
+                  {#if htmlContent}
+                    <!-- svelte-ignore a11y_click_events_have_key_events -->
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div class="text-sm overflow-hidden message-content min-w-0" onclick={handleMessageContentClick}>
+                      <!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized with DOMPurify -->
+                      {@html htmlContent}
+                    </div>
+                  {/if}
+                  <div class="flex items-center gap-1 ml-auto">
+                    <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
+                    {#if message.isMine}
+                      <StatusIndicator status={message.status} variant="bubble" />
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             </div>
           {/if}
 
           <!-- File attachments -->
-          {#each fileLinks as link (link.nhash + link.filename)}
-            <FileAttachment nhash={link.nhash} filename={link.filename} isMine={message.isMine} />
-          {/each}
+          {#if !showCombinedTextAndFiles}
+            {#each fileLinks as link (link.nhash + link.filename)}
+              <FileAttachment nhash={link.nhash} filename={link.filename} isMine={message.isMine} />
+            {/each}
+          {/if}
         </div>
 
         <!-- Time + status for file-only messages -->

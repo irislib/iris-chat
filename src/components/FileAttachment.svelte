@@ -15,9 +15,10 @@
     nhash: string
     filename: string
     isMine?: boolean
+    inBubble?: boolean
   }
 
-  let { nhash, filename, isMine = false }: Props = $props()
+  let { nhash, filename, isMine = false, inBubble = false }: Props = $props()
 
   let mediaUrl = $state<string | null>(null)
   let loading = $state(false)
@@ -94,7 +95,7 @@
   }
 </script>
 
-<div class="file-attachment mt-2">
+<div class="file-attachment {inBubble ? 'mt-1.5' : 'mt-2'}">
   {#if loading && isAudio}
     <!-- Audio loading - maintain button size -->
     <div class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm {isMine ? 'bg-white/20' : 'bg-surface-light'}">
@@ -176,4 +177,3 @@
     </button>
   {/if}
 </div>
-
