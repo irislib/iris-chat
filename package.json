@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "0.1.3",
+  "version": "2.6.1",
   "type": "module",
   "packageManager": "pnpm@10.24.0",
   "scripts": {
