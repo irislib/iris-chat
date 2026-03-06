@@ -201,6 +201,10 @@ export class TestRelay {
     return `ws://127.0.0.1:${this.port}`
   }
 
+  get publishedEvents(): NostrEvent[] {
+    return Array.from(this.events.values())
+  }
+
   /** Clear all stored events */
   clear() {
     this.events.clear()

@@ -60,6 +60,32 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+async function waitForOwnerAppKeysEventCount(
+  testRelay: { publishedEvents: Array<{ kind: number; pubkey: string; tags: string[][] }> },
+  ownerPubkeyHex: string,
+  minCount: number,
+  timeoutMs = 10000
+) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const count = testRelay.publishedEvents.filter((event) => {
+      if (event.kind !== 30078 || event.pubkey !== ownerPubkeyHex) return false
+      return event.tags.some((tag) => tag[0] === 'd' && tag[1] === 'double-ratchet/app-keys')
+    }).length
+
+    if (count >= minCount) {
+      return
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  throw new Error(
+    `Timed out waiting for owner AppKeys events >= ${minCount} for ${ownerPubkeyHex.slice(0, 8)}`
+  )
+}
+
 async function openChatFromList(page: Page, message: string): Promise<void> {
   const chatList = page.getByTestId('sidebar-chat-list')
   const listItemName = new RegExp(escapeRegExp(message))
@@ -417,6 +443,93 @@ test('link device interop: flutter new device -> web owner accept', async ({ bro
     await expect(
       user2Page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterToUser2 }).first()
     ).toBeVisible({ timeout: 30000 })
+  } finally {
+    await ownerContext.close()
+    await user2Context.close()
+    await bridge.stop()
+  }
+})
+
+test('link device interop: linked flutter invite can be messaged by web user', async ({
+  browser,
+  testRelayUrl,
+  testRelay,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(300000)
+
+  const ownerSecret = generateSecretKey()
+  const ownerPrivkeyHex = toHex(ownerSecret)
+  const ownerPubkeyHex = getPublicKey(ownerSecret).toLowerCase()
+
+  const flutterSecret = generateSecretKey()
+  const flutterNsec = nip19.nsecEncode(flutterSecret)
+
+  const user2Secret = generateSecretKey()
+  const user2PrivkeyHex = toHex(user2Secret)
+  const user2PubkeyHex = getPublicKey(user2Secret).toLowerCase()
+
+  const ownerContext = await browser.newContext()
+  const user2Context = await browser.newContext()
+  await useTestRelay(ownerContext, testRelayUrl)
+  await useTestRelay(user2Context, testRelayUrl)
+  await setIdentity(ownerContext, ownerPrivkeyHex)
+  await setIdentity(user2Context, user2PrivkeyHex)
+
+  const ownerPage = await ownerContext.newPage()
+  const user2Page = await user2Context.newPage()
+  const bridge = new FlutterInteropBridge(testRelayUrl, flutterNsec)
+
+  try {
+    await loginWithStoredKey(ownerPage)
+    await loginWithStoredKey(user2Page)
+    await registerDevice(ownerPage)
+    await registerDevice(user2Page)
+
+    await bridge.start()
+    await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+
+    const linkInvite = await bridge.command<{ inviteUrl: string }>('create_link_invite', {}, 30000)
+    await acceptLinkInvite(ownerPage, linkInvite.inviteUrl)
+
+    const linked = await bridge.command<{ ownerPubkeyHex: string }>(
+      'wait_for_linked_device',
+      { timeoutMs: 40000 },
+      50000
+    )
+    expect(linked.ownerPubkeyHex.toLowerCase()).toBe(ownerPubkeyHex)
+    await waitForOwnerAppKeysEventCount(testRelay, ownerPubkeyHex, 2, 15000)
+
+    const linkedInvite = await bridge.command<{ inviteUrl: string }>(
+      'create_invite',
+      { maxUses: 5 },
+      30000
+    )
+
+    await user2Page.getByRole('button', { name: 'New Chat' }).click()
+    await user2Page.getByPlaceholder('Paste invite link').fill(linkedInvite.inviteUrl)
+    await expect(user2Page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+
+    const flutterSession = await bridge.command<{ sessionId: string }>(
+      'wait_for_session',
+      {
+        recipientPubkeyHex: user2PubkeyHex,
+        timeoutMs: 40000,
+      },
+      50000
+    )
+
+    const user2ToLinkedFlutter = `user2->linked flutter invite ${Date.now()}`
+    await user2Page.getByPlaceholder('Type a message...').fill(user2ToLinkedFlutter)
+    await user2Page.getByRole('button', { name: 'Send' }).click()
+
+    await openChatFromList(ownerPage, user2ToLinkedFlutter)
+    await expect(
+      ownerPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: user2ToLinkedFlutter }).first()
+    ).toBeVisible({ timeout: 30000 })
+    expect(flutterSession.sessionId).toBeTruthy()
   } finally {
     await ownerContext.close()
     await user2Context.close()
