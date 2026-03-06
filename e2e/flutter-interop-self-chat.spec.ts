@@ -20,6 +20,19 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+function hexToBytes(hex: string): Uint8Array {
+  const normalized = hex.trim()
+  if (normalized.length % 2 !== 0) {
+    throw new Error(`Invalid hex string length: ${normalized.length}`)
+  }
+
+  const out = new Uint8Array(normalized.length / 2)
+  for (let i = 0; i < normalized.length; i += 2) {
+    out[i / 2] = Number.parseInt(normalized.slice(i, i + 2), 16)
+  }
+  return out
+}
+
 async function setIdentity(context: BrowserContext, privkeyHex: string) {
   await context.addInitScript((key: string) => {
     try {
@@ -47,6 +60,22 @@ async function loginWithStoredKey(page: Page) {
   }
 }
 
+async function loginAnonymously(page: Page) {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Go' }).click()
+  await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({
+    timeout: 30000,
+  })
+}
+
+async function getStoredIdentityPrivkeyHex(page: Page): Promise<string> {
+  const privkeyHex = await page.evaluate(() => localStorage.getItem('iris-chat-identity'))
+  if (!privkeyHex) {
+    throw new Error('No stored web identity found in localStorage')
+  }
+  return privkeyHex
+}
+
 type BridgeEvent =
   | { type: 'ready'; data?: { pubkeyHex?: string; relayUrl?: string } }
   | { type: 'response'; id?: string; ok?: boolean; data?: unknown; error?: string }
@@ -63,7 +92,8 @@ class FlutterInteropBridge {
 
   constructor(
     private readonly relayUrl: string,
-    private readonly privateKeyNsec: string
+    private readonly privateKeyNsec: string,
+    private readonly registerDeviceOnLogin = false
   ) {}
 
   async start(): Promise<{ pubkeyHex: string }> {
@@ -81,6 +111,7 @@ class FlutterInteropBridge {
         `--dart-define=IRIS_INTEROP_RELAY_URL=${this.relayUrl}`,
         `--dart-define=IRIS_INTEROP_BRIDGE_DIR=${this.bridgeDir}`,
         `--dart-define=IRIS_INTEROP_PRIVATE_KEY_NSEC=${this.privateKeyNsec}`,
+        `--dart-define=IRIS_INTEROP_REGISTER_DEVICE=${this.registerDeviceOnLogin ? '1' : '0'}`,
       ],
       {
         cwd: FLUTTER_REPO,
@@ -281,6 +312,84 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
       'send_message',
       {
         sessionId: session.sessionId,
+        text: flutterMessage,
+      },
+      30000
+    )
+
+    await expect(
+      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
+    ).toBeVisible({ timeout: 30000 })
+  } finally {
+    await context.close()
+    await bridge.stop()
+  }
+})
+
+test('flutter existing-nsec invite interop (different keys) between flutter and web', async ({
+  browser,
+  testRelayUrl,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(240000)
+
+  const flutterSecret = generateSecretKey()
+  const flutterNsec = nip19.nsecEncode(flutterSecret)
+  const expectedFlutterPubkeyHex = getPublicKey(flutterSecret).toLowerCase()
+
+  const context = await browser.newContext()
+  await useTestRelay(context, testRelayUrl)
+  const page = await context.newPage()
+
+  const bridge = new FlutterInteropBridge(testRelayUrl, flutterNsec, true)
+
+  try {
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).toBe(expectedFlutterPubkeyHex)
+
+    const created = await bridge.command<{ inviteUrl: string }>(
+      'create_invite',
+      { maxUses: 5 },
+      30000
+    )
+
+    await loginAnonymously(page)
+    const webPrivkeyHex = await getStoredIdentityPrivkeyHex(page)
+    const webPubkeyHex = getPublicKey(hexToBytes(webPrivkeyHex)).toLowerCase()
+
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(created.inviteUrl)
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+
+    const flutterSession = await bridge.command<{ sessionId: string }>(
+      'wait_for_session',
+      {
+        recipientPubkeyHex: webPubkeyHex,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+
+    const webMessage = 'web->flutter invite interop'
+    await page.getByPlaceholder('Type a message...').fill(webMessage)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await bridge.command(
+      'wait_for_message',
+      {
+        text: webMessage,
+        timeoutMs: 30000,
+        incomingOnly: true,
+      },
+      40000
+    )
+
+    const flutterMessage = 'flutter->web invite interop'
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterSession.sessionId,
         text: flutterMessage,
       },
       30000
