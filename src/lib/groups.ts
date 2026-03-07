@@ -137,8 +137,9 @@ function resolveNativeSenderPubkey(
 
 function createNativeGroupSubscribe(): NostrSubscribe | undefined {
   const ndkInstance = get(ndk) as { subscribe?: (...args: unknown[]) => unknown } | undefined
-  const subscribe = ndkInstance?.subscribe
-  if (typeof subscribe !== 'function') return undefined
+  if (!ndkInstance || typeof ndkInstance.subscribe !== 'function') return undefined
+  const subscribeMethod = ndkInstance.subscribe
+  const subscribe = subscribeMethod.bind(ndkInstance) as typeof subscribeMethod
 
   return (filter, onEvent) => {
     const subscription = subscribe(
