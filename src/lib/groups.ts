@@ -327,6 +327,40 @@ function fanOutToMembers(
   }
 }
 
+function senderCopyGroupMetadataToSelf(groupId: string, content: string): void {
+  const myPubkey = getPubkey()
+  if (!myPubkey) return
+  if (!getSessionManager()) return
+
+  fanOutToMembers(
+    groupId,
+    {
+      content,
+      kind: GROUP_METADATA_KIND,
+      tags: [],
+    },
+    [myPubkey],
+    { includeSelf: true },
+  )
+}
+
+function fanOutGroupMetadataToMembers(
+  groupId: string,
+  content: string,
+  recipientOverride?: string[],
+): void {
+  fanOutToMembers(
+    groupId,
+    {
+      content,
+      kind: GROUP_METADATA_KIND,
+      tags: [],
+    },
+    recipientOverride,
+  )
+  senderCopyGroupMetadataToSelf(groupId, content)
+}
+
 
 function saveGroupState(group: Group): void {
   const storedGroup: StoredGroup = {
@@ -375,12 +409,12 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
 
   saveGroupState(group)
 
+  const metadataContent = buildGroupMetadataContent(group)
+
   if (!runtime) {
-    fanOutToMembers(group.id, {
-      content: buildGroupMetadataContent(group),
-      kind: GROUP_METADATA_KIND,
-      tags: []
-    })
+    fanOutGroupMetadataToMembers(group.id, metadataContent)
+  } else {
+    senderCopyGroupMetadataToSelf(group.id, metadataContent)
   }
 
   setupGroupChannel(group)
@@ -408,11 +442,11 @@ export function addGroupMember(groupId: string, pubkey: string): void {
   teardownGroupChannel(groupId)
   setupGroupChannel(updated)
 
-  fanOutToMembers(groupId, {
-    content: buildGroupMetadataContent(updated),
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  }, updated.members)
+  fanOutGroupMetadataToMembers(
+    groupId,
+    buildGroupMetadataContent(updated),
+    updated.members,
+  )
 }
 
 export function removeGroupMember(groupId: string, pubkey: string): void {
@@ -432,11 +466,11 @@ export function removeGroupMember(groupId: string, pubkey: string): void {
   setupGroupChannel(updated)
 
   // Remaining members get new secret
-  fanOutToMembers(groupId, {
-    content: buildGroupMetadataContent(updated),
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  }, updated.members)
+  fanOutGroupMetadataToMembers(
+    groupId,
+    buildGroupMetadataContent(updated),
+    updated.members,
+  )
 
   // Removed member gets metadata WITHOUT secret
   fanOutToMembers(groupId, {
@@ -459,11 +493,7 @@ export function updateGroupInfo(groupId: string, updates: { name?: string, descr
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
-  fanOutToMembers(groupId, {
-    content: buildGroupMetadataContent(updated),
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  })
+  fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
 export function addGroupAdmin(groupId: string, pubkey: string): void {
@@ -479,11 +509,7 @@ export function addGroupAdmin(groupId: string, pubkey: string): void {
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
-  fanOutToMembers(groupId, {
-    content: buildGroupMetadataContent(updated),
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  })
+  fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
 export function removeGroupAdmin(groupId: string, pubkey: string): void {
@@ -499,11 +525,7 @@ export function removeGroupAdmin(groupId: string, pubkey: string): void {
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
-  fanOutToMembers(groupId, {
-    content: buildGroupMetadataContent(updated),
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  })
+  fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
 export function sendGroupMessage(groupId: string, text: string, replyTo?: string): void {
@@ -661,11 +683,7 @@ export function handleGroupEvent(
 }
 
 export function fanOutGroupMetadata(groupId: string, content: string): void {
-  fanOutToMembers(groupId, {
-    content,
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  })
+  fanOutGroupMetadataToMembers(groupId, content)
 }
 
 function handleGroupMetadata(rumor: Rumor, senderPubkey: string): void {

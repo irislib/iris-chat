@@ -112,16 +112,17 @@ describe('groups', () => {
       expect(stored!.admins).toEqual([MY_PUBKEY])
     })
 
-    it('fans out metadata to all members', async () => {
+    it('fans out metadata to members and sender-copies it to self', async () => {
       const { createGroup } = await import('./groups')
       await createGroup('Fan Out Test', [MEMBER_B])
 
-      // Should have sent to MEMBER_B (not to self)
+      // Should have sent to MEMBER_B and also sender-copied to self so
+      // linked clients can materialize the group.
       expect(sendEventCalls.length).toBeGreaterThanOrEqual(1)
       const sentToB = sendEventCalls.some(c => c.recipient === MEMBER_B)
       expect(sentToB).toBe(true)
       const sentToSelf = sendEventCalls.some(c => c.recipient === MY_PUBKEY)
-      expect(sentToSelf).toBe(false)
+      expect(sentToSelf).toBe(true)
     })
 
     it('deduplicates creator from member list', async () => {
@@ -519,6 +520,29 @@ describe('groups', () => {
         expect(expiresAt).toBeGreaterThanOrEqual(before + 60)
         expect(expiresAt).toBeLessThanOrEqual(after + 60)
       }
+    })
+  })
+
+  describe('fanOutGroupMetadata', () => {
+    it('sender-copies metadata updates to self', async () => {
+      const { createGroup, fanOutGroupMetadata } = await import('./groups')
+      const group = await createGroup('Metadata Update Test', [MEMBER_B])
+      sendEventCalls.length = 0
+
+      fanOutGroupMetadata(
+        group.id,
+        JSON.stringify({
+          id: group.id,
+          name: 'Metadata Update Test',
+          members: group.members,
+          admins: group.admins,
+        })
+      )
+
+      const sentToB = sendEventCalls.some(c => c.recipient === MEMBER_B)
+      const sentToSelf = sendEventCalls.some(c => c.recipient === MY_PUBKEY)
+      expect(sentToB).toBe(true)
+      expect(sentToSelf).toBe(true)
     })
   })
 

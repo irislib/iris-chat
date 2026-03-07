@@ -499,3 +499,108 @@ test('group interop (same key) between web and flutter', async ({ browser, testR
     await bridge.stop()
   }
 })
+
+test('group interop (same key) between web-created groups and flutter', async ({
+  browser,
+  testRelayUrl,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(240000)
+
+  const secretKey = generateSecretKey()
+  const privkeyHex = toHex(secretKey)
+  const privateKeyNsec = nip19.nsecEncode(secretKey)
+  const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
+  const groupName = `web-created-interop-group-${Date.now()}`
+
+  const context = await browser.newContext()
+  await useTestRelay(context, testRelayUrl)
+  await setIdentity(context, privkeyHex)
+  const page = await context.newPage()
+
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec)
+
+  try {
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+
+    await loginWithStoredKey(page)
+
+    // Bootstrap a self-session first so web can sender-copy group metadata
+    // back to Flutter via pairwise transport.
+    const dmBootstrapInvite = await bridge.command<{ inviteUrl: string }>(
+      'create_invite',
+      { maxUses: 5 },
+      30000
+    )
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(dmBootstrapInvite.inviteUrl)
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+    const dmBootstrapText = 'web-created-group-bootstrap-self-session'
+    await page.getByPlaceholder('Type a message...').fill(dmBootstrapText)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await bridge.command('wait_for_message', { text: dmBootstrapText, timeoutMs: 30000 }, 40000)
+
+    await page.getByRole('button', { name: 'Back' }).click()
+    await expect(page.getByRole('button', { name: 'Create Group' })).toBeVisible({
+      timeout: 20000,
+    })
+
+    await page.getByRole('button', { name: 'Create Group' }).click()
+    const createGroupView = page.getByTestId('create-group-view')
+    await createGroupView.getByTestId('create-group-member').first().click()
+    await createGroupView.getByTestId('create-group-next').click()
+    await page.getByPlaceholder('Enter group name...').fill(groupName)
+    await createGroupView.getByTestId('create-group-submit').click()
+
+    const flutterGroup = await bridge.command<{ groupId: string }>(
+      'wait_for_group_named',
+      {
+        name: groupName,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+
+    await bridge.command(
+      'accept_group',
+      {
+        groupId: flutterGroup.groupId,
+      },
+      20000
+    )
+
+    const webMessage = 'web->flutter web-created group interop'
+    await page.getByPlaceholder('Type a message...').fill(webMessage)
+    await page.getByRole('button', { name: 'Send' }).click()
+
+    await bridge.command(
+      'wait_for_group_message',
+      {
+        groupId: flutterGroup.groupId,
+        text: webMessage,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+
+    const flutterMessage = 'flutter->web web-created group interop'
+    await bridge.command(
+      'send_group_message',
+      {
+        groupId: flutterGroup.groupId,
+        text: flutterMessage,
+      },
+      30000
+    )
+
+    await expect(
+      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
+    ).toBeVisible({ timeout: 30000 })
+  } finally {
+    await context.close()
+    await bridge.stop()
+  }
+})
