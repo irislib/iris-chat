@@ -240,6 +240,7 @@ test.describe('iris chat', () => {
         // exercising the real UI flow for opening and switching chats.
         await page1.goto('/')
         await page1.getByRole('button', { name: 'Go' }).click()
+        await expect(page1.getByRole('button', { name: 'New Chat' })).toBeVisible()
         await registerDevice(page1)
 
         const npub1 = nip19.npubEncode('b'.repeat(64))
