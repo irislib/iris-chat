@@ -7,6 +7,8 @@
   import { getAnimalName } from '../lib/animalNames'
   import { chats } from '../lib/chat'
   import { generateProxyUrl } from '../lib/imgproxy'
+  import { createRuntimeProfileAppKeysStore } from '../lib/profileAppKeysRuntime'
+  import type { ProfileAppKeysState } from '../lib/profileAppKeys'
 
   interface Props {
     pubkey: string
@@ -24,6 +26,13 @@
   let profile = $derived(profileStore ? $profileStore ?? undefined : undefined)
   let profileName = $derived(isValidPubkey ? getProfileName(profile) : undefined)
   let animalName = $derived(isValidPubkey ? getAnimalName(pubkey) : 'Unknown')
+  let profileAppKeysStore = $derived(
+    isValidPubkey ? createRuntimeProfileAppKeysStore(pubkey) : undefined
+  )
+  const emptyProfileAppKeys: ProfileAppKeysState = { devices: [], loading: false }
+  let profileAppKeys = $derived(
+    profileAppKeysStore ? ($profileAppKeysStore ?? emptyProfileAppKeys) : emptyProfileAppKeys
+  )
 
   // Check if we have an existing chat with this user
   let hasExistingChat = $derived(isValidPubkey ? $chats.has(pubkey) : false)
@@ -53,6 +62,15 @@
     if (profilePicture) {
       showPictureModal = true
     }
+  }
+
+  function formatDeviceCreatedAt(createdAt: number) {
+    if (!createdAt) return 'Published time unknown'
+
+    const date = new Date(createdAt * 1000)
+    if (Number.isNaN(date.getTime())) return 'Published time unknown'
+
+    return `Published ${date.toLocaleString()}`
   }
 </script>
 
@@ -117,6 +135,52 @@
           <div class="mb-4 flex">
             <CopyButton text={npub} maxLength={48} />
           </div>
+
+          <details
+            class="mb-4 rounded-xl border border-surface-lighter bg-surface-light/60 text-left"
+            data-testid="profile-appkeys-disclosure"
+          >
+            <summary class="cursor-pointer px-4 py-3 select-none">
+              <span class="text-sm font-medium text-gray-200">Known App Keys</span>
+              <span class="block text-xs text-gray-400 mt-1">
+                {#if profileAppKeys.devices.length > 0}
+                  {profileAppKeys.devices.length}
+                  {profileAppKeys.devices.length === 1 ? ' device key published' : ' device keys published'}
+                {:else if profileAppKeys.loading}
+                  Checking connected relays...
+                {:else}
+                  No published app keys seen yet
+                {/if}
+              </span>
+            </summary>
+
+            <div class="border-t border-surface-lighter px-4 py-3 space-y-3">
+              {#if profileAppKeys.devices.length > 0}
+                {#if profileAppKeys.loading}
+                  <p class="text-xs text-gray-500">Refreshing from connected relays...</p>
+                {/if}
+
+                {#each profileAppKeys.devices as device}
+                  <div class="space-y-2">
+                    <CopyButton
+                      text={device.identityPubkey}
+                      maxLength={36}
+                      className="text-xs"
+                    />
+                    <p class="text-xs text-gray-500">{formatDeviceCreatedAt(device.createdAt)}</p>
+                  </div>
+                {/each}
+              {:else if profileAppKeys.loading}
+                <p class="text-sm text-gray-400">
+                  Checking connected relays for device keys...
+                </p>
+              {:else}
+                <p class="text-sm text-gray-400">
+                  No app keys for this profile have been seen on your connected relays yet.
+                </p>
+              {/if}
+            </div>
+          </details>
 
           <!-- Chat Button -->
           <button

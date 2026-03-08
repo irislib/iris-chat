@@ -1339,6 +1339,46 @@ test.describe('iris chat', () => {
         await context2.close()
       }
     })
+
+    test('should show known app keys on another user profile', async ({ browser, testRelayUrl }) => {
+      const context1 = await createContext(browser, testRelayUrl)
+      const context2 = await createContext(browser, testRelayUrl)
+
+      const page1 = await context1.newPage()
+      const page2 = await context2.newPage()
+
+      try {
+        await page1.goto('/')
+        await page1.getByPlaceholder('Name').fill('Alice')
+        await page1.getByRole('button', { name: 'Go' }).click()
+        await page1.getByRole('button', { name: 'New Chat' }).click()
+        const inviteUrl = await getInviteUrl(page1)
+
+        await page2.goto('/')
+        await page2.getByPlaceholder('Name').fill('Bob')
+        await page2.getByRole('button', { name: 'Go' }).click()
+        await page2.getByRole('button', { name: 'New Chat' }).click()
+        await joinViaPasteAndSync(page1, page2, inviteUrl, 'AppKeys check')
+
+        const profileButton = page1.locator('header button').filter({ hasText: 'Bob' }).first()
+        await expect(profileButton).toBeEnabled()
+        await profileButton.click()
+
+        const disclosure = page1.getByTestId('profile-appkeys-disclosure')
+        await expect(disclosure).toBeVisible()
+        await expect(disclosure).toContainText('Known App Keys')
+        await expect(disclosure).toContainText('device key published')
+
+        await disclosure.locator('summary').click()
+
+        const appKeyButton = disclosure.locator('button[title]').first()
+        await expect(appKeyButton).toBeVisible()
+        await expect(appKeyButton).toHaveAttribute('title', /^[0-9a-f]{64}$/)
+      } finally {
+        await context1.close()
+        await context2.close()
+      }
+    })
   })
 
   test.describe('Settings page', () => {
