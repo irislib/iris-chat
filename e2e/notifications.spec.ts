@@ -104,7 +104,7 @@ test.describe('Notifications', () => {
 
       // Change server URL
       await page.locator('#server-url').fill('https://custom.server.com')
-      await page.getByRole('button', { name: 'Save' }).click()
+      await page.locator('#server-url + button').click()
 
       // Reload page - settings page should still be shown (URL has #settings)
       await safeReload(page)

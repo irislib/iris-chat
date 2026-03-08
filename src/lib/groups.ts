@@ -411,12 +411,7 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
   saveGroupState(group)
 
   const metadataContent = buildGroupMetadataContent(group)
-
-  if (!runtime) {
-    fanOutGroupMetadataToMembers(group.id, metadataContent)
-  } else {
-    senderCopyGroupMetadataToSelf(group.id, metadataContent)
-  }
+  fanOutGroupMetadataToMembers(group.id, metadataContent)
 
   setupGroupChannel(group)
   syncNativeGroupTransport(group.id)

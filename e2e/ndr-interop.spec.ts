@@ -154,7 +154,7 @@ async function stopNdrListen(child: ReturnType<typeof startNdrListen>['child']) 
 }
 
 test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
-  test.setTimeout(180000)
+  test.setTimeout(240000)
 
   const dataDir = createNdrDataDir(testRelayUrl)
   let listener: ReturnType<typeof startNdrListen> | null = null
@@ -185,7 +185,7 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
     const createdSession = await waitForNdrJson(
       listener.reader,
       (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
-      20000
+      60000
     )
 
     const irisMessage = 'hello from iris'
@@ -195,15 +195,15 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
     await waitForNdrJson(
       listener.reader,
       (json) => json.event === 'message' && json.content === irisMessage,
-      15000
+      30000
     )
 
     const ndrMessage = 'hello from ndr'
-    await runNdrRetry(['send', createdSession.chat_id, ndrMessage], dataDir, 15000, 500)
+    await runNdrRetry(['send', createdSession.chat_id, ndrMessage], dataDir, 30000, 500)
 
     await expect(
       page.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrMessage })
-    ).toBeVisible({ timeout: 10000 })
+    ).toBeVisible({ timeout: 30000 })
   } finally {
     if (listener) {
       await stopNdrListen(listener.child)

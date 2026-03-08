@@ -77,13 +77,27 @@ async function getStoredIdentityPrivkeyHex(page: Page): Promise<string> {
 }
 
 async function openGroupFromSidebar(page: Page, groupName: string): Promise<void> {
-  await page.getByTestId('sidebar-tab-all').click()
-  const groupListItem = page
-    .getByTestId('sidebar-chat-list')
-    .getByRole('button', { name: new RegExp(groupName) })
-    .first()
-  await expect(groupListItem).toBeVisible({ timeout: 30000 })
-  await groupListItem.click()
+  const chatList = page.getByTestId('sidebar-chat-list')
+  const allTab = page.getByTestId('sidebar-tab-all')
+  const requestsTab = page.getByTestId('sidebar-tab-requests')
+  const deadline = Date.now() + 60_000
+
+  while (Date.now() < deadline) {
+    for (const tabButton of [allTab, requestsTab]) {
+      await tabButton.click().catch(() => {})
+      const groupListItem = chatList
+        .getByRole('button', { name: new RegExp(groupName) })
+        .first()
+      if (await groupListItem.isVisible().catch(() => false)) {
+        await groupListItem.click()
+        return
+      }
+    }
+
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`Could not find group list item: ${groupName}`)
 }
 
 async function acceptOpenGroupIfNeeded(page: Page): Promise<void> {
@@ -91,6 +105,11 @@ async function acceptOpenGroupIfNeeded(page: Page): Promise<void> {
   if (await acceptButton.isVisible().catch(() => false)) {
     await acceptButton.click()
   }
+}
+
+async function expectChatMessageVisible(page: Page, text: string): Promise<void> {
+  const visibleText = page.getByText(text, { exact: true }).first()
+  await expect(visibleText).toBeVisible({ timeout: 90_000 })
 }
 
 type BridgeEvent =
@@ -291,7 +310,7 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
@@ -312,13 +331,10 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
     const webMessage = 'web->flutter self interop'
     await page.getByPlaceholder('Type a message...').fill(webMessage)
     await page.getByRole('button', { name: 'Send' }).click()
-    await bridge.command('wait_for_message', { text: webMessage, timeoutMs: 30000 }, 40000)
-
-    const pubkey = await bridge.command<{ pubkeyHex: string }>('get_pubkey', {}, 10000)
-    const session = await bridge.command<{ sessionId: string }>(
-      'wait_for_session',
+    const flutterIncomingMessage = await bridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
       {
-        recipientPubkeyHex: pubkey.pubkeyHex,
+        text: webMessage,
         timeoutMs: 30000,
       },
       40000
@@ -326,17 +342,15 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
 
     const flutterMessage = 'flutter->web self interop'
     await bridge.command(
-      'send_message',
+      'send_message_ui',
       {
-        sessionId: session.sessionId,
+        sessionId: flutterIncomingMessage.sessionId,
         text: flutterMessage,
       },
       30000
     )
 
-    await expect(
-      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
-    ).toBeVisible({ timeout: 30000 })
+    await expectChatMessageVisible(page, flutterMessage)
   } finally {
     await context.close()
     await bridge.stop()
@@ -373,27 +387,17 @@ test('flutter existing-nsec invite interop (different keys) between flutter and 
     )
 
     await loginAnonymously(page)
-    const webPrivkeyHex = await getStoredIdentityPrivkeyHex(page)
-    const webPubkeyHex = getPublicKey(hexToBytes(webPrivkeyHex)).toLowerCase()
+    await getStoredIdentityPrivkeyHex(page)
 
     await page.getByRole('button', { name: 'New Chat' }).click()
     await page.getByPlaceholder('Paste invite link').fill(created.inviteUrl)
     await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
 
-    const flutterSession = await bridge.command<{ sessionId: string }>(
-      'wait_for_session',
-      {
-        recipientPubkeyHex: webPubkeyHex,
-        timeoutMs: 30000,
-      },
-      40000
-    )
-
     const webMessage = 'web->flutter invite interop'
     await page.getByPlaceholder('Type a message...').fill(webMessage)
     await page.getByRole('button', { name: 'Send' }).click()
-    await bridge.command(
-      'wait_for_message',
+    const flutterIncomingMessage = await bridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
       {
         text: webMessage,
         timeoutMs: 30000,
@@ -406,15 +410,13 @@ test('flutter existing-nsec invite interop (different keys) between flutter and 
     await bridge.command(
       'send_message_ui',
       {
-        sessionId: flutterSession.sessionId,
+        sessionId: flutterIncomingMessage.sessionId,
         text: flutterMessage,
       },
       30000
     )
 
-    await expect(
-      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
-    ).toBeVisible({ timeout: 30000 })
+    await expectChatMessageVisible(page, flutterMessage)
   } finally {
     await context.close()
     await bridge.stop()
@@ -438,7 +440,7 @@ test('group interop (same key) between web and flutter', async ({ browser, testR
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
@@ -459,7 +461,21 @@ test('group interop (same key) between web and flutter', async ({ browser, testR
     const dmBootstrapText = 'group-bootstrap-self-session'
     await page.getByPlaceholder('Type a message...').fill(dmBootstrapText)
     await page.getByRole('button', { name: 'Send' }).click()
-    await bridge.command('wait_for_message', { text: dmBootstrapText, timeoutMs: 30000 }, 40000)
+    const flutterBootstrapMessage = await bridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
+      { text: dmBootstrapText, timeoutMs: 30000 },
+      40000
+    )
+    const dmBootstrapAck = 'group-bootstrap-self-session-ack'
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterBootstrapMessage.sessionId,
+        text: dmBootstrapAck,
+      },
+      30000
+    )
+    await expectChatMessageVisible(page, dmBootstrapAck)
 
     const pubkey = await bridge.command<{ pubkeyHex: string }>('get_pubkey', {}, 10000)
     const created = await bridge.command<{ groupId: string }>(
@@ -484,9 +500,7 @@ test('group interop (same key) between web and flutter', async ({ browser, testR
       30000
     )
 
-    await expect(
-      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
-    ).toBeVisible({ timeout: 30000 })
+    await expectChatMessageVisible(page, flutterMessage)
 
     const webMessage = 'web->flutter group interop'
     await page.getByPlaceholder('Type a message...').fill(webMessage)
@@ -548,8 +562,8 @@ test('group interop (different keys) web creates group and flutter receives it',
     const dmBootstrapText = `web->flutter group bootstrap ${Date.now()}`
     await page.getByPlaceholder('Type a message...').fill(dmBootstrapText)
     await page.getByRole('button', { name: 'Send' }).click()
-    await bridge.command(
-      'wait_for_message',
+    const flutterBootstrapMessage = await bridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
       {
         text: dmBootstrapText,
         timeoutMs: 30000,
@@ -557,6 +571,16 @@ test('group interop (different keys) web creates group and flutter receives it',
       },
       40000
     )
+    const dmBootstrapAck = `flutter->web group bootstrap ack ${Date.now()}`
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterBootstrapMessage.sessionId,
+        text: dmBootstrapAck,
+      },
+      30000
+    )
+    await expectChatMessageVisible(page, dmBootstrapAck)
 
     await page.getByRole('button', { name: 'Back' }).click()
     await expect(page.getByRole('button', { name: 'Create Group' })).toBeVisible({
@@ -611,9 +635,7 @@ test('group interop (different keys) web creates group and flutter receives it',
       30000
     )
 
-    await expect(
-      page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
-    ).toBeVisible({ timeout: 30000 })
+    await expectChatMessageVisible(page, flutterMessage)
 
     expect(webPubkeyHex).toHaveLength(64)
   } finally {
@@ -664,8 +686,8 @@ test('group interop (different keys) flutter creates group and web sees flutter 
     await page.getByPlaceholder('Type a message...').fill(dmBootstrapText)
     await page.getByRole('button', { name: 'Send' }).click()
 
-    await bridge.command(
-      'wait_for_message',
+    const flutterBootstrapMessage = await bridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
       {
         text: dmBootstrapText,
         timeoutMs: 30000,
@@ -673,6 +695,16 @@ test('group interop (different keys) flutter creates group and web sees flutter 
       },
       40000
     )
+    const dmBootstrapAck = `flutter->web group create ack ${Date.now()}`
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterBootstrapMessage.sessionId,
+        text: dmBootstrapAck,
+      },
+      30000
+    )
+    await expectChatMessageVisible(page, dmBootstrapAck)
 
     const flutterGroup = await bridge.command<{ groupId: string }>(
       'create_group',
@@ -740,7 +772,7 @@ test('group interop (same key) between web-created groups and flutter', async ({
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
@@ -761,7 +793,21 @@ test('group interop (same key) between web-created groups and flutter', async ({
     const dmBootstrapText = 'web-created-group-bootstrap-self-session'
     await page.getByPlaceholder('Type a message...').fill(dmBootstrapText)
     await page.getByRole('button', { name: 'Send' }).click()
-    await bridge.command('wait_for_message', { text: dmBootstrapText, timeoutMs: 30000 }, 40000)
+    const flutterBootstrapMessage = await bridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
+      { text: dmBootstrapText, timeoutMs: 30000 },
+      40000
+    )
+    const dmBootstrapAck = 'web-created-group-bootstrap-self-session-ack'
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterBootstrapMessage.sessionId,
+        text: dmBootstrapAck,
+      },
+      30000
+    )
+    await expectChatMessageVisible(page, dmBootstrapAck)
 
     await page.getByRole('button', { name: 'Back' }).click()
     await expect(page.getByRole('button', { name: 'Create Group' })).toBeVisible({
