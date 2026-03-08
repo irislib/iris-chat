@@ -86,6 +86,41 @@ async function waitForOwnerAppKeysEventCount(
   )
 }
 
+function getOwnerAppKeysEvents(
+  testRelay: { publishedEvents: Array<{ kind: number; pubkey: string; tags: string[][] }> },
+  ownerPubkeyHex: string
+) {
+  return testRelay.publishedEvents.filter((event) => {
+    if (event.kind !== 30078 || event.pubkey !== ownerPubkeyHex) return false
+    return event.tags.some((tag) => tag[0] === 'd' && tag[1] === 'double-ratchet/app-keys')
+  })
+}
+
+async function waitForLatestOwnerAppKeysDeviceCount(
+  testRelay: { publishedEvents: Array<{ kind: number; pubkey: string; tags: string[][] }> },
+  ownerPubkeyHex: string,
+  minDeviceCount: number,
+  timeoutMs = 10000
+) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const latest = getOwnerAppKeysEvents(testRelay, ownerPubkeyHex).at(-1)
+    const deviceCount =
+      latest?.tags.filter((tag) => tag[0] === 'device' && tag[1]?.trim().length > 0).length ?? 0
+
+    if (deviceCount >= minDeviceCount) {
+      return latest
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  throw new Error(
+    `Timed out waiting for latest owner AppKeys to include >= ${minDeviceCount} devices for ${ownerPubkeyHex.slice(0, 8)}`
+  )
+}
+
 async function openChatFromList(page: Page, message: string): Promise<void> {
   const chatList = page.getByTestId('sidebar-chat-list')
   const listItemName = new RegExp(escapeRegExp(message))
@@ -598,6 +633,100 @@ test('link device interop: web new device -> flutter owner accept', async ({ bro
     )
   } finally {
     await linkedContext.close()
+    await user2Context.close()
+    await bridge.stop()
+  }
+})
+
+test('link device interop: flutter owner keeps multiple web appkeys and sees web sender copies', async ({
+  browser,
+  testRelayUrl,
+  testRelay,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(360000)
+
+  const ownerSecret = generateSecretKey()
+  const ownerNsec = nip19.nsecEncode(ownerSecret)
+  const ownerPubkeyHex = getPublicKey(ownerSecret).toLowerCase()
+
+  const user2Secret = generateSecretKey()
+  const user2PrivkeyHex = toHex(user2Secret)
+
+  const linkedContext1 = await browser.newContext()
+  const linkedContext2 = await browser.newContext()
+  const user2Context = await browser.newContext()
+  await useTestRelay(linkedContext1, testRelayUrl)
+  await useTestRelay(linkedContext2, testRelayUrl)
+  await useTestRelay(user2Context, testRelayUrl)
+  await clearIdentity(linkedContext1)
+  await clearIdentity(linkedContext2)
+  await setIdentity(user2Context, user2PrivkeyHex)
+
+  const linkedPage1 = await linkedContext1.newPage()
+  const linkedPage2 = await linkedContext2.newPage()
+  const user2Page = await user2Context.newPage()
+  const bridge = new FlutterInteropBridge(testRelayUrl, ownerNsec)
+
+  try {
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).toBe(ownerPubkeyHex)
+    await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+
+    await loginWithStoredKey(user2Page)
+    await registerDevice(user2Page)
+
+    await openLinkThisDevice(linkedPage1)
+    const linkInviteUrl1 = await getLinkInviteUrl(linkedPage1)
+    await bridge.command('accept_link_invite', { inviteUrl: linkInviteUrl1 }, 30000)
+    await expect(linkedPage1.getByRole('button', { name: 'New Chat' })).toBeVisible({
+      timeout: 30000,
+    })
+    await waitForOwnerAppKeysEventCount(testRelay, ownerPubkeyHex, 2, 15000)
+
+    await openLinkThisDevice(linkedPage2)
+    const linkInviteUrl2 = await getLinkInviteUrl(linkedPage2)
+    await bridge.command('accept_link_invite', { inviteUrl: linkInviteUrl2 }, 30000)
+    await expect(linkedPage2.getByRole('button', { name: 'New Chat' })).toBeVisible({
+      timeout: 30000,
+    })
+
+    const latestAppKeys = await waitForLatestOwnerAppKeysDeviceCount(
+      testRelay,
+      ownerPubkeyHex,
+      3,
+      20000
+    )
+    expect(latestAppKeys?.tags.filter((tag) => tag[0] === 'device')).toHaveLength(3)
+
+    await user2Page.getByRole('button', { name: 'New Chat' }).click()
+    const inviteUrl = await getInviteUrl(user2Page)
+
+    await linkedPage1.getByRole('button', { name: 'New Chat' }).click()
+    await linkedPage1.getByPlaceholder('Paste invite link').fill(inviteUrl)
+    await expect(linkedPage1.getByPlaceholder('Type a message...')).toBeVisible({
+      timeout: 20000,
+    })
+
+    const linkedWebToUser2 = `owner->user2 from linked web 1 ${Date.now()}`
+    await linkedPage1.getByPlaceholder('Type a message...').fill(linkedWebToUser2)
+    await linkedPage1.getByRole('button', { name: 'Send' }).click()
+
+    await openChatFromList(user2Page, linkedWebToUser2)
+    await expect(
+      user2Page.locator('.max-w-\\[85\\%\\]').filter({ hasText: linkedWebToUser2 }).first()
+    ).toBeVisible({ timeout: 30000 })
+
+    await bridge.command(
+      'wait_for_message',
+      { text: linkedWebToUser2, timeoutMs: 40000, incomingOnly: false },
+      50000
+    )
+  } finally {
+    await linkedContext1.close()
+    await linkedContext2.close()
     await user2Context.close()
     await bridge.stop()
   }
