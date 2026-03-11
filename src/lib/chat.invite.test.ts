@@ -123,7 +123,7 @@ describe('Invite Parsing / Acceptance', () => {
     expect(invite).toEqual({ type: 'pubkey', pubkey })
   })
 
-  it('acceptInvite(pubkey) should not block UI navigation on device registration', async () => {
+  it('acceptInvite(pubkey) should not block UI navigation on device registration for other users', async () => {
     const registration = defer<void>()
     mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
 
@@ -145,6 +145,56 @@ describe('Invite Parsing / Acceptance', () => {
     expect(session?.id).toBe(pubkey)
     expect(get(chats).has(pubkey)).toBe(true)
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+  })
+
+  it('acceptInvite(pubkey) should wait for device registration before opening self chat', async () => {
+    const registration = defer<void>()
+    mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
+
+    const invite = { type: 'pubkey', pubkey: MY_PUBKEY } as const
+    const acceptancePromise = acceptInvite(invite)
+
+    let settled = false
+    void acceptancePromise.then(() => {
+      settled = true
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+
+    expect(settled).toBe(false)
+    expect(get(chats).has(MY_PUBKEY)).toBe(true)
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+
+    registration.resolve()
+
+    const session = await acceptancePromise
+    expect(session.id).toBe(MY_PUBKEY)
+    expect(get(chats).has(MY_PUBKEY)).toBe(true)
+  })
+
+  it('acceptInvite(pubkey) should wait for SessionManager readiness before opening self chat', async () => {
+    const sessionManagerReady = defer<void>()
+    mocks.waitForSessionManager.mockReturnValue(sessionManagerReady.promise)
+
+    const invite = { type: 'pubkey', pubkey: MY_PUBKEY } as const
+    const acceptancePromise = acceptInvite(invite)
+
+    let settled = false
+    void acceptancePromise.then(() => {
+      settled = true
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+
+    expect(settled).toBe(false)
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    expect(mocks.waitForSessionManager).toHaveBeenCalledTimes(1)
+
+    sessionManagerReady.resolve()
+
+    const session = await acceptancePromise
+    expect(session.id).toBe(MY_PUBKEY)
+    expect(get(chats).has(MY_PUBKEY)).toBe(true)
   })
 
   it('acceptInvite(legacy) should use SessionManager.acceptInvite and open manager chat', async () => {
