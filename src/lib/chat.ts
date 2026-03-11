@@ -641,15 +641,28 @@ export async function handleManagerEvent(
 export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   if (invite.type === 'pubkey') {
     const existing = get(chats).get(invite.pubkey)
+    const myPubkey = getPubkey()
+    const requiresReadyRegistration =
+      !existing &&
+      !!myPubkey &&
+      invite.pubkey === myPubkey
+    const sessionManagerReadyPromise = requiresReadyRegistration
+      ? waitForSessionManager().catch((e) => {
+          console.warn('[chat] waitForSessionManager failed during acceptInvite:', e)
+          throw e
+        })
+      : null
     const chatSession = await ensureManagerChat(invite.pubkey)
     // User-initiated join: treat as accepted even before sending a message.
     acceptChat(invite.pubkey)
     if (!existing) {
       // Device registration/AppKeys publishing is important for reliable multi-device messaging.
-      // Don't block UI navigation on it: joining should be instant; registration can be slow.
-      void ensureDeviceRegistered().catch((e) =>
+      const registrationPromise = ensureDeviceRegistered().catch((e) => {
         console.warn('[chat] ensureDeviceRegistered failed during acceptInvite:', e)
-      )
+      })
+      if (requiresReadyRegistration) {
+        await Promise.all([registrationPromise, sessionManagerReadyPromise])
+      }
     }
     return chatSession
   }

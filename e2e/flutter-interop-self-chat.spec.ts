@@ -3,6 +3,7 @@ import type { BrowserContext, Page } from '@playwright/test'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
+import net from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +14,7 @@ const __dirname = path.dirname(__filename)
 
 const RUN_FLUTTER_INTEROP = process.env.IRIS_FLUTTER_INTEROP === '1'
 const FLUTTER_REPO = path.resolve(__dirname, '../../iris-chat-flutter')
+const IRIS_CLIENT_REPO = path.resolve(__dirname, '../../iris-client')
 
 test.describe.configure({ mode: 'serial' })
 
@@ -112,8 +114,277 @@ async function expectChatMessageVisible(page: Page, text: string): Promise<void>
   await expect(visibleText).toBeVisible({ timeout: 90_000 })
 }
 
+async function getAvailablePort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const server = net.createServer()
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Could not determine free port')))
+        return
+      }
+      const { port } = address
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(port)
+      })
+    })
+  })
+}
+
+async function waitForHttpReady(url: string, timeoutMs: number, onTimeout: () => string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url)
+      if (response.ok) return
+    } catch {
+      // wait for server startup
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  throw new Error(`Timed out waiting for ${url}\n${onTimeout()}`)
+}
+
+async function seedIrisClientRelay(context: BrowserContext, relayUrl: string) {
+  await context.addInitScript((url: string) => {
+    try {
+      const raw = window.localStorage.getItem('user-storage')
+      const parsed =
+        raw && raw.trim().length > 0
+          ? (JSON.parse(raw) as { state?: Record<string, unknown>; version?: number })
+          : {}
+      const state = parsed.state ?? {}
+      window.localStorage.setItem(
+        'user-storage',
+        JSON.stringify({
+          version: typeof parsed.version === 'number' ? parsed.version : 2,
+          state: {
+            ...state,
+            relays: [url],
+            relayConfigs: [{ url }],
+            ndkOutboxModel: false,
+            autoConnectUserRelays: false,
+          },
+        })
+      )
+    } catch {
+      // ignore opaque origins (about:blank)
+    }
+  }, relayUrl)
+}
+
+async function loginIrisClientWithKey(page: Page, baseUrl: string, privateKeyNsec: string): Promise<void> {
+  await page.goto(baseUrl)
+  await page.waitForLoadState('domcontentloaded')
+  await expect(page.locator('#main-content')).toBeVisible({ timeout: 10000 })
+
+  const signUpHeading = page.getByRole('heading', { name: 'Sign up' })
+  const signInHeading = page.getByRole('heading', { name: 'Sign in' })
+
+  if (
+    !(await signUpHeading.isVisible().catch(() => false)) &&
+    !(await signInHeading.isVisible().catch(() => false))
+  ) {
+    const signUpButton = page.locator('button:visible', { hasText: 'Sign up' }).first()
+    await expect(signUpButton).toBeVisible({ timeout: 10000 })
+    await signUpButton.click()
+  }
+
+  if (await signUpHeading.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: 'Sign in' }).click()
+  }
+
+  await expect(signInHeading).toBeVisible({ timeout: 10000 })
+  await page.getByPlaceholder(/paste secret or public key/i).fill(privateKeyNsec)
+  await expect(signInHeading).not.toBeVisible({ timeout: 15000 })
+  await expect(page.locator('#main-content').getByTestId('new-post-button')).toBeVisible({
+    timeout: 15000,
+  })
+}
+
+async function waitForIrisClientRelays(page: Page): Promise<void> {
+  const relayIndicator = page.locator('[title*="relays connected"]').first()
+  await expect(relayIndicator).toBeVisible({ timeout: 10000 })
+  await expect
+    .poll(
+      async () => {
+        const text = await relayIndicator.textContent()
+        return Number.parseInt(text?.match(/\d+/)?.[0] || '0', 10)
+      },
+      { timeout: 10000 }
+    )
+    .toBeGreaterThan(0)
+}
+
+async function ensureIrisClientCurrentDeviceRegistered(page: Page, baseUrl: string): Promise<void> {
+  await page.goto(`${baseUrl}/chats/new/devices`)
+  await expect(page.getByRole('button', { name: 'Link another device' })).toBeVisible({
+    timeout: 10000,
+  })
+
+  const registerButton = page.getByRole('button', { name: 'Register this device' })
+  const thisDeviceBadge = page.locator('span.badge').filter({ hasText: /^This device$/ })
+
+  if (!(await thisDeviceBadge.isVisible().catch(() => false))) {
+    if (await registerButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await Promise.race([
+        thisDeviceBadge.waitFor({ state: 'visible', timeout: 3000 }),
+        registerButton.waitFor({ state: 'hidden', timeout: 3000 }),
+      ]).catch(() => {})
+
+      if (
+        !(await thisDeviceBadge.isVisible().catch(() => false)) &&
+        (await registerButton.isVisible().catch(() => false))
+      ) {
+        await registerButton.click({ timeout: 10000 })
+
+        const confirmDialog = page
+          .locator('dialog[open]')
+          .filter({ has: page.getByRole('heading', { name: 'Confirm Device Registration' }) })
+
+        await Promise.race([
+          thisDeviceBadge.waitFor({ state: 'visible', timeout: 5000 }),
+          confirmDialog.waitFor({ state: 'visible', timeout: 5000 }),
+        ]).catch(() => {})
+
+        if (await confirmDialog.isVisible().catch(() => false)) {
+          await confirmDialog
+            .getByRole('button', { name: 'Register Device' })
+            .click({ timeout: 10000, force: true })
+        }
+      }
+    }
+  }
+
+  await expect(thisDeviceBadge).toBeVisible({ timeout: 20000 })
+}
+
+async function openIrisClientSelfChat(page: Page): Promise<void> {
+  const profileLink = page.locator('[data-testid="sidebar-user-row"]').first()
+  await profileLink.click()
+  await page.waitForLoadState('domcontentloaded')
+
+  await expect(page.getByTestId('profile-header-actions')).toBeVisible({
+    timeout: 10000,
+  })
+
+  const messageButton = page
+    .getByTestId('profile-header-actions')
+    .locator('button')
+    .filter({ has: page.locator('use[href*="mail-outline"]') })
+    .first()
+  await expect(messageButton).toBeVisible({ timeout: 15000 })
+  await messageButton.click()
+  await expect(page).toHaveURL(/\/chats\/chat/, { timeout: 15000 })
+
+  const messageInput = page.getByPlaceholder('Message').last()
+  await expect(messageInput).toBeVisible({ timeout: 30000 })
+  await expect(messageInput).toBeEnabled({ timeout: 60000 })
+}
+
+class IrisClientServer {
+  private child: ChildProcessWithoutNullStreams | null = null
+  private stdout = ''
+  private stderr = ''
+
+  constructor(private readonly port: number) {}
+
+  async start(): Promise<string> {
+    const baseUrl = `http://127.0.0.1:${this.port}`
+
+    this.child = spawn(
+      'pnpm',
+      ['exec', 'vite', '--host', '127.0.0.1', '--port', String(this.port), '--strictPort'],
+      {
+        cwd: IRIS_CLIENT_REPO,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          FORCE_COLOR: '0',
+          VITE_E2E: 'true',
+        },
+      }
+    )
+
+    this.child.stdout.on('data', (chunk) => {
+      this.stdout += chunk.toString()
+      if (this.stdout.length > 50000) {
+        this.stdout = this.stdout.slice(-50000)
+      }
+    })
+    this.child.stderr.on('data', (chunk) => {
+      this.stderr += chunk.toString()
+      if (this.stderr.length > 50000) {
+        this.stderr = this.stderr.slice(-50000)
+      }
+    })
+
+    await waitForHttpReady(baseUrl, 60000, () => `stdout:\n${this.stdout}\nstderr:\n${this.stderr}`)
+    return baseUrl
+  }
+
+  async stop(): Promise<void> {
+    if (!this.child) return
+    if (this.child.exitCode === null) {
+      this.child.kill('SIGTERM')
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          this.child?.kill('SIGKILL')
+          resolve()
+        }, 5000)
+        this.child?.once('exit', () => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+    }
+    this.child = null
+  }
+}
+
+function getOwnerAppKeysEvents(
+  testRelay: { publishedEvents: Array<{ kind: number; pubkey: string; tags: string[][] }> },
+  ownerPubkeyHex: string
+) {
+  return testRelay.publishedEvents.filter((event) => {
+    if (event.kind !== 30078 || event.pubkey !== ownerPubkeyHex) return false
+    return event.tags.some((tag) => tag[0] === 'd' && tag[1] === 'double-ratchet/app-keys')
+  })
+}
+
+async function waitForLatestOwnerAppKeysDeviceCount(
+  testRelay: { publishedEvents: Array<{ kind: number; pubkey: string; tags: string[][] }> },
+  ownerPubkeyHex: string,
+  minDeviceCount: number,
+  timeoutMs = 10000
+) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const latest = getOwnerAppKeysEvents(testRelay, ownerPubkeyHex).at(-1)
+    const deviceCount =
+      latest?.tags.filter((tag) => tag[0] === 'device' && tag[1]?.trim().length > 0).length ?? 0
+
+    if (deviceCount >= minDeviceCount) {
+      return latest
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  throw new Error(
+    `Timed out waiting for latest owner AppKeys to include >= ${minDeviceCount} devices for ${ownerPubkeyHex.slice(0, 8)}`
+  )
+}
+
 type BridgeEvent =
-  | { type: 'ready'; data?: { pubkeyHex?: string; relayUrl?: string } }
+  | { type: 'ready'; data?: { pubkeyHex?: string; devicePubkeyHex?: string; relayUrl?: string } }
   | { type: 'response'; id?: string; ok?: boolean; data?: unknown; error?: string }
   | { type: string; id?: string; ok?: boolean; data?: unknown; error?: string }
 
@@ -132,7 +403,7 @@ class FlutterInteropBridge {
     private readonly registerDeviceOnLogin = false
   ) {}
 
-  async start(): Promise<{ pubkeyHex: string }> {
+  async start(): Promise<{ pubkeyHex: string; devicePubkeyHex?: string }> {
     this.bridgeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iris-flutter-interop-'))
     this.commandsFile = path.join(this.bridgeDir, 'commands.jsonl')
     this.eventsFile = path.join(this.bridgeDir, 'events.jsonl')
@@ -174,7 +445,13 @@ class FlutterInteropBridge {
       120000
     )
 
-    return { pubkeyHex: (ready.data?.pubkeyHex as string).toLowerCase() }
+    return {
+      pubkeyHex: (ready.data?.pubkeyHex as string).toLowerCase(),
+      devicePubkeyHex:
+        typeof ready.data?.devicePubkeyHex === 'string'
+          ? ready.data.devicePubkeyHex.toLowerCase()
+          : undefined,
+    }
   }
 
   async stop(): Promise<void> {
@@ -354,6 +631,282 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
   } finally {
     await context.close()
     await bridge.stop()
+  }
+})
+
+test('direct self-chat interop (same key) between web and flutter', async ({
+  browser,
+  testRelayUrl,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(240000)
+
+  const secretKey = generateSecretKey()
+  const privkeyHex = toHex(secretKey)
+  const privateKeyNsec = nip19.nsecEncode(secretKey)
+  const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
+  const expectedNpub = nip19.npubEncode(expectedPubkeyHex)
+
+  const context = await browser.newContext()
+  await useTestRelay(context, testRelayUrl)
+  await setIdentity(context, privkeyHex)
+  const page = await context.newPage()
+
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+
+  try {
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+
+    await loginWithStoredKey(page)
+
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(`https://chat.iris.to/#${expectedNpub}`)
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+
+    const webMessage = `web->flutter direct self interop ${Date.now()}`
+    await page.getByPlaceholder('Type a message...').fill(webMessage)
+    await page.getByRole('button', { name: 'Send' }).click()
+    const flutterSelfSession = await bridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
+      {
+        text: webMessage,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+
+    const flutterMessage = `flutter->web direct self interop ${Date.now()}`
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterSelfSession.sessionId,
+        text: flutterMessage,
+      },
+      30000
+    )
+
+    await expectChatMessageVisible(page, flutterMessage)
+  } finally {
+    await context.close()
+    await bridge.stop()
+  }
+})
+
+test('direct self-chat interop (same key) from flutter first between web and flutter', async ({
+  browser,
+  testRelay,
+  testRelayUrl,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(240000)
+
+  const secretKey = generateSecretKey()
+  const privkeyHex = toHex(secretKey)
+  const privateKeyNsec = nip19.nsecEncode(secretKey)
+  const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
+  const expectedNpub = nip19.npubEncode(expectedPubkeyHex)
+
+  const context = await browser.newContext()
+  await useTestRelay(context, testRelayUrl)
+  await setIdentity(context, privkeyHex)
+  const page = await context.newPage()
+
+  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+
+  try {
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+    expect(ready.devicePubkeyHex).toBeTruthy()
+
+    await loginWithStoredKey(page)
+
+    const latestAppKeys = await waitForLatestOwnerAppKeysDeviceCount(
+      testRelay,
+      expectedPubkeyHex,
+      2,
+      15000
+    )
+    const registeredDevicePubkeys = latestAppKeys.tags
+      .filter((tag) => tag[0] === 'device' && tag[1]?.trim().length > 0)
+      .map((tag) => tag[1].toLowerCase())
+    expect(registeredDevicePubkeys).toContain(ready.devicePubkeyHex as string)
+    const webDevicePubkeyHex = registeredDevicePubkeys.find(
+      (pubkey) => pubkey !== ready.devicePubkeyHex
+    )
+    expect(webDevicePubkeyHex).toBeTruthy()
+
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(`https://chat.iris.to/#${expectedNpub}`)
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+    await waitForLatestOwnerAppKeysDeviceCount(testRelay, expectedPubkeyHex, 2, 15000)
+    await expect
+      .poll(
+        () =>
+          testRelay.publishedEvents.filter((event) => {
+            if (event.kind !== 30078 || event.pubkey !== webDevicePubkeyHex) return false
+            const hasInviteLabel = event.tags.some(
+              (tag) => tag[0] === 'l' && tag[1] === 'double-ratchet/invites'
+            )
+            const hasInviteId = event.tags.some(
+              (tag) => tag[0] === 'd' && tag[1] === `double-ratchet/invites/${webDevicePubkeyHex}`
+            )
+            return hasInviteLabel && hasInviteId
+          }).length,
+        { timeout: 15000 }
+      )
+      .toBeGreaterThan(0)
+
+    const flutterSelfSession = await bridge.command<{
+      sessionId: string
+      acceptedViaPublicInvite: boolean
+    }>(
+      'ensure_session_for_recipient',
+      {
+        recipientPubkeyHex: expectedPubkeyHex,
+      },
+      30000
+    )
+    expect(flutterSelfSession.acceptedViaPublicInvite).toBe(true)
+
+    const flutterMessage = `flutter->web direct self first ${Date.now()}`
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterSelfSession.sessionId,
+        text: flutterMessage,
+      },
+      30000
+    )
+    await expectChatMessageVisible(page, flutterMessage)
+
+    const webMessage = `web->flutter direct self second ${Date.now()}`
+    await page.getByPlaceholder('Type a message...').fill(webMessage)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await bridge.command(
+      'wait_for_message_meta',
+      {
+        text: webMessage,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+  } finally {
+    await context.close()
+    await bridge.stop()
+  }
+})
+
+test('self-chat interop (same key) across web, flutter, and iris-client', async ({
+  browser,
+  testRelay,
+  testRelayUrl,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.skip(!fs.existsSync(IRIS_CLIENT_REPO), `Iris client repo missing: ${IRIS_CLIENT_REPO}`)
+  test.setTimeout(300000)
+
+  const secretKey = generateSecretKey()
+  const privkeyHex = toHex(secretKey)
+  const privateKeyNsec = nip19.nsecEncode(secretKey)
+  const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
+  const expectedNpub = nip19.npubEncode(expectedPubkeyHex)
+
+  const webContext = await browser.newContext()
+  await useTestRelay(webContext, testRelayUrl)
+  await setIdentity(webContext, privkeyHex)
+  const webPage = await webContext.newPage()
+
+  const flutterBridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+  const irisClientServer = new IrisClientServer(await getAvailablePort())
+  const irisClientBaseUrl = await irisClientServer.start()
+  const irisClientContext = await browser.newContext()
+  await seedIrisClientRelay(irisClientContext, testRelayUrl)
+  const irisClientPage = await irisClientContext.newPage()
+
+  try {
+    const flutterReady = await flutterBridge.start()
+    expect(flutterReady.pubkeyHex).toBe(expectedPubkeyHex)
+
+    await loginWithStoredKey(webPage)
+    await loginIrisClientWithKey(irisClientPage, irisClientBaseUrl, privateKeyNsec)
+    await waitForIrisClientRelays(irisClientPage)
+    await ensureIrisClientCurrentDeviceRegistered(irisClientPage, irisClientBaseUrl)
+
+    await webPage.getByRole('button', { name: 'New Chat' }).click()
+    await webPage
+      .getByPlaceholder('Paste invite link')
+      .fill(`https://chat.iris.to/#${expectedNpub}`)
+    await expect(webPage.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+
+    await waitForLatestOwnerAppKeysDeviceCount(testRelay, expectedPubkeyHex, 3, 30000)
+
+    await openIrisClientSelfChat(irisClientPage)
+    const flutterSelfSession = await flutterBridge.command<{ sessionId: string }>(
+      'ensure_session_for_recipient',
+      {
+        recipientPubkeyHex: expectedPubkeyHex,
+      },
+      30000
+    )
+
+    const flutterBootstrapMessage = `flutter->all same key ${Date.now()}`
+    await flutterBridge.command(
+      'send_message_ui',
+      {
+        sessionId: flutterSelfSession.sessionId,
+        text: flutterBootstrapMessage,
+      },
+      30000
+    )
+    await expectChatMessageVisible(webPage, flutterBootstrapMessage)
+    await expect(
+      irisClientPage.locator('.whitespace-pre-wrap').getByText(flutterBootstrapMessage).last()
+    ).toBeVisible({ timeout: 60000 })
+
+    const irisClientMessage = `iris-client->all same key ${Date.now()}`
+    const irisClientInput = irisClientPage.getByPlaceholder('Message').last()
+    await irisClientInput.fill(irisClientMessage)
+    await irisClientInput.press('Enter')
+    await expect(
+      irisClientPage.locator('.whitespace-pre-wrap').getByText(irisClientMessage).last()
+    ).toBeVisible({ timeout: 10000 })
+    await expectChatMessageVisible(webPage, irisClientMessage)
+    await flutterBridge.command(
+      'wait_for_message_meta',
+      {
+        text: irisClientMessage,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+
+    const webMessage = `web->all same key ${Date.now()}`
+    await webPage.getByPlaceholder('Type a message...').fill(webMessage)
+    await webPage.getByRole('button', { name: 'Send' }).click()
+    await expectChatMessageVisible(webPage, webMessage)
+    await expect(
+      irisClientPage.locator('.whitespace-pre-wrap').getByText(webMessage).last()
+    ).toBeVisible({ timeout: 60000 })
+    await flutterBridge.command(
+      'wait_for_message_meta',
+      {
+        text: webMessage,
+        timeoutMs: 30000,
+      },
+      40000
+    )
+  } finally {
+    await irisClientContext.close()
+    await irisClientServer.stop()
+    await webContext.close()
+    await flutterBridge.stop()
   }
 })
 

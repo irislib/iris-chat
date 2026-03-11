@@ -410,7 +410,15 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
     if (ndkInstance.pool.connectedRelays().length === 0) {
       await ndkInstance.pool.connect(5000)
     }
+    const baseKeys = await resolveBaseAppKeys(ownerPubkey)
+    await appKeysManager.setAppKeys(baseKeys)
+
+    const payload = delegateManager.getRegistrationPayload()
+    appKeysManager.addDevice(payload)
     await appKeysManager.publish().catch(() => {})
+
+    devices.setHasLocalAppKeys(appKeysManager.getOwnDevices().length > 0)
+    devices.setRegisteredDevices(appKeysManager.getOwnDevices(), Math.floor(Date.now() / 1000))
   }
 
   const nostrSubscribe = createSubscribe(getNDK())
