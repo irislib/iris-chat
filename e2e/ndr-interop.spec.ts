@@ -114,12 +114,13 @@ function startNdrListen(dataDir: string) {
 async function waitForNdrJson(
   reader: readline.Interface,
   predicate: (value: any) => boolean,
-  timeoutMs: number
+  timeoutMs: number,
+  description: string
 ): Promise<any> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup()
-      reject(new Error('Timed out waiting for ndr output'))
+      reject(new Error(`Timed out waiting for ndr output: ${description}`))
     }, timeoutMs)
 
     const onLine = (line: string) => {
@@ -177,26 +178,30 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
     await waitForNdrJson(
       listener.reader,
       (json) => json.command === 'listen' && json.status === 'ok',
-      10000
+      10000,
+      'listen readiness'
     )
 
-    await page.getByPlaceholder('Paste invite link').fill(inviteUrl!)
-
-    const createdSession = await waitForNdrJson(
+    const createdSessionPromise = waitForNdrJson(
       listener.reader,
       (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
-      60000
+      60000,
+      'session_created after invite acceptance'
     )
+    await page.getByPlaceholder('Paste invite link').fill(inviteUrl!)
+    const createdSession = await createdSessionPromise
 
     const irisMessage = 'hello from iris'
+    const irisMessagePromise = waitForNdrJson(
+      listener.reader,
+      (json) => json.event === 'message' && json.content === irisMessage,
+      30000,
+      'ndr receiving iris message'
+    )
     await page.getByPlaceholder('Type a message...').fill(irisMessage)
     await page.getByRole('button', { name: 'Send' }).click()
 
-    await waitForNdrJson(
-      listener.reader,
-      (json) => json.event === 'message' && json.content === irisMessage,
-      30000
-    )
+    await irisMessagePromise
 
     const ndrMessage = 'hello from ndr'
     await runNdrRetry(['send', createdSession.chat_id, ndrMessage], dataDir, 30000, 500)

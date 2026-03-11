@@ -221,7 +221,7 @@ describe('Invite Parsing / Acceptance', () => {
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
   })
 
-  it('acceptInvite(legacy) should wait for device registration before handshake', async () => {
+  it('acceptInvite(legacy) should wait for device registration before publishing owner claims', async () => {
     const ownerPubkey = 'h'.repeat(64)
     const devicePubkey = 'i'.repeat(64)
     const registration = defer<void>()
@@ -237,23 +237,15 @@ describe('Invite Parsing / Acceptance', () => {
     const legacyInvite = Invite.createNew(devicePubkey)
     legacyInvite.ownerPubkey = ownerPubkey
 
-    const acceptancePromise = acceptInvite({ type: 'legacy', invite: legacyInvite })
+    const acceptPromise = acceptInvite({ type: 'legacy', invite: legacyInvite })
 
-    let settled = false
-    void acceptancePromise.then(() => {
-      settled = true
-    })
-
-    await new Promise((resolve) => setTimeout(resolve, 25))
-
-    expect(settled).toBe(false)
+    await vi.waitFor(() => expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1))
     expect(managerAccept).not.toHaveBeenCalled()
 
     registration.resolve()
+    const session = await acceptPromise
 
-    const session = await acceptancePromise
-
-    expect(session.id).toBe(ownerPubkey)
+    expect(session?.id).toBe(ownerPubkey)
     expect(get(chats).has(ownerPubkey)).toBe(true)
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
     expect(managerAccept).toHaveBeenCalledTimes(1)
