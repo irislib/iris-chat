@@ -731,3 +731,140 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
     await bridge.stop()
   }
 })
+
+test('link device interop: linked web sender reaches linked flutter receiver across four devices', async ({
+  browser,
+  testRelayUrl,
+  testRelay,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.setTimeout(420000)
+
+  const aliceOwnerSecret = generateSecretKey()
+  const aliceOwnerPrivkeyHex = toHex(aliceOwnerSecret)
+  const aliceOwnerPubkeyHex = getPublicKey(aliceOwnerSecret).toLowerCase()
+
+  const aliceFlutterSecret = generateSecretKey()
+  const aliceFlutterNsec = nip19.nsecEncode(aliceFlutterSecret)
+
+  const bobOwnerSecret = generateSecretKey()
+  const bobOwnerPrivkeyHex = toHex(bobOwnerSecret)
+  const bobOwnerPubkeyHex = getPublicKey(bobOwnerSecret).toLowerCase()
+
+  const aliceOwnerContext = await browser.newContext()
+  const bobOwnerContext = await browser.newContext()
+  const bobLinkedContext = await browser.newContext()
+  await useTestRelay(aliceOwnerContext, testRelayUrl)
+  await useTestRelay(bobOwnerContext, testRelayUrl)
+  await useTestRelay(bobLinkedContext, testRelayUrl)
+  await setIdentity(aliceOwnerContext, aliceOwnerPrivkeyHex)
+  await setIdentity(bobOwnerContext, bobOwnerPrivkeyHex)
+  await clearIdentity(bobLinkedContext)
+
+  const aliceOwnerPage = await aliceOwnerContext.newPage()
+  const bobOwnerPage = await bobOwnerContext.newPage()
+  const bobLinkedPage = await bobLinkedContext.newPage()
+  const bridge = new FlutterInteropBridge(testRelayUrl, aliceFlutterNsec)
+
+  try {
+    await loginWithStoredKey(aliceOwnerPage)
+    await loginWithStoredKey(bobOwnerPage)
+    await registerDevice(aliceOwnerPage)
+    await registerDevice(bobOwnerPage)
+
+    const ready = await bridge.start()
+    expect(ready.pubkeyHex).not.toBe(aliceOwnerPubkeyHex)
+    await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+
+    const aliceLinkInvite = await bridge.command<{ inviteUrl: string }>('create_link_invite', {}, 30000)
+    await acceptLinkInvite(aliceOwnerPage, aliceLinkInvite.inviteUrl)
+
+    const linkedFlutter = await bridge.command<{ ownerPubkeyHex: string }>(
+      'wait_for_linked_device',
+      { timeoutMs: 40000 },
+      50000
+    )
+    expect(linkedFlutter.ownerPubkeyHex.toLowerCase()).toBe(aliceOwnerPubkeyHex)
+    await waitForOwnerAppKeysEventCount(testRelay, aliceOwnerPubkeyHex, 2, 15000)
+
+    await openLinkThisDevice(bobLinkedPage)
+    const bobLinkInviteUrl = await getLinkInviteUrl(bobLinkedPage)
+    await acceptLinkInvite(bobOwnerPage, bobLinkInviteUrl)
+    await expect(bobLinkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({
+      timeout: 30000,
+    })
+    await waitForLatestOwnerAppKeysDeviceCount(testRelay, bobOwnerPubkeyHex, 2, 15000)
+
+    await bobOwnerPage.getByRole('button', { name: 'New Chat' }).click()
+    const bobInviteUrl = await getInviteUrl(bobOwnerPage)
+
+    await aliceOwnerPage.getByRole('button', { name: 'New Chat' }).click()
+    await aliceOwnerPage.getByPlaceholder('Paste invite link').fill(bobInviteUrl)
+    await expect(aliceOwnerPage.getByPlaceholder('Type a message...')).toBeVisible({
+      timeout: 20000,
+    })
+
+    const aliceBootstrap = `alice owner -> bob bootstrap ${Date.now()}`
+    await aliceOwnerPage.getByPlaceholder('Type a message...').fill(aliceBootstrap)
+    await aliceOwnerPage.getByRole('button', { name: 'Send' }).click()
+
+    await openChatFromList(bobLinkedPage, aliceBootstrap)
+    await expect(
+      bobLinkedPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: aliceBootstrap }).first()
+    ).toBeVisible({ timeout: 30000 })
+
+    await bridge.command(
+      'wait_for_session',
+      {
+        recipientPubkeyHex: bobOwnerPubkeyHex,
+        timeoutMs: 40000,
+      },
+      50000
+    )
+    await bridge.command(
+      'wait_for_message',
+      { text: aliceBootstrap, timeoutMs: 40000, incomingOnly: false },
+      50000
+    )
+
+    const bobLinkedToAlice = `bob linked -> alice flutter ${Date.now()}`
+    await bobLinkedPage.getByPlaceholder('Type a message...').fill(bobLinkedToAlice)
+    await bobLinkedPage.getByRole('button', { name: 'Send' }).click()
+
+    await openChatFromList(aliceOwnerPage, bobLinkedToAlice)
+    await expect(
+      aliceOwnerPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: bobLinkedToAlice }).first()
+    ).toBeVisible({ timeout: 30000 })
+
+    try {
+      await bridge.command(
+        'wait_for_message',
+        { text: bobLinkedToAlice, timeoutMs: 40000, incomingOnly: true },
+        50000
+      )
+    } catch (error) {
+      const debugState = await bridge.command<Record<string, unknown>>('get_debug_state', {}, 15000)
+      const message = error instanceof Error ? error.message : String(error)
+      const relayMessages = testRelay.publishedEvents
+        .filter((event) => event.kind === 1060)
+        .slice(-12)
+        .map((event) => ({
+          id: event.id,
+          pubkey: event.pubkey,
+          tags: event.tags,
+          created_at: event.created_at,
+        }))
+      throw new Error(
+        `${message}\nFlutter debug state:\n${JSON.stringify(debugState, null, 2)}\n` +
+          `Recent relay 1060 events:\n${JSON.stringify(relayMessages, null, 2)}`
+      )
+    }
+  } finally {
+    await aliceOwnerContext.close()
+    await bobOwnerContext.close()
+    await bobLinkedContext.close()
+    await bridge.stop()
+  }
+})
