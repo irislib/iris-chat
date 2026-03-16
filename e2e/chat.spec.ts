@@ -1374,7 +1374,7 @@ test.describe('iris chat', () => {
 
         const appKeyButton = disclosure.locator('button[title]').first()
         await expect(appKeyButton).toBeVisible()
-        await expect(appKeyButton).toHaveAttribute('title', /^[0-9a-f]{64}$/)
+        await expect(appKeyButton).toHaveAttribute('title', /^npub1/)
       } finally {
         await context1.close()
         await context2.close()

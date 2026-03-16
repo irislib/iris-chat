@@ -72,6 +72,14 @@
 
     return `Published ${date.toLocaleString()}`
   }
+
+  function formatDeviceIdentity(identityPubkey: string) {
+    try {
+      return nip19.npubEncode(identityPubkey)
+    } catch {
+      return identityPubkey
+    }
+  }
 </script>
 
 <div class="h-full flex flex-col bg-[#0a0a0a]">
@@ -163,8 +171,8 @@
                 {#each profileAppKeys.devices as device}
                   <div class="space-y-2">
                     <CopyButton
-                      text={device.identityPubkey}
-                      maxLength={36}
+                      text={formatDeviceIdentity(device.identityPubkey)}
+                      maxLength={48}
                       className="text-xs"
                     />
                     <p class="text-xs text-gray-500">{formatDeviceCreatedAt(device.createdAt)}</p>
