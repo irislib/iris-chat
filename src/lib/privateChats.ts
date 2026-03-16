@@ -547,30 +547,17 @@ export const acceptLinkInvite = async (invite: Invite): Promise<void> => {
   if (!currentIdentity?.pubkey) {
     throw new Error('Owner pubkey not available')
   }
+  if (invite.ownerPubkey && invite.ownerPubkey !== currentIdentity.pubkey) {
+    throw new Error('Link invite is for a different account')
+  }
 
   const ndkInstance = getNDK()
   if (ndkInstance.pool.connectedRelays().length === 0) {
     await ndkInstance.pool.connect(5000)
   }
 
-  const signer = currentIdentity.signer ?? ndkInstance.signer
-  if (!signer) {
-    throw new Error('No signer available to accept link invite')
-  }
-
-  const encrypt = async (plaintext: string, pubkey: string) => {
-    const user = ndkInstance.getUser({ pubkey })
-    return signer.encrypt(user, plaintext, 'nip44')
-  }
-
-  const nostrSubscribe = createSubscribe(ndkInstance)
-  const { event } = await invite.accept(
-    nostrSubscribe,
-    currentIdentity.pubkey,
-    encrypt,
-    currentIdentity.pubkey
-  )
-
-  const ndkEvent = new NDKEvent(ndkInstance, event)
-  await ndkEvent.publish()
+  const manager = getSessionManager() ?? (await waitForSessionManager())
+  await manager.acceptInvite(invite, {
+    ownerPublicKey: currentIdentity.pubkey,
+  })
 }
