@@ -15,7 +15,7 @@ export type { Invite } from 'nostr-double-ratchet'
 import { getEventHash, nip19 } from 'nostr-tools'
 import { getPubkey, hasNip44Support, isNip07Login } from './identity'
 import { devices } from './devices'
-import { getSessionManager, waitForSessionManager, ensureDeviceRegistered, rotateDeviceInvite } from './privateChats'
+import { getSessionManager, waitForSessionManager, rotateDeviceInvite } from './privateChats'
 import {
   saveSession as saveSessionToDb,
   getAllSessions,
@@ -642,11 +642,11 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   if (invite.type === 'pubkey') {
     const existing = get(chats).get(invite.pubkey)
     const myPubkey = getPubkey()
-    const requiresReadyRegistration =
+    const requiresSessionManagerReady =
       !existing &&
       !!myPubkey &&
       invite.pubkey === myPubkey
-    const sessionManagerReadyPromise = requiresReadyRegistration
+    const sessionManagerReadyPromise = requiresSessionManagerReady
       ? waitForSessionManager().catch((e) => {
           console.warn('[chat] waitForSessionManager failed during acceptInvite:', e)
           throw e
@@ -655,14 +655,8 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     const chatSession = await ensureManagerChat(invite.pubkey)
     // User-initiated join: treat as accepted even before sending a message.
     acceptChat(invite.pubkey)
-    if (!existing) {
-      // Device registration/AppKeys publishing is important for reliable multi-device messaging.
-      const registrationPromise = ensureDeviceRegistered().catch((e) => {
-        console.warn('[chat] ensureDeviceRegistered failed during acceptInvite:', e)
-      })
-      if (requiresReadyRegistration) {
-        await Promise.all([registrationPromise, sessionManagerReadyPromise])
-      }
+    if (!existing && sessionManagerReadyPromise) {
+      await sessionManagerReadyPromise
     }
     return chatSession
   }
@@ -688,22 +682,6 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
 
   if (!managerWithInviteAccept?.acceptInvite) {
     throw new Error('SessionManager is not available')
-  }
-
-  const myPubkey = getPubkey()
-  const managerDeviceId = managerWithInviteAccept.getDeviceId?.()
-  const requiresOwnerRegistration =
-    !existing &&
-    !!myPubkey &&
-    !!managerDeviceId &&
-    managerDeviceId !== myPubkey
-
-  if (requiresOwnerRegistration) {
-    try {
-      await ensureDeviceRegistered()
-    } catch (e) {
-      console.warn('[chat] ensureDeviceRegistered failed before legacy acceptInvite:', e)
-    }
   }
 
   const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })

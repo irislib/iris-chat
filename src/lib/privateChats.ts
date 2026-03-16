@@ -208,23 +208,10 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
   await initSessionManager(ownerPubkey)
   startAppKeysSubscription(ownerPubkey)
 
-  // Make sure other users can establish a SessionManager session with us:
-  // - AppKeys must be published (device identity list)
-  // - our device Invite must be published (handshake material)
-  //
-  // Without this, a user can paste our invite and send a first message that
-  // never arrives because their SessionManager can't complete the handshake.
   try {
-    await ensureDeviceRegistered()
+    await republishInvite()
   } catch (e) {
-    console.warn('[privateChats] ensureDeviceRegistered failed:', e)
-    // Best-effort: even if AppKeys publish failed, republishing the invite may
-    // still help existing sessions or subsequent retries.
-    try {
-      await republishInvite()
-    } catch (err) {
-      console.warn('[privateChats] Republish invite failed:', err)
-    }
+    console.warn('[privateChats] Republish invite failed:', e)
   }
 }
 
