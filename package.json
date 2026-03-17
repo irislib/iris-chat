@@ -59,8 +59,7 @@
   },
   "pnpm": {
     "overrides": {
-      "@isaacs/brace-expansion": "5.0.1",
-      "nostr-double-ratchet": "link:../nostr-double-ratchet/ts"
+      "@isaacs/brace-expansion": "5.0.1"
     }
   }
 }
