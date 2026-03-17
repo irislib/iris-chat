@@ -135,12 +135,17 @@ export class TestRelay {
       const dTag = event.tags.find(t => t[0] === 'd')?.[1]
       const lTag = event.tags.find(t => t[0] === 'l')?.[1]
       const pTag = event.tags.find(t => t[0] === 'p')?.[1]
+      const deviceTags = event.tags
+        .filter((t) => t[0] === 'device')
+        .map((t) => t[1]?.slice(0, 8))
+        .filter(Boolean)
       console.log(
         `[relay:${this.port}] broadcast kind=${event.kind}` +
           ` pubkey=${event.pubkey.slice(0, 8)}` +
           ` d=${dTag ?? '-'}` +
           ` l=${lTag ?? '-'}` +
           ` p=${pTag ? pTag.slice(0, 8) : '-'}` +
+          ` devices=${deviceTags.length > 0 ? deviceTags.join(',') : '-'}` +
           ` id=${event.id.slice(0, 8)}` +
           ` → ${matched} subscribers (${this.subscriptions.size} clients)`
       )

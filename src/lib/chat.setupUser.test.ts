@@ -1,20 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import { needsManagerUserSetup } from './chat'
-import type { UserRecord } from 'nostr-double-ratchet'
+import type { DeviceRecord, UserRecord } from 'nostr-double-ratchet'
 
 function makeRecord(overrides: Partial<UserRecord> = {}): UserRecord {
   return {
     publicKey: 'owner',
-    state: 'ready',
     devices: new Map(),
     appKeys: undefined,
-    ensureSetup: async () => {},
-    onAppKeys: async () => {},
-    isDeviceAuthorized: () => false,
-    onDeviceRumor: () => {},
-    onDeviceDirty: () => {},
-    deactivateCurrentSessions: () => {},
-    close: () => {},
+    ...overrides,
+  }
+}
+
+function makeDeviceRecord(
+  deviceId: string,
+  overrides: Partial<DeviceRecord> = {}
+): DeviceRecord {
+  return {
+    deviceId,
+    activeSession: undefined,
+    inactiveSessions: [],
+    createdAt: 0,
     ...overrides,
   }
 }
@@ -25,12 +30,9 @@ describe('needsManagerUserSetup', () => {
       devices: new Map([
         [
           'device-1',
-          {
-            deviceId: 'device-1',
-            state: 'session-ready',
+          makeDeviceRecord('device-1', {
             activeSession: {} as never,
-            inactiveSessions: [],
-          },
+          }),
         ],
       ]),
       appKeys: {
@@ -49,12 +51,7 @@ describe('needsManagerUserSetup', () => {
       devices: new Map([
         [
           'device-1',
-          {
-            deviceId: 'device-1',
-            state: 'new',
-            activeSession: undefined,
-            inactiveSessions: [],
-          },
+          makeDeviceRecord('device-1'),
         ],
       ]),
       appKeys: {
@@ -70,21 +67,15 @@ describe('needsManagerUserSetup', () => {
       devices: new Map([
         [
           'device-1',
-          {
-            deviceId: 'device-1',
-            state: 'session-ready',
+          makeDeviceRecord('device-1', {
             activeSession: {} as never,
-            inactiveSessions: [],
-          },
+          }),
         ],
         [
           'device-2',
-          {
-            deviceId: 'device-2',
-            state: 'waiting-for-invite',
-            activeSession: undefined,
+          makeDeviceRecord('device-2', {
             inactiveSessions: [{} as never],
-          },
+          }),
         ],
       ]),
       appKeys: {

@@ -11,12 +11,16 @@ import type { Filter } from 'nostr-tools'
 import { ndk, getPubkey, hexToBytes } from './identity'
 import { chats, acceptInvite } from './chat'
 import type { Group } from './groups'
+import {
+  asNdkEventSubscription,
+  type NdkEventSubscription,
+} from './ndkSubscription'
 
 const GROUP_INVITE_RUMOR_KIND = 10445
 
 interface ChannelState {
   channel: SharedChannel
-  subscription: NDKSubscription | null
+  subscription: NdkEventSubscription | null
   groupId: string
 }
 
@@ -49,11 +53,13 @@ export function setupGroupChannel(group: Group): void {
     authors: [channel.publicKey]
   }
 
-  const sub = ndkInstance.subscribe(filter, { closeOnEose: false })
+  const sub = asNdkEventSubscription(
+    ndkInstance.subscribe(filter, { closeOnEose: false })
+  )
   state.subscription = sub
 
   const seenIds = new Set<string>()
-  sub.on('event', (ndkEvent) => {
+  sub.on('event', (ndkEvent: NDKEvent) => {
     const event = ndkEvent.rawEvent()
     if (seenIds.has(event.id)) return
     seenIds.add(event.id)

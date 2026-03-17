@@ -1,5 +1,8 @@
 import { writable, derived, get } from 'svelte/store'
-import type { DeviceEntry } from 'nostr-double-ratchet'
+import {
+  evaluateDeviceRegistrationState,
+  type DeviceEntry,
+} from 'nostr-double-ratchet'
 
 export interface DeviceState {
   identityPubkey: string | null
@@ -23,17 +26,34 @@ const initialState: DeviceState = {
 
 const state = writable<DeviceState>(initialState)
 
+function evaluateStateSnapshot(snapshot: {
+  identityPubkey: string | null
+  registeredDevices: DeviceEntry[]
+  appKeysManagerReady: boolean
+  sessionManagerReady: boolean
+  hasLocalAppKeys: boolean
+}) {
+  return evaluateDeviceRegistrationState({
+    currentDevicePubkey: snapshot.identityPubkey,
+    registeredDevices: snapshot.registeredDevices,
+    hasLocalAppKeys: snapshot.hasLocalAppKeys,
+    appKeysManagerReady: snapshot.appKeysManagerReady,
+    sessionManagerReady: snapshot.sessionManagerReady,
+  })
+}
+
 export const devices = {
   subscribe: state.subscribe,
   setIdentityPubkey: (pubkey: string) => {
     const current = get(state)
-    const isCurrentDeviceRegistered = current.registeredDevices.some(
-      (d) => d.identityPubkey === pubkey
-    )
+    const nextState = evaluateStateSnapshot({
+      ...current,
+      identityPubkey: pubkey,
+    })
     state.update((s) => ({
       ...s,
       identityPubkey: pubkey,
-      isCurrentDeviceRegistered,
+      isCurrentDeviceRegistered: nextState.isCurrentDeviceRegistered,
     }))
   },
   setRegisteredDevices: (devicesList: DeviceEntry[], timestamp?: number) => {
@@ -41,13 +61,14 @@ export const devices = {
       if (timestamp !== undefined && timestamp < s.lastEventTimestamp) {
         return s
       }
-      const isCurrentDeviceRegistered = s.identityPubkey
-        ? devicesList.some((d) => d.identityPubkey === s.identityPubkey)
-        : false
+      const nextState = evaluateStateSnapshot({
+        ...s,
+        registeredDevices: devicesList,
+      })
       return {
         ...s,
         registeredDevices: devicesList,
-        isCurrentDeviceRegistered,
+        isCurrentDeviceRegistered: nextState.isCurrentDeviceRegistered,
         lastEventTimestamp: timestamp ?? s.lastEventTimestamp,
       }
     })
@@ -65,9 +86,5 @@ export const devices = {
 }
 
 export const canSendPrivateMessages = derived(state, ($state) => {
-  return (
-    $state.appKeysManagerReady &&
-    $state.sessionManagerReady &&
-    ($state.hasLocalAppKeys || $state.isCurrentDeviceRegistered)
-  )
+  return evaluateStateSnapshot($state).canSendPrivateMessages
 })

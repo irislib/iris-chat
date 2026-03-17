@@ -2,11 +2,15 @@ import { get } from 'svelte/store'
 import { NDKEvent, NDKSubscriptionCacheUsage, type NDKFilter } from '@nostr-dev-kit/ndk'
 import {
   AppKeysManager,
+  applyAppKeysSnapshot,
+  buildAppKeysFilter,
   DelegateManager,
+  evaluateDeviceRegistrationState,
   SessionManager,
   AppKeys,
   Invite,
   INVITE_RESPONSE_KIND,
+  shouldRequireRelayRegistrationConfirmation,
   type DeviceEntry,
   type NostrSubscribe,
   type NostrPublish,
@@ -15,6 +19,7 @@ import {
 import { finalizeEvent } from 'nostr-tools'
 import { ndk, identity, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
+import { asNdkEventSubscription } from './ndkSubscription'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 
 let appKeysManager: AppKeysManager | null = null
@@ -27,9 +32,11 @@ let sessionManagerInitPromise: Promise<void> | null = null
 
 let appKeysSubscriptionCleanup: (() => void) | null = null
 let rotateInvitePromise: Promise<void> | null = null
+let linkedInviteRepublishTimer: ReturnType<typeof setTimeout> | null = null
 
 const APP_KEYS_FETCH_TIMEOUT_MS = 8000
 const APP_KEYS_FAST_TIMEOUT_MS = 2000
+const LINKED_INVITE_REPUBLISH_RETRY_MS = 1500
 
 const cloneAppKeys = (appKeys: AppKeys): AppKeys => new AppKeys(appKeys.getAllDevices())
 
@@ -76,19 +83,37 @@ const resolveBaseAppKeys = async (
   return new AppKeys()
 }
 
-const createSubscribe = (ndkInstance: ReturnType<typeof getNDK>): NostrSubscribe => {
+const createSubscribe = (
+  ndkInstance: ReturnType<typeof getNDK>,
+  cacheUsage: NDKSubscriptionCacheUsage = NDKSubscriptionCacheUsage.PARALLEL
+): NostrSubscribe => {
   return (filter, onEvent) => {
     const relayUrls = ndkInstance.pool.connectedRelays().map((relay) => relay.url)
-    const subscription = ndkInstance.subscribe(filter, {
+    const subscription = asNdkEventSubscription(ndkInstance.subscribe(filter, {
       closeOnEose: false,
-      cacheUsage: NDKSubscriptionCacheUsage.PARALLEL,
+      cacheUsage,
       ...(relayUrls.length > 0 ? { relayUrls } : {}),
-    })
+    }))
     subscription.on('event', (event: NDKEvent) => {
       onEvent(event.rawEvent() as Parameters<typeof onEvent>[0])
     })
     subscription.start()
     return () => subscription.stop()
+  }
+}
+
+const waitForCurrentDeviceRegistrationOnRelay = async (
+  ownerPubkey: string,
+  devicePubkey: string,
+  timeoutMs: number = APP_KEYS_FETCH_TIMEOUT_MS
+): Promise<void> => {
+  const relaySubscribe = createSubscribe(getNDK(), NDKSubscriptionCacheUsage.ONLY_RELAY)
+  const appKeys = await AppKeys.waitFor(ownerPubkey, relaySubscribe, timeoutMs)
+  const isAuthorized =
+    appKeys?.getAllDevices().some((device) => device.identityPubkey === devicePubkey) ?? false
+
+  if (!isAuthorized) {
+    throw new Error(`Relay AppKeys for ${ownerPubkey} do not include current device ${devicePubkey}`)
   }
 }
 
@@ -102,6 +127,20 @@ const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => 
 
 function getNDK() {
   return get(ndk)
+}
+
+const republishInviteWithRetry = async (reason: string): Promise<void> => {
+  await republishInvite()
+
+  if (linkedInviteRepublishTimer) {
+    clearTimeout(linkedInviteRepublishTimer)
+  }
+  linkedInviteRepublishTimer = setTimeout(() => {
+    linkedInviteRepublishTimer = null
+    void republishInvite().catch((e) => {
+      console.warn(`[privateChats] Deferred invite republish failed (${reason}):`, e)
+    })
+  }, LINKED_INVITE_REPUBLISH_RETRY_MS)
 }
 
 export const initAppKeysManager = async (): Promise<void> => {
@@ -211,10 +250,75 @@ export const getAppKeysManager = (): AppKeysManager => {
 export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
   await Promise.all([initAppKeysManager(), initDelegateManager()])
   await initSessionManager(ownerPubkey)
+  const ndkInstance = getNDK()
+  if (ndkInstance.pool.connectedRelays().length === 0) {
+    await ndkInstance.pool.connect(5000)
+  }
   startAppKeysSubscription(ownerPubkey)
 
+  let linkedDeviceAuthorized = get(devices).isCurrentDeviceRegistered
+  let currentDevicePubkey = delegateManager?.getIdentityPublicKey() ?? null
+  if (isLinkedDeviceLogin() && delegateManager && appKeysManager) {
+    try {
+      const baseKeys = await resolveBaseAppKeys(ownerPubkey)
+      await appKeysManager.setAppKeys(baseKeys)
+      devices.setHasLocalAppKeys(baseKeys.getAllDevices().length > 0)
+      devices.setRegisteredDevices(appKeysManager.getOwnDevices(), Math.floor(Date.now() / 1000))
+      currentDevicePubkey = delegateManager.getIdentityPublicKey()
+      linkedDeviceAuthorized = baseKeys
+        .getAllDevices()
+        .some((device) => device.identityPubkey === currentDevicePubkey)
+    } catch (e) {
+      console.warn('[privateChats] Failed to hydrate linked-device AppKeys state:', e)
+    }
+  }
+
+  if (
+    isLinkedDeviceLogin() &&
+    delegateManager &&
+    appKeysManager &&
+    currentDevicePubkey &&
+    !linkedDeviceAuthorized
+  ) {
+    try {
+      const refreshedKeys = await AppKeys.waitFor(
+        ownerPubkey,
+        createSubscribe(getNDK()),
+        APP_KEYS_FETCH_TIMEOUT_MS
+      )
+      if (refreshedKeys) {
+        const previousState = get(devices)
+        await appKeysManager.setAppKeys(refreshedKeys)
+        devices.setHasLocalAppKeys(refreshedKeys.getAllDevices().length > 0)
+        devices.setRegisteredDevices(
+          appKeysManager.getOwnDevices(),
+          Math.floor(Date.now() / 1000)
+        )
+        linkedDeviceAuthorized = refreshedKeys
+          .getAllDevices()
+          .some((device) => device.identityPubkey === currentDevicePubkey)
+
+        if (
+          linkedDeviceAuthorized &&
+          !previousState.isCurrentDeviceRegistered &&
+          get(devices).isCurrentDeviceRegistered
+        ) {
+          await republishInviteWithRetry('linked device authorization backfill')
+        }
+      }
+    } catch (e) {
+      console.warn('[privateChats] Linked-device AppKeys backfill failed:', e)
+    }
+  }
+
   try {
-    await republishInvite()
+    if (!isLinkedDeviceLogin() || linkedDeviceAuthorized) {
+      if (isLinkedDeviceLogin()) {
+        await republishInviteWithRetry('linked device init')
+      } else {
+        await republishInvite()
+      }
+    }
   } catch (e) {
     console.warn('[privateChats] Republish invite failed:', e)
   }
@@ -251,6 +355,16 @@ export const registerDevice = async (): Promise<void> => {
   }
 
   const baseKeys = await resolveBaseAppKeys(ownerPubkey)
+  const knownDevices = baseKeys
+    .getAllDevices()
+    .map((device) => device.identityPubkey)
+  const shouldConfirmOnRelay = shouldRequireRelayRegistrationConfirmation({
+    currentDevicePubkey: delegateManager.getIdentityPublicKey(),
+    registeredDevices: baseKeys.getAllDevices(),
+    hasLocalAppKeys: knownDevices.length > 0,
+    appKeysManagerReady: true,
+    sessionManagerReady: true,
+  })
   await appKeysManager.setAppKeys(baseKeys)
 
   const payload = delegateManager.getRegistrationPayload()
@@ -259,6 +373,14 @@ export const registerDevice = async (): Promise<void> => {
 
   devices.setHasLocalAppKeys(true)
   devices.setRegisteredDevices(appKeysManager.getOwnDevices(), Math.floor(Date.now() / 1000))
+
+  if (shouldConfirmOnRelay) {
+    await waitForCurrentDeviceRegistrationOnRelay(
+      ownerPubkey,
+      payload.identityPubkey,
+      APP_KEYS_FETCH_TIMEOUT_MS
+    )
+  }
 }
 
 /**
@@ -393,31 +515,18 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
   if (!ownerPubkey) {
     throw new Error('Owner pubkey not available')
   }
-  if (!delegateManager.getOwnerPublicKey()) {
-    await delegateManager.activate(ownerPubkey)
-  }
-
+  const currentDevicePubkey = delegateManager.getIdentityPublicKey()
   const state = get(devices)
-  if (!state.isCurrentDeviceRegistered) {
+  const currentState = evaluateDeviceRegistrationState({
+    currentDevicePubkey,
+    registeredDevices: state.registeredDevices,
+    hasLocalAppKeys: state.hasLocalAppKeys,
+    appKeysManagerReady: state.appKeysManagerReady,
+    sessionManagerReady: state.sessionManagerReady,
+  })
+  if (!currentState.isCurrentDeviceRegistered || state.hasLocalAppKeys) {
     await registerDevice()
-  } else {
-    const ndkInstance = getNDK()
-    if (ndkInstance.pool.connectedRelays().length === 0) {
-      await ndkInstance.pool.connect(5000)
-    }
-    const baseKeys = await resolveBaseAppKeys(ownerPubkey)
-    await appKeysManager.setAppKeys(baseKeys)
-
-    const payload = delegateManager.getRegistrationPayload()
-    appKeysManager.addDevice(payload)
-    await appKeysManager.publish().catch(() => {})
-
-    devices.setHasLocalAppKeys(appKeysManager.getOwnDevices().length > 0)
-    devices.setRegisteredDevices(appKeysManager.getOwnDevices(), Math.floor(Date.now() / 1000))
   }
-
-  const nostrSubscribe = createSubscribe(getNDK())
-  await AppKeys.waitFor(ownerPubkey, nostrSubscribe, 4000).catch(() => null)
 
   await republishInvite().catch(() => {})
 }
@@ -447,28 +556,43 @@ export const startAppKeysSubscription = (ownerPubkey: string): void => {
   if (appKeysSubscriptionCleanup) return
 
   const ndkInstance = getNDK()
-  const subscription = ndkInstance.subscribe({
-    kinds: [30078],
-    authors: [ownerPubkey],
-    '#d': ['double-ratchet/app-keys'],
-  } as NDKFilter)
+  const subscription = asNdkEventSubscription(
+    ndkInstance.subscribe(buildAppKeysFilter(ownerPubkey) as NDKFilter)
+  )
 
   subscription.on('event', async (event: NDKEvent) => {
     try {
+      const previousState = get(devices)
       const eventTime = event.created_at ?? 0
-      const { lastEventTimestamp } = get(devices)
-      if (eventTime < lastEventTimestamp) return
+      const { lastEventTimestamp } = previousState
 
       const incomingAppKeys = AppKeys.fromEvent(event.rawEvent() as never)
       if (appKeysManager) {
-        const currentAppKeys = appKeysManager.getAppKeys()
-        const nextAppKeys =
-          eventTime === lastEventTimestamp && currentAppKeys
-            ? currentAppKeys.merge(incomingAppKeys)
-            : incomingAppKeys
-        await appKeysManager.setAppKeys(nextAppKeys)
+        const nextSnapshot = applyAppKeysSnapshot({
+          currentAppKeys: appKeysManager.getAppKeys(),
+          currentCreatedAt: lastEventTimestamp,
+          incomingAppKeys,
+          incomingCreatedAt: eventTime,
+        })
+        if (nextSnapshot.decision === 'stale') return
+
+        await appKeysManager.setAppKeys(nextSnapshot.appKeys)
         devices.setHasLocalAppKeys(appKeysManager.getOwnDevices().length > 0)
-        devices.setRegisteredDevices(appKeysManager.getOwnDevices(), eventTime)
+        devices.setRegisteredDevices(
+          appKeysManager.getOwnDevices(),
+          nextSnapshot.createdAt
+        )
+
+        const nextState = get(devices)
+        if (
+          isLinkedDeviceLogin() &&
+          !previousState.isCurrentDeviceRegistered &&
+          nextState.isCurrentDeviceRegistered
+        ) {
+          void republishInviteWithRetry('linked device registration').catch((err) => {
+            console.warn('[privateChats] Republish invite after linked registration failed:', err)
+          })
+        }
       }
     } catch (err) {
       console.error('[privateChats] Failed to process AppKeys event:', err)
@@ -487,6 +611,10 @@ export const stopAppKeysSubscription = (): void => {
 }
 
 export const resetManagers = (): void => {
+  if (linkedInviteRepublishTimer) {
+    clearTimeout(linkedInviteRepublishTimer)
+    linkedInviteRepublishTimer = null
+  }
   appKeysManager?.close?.()
   delegateManager?.close?.()
   sessionManager?.close()
@@ -504,22 +632,11 @@ export const republishInvite = async (): Promise<void> => {
   if (!delegateManager) {
     throw new Error('DelegateManager not initialized')
   }
-
-  const invite = delegateManager.getInvite()
-  if (!invite) {
-    throw new Error('No invite available')
-  }
-
-  const unsignedEvent = invite.getEvent()
-  const signedEvent = finalizeEvent(unsignedEvent, delegateManager.getIdentityKey())
-
   const ndkInstance = getNDK()
   if (ndkInstance.pool.connectedRelays().length === 0) {
     await ndkInstance.pool.connect(5000)
   }
-
-  const event = new NDKEvent(ndkInstance, signedEvent)
-  await event.publish()
+  await delegateManager.publishInvite()
 }
 
 export const rotateDeviceInvite = async (): Promise<void> => {

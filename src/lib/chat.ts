@@ -3,7 +3,9 @@ import {
   Invite,
   type OnEventMeta,
   type Rumor,
+  resolveSessionPubkeyToOwner as resolveSessionPubkeyToOwnerFromRecords,
   type SessionManager,
+  type SessionUserRecordsLike,
   type UserRecord,
   REACTION_KIND,
   RECEIPT_KIND,
@@ -95,6 +97,7 @@ let invitesInitialized = false
 let sessionManagerPoller: ReturnType<typeof setInterval> | null = null
 
 let sessionManagerSubscribed = false
+const managerChatBootstrapInFlight = new Set<string>()
 const pendingAutoOpenChats = new Set<string>()
 const autoOpenedChats = new Set<string>()
 
@@ -315,7 +318,7 @@ export function needsManagerUserSetup(record: UserRecord): boolean {
   }
 
   return Array.from(record.devices.values()).some(
-    (device) => !device.activeSession && device.inactiveSessions.length === 0 && device.state !== 'revoked'
+    (device) => !device.activeSession && device.inactiveSessions.length === 0
   )
 }
 
@@ -460,7 +463,6 @@ export function parseInviteFromHash(): ChatInvite | null {
 
 // Parse invite from a pasted URL
 export function parseInviteFromUrl(url: string): ChatInvite | null {
-  console.log('[chat] parseInviteFromUrl input:', url)
   try {
     const trimmed = url.trim()
     if (trimmed.startsWith('npub') || trimmed.startsWith('nprofile')) {
@@ -662,7 +664,11 @@ export function getInviteEphemeralPubkeys(): string[] {
   return pubkeys
 }
 
-async function ensureManagerChat(recipientPubkey: string): Promise<ChatSession> {
+async function ensureManagerChat(
+  recipientPubkey: string,
+  options: { bootstrap?: boolean } = {}
+): Promise<ChatSession> {
+  const { bootstrap = true } = options
   const existing = get(chats).get(recipientPubkey)
   if (existing) return existing
 
@@ -695,8 +701,30 @@ async function ensureManagerChat(recipientPubkey: string): Promise<ChatSession> 
 
   await saveSessionToStorage(chatSession)
   updateDMSubscription()
+  if (bootstrap) {
+    bootstrapManagerChatSession(recipientPubkey)
+  }
 
   return chatSession
+}
+
+function bootstrapManagerChatSession(recipientPubkey: string): void {
+  const myPubkey = getPubkey()
+  if (!recipientPubkey || recipientPubkey === myPubkey) {
+    return
+  }
+  if (managerChatBootstrapInFlight.has(recipientPubkey)) {
+    return
+  }
+
+  managerChatBootstrapInFlight.add(recipientPubkey)
+  void waitForPeerSendReadySessionManager(recipientPubkey)
+    .catch((e) =>
+      console.warn('[chat] Failed to bootstrap manager chat session:', recipientPubkey, e)
+    )
+    .finally(() => {
+      managerChatBootstrapInFlight.delete(recipientPubkey)
+    })
 }
 
 function resolveManagerSender(fromPubkey: string, myPubkey: string | null): string {
@@ -711,69 +739,13 @@ function resolveManagerSender(fromPubkey: string, myPubkey: string | null): stri
   return isOwnDevice ? myPubkey : fromPubkey
 }
 
-type SessionStateLike = {
-  theirCurrentNostrPublicKey?: string
-  theirNextNostrPublicKey?: string
-}
-
-type SessionLike = {
-  state?: SessionStateLike | null
-}
-
-type SessionDeviceLike = {
-  activeSession?: SessionLike | null
-  inactiveSessions?: Array<SessionLike | null>
-}
-
-type SessionUserRecordLike = {
-  devices?: Map<string, SessionDeviceLike>
-  appKeys?: {
-    getAllDevices?: () => Array<{
-      identityPubkey?: string | null
-    }>
-  } | null
-}
-
 function resolveSessionPubkeyToOwner(pubkey: string): string {
   if (!pubkey) return pubkey
 
   const manager = getSessionManager()
-  const userRecords = manager?.getUserRecords() as Map<string, SessionUserRecordLike> | undefined
+  const userRecords = manager?.getUserRecords() as SessionUserRecordsLike | undefined
   if (!userRecords) return pubkey
-
-  for (const [recordPubkey, userRecord] of userRecords.entries()) {
-    if (recordPubkey === pubkey) {
-      return recordPubkey
-    }
-
-    const devices = userRecord?.devices
-    if (devices?.has(pubkey)) {
-      return recordPubkey
-    }
-
-    const appKeyDevices = userRecord?.appKeys?.getAllDevices?.() ?? []
-    if (appKeyDevices.some((device) => device.identityPubkey === pubkey)) {
-      return recordPubkey
-    }
-
-    if (!devices) continue
-
-    for (const device of devices.values()) {
-      const sessions = [device.activeSession, ...(device.inactiveSessions ?? [])]
-      for (const session of sessions) {
-        const state = session?.state
-        if (!state) continue
-        if (
-          state.theirCurrentNostrPublicKey === pubkey ||
-          state.theirNextNostrPublicKey === pubkey
-        ) {
-          return recordPubkey
-        }
-      }
-    }
-  }
-
-  return pubkey
+  return resolveSessionPubkeyToOwnerFromRecords(userRecords, pubkey)
 }
 
 function isKnownOwnDevice(pubkey: string): boolean {
@@ -820,8 +792,13 @@ export async function handleManagerEvent(
   }
 
   let chatId = resolvedFromPubkey
+  const senderResolvesToSelf =
+    meta?.isSelf === true ||
+    meta?.senderOwnerPubkey === myPubkey ||
+    effectiveFromPubkey === myPubkey ||
+    resolvedFromPubkey === myPubkey
 
-  if (effectiveFromPubkey === myPubkey) {
+  if (senderResolvesToSelf) {
     const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')
     const resolvedPTag = pTag?.[1] ? resolveSessionPubkeyToOwner(pTag[1]) : undefined
     if (resolvedPTag && resolvedPTag !== myPubkey) {
@@ -888,10 +865,11 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   if (invite.type === 'pubkey') {
     const existing = get(chats).get(invite.pubkey)
     const myPubkey = getPubkey()
+    const isSelfChat = !!myPubkey && invite.pubkey === myPubkey
     const requiresSessionManagerReady =
       !existing &&
       !!myPubkey &&
-      invite.pubkey === myPubkey
+      isSelfChat
     const sessionManagerReadyPromise = requiresSessionManagerReady
       ? waitForSessionManager()
           .then(async (ready) => {
@@ -907,9 +885,16 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
             throw e
           })
       : null
-    const chatSession = await ensureManagerChat(invite.pubkey)
+    const chatSession = await ensureManagerChat(invite.pubkey, {
+      bootstrap: isSelfChat,
+    })
     // User-initiated join: treat as accepted even before sending a message.
     acceptChat(invite.pubkey)
+    if (!existing && !isSelfChat) {
+      void waitForSendReadySessionManager().catch((e) => {
+        console.warn('[chat] Failed to pre-register device for pubkey invite:', e)
+      })
+    }
     if (!existing && sessionManagerReadyPromise) {
       await sessionManagerReadyPromise
     }
@@ -939,6 +924,9 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     throw new Error('SessionManager is not available')
   }
 
+  // Legacy invite responses need a stable owner claim so the inviter can route
+  // the new session under the responder account rather than a transient device key.
+  await ensureDeviceRegistered()
   const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
   const chatTarget = accepted.ownerPublicKey || ownerPublicKey
   const chatSession = await ensureManagerChat(chatTarget)
@@ -1142,11 +1130,27 @@ function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload
   }
 }
 
-function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Rumor {
-  const myPubkey = getPubkey()
-  if (!myPubkey) {
-    throw new Error('Not logged in')
+function getManagerRumorAuthorPubkey(): string {
+  const managerDeviceId = getSessionManager()?.getDeviceId()?.trim()
+  if (managerDeviceId) {
+    return managerDeviceId
   }
+
+  const deviceIdentityPubkey = get(devices).identityPubkey?.trim()
+  if (deviceIdentityPubkey) {
+    return deviceIdentityPubkey
+  }
+
+  const ownerPubkey = getPubkey()?.trim()
+  if (ownerPubkey) {
+    return ownerPubkey
+  }
+
+  throw new Error('Not logged in')
+}
+
+function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Rumor {
+  const myPubkey = getManagerRumorAuthorPubkey()
 
   const now = Date.now()
   const tags = [...(partial.tags || [])]
@@ -1179,11 +1183,21 @@ async function waitForSendReadySessionManager(): Promise<SessionManager> {
   return waitForSessionManager()
 }
 
+async function waitForPeerSendReadySessionManager(
+  recipientPubkey: string
+): Promise<SessionManager> {
+  const manager = await waitForSendReadySessionManager()
+  await manager.setupUser(recipientPubkey).catch((e) => {
+    console.warn('[chat] Failed to prepare peer SessionManager user setup:', recipientPubkey, e)
+  })
+  return manager
+}
+
 // Send a receipt via the double ratchet session
 function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
   if (messageIds.length === 0) return
 
-  void waitForSendReadySessionManager()
+  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
     .then((ready) => ready.sendReceipt(chatSession.recipientPubkey, type, messageIds))
     .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
 }
@@ -1240,7 +1254,7 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   // Always await device registration + SessionManager init. It is possible to have a
   // non-null manager while init is still in progress, and an unregistered owner-side
   // device cannot be trusted by linked recipients for multidevice fanout.
-  void waitForSendReadySessionManager()
+  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
     .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
     .catch((e) => console.error('[chat] Failed to send via SessionManager:', e))
 
@@ -1285,7 +1299,7 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
     kind: REACTION_KIND,
     tags: [['e', messageId]],
   })
-  void waitForSendReadySessionManager()
+  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
     .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
     .catch((e) => console.error('[chat] Failed to send reaction via SessionManager:', e))
 
@@ -1495,7 +1509,7 @@ export function sendTypingEvent(chatSession: ChatSession): void {
   const policyCtx = getMessageRequestPolicyContext()
   if (!isChatAccepted(chatSession, policyCtx)) return
 
-  void waitForSendReadySessionManager()
+  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
     .then((ready) => ready.sendTyping(chatSession.recipientPubkey))
     .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
 }

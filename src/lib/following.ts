@@ -1,11 +1,15 @@
 import { writable, get } from 'svelte/store'
 import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk'
 import { identity, ndk } from './identity'
+import {
+  asNdkEventSubscription,
+  type NdkEventSubscription,
+} from './ndkSubscription'
 
 // Set of pubkeys we follow (based on kind:3 contact list).
 export const following = writable<Set<string>>(new Set())
 
-let sub: NDKSubscription | null = null
+let sub: NdkEventSubscription | null = null
 let identityUnsub: (() => void) | null = null
 let lastPubkey: string | null = null
 let latestCreatedAt = 0
@@ -49,10 +53,10 @@ export function initFollowing(): () => void {
     latestCreatedAt = 0
 
     // Keep listening; contact list updates should take effect immediately.
-    sub = ndkInstance.subscribe(
+    sub = asNdkEventSubscription(ndkInstance.subscribe(
       { kinds: [3], authors: [pubkey], limit: 1 },
       { closeOnEose: false }
-    )
+    ))
 
     sub.on('event', (ev: NDKEvent) => {
       const raw = ev.rawEvent?.() as { created_at?: number } | undefined
@@ -71,4 +75,3 @@ export function initFollowing(): () => void {
     following.set(new Set())
   }
 }
-

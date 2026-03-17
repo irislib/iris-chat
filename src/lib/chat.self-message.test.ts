@@ -48,8 +48,8 @@ vi.mock('./notifications', () => ({
 
 vi.mock('./privateChats', () => ({
   getSessionManager: () => sessionState.manager,
-  waitForSessionManager: (...args: unknown[]) => privateChatsMocks.waitForSessionManager(...args),
-  ensureDeviceRegistered: (...args: unknown[]) => privateChatsMocks.ensureDeviceRegistered(...args),
+  waitForSessionManager: privateChatsMocks.waitForSessionManager,
+  ensureDeviceRegistered: privateChatsMocks.ensureDeviceRegistered,
   republishInvite: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -240,6 +240,66 @@ describe('handleManagerEvent', () => {
     expect(chatMap.get(PEER_LINKED_DEVICE)).toBeUndefined()
   })
 
+  it('routes self-origin copies with a peer p-tag to the peer chat even before device state catches up', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const OWN_OTHER_DEVICE = 'd'.repeat(64)
+
+    const rumor = {
+      id: 'msg-self-peer-routing-lag',
+      pubkey: OWN_OTHER_DEVICE,
+      content: 'hello peer despite stale device state',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', PEER_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, OWN_OTHER_DEVICE, {
+      isSelf: true,
+      isCrossDeviceSelf: true,
+      senderOwnerPubkey: MY_PUBKEY,
+      senderDevicePubkey: OWN_OTHER_DEVICE,
+      fromDeviceId: OWN_OTHER_DEVICE,
+      origin: 'same-owner-other-device',
+    })
+
+    const chatMap = get(chats)
+    const peerChat = chatMap.get(PEER_PUBKEY)
+
+    expect(peerChat).toBeTruthy()
+    expect(peerChat?.messages).toHaveLength(1)
+    expect(peerChat?.messages[0].content).toBe('hello peer despite stale device state')
+    expect(peerChat?.messages[0].isMine).toBe(true)
+    expect(chatMap.get(MY_PUBKEY)).toBeUndefined()
+  })
+
+  it('bootstraps peer setup when a self-copy creates a new peer chat', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const setupUser = vi.fn().mockResolvedValue(undefined)
+    privateChatsMocks.waitForSessionManager.mockResolvedValue({
+      setupUser,
+    } as never)
+
+    const rumor = {
+      id: 'msg-bootstrap-peer',
+      pubkey: MY_PUBKEY,
+      content: 'hello peer bootstrap',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', PEER_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, MY_PUBKEY, {
+      isSelf: true,
+      isCrossDeviceSelf: true,
+    })
+    await vi.waitFor(() =>
+      expect(privateChatsMocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    )
+
+    expect(privateChatsMocks.waitForSessionManager).toHaveBeenCalled()
+    await vi.waitFor(() => expect(setupUser).toHaveBeenCalledWith(PEER_PUBKEY))
+  })
+
   it('routes incoming peer linked-device messages to the peer owner chat', async () => {
     const PEER_PUBKEY = 'c'.repeat(64)
     const PEER_LINKED_DEVICE = 'f'.repeat(64)
@@ -416,11 +476,16 @@ describe('handleManagerEvent', () => {
     const registrationReady = new Promise<void>((resolve) => {
       resolveRegistration = resolve
     })
+    const setupUser = vi.fn().mockResolvedValue(undefined)
     const sendEvent = vi.fn().mockResolvedValue(undefined)
-    const manager = { sendEvent }
+    const manager = {
+      getDeviceId: () => MY_PUBKEY,
+      sendEvent,
+      setupUser,
+    }
 
     privateChatsMocks.ensureDeviceRegistered.mockReturnValue(registrationReady)
-    privateChatsMocks.waitForSessionManager.mockResolvedValue(manager)
+    privateChatsMocks.waitForSessionManager.mockResolvedValue(manager as never)
     sessionState.manager = manager
 
     chats.set(
@@ -449,7 +514,96 @@ describe('handleManagerEvent', () => {
     await new Promise((resolve) => setTimeout(resolve, 10))
 
     expect(privateChatsMocks.waitForSessionManager).toHaveBeenCalledTimes(1)
+    expect(setupUser).toHaveBeenCalledTimes(1)
+    expect(setupUser).toHaveBeenCalledWith(MY_PUBKEY)
     expect(sendEvent).toHaveBeenCalledTimes(1)
     expect(sendEvent.mock.calls[0]?.[0]).toBe(MY_PUBKEY)
+  })
+
+  it('waits for peer setup before sending the first linked-device message', async () => {
+    let resolvePeerSetup!: () => void
+    const peerSetupReady = new Promise<void>((resolve) => {
+      resolvePeerSetup = resolve
+    })
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const sendEvent = vi.fn().mockResolvedValue(undefined)
+    const setupUser = vi.fn((pubkey: string) =>
+      pubkey === PEER_PUBKEY ? peerSetupReady : Promise.resolve()
+    )
+    const manager = {
+      getDeviceId: () => MY_PUBKEY,
+      sendEvent,
+      setupUser,
+    }
+
+    privateChatsMocks.waitForSessionManager.mockResolvedValue(manager as never)
+    sessionState.manager = manager
+
+    chats.set(
+      new Map([
+        [
+          PEER_PUBKEY,
+          {
+            id: PEER_PUBKEY,
+            recipientPubkey: PEER_PUBKEY,
+            mode: 'manager',
+            messages: [],
+          },
+        ],
+      ])
+    )
+
+    sendMessage(get(chats).get(PEER_PUBKEY)!, 'linked first send waits for setup')
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(setupUser).toHaveBeenCalledWith(PEER_PUBKEY)
+    expect(sendEvent).not.toHaveBeenCalled()
+
+    resolvePeerSetup()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(sendEvent).toHaveBeenCalledTimes(1)
+    expect(sendEvent.mock.calls[0]?.[0]).toBe(PEER_PUBKEY)
+  })
+
+  it('uses the current device pubkey when sending manager rumors from a linked device', async () => {
+    const LINKED_DEVICE_PUBKEY = 'b'.repeat(64)
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const sendEvent = vi.fn().mockResolvedValue(undefined)
+    const manager = {
+      getDeviceId: () => LINKED_DEVICE_PUBKEY,
+      setupUser: vi.fn().mockResolvedValue(undefined),
+      sendEvent,
+    }
+
+    devices.setIdentityPubkey(LINKED_DEVICE_PUBKEY)
+    privateChatsMocks.waitForSessionManager.mockResolvedValue(manager as never)
+    sessionState.manager = manager
+
+    chats.set(
+      new Map([
+        [
+          PEER_PUBKEY,
+          {
+            id: PEER_PUBKEY,
+            recipientPubkey: PEER_PUBKEY,
+            mode: 'manager',
+            messages: [],
+          },
+        ],
+      ])
+    )
+
+    sendMessage(get(chats).get(PEER_PUBKEY)!, 'send from linked device')
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(sendEvent).toHaveBeenCalledTimes(1)
+    expect(sendEvent.mock.calls[0]?.[0]).toBe(PEER_PUBKEY)
+    expect(sendEvent.mock.calls[0]?.[1]).toMatchObject({
+      pubkey: LINKED_DEVICE_PUBKEY,
+      content: 'send from linked device',
+    })
   })
 })

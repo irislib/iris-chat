@@ -22,6 +22,7 @@ async function safeReload(page: Page) {
 // Helper to get invite URL from CopyButton (has title attribute with full URL)
 // Rewrites chat.iris.to URLs to localhost for e2e tests
 async function getInviteUrl(page: Page): Promise<string> {
+  await registerDevice(page)
   const copyButton = page.locator('button[title*="#"]').first()
   await expect(copyButton).toBeVisible()
   const url = await copyButton.getAttribute('title')
@@ -49,39 +50,39 @@ async function registerDevice(page: Page): Promise<void> {
   }
 
   await settingsButton.click()
-  // Ensure the settings view has rendered before probing for the register button.
-  // This avoids spending the full timeout waiting when the device is already registered.
-  await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
+  await page
+    .getByRole('heading', { name: 'Devices' })
+    .waitFor({ state: 'visible', timeout: 10000 })
   const registerButton = page.getByRole('button', { name: 'Register this device' })
   const thisDeviceLabel = page.getByText('This device').first()
-  try {
-    if (!(await registerButton.count())) {
-      // If the device state is still initializing, wait until we can tell whether
-      // registration is needed (button appears) or already done ("This device" appears).
-      await Promise.race([
-        registerButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
-        thisDeviceLabel.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
-      ])
+
+  const registrationDeadline = Date.now() + 15_000
+  let registrationState: 'registered' | 'needs-registration' | 'loading' = 'loading'
+  while (Date.now() < registrationDeadline) {
+    if (await thisDeviceLabel.isVisible().catch(() => false)) {
+      registrationState = 'registered'
+      break
     }
-    if (await registerButton.count()) {
-      await registerButton.click({ timeout: 5000 })
-      await Promise.race([
-        registerButton.waitFor({ state: 'hidden', timeout: 20000 }).catch(() => null),
-        thisDeviceLabel.waitFor({ state: 'visible', timeout: 20000 }).catch(() => null),
-      ])
+    if (await registerButton.isVisible().catch(() => false)) {
+      registrationState = 'needs-registration'
+      break
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : ''
-    const lowered = message.toLowerCase()
-    if (
-      !lowered.includes('timeout') &&
-      !lowered.includes('not found') &&
-      !lowered.includes('detached') &&
-      !lowered.includes('not stable')
-    ) {
-      throw err
-    }
-    // Button likely absent or disappeared due to auto-registration; continue.
+    await page.waitForTimeout(250)
+  }
+
+  if (registrationState === 'loading') {
+    throw new Error('Timed out waiting for device registration state')
+  }
+
+  if (registrationState === 'needs-registration') {
+    await registerButton.scrollIntoViewIfNeeded().catch(() => {})
+    await registerButton.click({ timeout: 10000 })
+    await expect
+      .poll(
+        async () => await thisDeviceLabel.isVisible().catch(() => false),
+        { timeout: 25000 }
+      )
+      .toBe(true)
   }
   await page.getByRole('button', { name: 'Back' }).click()
 }
@@ -145,8 +146,6 @@ async function openChatFromList(page: Page, message: string): Promise<void> {
 }
 
 async function joinViaPasteAndSync(inviter: Page, joiner: Page, inviteUrl: string, message: string): Promise<void> {
-  await registerDevice(inviter)
-  await registerDevice(joiner)
   await joiner.getByPlaceholder('Paste invite link').fill(inviteUrl)
   await expect(joiner.getByPlaceholder('Type a message...')).toBeVisible()
   await joiner.getByPlaceholder('Type a message...').fill(message)

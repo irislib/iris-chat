@@ -39,7 +39,6 @@ const createSubscribeHarness = () => {
     expect(filter).toEqual({
       kinds: [30078],
       authors: [PROFILE_PUBKEY],
-      '#d': ['double-ratchet/app-keys'],
     })
     onEvent = callback
     return stop
