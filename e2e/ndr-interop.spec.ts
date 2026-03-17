@@ -48,9 +48,15 @@ async function runNdr(args: string[], dataDir: string): Promise<any> {
     let stderr = ''
     child.stdout.on('data', (data) => {
       stdout += data.toString()
+      if (stdout.length > 50000) {
+        stdout = stdout.slice(-50000)
+      }
     })
     child.stderr.on('data', (data) => {
       stderr += data.toString()
+      if (stderr.length > 50000) {
+        stderr = stderr.slice(-50000)
+      }
     })
 
     child.on('close', (code) => {

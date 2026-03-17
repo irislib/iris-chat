@@ -1,6 +1,6 @@
 import { test, expect, useTestRelay } from './fixtures'
 import type { BrowserContext, Page } from '@playwright/test'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
@@ -11,6 +11,10 @@ import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const FLUTTER_REPO = path.resolve(__dirname, '../../iris-chat-flutter')
+const FLUTTER_MACOS_APP_BINARY = path.join(
+  FLUTTER_REPO,
+  'build/macos/Build/Products/Debug/iris chat.app/Contents/MacOS/iris chat'
+)
 const RUN_FLUTTER_INTEROP = process.env.IRIS_FLUTTER_INTEROP === '1'
 const RUN_PRODUCTION_RELAYS = process.env.IRIS_FLUTTER_INTEROP_PROD === '1'
 const DEFAULT_PROD_RELAYS = [
@@ -47,6 +51,13 @@ async function loginWithStoredKey(page: Page) {
   await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 30000 })
 }
 
+async function waitForNextCreatedAtSecond(): Promise<void> {
+  const currentSecond = Math.floor(Date.now() / 1000)
+  while (Math.floor(Date.now() / 1000) === currentSecond) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
 async function configureRelays(context: BrowserContext, testRelayUrl: string) {
   if (!RUN_PRODUCTION_RELAYS) {
     await useTestRelay(context, testRelayUrl)
@@ -67,6 +78,28 @@ type BridgeEvent =
   | { type: 'response'; id?: string; ok?: boolean; data?: unknown; error?: string }
   | { type: string; id?: string; ok?: boolean; data?: unknown; error?: string }
 
+function reapFlutterInteropAppProcesses(): void {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  const result = spawnSync('pgrep', ['-f', FLUTTER_MACOS_APP_BINARY], {
+    encoding: 'utf8',
+  })
+  const pids = result.stdout
+    .split('\n')
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
+
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // best effort
+    }
+  }
+}
+
 class FlutterInteropBridge {
   private bridgeDir: string | null = null
   private commandsFile: string | null = null
@@ -79,13 +112,15 @@ class FlutterInteropBridge {
   constructor(
     private readonly relayUrls: string[],
     private readonly privateKeyNsec: string,
-    private readonly dataDir: string
+    private readonly dataDir: string,
+    private readonly registerDeviceOnLogin = false
   ) {}
 
   async start(): Promise<{ pubkeyHex: string }> {
     this.bridgeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iris-flutter-interop-'))
     this.commandsFile = path.join(this.bridgeDir, 'commands.jsonl')
     this.eventsFile = path.join(this.bridgeDir, 'events.jsonl')
+    reapFlutterInteropAppProcesses()
 
     this.child = spawn(
       'flutter',
@@ -99,6 +134,7 @@ class FlutterInteropBridge {
         `--dart-define=IRIS_INTEROP_BRIDGE_DIR=${this.bridgeDir}`,
         `--dart-define=IRIS_INTEROP_DATA_DIR=${this.dataDir}`,
         `--dart-define=IRIS_INTEROP_PRIVATE_KEY_NSEC=${this.privateKeyNsec}`,
+        `--dart-define=IRIS_INTEROP_REGISTER_DEVICE=${this.registerDeviceOnLogin ? '1' : '0'}`,
       ],
       {
         cwd: FLUTTER_REPO,
@@ -136,7 +172,12 @@ class FlutterInteropBridge {
     await this.waitForProcessExit(5000).catch(() => {
       if (!this.child) return
       this.child.kill('SIGTERM')
+      return this.waitForProcessExit(2000).catch(() => {
+        if (!this.child || this.child.exitCode !== null) return
+        this.child.kill('SIGKILL')
+      })
     })
+    reapFlutterInteropAppProcesses()
 
     if (this.bridgeDir) {
       await fsp.rm(this.bridgeDir, { recursive: true, force: true }).catch(() => {})
@@ -264,7 +305,7 @@ test('npub link interop (different keys) between web and flutter', async ({ brow
   let bridge: FlutterInteropBridge | null = null
 
   try {
-    bridge = new FlutterInteropBridge(relayUrls, flutterNsec, flutterDataDir)
+    bridge = new FlutterInteropBridge(relayUrls, flutterNsec, flutterDataDir, true)
     const flutterReady = await bridge.start()
     await bridge.command(
       'wait_for_connected_relays',
@@ -392,6 +433,10 @@ test('npub link interop (different keys) between web and flutter', async ({ brow
 
     const roundTrips = RUN_PRODUCTION_RELAYS ? 10 : 4
     for (let i = 1; i <= roundTrips; i++) {
+      // Typing rumors only have second-level ordering in the interop path; keep
+      // each probe on a fresh Nostr second so the app doesn't classify it as a
+      // stale replay of the previous message.
+      await waitForNextCreatedAtSecond()
       const webToFlutter = `web->flutter soak #${i} ${Date.now()}`
       await composer.fill(`typing pre-send ${i}`)
       await bridge.command(
@@ -439,7 +484,7 @@ test('npub link interop (different keys) between web and flutter', async ({ brow
 
     await bridge.stop()
 
-    bridge = new FlutterInteropBridge(relayUrls, flutterNsec, flutterDataDir)
+    bridge = new FlutterInteropBridge(relayUrls, flutterNsec, flutterDataDir, true)
     await bridge.start()
     await bridge.command(
       'wait_for_connected_relays',

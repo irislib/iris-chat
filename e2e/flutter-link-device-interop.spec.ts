@@ -1,6 +1,6 @@
 import { test, expect, useTestRelay } from './fixtures'
 import type { BrowserContext, Page } from '@playwright/test'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
@@ -12,6 +12,10 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const FLUTTER_REPO = path.resolve(__dirname, '../../iris-chat-flutter')
 const RUN_FLUTTER_INTEROP = process.env.IRIS_FLUTTER_INTEROP === '1'
+const FLUTTER_MACOS_APP_BINARY = path.join(
+  FLUTTER_REPO,
+  'build/macos/Build/Products/Debug/iris chat.app/Contents/MacOS/iris chat'
+)
 
 test.describe.configure({ mode: 'serial' })
 
@@ -121,6 +125,13 @@ async function waitForLatestOwnerAppKeysDeviceCount(
   )
 }
 
+async function waitForNextCreatedAtSecond(): Promise<void> {
+  const currentSecond = Math.floor(Date.now() / 1000)
+  while (Math.floor(Date.now() / 1000) === currentSecond) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
 async function openChatFromList(page: Page, message: string): Promise<void> {
   const chatList = page.getByTestId('sidebar-chat-list')
   const listItemName = new RegExp(escapeRegExp(message))
@@ -214,10 +225,33 @@ async function getLinkInviteUrl(page: Page): Promise<string> {
 async function acceptLinkInvite(page: Page, inviteUrl: string): Promise<void> {
   await page.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'Link another device' }).click()
+  await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link invite').fill(inviteUrl)
   await expect(page.getByText('Device linked')).toBeVisible({ timeout: 20000 })
   await page.locator('button[aria-label="Close"]').click()
   await page.getByRole('button', { name: 'Back' }).click()
+}
+
+function reapFlutterInteropAppProcesses(): void {
+  if (process.platform !== 'darwin') {
+    return
+  }
+
+  const result = spawnSync('pgrep', ['-f', FLUTTER_MACOS_APP_BINARY], {
+    encoding: 'utf8',
+  })
+  const pids = result.stdout
+    .split('\n')
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
+
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // best effort
+    }
+  }
 }
 
 type BridgeEvent =
@@ -236,13 +270,15 @@ class FlutterInteropBridge {
 
   constructor(
     private readonly relayUrl: string,
-    private readonly privateKeyNsec: string
+    private readonly privateKeyNsec: string,
+    private readonly registerDeviceOnLogin = false
   ) {}
 
   async start(): Promise<{ pubkeyHex: string }> {
     this.bridgeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iris-flutter-interop-'))
     this.commandsFile = path.join(this.bridgeDir, 'commands.jsonl')
     this.eventsFile = path.join(this.bridgeDir, 'events.jsonl')
+    reapFlutterInteropAppProcesses()
 
     this.child = spawn(
       'flutter',
@@ -254,6 +290,7 @@ class FlutterInteropBridge {
         `--dart-define=IRIS_INTEROP_RELAY_URL=${this.relayUrl}`,
         `--dart-define=IRIS_INTEROP_BRIDGE_DIR=${this.bridgeDir}`,
         `--dart-define=IRIS_INTEROP_PRIVATE_KEY_NSEC=${this.privateKeyNsec}`,
+        `--dart-define=IRIS_INTEROP_REGISTER_DEVICE=${this.registerDeviceOnLogin ? '1' : '0'}`,
       ],
       {
         cwd: FLUTTER_REPO,
@@ -288,10 +325,15 @@ class FlutterInteropBridge {
       }
     }
 
-    await this.waitForProcessExit(5000).catch(() => {
+    await this.waitForProcessExit(5000).catch(async () => {
       if (!this.child) return
       this.child.kill('SIGTERM')
+      await this.waitForProcessExit(2000).catch(() => {
+        if (!this.child || this.child.exitCode !== null) return
+        this.child.kill('SIGKILL')
+      })
     })
+    reapFlutterInteropAppProcesses()
 
     if (this.bridgeDir) {
       await fsp.rm(this.bridgeDir, { recursive: true, force: true }).catch(() => {})
@@ -594,7 +636,7 @@ test('link device interop: web new device -> flutter owner accept', async ({ bro
 
   const linkedPage = await linkedContext.newPage()
   const user2Page = await user2Context.newPage()
-  const bridge = new FlutterInteropBridge(testRelayUrl, ownerNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrl, ownerNsec, true)
 
   try {
     const ready = await bridge.start()
@@ -607,6 +649,7 @@ test('link device interop: web new device -> flutter owner accept', async ({ bro
     await openLinkThisDevice(linkedPage)
     const linkInviteUrl = await getLinkInviteUrl(linkedPage)
 
+    await waitForNextCreatedAtSecond()
     await bridge.command('accept_link_invite', { inviteUrl: linkInviteUrl }, 30000)
     await expect(linkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 30000 })
 
@@ -668,7 +711,7 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
   const linkedPage1 = await linkedContext1.newPage()
   const linkedPage2 = await linkedContext2.newPage()
   const user2Page = await user2Context.newPage()
-  const bridge = new FlutterInteropBridge(testRelayUrl, ownerNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrl, ownerNsec, true)
 
   try {
     const ready = await bridge.start()
@@ -680,6 +723,7 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
 
     await openLinkThisDevice(linkedPage1)
     const linkInviteUrl1 = await getLinkInviteUrl(linkedPage1)
+    await waitForNextCreatedAtSecond()
     await bridge.command('accept_link_invite', { inviteUrl: linkInviteUrl1 }, 30000)
     await expect(linkedPage1.getByRole('button', { name: 'New Chat' })).toBeVisible({
       timeout: 30000,
@@ -688,6 +732,7 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
 
     await openLinkThisDevice(linkedPage2)
     const linkInviteUrl2 = await getLinkInviteUrl(linkedPage2)
+    await waitForNextCreatedAtSecond()
     await bridge.command('accept_link_invite', { inviteUrl: linkInviteUrl2 }, 30000)
     await expect(linkedPage2.getByRole('button', { name: 'New Chat' })).toBeVisible({
       timeout: 30000,

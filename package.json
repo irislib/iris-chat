@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "2.6.2",
+  "version": "2.6.3",
   "type": "module",
   "packageManager": "pnpm@10.24.0",
   "scripts": {
@@ -53,13 +53,14 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "0.0.83",
+    "nostr-double-ratchet": "0.0.84",
     "nostr-tools": "^2.19.3",
     "qrcode": "^1.5.4"
   },
   "pnpm": {
     "overrides": {
-      "@isaacs/brace-expansion": "5.0.1"
+      "@isaacs/brace-expansion": "5.0.1",
+      "nostr-double-ratchet": "link:../nostr-double-ratchet/ts"
     }
   }
 }

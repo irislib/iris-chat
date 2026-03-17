@@ -1,8 +1,10 @@
 import { writable, get } from 'svelte/store'
 import {
   Invite,
+  type OnEventMeta,
   type Rumor,
   type SessionManager,
+  type UserRecord,
   REACTION_KIND,
   RECEIPT_KIND,
   CHAT_MESSAGE_KIND,
@@ -15,7 +17,12 @@ export type { Invite } from 'nostr-double-ratchet'
 import { getEventHash, nip19 } from 'nostr-tools'
 import { getPubkey, hasNip44Support, isNip07Login } from './identity'
 import { devices } from './devices'
-import { getSessionManager, waitForSessionManager, rotateDeviceInvite } from './privateChats'
+import {
+  ensureDeviceRegistered,
+  getSessionManager,
+  waitForSessionManager,
+  republishInvite,
+} from './privateChats'
 import {
   saveSession as saveSessionToDb,
   getAllSessions,
@@ -101,6 +108,136 @@ function triggerAutoOpen(chatSession: ChatSession): void {
   pendingAutoOpenChats.add(chatSession.id)
 }
 
+function mergeChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>()
+  for (const message of messages) {
+    const existing = byId.get(message.id)
+    if (!existing || existing.timestamp <= message.timestamp) {
+      byId.set(message.id, message)
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => a.timestamp - b.timestamp)
+}
+
+async function persistCanonicalizedChat(
+  previousId: string,
+  canonicalChat: ChatSession
+): Promise<void> {
+  try {
+    await saveSessionToStorage(canonicalChat)
+    await Promise.all(
+      canonicalChat.messages.map((message) =>
+        saveMessageToStorage(canonicalChat.id, message)
+      )
+    )
+    if (previousId !== canonicalChat.id) {
+      await Promise.allSettled([
+        deleteSessionFromDb(previousId),
+        deleteMessagesForSession(previousId),
+      ])
+    }
+  } catch (e) {
+    console.error('[chat] Failed to persist canonicalized chat:', e)
+  }
+}
+
+function canonicalizeManagerChatAlias(chatId: string, canonicalId: string): void {
+  if (!chatId || !canonicalId || chatId === canonicalId) {
+    return
+  }
+
+  const currentChats = get(chats)
+  const aliasChat = currentChats.get(chatId)
+  if (!aliasChat) {
+    return
+  }
+
+  const canonicalChat = currentChats.get(canonicalId)
+  const mergedChat: ChatSession = canonicalChat
+    ? {
+        ...canonicalChat,
+        recipientPubkey: canonicalId,
+        messages: mergeChatMessages([
+          ...canonicalChat.messages,
+          ...aliasChat.messages,
+        ]),
+        inviteId: canonicalChat.inviteId ?? aliasChat.inviteId,
+        inviteLabel: canonicalChat.inviteLabel ?? aliasChat.inviteLabel,
+      }
+    : {
+        ...aliasChat,
+        id: canonicalId,
+        recipientPubkey: canonicalId,
+        messages: mergeChatMessages(aliasChat.messages),
+      }
+
+  chats.update((chatMap) => {
+    chatMap.delete(chatId)
+    chatMap.set(canonicalId, mergedChat)
+    return chatMap
+  })
+
+  if (pendingAutoOpenChats.delete(chatId)) {
+    pendingAutoOpenChats.add(canonicalId)
+  }
+  if (autoOpenedChats.delete(chatId)) {
+    autoOpenedChats.add(canonicalId)
+  }
+
+  const current = get(currentChat)
+  if (current?.id === chatId || current?.id === canonicalId) {
+    currentChat.set(mergedChat)
+  }
+
+  void persistCanonicalizedChat(chatId, mergedChat)
+}
+
+function canonicalizeKnownManagerChats(): void {
+  const currentChats = Array.from(get(chats).keys())
+  for (const chatId of currentChats) {
+    const canonicalId = resolveSessionPubkeyToOwner(chatId)
+    if (canonicalId !== chatId) {
+      canonicalizeManagerChatAlias(chatId, canonicalId)
+    }
+  }
+}
+
+function syncCurrentChatIfMatching(updatedSession: ChatSession): void {
+  const current = get(currentChat)
+  if (current?.id === updatedSession.id) {
+    currentChat.set(updatedSession)
+  }
+}
+
+function updateChatSession(
+  sessionId: string,
+  updater: (chatSession: ChatSession) => ChatSession | null
+): ChatSession | null {
+  let updatedSession: ChatSession | null = null
+
+  chats.update((chatMap) => {
+    const chatSession = chatMap.get(sessionId)
+    if (!chatSession) {
+      return chatMap
+    }
+
+    const nextSession = updater(chatSession)
+    if (!nextSession) {
+      return chatMap
+    }
+
+    chatMap.set(sessionId, nextSession)
+    updatedSession = nextSession
+    return chatMap
+  })
+
+  if (updatedSession) {
+    syncCurrentChatIfMatching(updatedSession)
+  }
+
+  return updatedSession
+}
+
 export function initSessionManagerEvents(): void {
   if (sessionManagerSubscribed) return
 
@@ -136,11 +273,18 @@ function syncManagerChats(manager: SessionManager): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
+  canonicalizeKnownManagerChats()
+
   const policyCtx = getMessageRequestPolicyContext()
 
   const currentChats = get(chats)
   for (const [pubkey, record] of manager.getUserRecords()) {
     if (pubkey === myPubkey) continue
+    if (needsManagerUserSetup(record)) {
+      void manager.setupUser(pubkey).catch((e) =>
+        console.error('[chat] Failed to refresh manager user setup:', e)
+      )
+    }
     if (currentChats.has(pubkey)) continue
     if (policyCtx.rejectedChats?.[pubkey]) continue
     if (
@@ -160,6 +304,19 @@ function syncManagerChats(manager: SessionManager): void {
       console.error('[chat] Failed to sync manager chat:', e)
     )
   }
+}
+
+export function needsManagerUserSetup(record: UserRecord): boolean {
+  const knownDeviceCount = record.devices.size
+  const appKeysDeviceCount = record.appKeys?.getAllDevices().length ?? 0
+
+  if (appKeysDeviceCount > knownDeviceCount) {
+    return true
+  }
+
+  return Array.from(record.devices.values()).some(
+    (device) => !device.activeSession && device.inactiveSessions.length === 0 && device.state !== 'revoked'
+  )
 }
 
 // Create a new invite (chat link) that can be shared
@@ -355,7 +512,6 @@ let inviteAcceptedCallback: ((session: ChatSession) => void) | null = null
 
 // Set callback for invite acceptance (called from App.svelte)
 export function setInviteAcceptedCallback(callback: (session: ChatSession) => void): void {
-  console.log('[chat] setInviteAcceptedCallback called')
   inviteAcceptedCallback = callback
   if (pendingAutoOpenChats.size === 0) return
   const chatMap = get(chats)
@@ -372,6 +528,10 @@ export function setInviteAcceptedCallback(callback: (session: ChatSession) => vo
 export async function createAndSaveInvite(label?: string): Promise<ActiveInvite> {
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
+
+  // Sharing a pubkey invite before this device is published in AppKeys leaves
+  // peers guessing which device should receive the first inbound message.
+  await ensureDeviceRegistered()
 
   const invite = createInvite()
   const id = crypto.randomUUID()
@@ -448,15 +608,12 @@ export async function updateInviteLabel(id: string, label: string): Promise<void
 
 // Load all invites from storage and start monitoring
 export async function loadAndMonitorInvites(): Promise<void> {
-  console.log('[chat] loadAndMonitorInvites called, initialized:', invitesInitialized)
   if (invitesInitialized) {
-    console.log('[chat] Already initialized, skipping')
     return
   }
 
   try {
     const storedInvites = await getAllInvites()
-    console.log('[chat] Found', storedInvites.length, 'stored invites to monitor')
 
     for (const stored of storedInvites) {
       try {
@@ -482,7 +639,6 @@ export async function loadAndMonitorInvites(): Promise<void> {
       }
     }
 
-    console.log('[chat] All invites loaded and monitored')
     invitesInitialized = true
   } catch (e) {
     console.error('Failed to load invites from storage:', e)
@@ -555,6 +711,71 @@ function resolveManagerSender(fromPubkey: string, myPubkey: string | null): stri
   return isOwnDevice ? myPubkey : fromPubkey
 }
 
+type SessionStateLike = {
+  theirCurrentNostrPublicKey?: string
+  theirNextNostrPublicKey?: string
+}
+
+type SessionLike = {
+  state?: SessionStateLike | null
+}
+
+type SessionDeviceLike = {
+  activeSession?: SessionLike | null
+  inactiveSessions?: Array<SessionLike | null>
+}
+
+type SessionUserRecordLike = {
+  devices?: Map<string, SessionDeviceLike>
+  appKeys?: {
+    getAllDevices?: () => Array<{
+      identityPubkey?: string | null
+    }>
+  } | null
+}
+
+function resolveSessionPubkeyToOwner(pubkey: string): string {
+  if (!pubkey) return pubkey
+
+  const manager = getSessionManager()
+  const userRecords = manager?.getUserRecords() as Map<string, SessionUserRecordLike> | undefined
+  if (!userRecords) return pubkey
+
+  for (const [recordPubkey, userRecord] of userRecords.entries()) {
+    if (recordPubkey === pubkey) {
+      return recordPubkey
+    }
+
+    const devices = userRecord?.devices
+    if (devices?.has(pubkey)) {
+      return recordPubkey
+    }
+
+    const appKeyDevices = userRecord?.appKeys?.getAllDevices?.() ?? []
+    if (appKeyDevices.some((device) => device.identityPubkey === pubkey)) {
+      return recordPubkey
+    }
+
+    if (!devices) continue
+
+    for (const device of devices.values()) {
+      const sessions = [device.activeSession, ...(device.inactiveSessions ?? [])]
+      for (const session of sessions) {
+        const state = session?.state
+        if (!state) continue
+        if (
+          state.theirCurrentNostrPublicKey === pubkey ||
+          state.theirNextNostrPublicKey === pubkey
+        ) {
+          return recordPubkey
+        }
+      }
+    }
+  }
+
+  return pubkey
+}
+
 function isKnownOwnDevice(pubkey: string): boolean {
   const deviceState = get(devices)
   return (
@@ -567,26 +788,30 @@ function resolveManagerIsFromSelf(
   rumor: Rumor,
   chatId: string,
   effectiveFromPubkey: string,
-  myPubkey: string
+  myPubkey: string,
+  meta?: OnEventMeta
 ): boolean {
+  if (meta?.isSelf) return true
   if (effectiveFromPubkey === myPubkey) return true
   if (rumor.pubkey === myPubkey) return true
   if (isKnownOwnDevice(rumor.pubkey)) return true
 
   const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')?.[1]
+  const resolvedPTag = pTag ? resolveSessionPubkeyToOwner(pTag) : undefined
   // Sender copies from another client can be surfaced via the peer user record.
-  return !!pTag && pTag !== myPubkey && pTag === chatId
+  return !!resolvedPTag && resolvedPTag !== myPubkey && resolvedPTag === chatId
 }
 
 export async function handleManagerEvent(
   rumor: Rumor,
   fromPubkey: string,
-  meta?: { fromDeviceId?: string }
+  meta?: OnEventMeta
 ): Promise<void> {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
   const effectiveFromPubkey = resolveManagerSender(fromPubkey, myPubkey)
+  const resolvedFromPubkey = resolveSessionPubkeyToOwner(effectiveFromPubkey)
 
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
@@ -594,18 +819,39 @@ export async function handleManagerEvent(
     return
   }
 
-  let chatId = effectiveFromPubkey
+  let chatId = resolvedFromPubkey
 
   if (effectiveFromPubkey === myPubkey) {
     const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')
-    if (pTag && pTag[1] && pTag[1] !== myPubkey) {
-      chatId = pTag[1]
+    const resolvedPTag = pTag?.[1] ? resolveSessionPubkeyToOwner(pTag[1]) : undefined
+    if (resolvedPTag && resolvedPTag !== myPubkey) {
+      chatId = resolvedPTag
     } else {
       // Self-message (p-tag is us or missing): route to self chat
       chatId = myPubkey
     }
   }
-  const isFromSelf = resolveManagerIsFromSelf(rumor, chatId, effectiveFromPubkey, myPubkey)
+
+  canonicalizeKnownManagerChats()
+  const canonicalFromPubkey = resolveSessionPubkeyToOwner(fromPubkey)
+  if (canonicalFromPubkey !== fromPubkey) {
+    canonicalizeManagerChatAlias(fromPubkey, canonicalFromPubkey)
+  }
+  if (effectiveFromPubkey !== chatId) {
+    const canonicalEffectiveFromPubkey = resolveSessionPubkeyToOwner(effectiveFromPubkey)
+    canonicalizeManagerChatAlias(
+      effectiveFromPubkey,
+      canonicalEffectiveFromPubkey === myPubkey ? chatId : canonicalEffectiveFromPubkey
+    )
+  }
+
+  const isFromSelf = resolveManagerIsFromSelf(
+    rumor,
+    chatId,
+    effectiveFromPubkey,
+    myPubkey,
+    meta
+  )
 
   const policyCtx = getMessageRequestPolicyContext()
   const existing = get(chats).get(chatId)
@@ -628,10 +874,10 @@ export async function handleManagerEvent(
     if (isChatAccepted(chatSession, policyCtx)) {
       triggerAutoOpen(chatSession)
     }
-    // Rotate our published device invite after the first successful inbound session
-    // so subsequent new chats can establish their own sessions reliably.
-    void rotateDeviceInvite().catch((e) =>
-      console.warn('[chat] rotateDeviceInvite failed:', e)
+    // Republish our current device invite after the first successful inbound session
+    // so it is present on relays without invalidating the SessionManager's invite-response listener.
+    void republishInvite().catch((e) =>
+      console.warn('[chat] republishInvite failed:', e)
     )
   }
   handleIncomingRumor(chatSession, rumor, isFromSelf)
@@ -647,10 +893,19 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
       !!myPubkey &&
       invite.pubkey === myPubkey
     const sessionManagerReadyPromise = requiresSessionManagerReady
-      ? waitForSessionManager().catch((e) => {
-          console.warn('[chat] waitForSessionManager failed during acceptInvite:', e)
-          throw e
-        })
+      ? waitForSessionManager()
+          .then(async (ready) => {
+            try {
+              await ready.setupUser(myPubkey)
+            } catch (e) {
+              console.warn('[chat] Failed to bootstrap self user during acceptInvite:', e)
+            }
+            return ready
+          })
+          .catch((e) => {
+            console.warn('[chat] waitForSessionManager failed during acceptInvite:', e)
+            throw e
+          })
       : null
     const chatSession = await ensureManagerChat(invite.pubkey)
     // User-initiated join: treat as accepted even before sending a message.
@@ -793,22 +1048,17 @@ function handleIncomingRumor(
   }
 
   // Check if message already exists
-  if (currentSession.messages.some((m) => m.id === message.id)) return
+  const updatedSession = updateChatSession(sessionId, (latestSession) => {
+    if (latestSession.messages.some((m) => m.id === message.id)) {
+      return null
+    }
 
-  const updatedMessages = [...currentSession.messages, message].sort((a, b) => a.timestamp - b.timestamp)
-  const updatedSession = { ...currentSession, messages: updatedMessages }
-
-  // Update store
-  chats.update((c) => {
-    c.set(sessionId, updatedSession)
-    return c
+    const updatedMessages = [...latestSession.messages, message].sort(
+      (a, b) => a.timestamp - b.timestamp
+    )
+    return { ...latestSession, messages: updatedMessages }
   })
-
-  // Update current chat if it's this one
-  const current = get(currentChat)
-  if (current?.id === sessionId) {
-    currentChat.set(updatedSession)
-  }
+  if (!updatedSession) return
 
   // Save message and updated session state to IndexedDB
   saveMessageToStorage(sessionId, message)
@@ -825,86 +1075,70 @@ function handleIncomingRumor(
 
 // Handle incoming reaction
 function handleIncomingReaction(chatSession: ChatSession, reaction: { messageId: string, emoji: string }, fromPubkey: string) {
-  const messageIndex = chatSession.messages.findIndex(m => m.id === reaction.messageId)
-  if (messageIndex === -1) return
+  let updatedMessage: ChatMessage | null = null
+  const updatedSession = updateChatSession(chatSession.id, (latestSession) => {
+    const messageIndex = latestSession.messages.findIndex((m) => m.id === reaction.messageId)
+    if (messageIndex === -1) return null
 
-  const message = chatSession.messages[messageIndex]
+    const message = latestSession.messages[messageIndex]
 
-  // Create updated reactions - first remove user from any existing reactions
-  const reactions: Record<string, string[]> = {}
-  for (const [emoji, users] of Object.entries(message.reactions || {})) {
-    const filtered = users.filter(u => u !== fromPubkey)
-    if (filtered.length > 0) {
-      reactions[emoji] = filtered
+    // Create updated reactions - first remove user from any existing reactions
+    const reactions: Record<string, string[]> = {}
+    for (const [emoji, users] of Object.entries(message.reactions || {})) {
+      const filtered = users.filter((u) => u !== fromPubkey)
+      if (filtered.length > 0) {
+        reactions[emoji] = filtered
+      }
     }
-  }
 
-  // Add user to new reaction
-  if (!reactions[reaction.emoji]) {
-    reactions[reaction.emoji] = []
-  }
-  reactions[reaction.emoji] = [...reactions[reaction.emoji], fromPubkey]
+    // Add user to new reaction
+    if (!reactions[reaction.emoji]) {
+      reactions[reaction.emoji] = []
+    }
+    reactions[reaction.emoji] = [...reactions[reaction.emoji], fromPubkey]
 
-  // Create new message with reactions
-  const updatedMessage = { ...message, reactions }
-
-  // Create new messages array for reactivity
-  const updatedMessages = [...chatSession.messages]
-  updatedMessages[messageIndex] = updatedMessage
-  chatSession.messages = updatedMessages
-
-  // Update store
-  chats.update(c => {
-    c.set(chatSession.id, { ...chatSession, messages: updatedMessages })
-    return c
+    updatedMessage = { ...message, reactions }
+    const updatedMessages = [...latestSession.messages]
+    updatedMessages[messageIndex] = updatedMessage
+    return { ...latestSession, messages: updatedMessages }
   })
-
-  // Update current chat if it's this one
-  const current = get(currentChat)
-  if (current?.id === chatSession.id) {
-    currentChat.set({ ...chatSession, messages: updatedMessages })
-  }
+  if (!updatedSession || !updatedMessage) return
 
   // Save updated message to IndexedDB
   saveMessageToStorage(chatSession.id, updatedMessage)
-  saveSessionToStorage(chatSession)
+  saveSessionToStorage(updatedSession)
 }
 
 // Handle incoming receipt:
 // - peer receipts advance status on our outgoing messages
 // - self/own-device receipts advance status on incoming messages (cross-session unread sync)
 function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload, isFromSelf: boolean) {
-  let changed = false
-  const updatedMessages = [...chatSession.messages]
+  const changedMessageIds: string[] = []
+  const updatedSession = updateChatSession(chatSession.id, (latestSession) => {
+    let changed = false
+    const updatedMessages = [...latestSession.messages]
 
-  for (const messageId of receipt.messageIds) {
-    const index = updatedMessages.findIndex(
-      (m) => m.id === messageId && (isFromSelf ? !m.isMine : m.isMine)
-    )
-    if (index === -1) continue
+    for (const messageId of receipt.messageIds) {
+      const index = updatedMessages.findIndex(
+        (m) => m.id === messageId && (isFromSelf ? !m.isMine : m.isMine)
+      )
+      if (index === -1) continue
 
-    const message = updatedMessages[index]
-    if (!shouldAdvanceStatus(message.status, receipt.type)) continue
+      const message = updatedMessages[index]
+      if (!shouldAdvanceStatus(message.status, receipt.type)) continue
 
-    updatedMessages[index] = { ...message, status: receipt.type }
-    changed = true
+      updatedMessages[index] = { ...message, status: receipt.type }
+      changedMessageIds.push(messageId)
+      changed = true
+    }
 
-    // Persist to IndexedDB
-    updateMessageStatusInDb(messageId, receipt.type)
-  }
-
-  if (!changed) return
-
-  // Update store
-  chats.update(c => {
-    c.set(chatSession.id, { ...chatSession, messages: updatedMessages })
-    return c
+    if (!changed) return null
+    return { ...latestSession, messages: updatedMessages }
   })
+  if (!updatedSession) return
 
-  // Update current chat if it's this one
-  const current = get(currentChat)
-  if (current?.id === chatSession.id) {
-    currentChat.set({ ...chatSession, messages: updatedMessages })
+  for (const messageId of changedMessageIds) {
+    updateMessageStatusInDb(messageId, receipt.type)
   }
 }
 
@@ -938,18 +1172,20 @@ function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Ru
   return rumor
 }
 
+async function waitForSendReadySessionManager(): Promise<SessionManager> {
+  // Multi-device fanout is only reliable once the current owner-side device is
+  // represented in AppKeys. A constructed SessionManager alone is not enough.
+  await ensureDeviceRegistered()
+  return waitForSessionManager()
+}
+
 // Send a receipt via the double ratchet session
 function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
   if (messageIds.length === 0) return
 
-  const manager = getSessionManager()
-  if (manager) {
-    manager.sendReceipt(chatSession.recipientPubkey, type, messageIds).catch(() => {})
-  } else {
-    waitForSessionManager()
-      .then((ready) => ready.sendReceipt(chatSession.recipientPubkey, type, messageIds))
-      .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
-  }
+  void waitForSendReadySessionManager()
+    .then((ready) => ready.sendReceipt(chatSession.recipientPubkey, type, messageIds))
+    .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
 }
 
 // Send seen receipts for incoming messages - called from ChatView
@@ -966,25 +1202,19 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
   })
   if (toAck.length === 0) return
 
-  // Update status on messages
-  const updatedMessages = currentSession.messages.map(m => {
-    if (toAck.includes(m.id)) {
-      const updated = { ...m, status: 'seen' as const }
-      updateMessageStatusInDb(m.id, 'seen')
-      return updated
-    }
-    return m
-  })
+  const updatedSession = updateChatSession(chatSession.id, (latestSession) => ({
+    ...latestSession,
+    messages: latestSession.messages.map((m) => {
+      if (toAck.includes(m.id)) {
+        return { ...m, status: 'seen' as const }
+      }
+      return m
+    }),
+  }))
+  if (!updatedSession) return
 
-  const updatedSession = { ...currentSession, messages: updatedMessages }
-  chats.update(c => {
-    c.set(chatSession.id, updatedSession)
-    return c
-  })
-
-  const current = get(currentChat)
-  if (current?.id === chatSession.id) {
-    currentChat.set(updatedSession)
+  for (const messageId of toAck) {
+    updateMessageStatusInDb(messageId, 'seen')
   }
 
   const policyCtx = getMessageRequestPolicyContext()
@@ -1007,10 +1237,10 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     tags,
   })
   messageId = rumor.id
-  // Always await SessionManager init. It is possible to have a non-null manager while
-  // `init()` is still in progress (e.g. immediately after login), and calling sendEvent()
-  // too early can fail and silently drop the message.
-  void waitForSessionManager()
+  // Always await device registration + SessionManager init. It is possible to have a
+  // non-null manager while init is still in progress, and an unregistered owner-side
+  // device cannot be trusted by linked recipients for multidevice fanout.
+  void waitForSendReadySessionManager()
     .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
     .catch((e) => console.error('[chat] Failed to send via SessionManager:', e))
 
@@ -1034,19 +1264,11 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     ...(replyTo && { replyTo }),
   }
 
-  const updatedMessages = [...currentSession.messages, message]
-  const updatedSession = { ...currentSession, messages: updatedMessages }
-
-  // Update stores synchronously
-  chats.update(c => {
-    c.set(chatSession.id, updatedSession)
-    return c
-  })
-
-  const current = get(currentChat)
-  if (current?.id === chatSession.id) {
-    currentChat.set(updatedSession)
-  }
+  const updatedSession = updateChatSession(chatSession.id, (latestSession) => ({
+    ...latestSession,
+    messages: [...latestSession.messages, message],
+  }))
+  if (!updatedSession) return
 
   // Save and publish in background - don't block UI
   saveMessageToStorage(chatSession.id, message)
@@ -1058,14 +1280,14 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
 
 // Send a reaction to a message
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
-  const manager = getSessionManager()
-  if (!manager) return
   const rumor = buildManagerRumor(chatSession.recipientPubkey, {
     content: emoji,
     kind: REACTION_KIND,
     tags: [['e', messageId]],
   })
-  manager.sendEvent(chatSession.recipientPubkey, rumor).catch(() => {})
+  void waitForSendReadySessionManager()
+    .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
+    .catch((e) => console.error('[chat] Failed to send reaction via SessionManager:', e))
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1103,17 +1325,18 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
     const updatedMessages = [...currentSession.messages]
     updatedMessages[messageIndex] = updatedMessage
 
-    // Update stores
-    const updatedSession = { ...currentSession, messages: updatedMessages }
-    chats.update(c => {
-      c.set(chatSession.id, updatedSession)
-      return c
-    })
+    const updatedSession = updateChatSession(chatSession.id, (latestSession) => {
+      const latestMessageIndex = latestSession.messages.findIndex((m) => m.id === messageId)
+      if (latestMessageIndex === -1 || !updatedMessage) {
+        return null
+      }
 
-    const current = get(currentChat)
-    if (current?.id === chatSession.id) {
-      currentChat.set(updatedSession)
-    }
+      const latestMessages = [...latestSession.messages]
+      latestMessages[latestMessageIndex] = updatedMessage
+      return { ...latestSession, messages: latestMessages }
+    })
+    if (!updatedSession) return
+
     // Save updated message to IndexedDB
     await saveMessageToStorage(chatSession.id, updatedMessage)
     await saveSessionToStorage(updatedSession)
@@ -1129,20 +1352,11 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
   const currentSession = currentChats.get(sessionId)
   if (!currentSession) return
 
-  // Filter out the message
-  const updatedMessages = currentSession.messages.filter(m => m.id !== messageId)
-  const updatedSession = { ...currentSession, messages: updatedMessages }
-
-  // Update stores
-  chats.update(c => {
-    c.set(sessionId, updatedSession)
-    return c
-  })
-
-  const current = get(currentChat)
-  if (current?.id === sessionId) {
-    currentChat.set(updatedSession)
-  }
+  const updatedSession = updateChatSession(sessionId, (latestSession) => ({
+    ...latestSession,
+    messages: latestSession.messages.filter((m) => m.id !== messageId),
+  }))
+  if (!updatedSession) return
 
   // Delete from IndexedDB
   await deleteMessageFromDb(messageId)
@@ -1266,6 +1480,7 @@ export async function loadChatsFromStorage(): Promise<void> {
       }
     }
 
+    canonicalizeKnownManagerChats()
     isInitialized = true
   } catch (e) {
     console.error('Failed to load chats from storage:', e)
@@ -1280,14 +1495,9 @@ export function sendTypingEvent(chatSession: ChatSession): void {
   const policyCtx = getMessageRequestPolicyContext()
   if (!isChatAccepted(chatSession, policyCtx)) return
 
-  const manager = getSessionManager()
-  if (manager) {
-    manager.sendTyping(chatSession.recipientPubkey).catch(() => {})
-  } else {
-    waitForSessionManager()
-      .then((ready) => ready.sendTyping(chatSession.recipientPubkey))
-      .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
-  }
+  void waitForSendReadySessionManager()
+    .then((ready) => ready.sendTyping(chatSession.recipientPubkey))
+    .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
 }
 
 // Clear all chat data (for logout)

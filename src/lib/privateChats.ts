@@ -1,5 +1,5 @@
 import { get } from 'svelte/store'
-import { NDKEvent, type NDKFilter } from '@nostr-dev-kit/ndk'
+import { NDKEvent, NDKSubscriptionCacheUsage, type NDKFilter } from '@nostr-dev-kit/ndk'
 import {
   AppKeysManager,
   DelegateManager,
@@ -78,7 +78,12 @@ const resolveBaseAppKeys = async (
 
 const createSubscribe = (ndkInstance: ReturnType<typeof getNDK>): NostrSubscribe => {
   return (filter, onEvent) => {
-    const subscription = ndkInstance.subscribe(filter, { closeOnEose: false })
+    const relayUrls = ndkInstance.pool.connectedRelays().map((relay) => relay.url)
+    const subscription = ndkInstance.subscribe(filter, {
+      closeOnEose: false,
+      cacheUsage: NDKSubscriptionCacheUsage.PARALLEL,
+      ...(relayUrls.length > 0 ? { relayUrls } : {}),
+    })
     subscription.on('event', (event: NDKEvent) => {
       onEvent(event.rawEvent() as Parameters<typeof onEvent>[0])
     })
@@ -296,8 +301,11 @@ export const createLinkInvite = async (): Promise<Invite> => {
   if (!delegateManager) {
     throw new Error('DelegateManager not initialized')
   }
-  const devicePubkey = delegateManager.getIdentityPublicKey()
-  const invite = Invite.createNew(devicePubkey)
+  const baseInvite = delegateManager.getInvite()
+  if (!baseInvite) {
+    throw new Error('DelegateManager invite not initialized')
+  }
+  const invite = Invite.deserialize(baseInvite.serialize())
   ;(invite as Invite & { purpose?: string }).purpose = 'link'
   return invite
 }
@@ -449,11 +457,16 @@ export const startAppKeysSubscription = (ownerPubkey: string): void => {
     try {
       const eventTime = event.created_at ?? 0
       const { lastEventTimestamp } = get(devices)
-      if (eventTime <= lastEventTimestamp) return
+      if (eventTime < lastEventTimestamp) return
 
       const incomingAppKeys = AppKeys.fromEvent(event.rawEvent() as never)
       if (appKeysManager) {
-        await appKeysManager.setAppKeys(incomingAppKeys)
+        const currentAppKeys = appKeysManager.getAppKeys()
+        const nextAppKeys =
+          eventTime === lastEventTimestamp && currentAppKeys
+            ? currentAppKeys.merge(incomingAppKeys)
+            : incomingAppKeys
+        await appKeysManager.setAppKeys(nextAppKeys)
         devices.setHasLocalAppKeys(appKeysManager.getOwnDevices().length > 0)
         devices.setRegisteredDevices(appKeysManager.getOwnDevices(), eventTime)
       }

@@ -91,7 +91,8 @@ vi.mock('./receipts', () => ({
   parseReceipt: vi.fn(() => null),
 }))
 
-import { acceptInvite, parseInviteFromUrl, chats, type ChatSession } from './chat'
+import { acceptInvite, createAndSaveInvite, parseInviteFromUrl, chats, type ChatSession } from './chat'
+import { saveInvite } from './storage'
 
 beforeEach(() => {
   chats.set(new Map())
@@ -99,7 +100,7 @@ beforeEach(() => {
   mocks.ensureDeviceRegistered.mockResolvedValue(undefined)
   mocks.getSessionManager.mockClear()
   mocks.waitForSessionManager.mockClear()
-  mocks.setSessionManager(null)
+  mocks.setSessionManager({ setupUser: vi.fn().mockResolvedValue(undefined) })
 })
 
 function defer<T>() {
@@ -113,6 +114,13 @@ function defer<T>() {
 }
 
 describe('Invite Parsing / Acceptance', () => {
+  it('createAndSaveInvite registers the current device before saving a pubkey invite', async () => {
+    await createAndSaveInvite('Test invite')
+
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    expect(saveInvite).toHaveBeenCalledTimes(1)
+  })
+
   it('parses #/npub... style invite URLs', () => {
     const pubkey = 'b'.repeat(64)
     const npub = nip19.npubEncode(pubkey)
@@ -155,7 +163,10 @@ describe('Invite Parsing / Acceptance', () => {
   })
 
   it('acceptInvite(pubkey) should wait for SessionManager readiness before opening self chat', async () => {
-    const sessionManagerReady = defer<void>()
+    const setupUser = vi.fn().mockResolvedValue(undefined)
+    const sessionManager = { setupUser }
+    const sessionManagerReady = defer<typeof sessionManager>()
+    mocks.setSessionManager(sessionManager)
     mocks.waitForSessionManager.mockReturnValue(sessionManagerReady.promise)
 
     const invite = { type: 'pubkey', pubkey: MY_PUBKEY } as const
@@ -172,11 +183,12 @@ describe('Invite Parsing / Acceptance', () => {
     expect(mocks.ensureDeviceRegistered).not.toHaveBeenCalled()
     expect(mocks.waitForSessionManager).toHaveBeenCalledTimes(1)
 
-    sessionManagerReady.resolve()
+    sessionManagerReady.resolve(sessionManager)
 
     const session = await acceptancePromise
     expect(session.id).toBe(MY_PUBKEY)
     expect(get(chats).has(MY_PUBKEY)).toBe(true)
+    expect(setupUser).toHaveBeenCalledWith(MY_PUBKEY)
   })
 
   it('acceptInvite(legacy) should use SessionManager.acceptInvite and open manager chat', async () => {

@@ -61,6 +61,13 @@ async function registerDevice(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Back' }).click()
 }
 
+async function waitForNextCreatedAtSecond(): Promise<void> {
+  const currentSecond = Math.floor(Date.now() / 1000)
+  while (Math.floor(Date.now() / 1000) === currentSecond) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -90,6 +97,47 @@ async function openChatFromList(page: import('@playwright/test').Page, message: 
   }
 
   throw new Error(`Could not find chat list item for message preview: ${message}`)
+}
+
+async function waitForIncomingRequest(page: import('@playwright/test').Page, message: string): Promise<void> {
+  const messageBubble = page.locator('.max-w-\\[85\\%\\]').filter({ hasText: message }).first()
+  const requestHeader = page.getByRole('heading', { name: 'Message request' })
+  const chatList = page.getByTestId('sidebar-chat-list')
+  const requestsTab = page.getByTestId('sidebar-tab-requests')
+  const deadline = Date.now() + 45_000
+
+  while (Date.now() < deadline) {
+    if (await messageBubble.isVisible().catch(() => false)) {
+      return
+    }
+
+    await requestsTab.click().catch(() => {})
+
+    if (
+      (await requestHeader.isVisible().catch(() => false)) &&
+      (await messageBubble.isVisible().catch(() => false))
+    ) {
+      return
+    }
+
+    const requestItemByText = chatList.locator('button').filter({ hasText: message }).first()
+    if (await requestItemByText.isVisible().catch(() => false)) {
+      await requestItemByText.click()
+      await expect(messageBubble).toBeVisible({ timeout: 15000 })
+      return
+    }
+
+    const requestItem = chatList.locator('button').first()
+    if (await requestItem.isVisible().catch(() => false)) {
+      await requestItem.click()
+      await expect(messageBubble).toBeVisible({ timeout: 15000 })
+      return
+    }
+
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`Timed out waiting for incoming request with message: ${message}`)
 }
 
 async function getInviteUrl(page: import('@playwright/test').Page): Promise<string> {
@@ -128,6 +176,7 @@ async function openLinkThisDevice(page: import('@playwright/test').Page): Promis
 async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl: string): Promise<void> {
   await page.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'Link another device' }).click()
+  await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link invite').fill(inviteUrl)
   await expect(page.getByText('Device linked')).toBeVisible({ timeout: 20000 })
   await page.locator('button[aria-label="Close"]').click()
@@ -135,6 +184,8 @@ async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl
 }
 
 test('syncs outgoing messages to another device', async ({ browser, testRelayUrl }) => {
+  test.slow()
+
   const ownerPrivkey = generateSecretKey()
   const ownerPrivkeyHex = toHex(ownerPrivkey)
 
@@ -189,10 +240,7 @@ test('syncs outgoing messages to another device', async ({ browser, testRelayUrl
     ).toBeVisible({ timeout: 20000 })
 
     // Sanity: user2 should receive the message too.
-    await openChatFromList(user2Page, message)
-    await expect(
-      user2Page.locator('.max-w-\\[85\\%\\]').filter({ hasText: message }).first()
-    ).toBeVisible({ timeout: 20000 })
+    await waitForIncomingRequest(user2Page, message)
   } finally {
     await contextOwner.close()
     await contextLinked.close()

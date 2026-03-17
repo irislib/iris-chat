@@ -38,7 +38,7 @@ export const devices = {
   },
   setRegisteredDevices: (devicesList: DeviceEntry[], timestamp?: number) => {
     state.update((s) => {
-      if (timestamp !== undefined && timestamp <= s.lastEventTimestamp) {
+      if (timestamp !== undefined && timestamp < s.lastEventTimestamp) {
         return s
       }
       const isCurrentDeviceRegistered = s.identityPubkey
