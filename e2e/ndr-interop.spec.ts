@@ -920,7 +920,7 @@ test('iris-chat group <-> ndr interop (web creates group)', async ({
   }
 })
 
-test('iris-chat group interop (ndr creates group and web receives)', async ({
+test('iris-chat group <-> ndr interop (ndr creates group)', async ({
   page,
   silentRelay,
   testRelayUrls,
@@ -984,6 +984,34 @@ test('iris-chat group interop (ndr creates group and web receives)', async ({
     const ndrMessageTwo = `ndr->web created group 2 ${Date.now()}`
     await runNdrRetry(['group', 'send', groupId, ndrMessageTwo], dataDir, 30000, 500)
     await expectChatBubbleVisible(page, ndrMessageTwo)
+
+    const webMessageOne = `web->ndr created group 1 ${Date.now()}`
+    await page.getByPlaceholder('Type a message...').fill(webMessageOne)
+    await page.getByRole('button', { name: 'Send' }).click()
+
+    await waitForNdrJson(
+      listener,
+      (json) =>
+        json.event === 'group_message' &&
+        json.group_id === groupId &&
+        json.content === webMessageOne,
+      60000,
+      'ndr receiving first web message in ndr-created group'
+    )
+
+    const webMessageTwo = `web->ndr created group 2 ${Date.now()}`
+    await page.getByPlaceholder('Type a message...').fill(webMessageTwo)
+    await page.getByRole('button', { name: 'Send' }).click()
+
+    await waitForNdrJson(
+      listener,
+      (json) =>
+        json.event === 'group_message' &&
+        json.group_id === groupId &&
+        json.content === webMessageTwo,
+      60000,
+      'ndr receiving second web message in ndr-created group'
+    )
     await silentRelayConnectionsReady
   } finally {
     if (listener) {

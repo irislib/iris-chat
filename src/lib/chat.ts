@@ -22,6 +22,8 @@ import { devices } from './devices'
 import {
   ensureDeviceRegistered,
   getSessionManager,
+  waitForPeerSendReadySessionManager,
+  waitForSendReadySessionManager,
   waitForSessionManager,
   republishInvite,
 } from './privateChats'
@@ -1174,23 +1176,6 @@ function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Ru
 
   rumor.id = getEventHash(rumor)
   return rumor
-}
-
-async function waitForSendReadySessionManager(): Promise<SessionManager> {
-  // Multi-device fanout is only reliable once the current owner-side device is
-  // represented in AppKeys. A constructed SessionManager alone is not enough.
-  await ensureDeviceRegistered()
-  return waitForSessionManager()
-}
-
-async function waitForPeerSendReadySessionManager(
-  recipientPubkey: string
-): Promise<SessionManager> {
-  const manager = await waitForSendReadySessionManager()
-  await manager.setupUser(recipientPubkey).catch((e) => {
-    console.warn('[chat] Failed to prepare peer SessionManager user setup:', recipientPubkey, e)
-  })
-  return manager
 }
 
 // Send a receipt via the double ratchet session

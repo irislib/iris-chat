@@ -157,6 +157,25 @@ export const waitForSessionManager = async (): Promise<SessionManager> => {
   return currentRuntime.waitForSessionManager(ownerPubkey)
 }
 
+export const waitForSendReadySessionManager = async (): Promise<SessionManager> => {
+  await ensureDeviceRegistered()
+  return waitForSessionManager()
+}
+
+export const waitForPeerSendReadySessionManager = async (
+  recipientPubkey: string
+): Promise<SessionManager> => {
+  const manager = await waitForSendReadySessionManager()
+  await manager.setupUser(recipientPubkey).catch((e) => {
+    console.warn(
+      '[privateChats] Failed to prepare peer SessionManager user setup:',
+      recipientPubkey,
+      e
+    )
+  })
+  return manager
+}
+
 export const getSessionManager = (): SessionManager | null => {
   return runtime?.getSessionManager() || null
 }

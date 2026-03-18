@@ -20,11 +20,14 @@ import {
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
 import type { Rumor, NostrSubscribe, GroupDecryptedEvent } from 'nostr-double-ratchet'
-import type { NDKEvent } from '@nostr-dev-kit/ndk'
+import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getPubkey, ndk } from './identity'
 import { devices } from './devices'
 import { chats, type ChatMessage } from './chat'
-import { getSessionManager } from './privateChats'
+import {
+  getSessionManager,
+  waitForPeerSendReadySessionManager,
+} from './privateChats'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import { getEventHash, type Event as NostrEvent } from 'nostr-tools'
 import {
@@ -309,9 +312,6 @@ function fanOutToMembers(
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const manager = getSessionManager()
-  if (!manager) return
-
   const tags = [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]]
   const recipients = recipientOverride || group.members
   const includeSelf = options?.includeSelf === true
@@ -321,16 +321,70 @@ function fanOutToMembers(
 
     try {
       const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
-      manager.sendEvent(memberPubkey, rumor).catch((error) => {
-        console.warn(
-          '[groups] Failed to send to member:',
-          memberPubkey.slice(0, 8),
-          error,
-        )
-      })
+      void waitForPeerSendReadySessionManager(memberPubkey)
+        .then((ready) => ready.sendEvent(memberPubkey, rumor))
+        .catch((error) => {
+          console.warn(
+            '[groups] Failed to send to member:',
+            memberPubkey.slice(0, 8),
+            error,
+          )
+        })
     } catch (e) {
       console.error('[groups] Failed to send to member:', memberPubkey.slice(0, 8), e)
     }
+  }
+}
+
+async function publishGroupOuterEvent(event: NostrEvent): Promise<void> {
+  const ndkInstance = get(ndk)
+  const publishEvent = new NDKEvent(ndkInstance, event)
+  await publishEvent.publish()
+}
+
+async function fanOutToOwnDevices(
+  groupId: string,
+  partialEvent: { content: string, kind: number, tags: string[][] },
+): Promise<void> {
+  const myPubkey = getPubkey()
+  if (!myPubkey) return
+
+  const ready = await waitForPeerSendReadySessionManager(myPubkey)
+  const rumor = buildGroupRumor(myPubkey, {
+    ...partialEvent,
+    tags: [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]],
+  })
+  await ready.sendEvent(myPubkey, rumor)
+}
+
+async function sendNativeGroupEvent(
+  groupId: string,
+  partialEvent: { content: string, kind: number, tags: string[][] },
+  options?: { includeSelfPairwiseCopy?: boolean },
+): Promise<void> {
+  const runtime = ensureNativeGroupRuntime()
+  const groupData = get(groups).get(groupId)
+  if (!runtime || !groupData) {
+    fanOutToMembers(
+      groupId,
+      partialEvent,
+      undefined,
+      options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
+    )
+    return
+  }
+
+  await runtime.manager.upsertGroup(groupData)
+  await runtime.manager.sendEvent(groupId, partialEvent, {
+    sendPairwise: async (recipientOwnerPubkey, rumor) => {
+      const ready = await waitForPeerSendReadySessionManager(recipientOwnerPubkey)
+      await ready.sendEvent(recipientOwnerPubkey, rumor)
+    },
+    publishOuter: publishGroupOuterEvent,
+  })
+
+  if (options?.includeSelfPairwiseCopy) {
+    await fanOutToOwnDevices(groupId, partialEvent)
   }
 }
 
@@ -573,11 +627,17 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
 
   saveGroupMessageToStorage(groupId, message)
 
-  fanOutToMembers(groupId, {
-    content: text,
-    kind: CHAT_MESSAGE_KIND,
-    tags
-  }, undefined, { includeSelf: true })
+  void sendNativeGroupEvent(
+    groupId,
+    {
+      content: text,
+      kind: CHAT_MESSAGE_KIND,
+      tags,
+    },
+    { includeSelfPairwiseCopy: true },
+  ).catch((error) => {
+    console.error('[groups] Failed to send group message:', error)
+  })
 }
 
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {
@@ -608,18 +668,26 @@ export function sendGroupReaction(groupId: string, messageId: string, emoji: str
   const updatedMsg = msgs.find(m => m.id === messageId)
   if (updatedMsg) saveGroupMessageToStorage(groupId, updatedMsg)
 
-  fanOutToMembers(groupId, {
-    content: JSON.stringify({ type: 'reaction', messageId, emoji }),
-    kind: REACTION_KIND,
-    tags: [['e', messageId]]
+  void sendNativeGroupEvent(
+    groupId,
+    {
+      content: JSON.stringify({ type: 'reaction', messageId, emoji }),
+      kind: REACTION_KIND,
+      tags: [['e', messageId]],
+    },
+    { includeSelfPairwiseCopy: true },
+  ).catch((error) => {
+    console.error('[groups] Failed to send group reaction:', error)
   })
 }
 
 export function sendGroupTypingEvent(groupId: string): void {
-  fanOutToMembers(groupId, {
+  void sendNativeGroupEvent(groupId, {
     content: 'typing',
     kind: TYPING_KIND,
-    tags: []
+    tags: [],
+  }).catch((error) => {
+    console.error('[groups] Failed to send group typing event:', error)
   })
 }
 
