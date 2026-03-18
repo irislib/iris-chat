@@ -121,6 +121,22 @@ async function openChatFromList(page: Page, previewText: string): Promise<void> 
   throw new Error(`Could not find chat list item for message preview: ${previewText}`)
 }
 
+async function expectChatBubbleVisible(page: Page, text: string): Promise<void> {
+  const bubble = page
+    .locator('.max-w-\\[85\\%\\]')
+    .filter({ hasText: text })
+    .first()
+
+  try {
+    await expect(bubble).toBeVisible({ timeout: 10_000 })
+    return
+  } catch {
+    await openChatFromList(page, text).catch(() => {})
+  }
+
+  await expect(bubble).toBeVisible({ timeout: 30_000 })
+}
+
 async function openLinkThisDevice(page: Page): Promise<void> {
   await page.goto('/')
   const linkButton = page.getByRole('button', { name: /link this device/i })
@@ -172,15 +188,69 @@ async function waitForRelayEvent(
   predicate: (event: TestRelay['publishedEvents'][number]) => boolean,
   timeoutMs: number,
   description: string
-): Promise<void> {
+): Promise<TestRelay['publishedEvents'][number]> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
-    if (testRelay.publishedEvents.some(predicate)) {
-      return
+    const matched = testRelay.publishedEvents.find(predicate)
+    if (matched) {
+      return matched
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   throw new Error(`Timed out waiting for relay event: ${description}`)
+}
+
+async function waitForNewRelayEvent(
+  testRelay: TestRelay,
+  startIndex: number,
+  predicate: (event: TestRelay['publishedEvents'][number]) => boolean,
+  timeoutMs: number,
+  description: string
+): Promise<TestRelay['publishedEvents'][number]> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const matched = testRelay.publishedEvents.slice(startIndex).find(predicate)
+    if (matched) {
+      return matched
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`Timed out waiting for new relay event: ${description}`)
+}
+
+async function waitForNdrReceiveContent(
+  testRelay: TestRelay,
+  startIndex: number,
+  expectedContent: string,
+  dataDir: string,
+  timeoutMs: number
+): Promise<any> {
+  const deadline = Date.now() + timeoutMs
+  let nextIndex = startIndex
+
+  while (Date.now() < deadline) {
+    const newEvents = testRelay.publishedEvents.slice(nextIndex)
+    for (const event of newEvents) {
+      nextIndex += 1
+      if (event.kind !== 1060) {
+        continue
+      }
+
+      const received = await runNdrRetry(
+        ['receive', JSON.stringify(event)],
+        dataDir,
+        30000,
+        500
+      )
+      if (received.status === 'ok' && received.command === 'receive' && received.data?.content === expectedContent) {
+        return received
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  throw new Error(`Timed out waiting for ndr receive content: ${expectedContent}`)
 }
 
 async function waitForRelayConnectionCount(
@@ -431,24 +501,31 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
     )
     await page.getByPlaceholder('Paste invite link').fill(inviteUrl!)
     const createdSession = await createdSessionPromise
+    await stopNdrListen(listener.child)
+    listener = null
 
     const irisMessage = 'hello from iris'
-    const irisMessagePromise = waitForNdrJson(
-      listener,
-      (json) => json.event === 'message' && json.content === irisMessage,
-      30000,
-      'ndr receiving iris message'
-    )
+    const relayEventStart = testRelay.publishedEvents.length
     await page.getByPlaceholder('Type a message...').fill(irisMessage)
     await page.getByRole('button', { name: 'Send' }).click()
-    await waitForRelayEvent(
+    await waitForNewRelayEvent(
       testRelay,
+      relayEventStart,
       (event) => event.kind === 1060,
       10000,
       'iris sending a 1060 message event'
     )
 
-    await irisMessagePromise
+    const received = await waitForNdrReceiveContent(
+      testRelay,
+      relayEventStart,
+      irisMessage,
+      dataDir,
+      30000
+    )
+    expect(received.status).toBe('ok')
+    expect(received.command).toBe('receive')
+    expect(received.data?.content).toBe(irisMessage)
 
     const ndrMessage = 'hello from ndr'
     await runNdrRetry(['send', createdSession.chat_id, ndrMessage], dataDir, 30000, 500)
@@ -555,23 +632,8 @@ test('iris-chat linked devices <-> ndr interop', async ({
 
     const ndrWarmup = `ndr warmup ${Date.now()}`
     await runNdrRetry(['send', createdSession.chat_id, ndrWarmup], dataDir, 30000, 500)
-    const ownerWarmupBubble = ownerPage
-      .locator('.max-w-\\[85\\%\\]')
-      .filter({ hasText: ndrWarmup })
-      .first()
-    if (!(await ownerWarmupBubble.isVisible().catch(() => false))) {
-      await openChatFromList(ownerPage, ndrWarmup)
-    }
-    await expect(ownerWarmupBubble).toBeVisible({ timeout: 30000 })
-
-    const linkedWarmupBubble = linkedPage
-      .locator('.max-w-\\[85\\%\\]')
-      .filter({ hasText: ndrWarmup })
-      .first()
-    if (!(await linkedWarmupBubble.isVisible().catch(() => false))) {
-      await openChatFromList(linkedPage, ndrWarmup)
-    }
-    await expect(linkedWarmupBubble).toBeVisible({ timeout: 30000 })
+    await expectChatBubbleVisible(ownerPage, ndrWarmup)
+    await expectChatBubbleVisible(linkedPage, ndrWarmup)
     const linkedAcceptButton = linkedPage.getByRole('button', { name: 'Accept' }).first()
     if (await linkedAcceptButton.isVisible().catch(() => false)) {
       await linkedAcceptButton.click()
@@ -582,23 +644,8 @@ test('iris-chat linked devices <-> ndr interop', async ({
 
     const ndrToAll = `ndr->owner+linked ${Date.now()}`
     await runNdrRetry(['send', createdSession.chat_id, ndrToAll], dataDir, 30000, 500)
-    const ownerSecondBubble = ownerPage
-      .locator('.max-w-\\[85\\%\\]')
-      .filter({ hasText: ndrToAll })
-      .first()
-    if (!(await ownerSecondBubble.isVisible().catch(() => false))) {
-      await openChatFromList(ownerPage, ndrToAll)
-    }
-    await expect(ownerSecondBubble).toBeVisible({ timeout: 30000 })
-
-    const linkedSecondBubble = linkedPage
-      .locator('.max-w-\\[85\\%\\]')
-      .filter({ hasText: ndrToAll })
-      .first()
-    if (!(await linkedSecondBubble.isVisible().catch(() => false))) {
-      await openChatFromList(linkedPage, ndrToAll)
-    }
-    await expect(linkedSecondBubble).toBeVisible({ timeout: 30000 })
+    await expectChatBubbleVisible(ownerPage, ndrToAll)
+    await expectChatBubbleVisible(linkedPage, ndrToAll)
     await silentRelayConnectionsReady
   } finally {
     if (listener) {
