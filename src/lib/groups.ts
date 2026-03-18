@@ -321,7 +321,13 @@ function fanOutToMembers(
 
     try {
       const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
-      manager.sendEvent(memberPubkey, rumor).catch(() => {})
+      manager.sendEvent(memberPubkey, rumor).catch((error) => {
+        console.warn(
+          '[groups] Failed to send to member:',
+          memberPubkey.slice(0, 8),
+          error,
+        )
+      })
     } catch (e) {
       console.error('[groups] Failed to send to member:', memberPubkey.slice(0, 8), e)
     }

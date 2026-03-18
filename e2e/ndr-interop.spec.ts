@@ -13,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const NDR_CWD = path.resolve(__dirname, '../../nostr-double-ratchet/rust')
+const NDR_BIN = path.join(NDR_CWD, 'target', 'debug', 'ndr')
 const NDR_SECRET =
   '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 
@@ -51,6 +52,31 @@ async function loginWithStoredKey(page: Page) {
   await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({
     timeout: 30000,
   })
+}
+
+async function loginAnonymously(page: Page) {
+  await page.goto('/')
+  const goButton = page.getByRole('button', { name: 'Go' })
+  const newChatButton = page.getByRole('button', { name: 'New Chat' })
+
+  await Promise.race([
+    goButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+    newChatButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+  ])
+
+  if (await goButton.isVisible().catch(() => false)) {
+    await goButton.click()
+  }
+
+  await expect(newChatButton).toBeVisible({ timeout: 30000 })
+}
+
+async function getStoredIdentityPrivkeyHex(page: Page): Promise<string> {
+  const privkeyHex = await page.evaluate(() => localStorage.getItem('iris-chat-identity'))
+  if (!privkeyHex) {
+    throw new Error('No stored web identity found in localStorage')
+  }
+  return privkeyHex
 }
 
 async function registerDevice(page: Page) {
@@ -119,6 +145,49 @@ async function openChatFromList(page: Page, previewText: string): Promise<void> 
   }
 
   throw new Error(`Could not find chat list item for message preview: ${previewText}`)
+}
+
+async function openGroupFromSidebar(page: Page, groupName: string): Promise<void> {
+  const chatList = page.getByTestId('sidebar-chat-list')
+  const allTab = page.getByTestId('sidebar-tab-all')
+  const requestsTab = page.getByTestId('sidebar-tab-requests')
+  const deadline = Date.now() + 60_000
+
+  while (Date.now() < deadline) {
+    for (const tabButton of [allTab, requestsTab]) {
+      await tabButton.click().catch(() => {})
+      const groupListItem = chatList
+        .getByRole('button', { name: new RegExp(groupName) })
+        .first()
+      if (await groupListItem.isVisible().catch(() => false)) {
+        await groupListItem.click()
+        return
+      }
+    }
+
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`Could not find group list item: ${groupName}`)
+}
+
+async function acceptOpenGroupIfNeeded(page: Page): Promise<void> {
+  const acceptButton = page.getByRole('button', { name: 'Accept' })
+  const composer = page.getByPlaceholder('Type a message...')
+
+  await Promise.race([
+    acceptButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+    composer.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
+  ])
+
+  if (await acceptButton.isVisible().catch(() => false)) {
+    await acceptButton.click()
+    await expect(composer).toBeVisible({ timeout: 30000 })
+  }
+}
+
+async function waitForNdrGroupRefresh(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 750))
 }
 
 async function expectChatBubbleVisible(page: Page, text: string): Promise<void> {
@@ -279,30 +348,98 @@ function createNdrDataDir(relayUrls: string[]): string {
   return dir
 }
 
-async function runNdr(args: string[], dataDir: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      'cargo',
-      [
-        'run',
-        '-q',
-        '-p',
-        'ndr',
-        '--',
-        '--json',
-        '--data-dir',
-        dataDir,
-        ...args,
-      ],
-      {
+let ndrBuildPromise: Promise<void> | null = null
+
+async function ensureNdrBinary(): Promise<void> {
+  if (!ndrBuildPromise) {
+    ndrBuildPromise = new Promise((resolve, reject) => {
+      const child = spawn('cargo', ['build', '-q', '-p', 'ndr'], {
         cwd: NDR_CWD,
         env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
         stdio: ['ignore', 'pipe', 'pipe'],
+      })
+
+      let stdout = ''
+      let stderr = ''
+      let finished = false
+      const timeout = setTimeout(() => {
+        if (finished) return
+        finished = true
+        child.kill('SIGKILL')
+        reject(new Error(`ndr build timed out: stdout=${stdout} stderr=${stderr}`))
+      }, 300000)
+
+      const finish = (fn: () => void) => {
+        if (finished) return
+        finished = true
+        clearTimeout(timeout)
+        fn()
       }
-    )
+
+      child.stdout.on('data', (data) => {
+        stdout += data.toString()
+        if (stdout.length > 50000) {
+          stdout = stdout.slice(-50000)
+        }
+      })
+      child.stderr.on('data', (data) => {
+        stderr += data.toString()
+        if (stderr.length > 50000) {
+          stderr = stderr.slice(-50000)
+        }
+      })
+
+      child.on('error', (error) => {
+        finish(() => reject(error))
+      })
+
+      child.on('close', (code) => {
+        finish(() => {
+          if (code !== 0) {
+            reject(new Error(`ndr build failed: code=${code} stdout=${stdout} stderr=${stderr}`))
+            return
+          }
+
+          if (!fs.existsSync(NDR_BIN)) {
+            reject(new Error(`ndr build succeeded but binary is missing: ${NDR_BIN}`))
+            return
+          }
+
+          resolve()
+        })
+      })
+    })
+  }
+
+  return ndrBuildPromise
+}
+
+async function runNdr(args: string[], dataDir: string): Promise<any> {
+  await ensureNdrBinary()
+  return new Promise((resolve, reject) => {
+    const child = spawn(NDR_BIN, ['--json', '--data-dir', dataDir, ...args], {
+      cwd: NDR_CWD,
+      env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
 
     let stdout = ''
     let stderr = ''
+    let finished = false
+    const timeout = setTimeout(() => {
+      if (finished) return
+      finished = true
+      child.kill('SIGKILL')
+      reject(new Error(`ndr timed out: args=${args.join(' ')} stdout=${stdout} stderr=${stderr}`))
+    }, 60000)
+
+    const finish = (fn: () => void) => {
+      if (finished) return
+      finished = true
+      clearTimeout(timeout)
+      fn()
+    }
+
     child.stdout.on('data', (data) => {
       stdout += data.toString()
       if (stdout.length > 50000) {
@@ -316,26 +453,32 @@ async function runNdr(args: string[], dataDir: string): Promise<any> {
       }
     })
 
+    child.on('error', (error) => {
+      finish(() => reject(error))
+    })
+
     child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`ndr failed: code=${code} stdout=${stdout} stderr=${stderr}`))
-        return
-      }
-
-      const lines = stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          resolve(JSON.parse(lines[i]))
+      finish(() => {
+        if (code !== 0) {
+          reject(new Error(`ndr failed: code=${code} stdout=${stdout} stderr=${stderr}`))
           return
-        } catch {
-          // ignore non-json lines
         }
-      }
 
-      reject(new Error(`ndr produced no json output: stdout=${stdout} stderr=${stderr}`))
+        const lines = stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            resolve(JSON.parse(lines[i]))
+            return
+          } catch {
+            // ignore non-json lines
+          }
+        }
+
+        reject(new Error(`ndr produced no json output: stdout=${stdout} stderr=${stderr}`))
+      })
     })
   })
 }
@@ -359,16 +502,21 @@ async function runNdrRetry(
   }
 }
 
-function startNdrListen(dataDir: string) {
-  const child = spawn(
-    'cargo',
-    ['run', '-q', '-p', 'ndr', '--', '--json', '--data-dir', dataDir, 'listen'],
-    {
-      cwd: NDR_CWD,
-      env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }
-  )
+type NdrListener = {
+  child: ReturnType<typeof spawn>
+  reader: readline.Interface
+  stderrReader: readline.Interface
+  recentStdout: string[]
+  recentStderr: string[]
+}
+
+async function startNdrListen(dataDir: string): Promise<NdrListener> {
+  await ensureNdrBinary()
+  const child = spawn(NDR_BIN, ['--json', '--data-dir', dataDir, 'listen'], {
+    cwd: NDR_CWD,
+    env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
 
   const reader = readline.createInterface({ input: child.stdout })
   const stderrReader = readline.createInterface({ input: child.stderr })
@@ -393,7 +541,7 @@ function startNdrListen(dataDir: string) {
 }
 
 async function waitForNdrListenRunning(
-  child: ReturnType<typeof startNdrListen>['child'],
+  child: NdrListener['child'],
   startupMs = 500
 ): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -419,7 +567,7 @@ async function waitForNdrListenRunning(
 }
 
 async function waitForNdrJson(
-  listener: ReturnType<typeof startNdrListen>,
+  listener: NdrListener,
   predicate: (value: any) => boolean,
   timeoutMs: number,
   description: string
@@ -460,7 +608,7 @@ async function waitForNdrJson(
   })
 }
 
-async function stopNdrListen(child: ReturnType<typeof startNdrListen>['child']) {
+async function stopNdrListen(child: NdrListener['child']) {
   child.kill('SIGINT')
   await new Promise((resolve) => {
     child.on('close', resolve)
@@ -472,7 +620,7 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
   test.setTimeout(240000)
 
   const dataDir = createNdrDataDir(testRelayUrls)
-  let listener: ReturnType<typeof startNdrListen> | null = null
+  let listener: NdrListener | null = null
 
   try {
     const login = await runNdr(['login', NDR_SECRET], dataDir)
@@ -489,7 +637,7 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
 
     await page.getByRole('button', { name: 'New Chat' }).click()
 
-    listener = startNdrListen(dataDir)
+    listener = await startNdrListen(dataDir)
     await waitForNdrListenRunning(listener.child)
     const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
 
@@ -566,7 +714,7 @@ test('iris-chat linked devices <-> ndr interop', async ({
   const linkedPage = await linkedContext.newPage()
 
   const dataDir = createNdrDataDir(testRelayUrls)
-  let listener: ReturnType<typeof startNdrListen> | null = null
+  let listener: NdrListener | null = null
 
   try {
     const login = await runNdr(['login', NDR_SECRET], dataDir)
@@ -575,7 +723,7 @@ test('iris-chat linked devices <-> ndr interop', async ({
     await loginWithStoredKey(ownerPage)
     await registerDevice(ownerPage)
 
-    listener = startNdrListen(dataDir)
+    listener = await startNdrListen(dataDir)
     await waitForNdrListenRunning(listener.child)
     const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 120000)
 
@@ -653,6 +801,194 @@ test('iris-chat linked devices <-> ndr interop', async ({
     }
     await ownerContext.close()
     await linkedContext.close()
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('iris-chat group <-> ndr interop (web creates group)', async ({
+  page,
+  silentRelay,
+  testRelayUrls,
+}) => {
+  skipIfNdrWorkspaceMissing()
+  test.setTimeout(240000)
+
+  const dataDir = createNdrDataDir(testRelayUrls)
+  let listener: NdrListener | null = null
+
+  try {
+    const login = await runNdr(['login', NDR_SECRET], dataDir)
+    expect(login.status).toBe('ok')
+
+    const invite = await runNdr(['invite', 'create'], dataDir)
+    expect(invite.status).toBe('ok')
+
+    await useTestRelay(page.context(), testRelayUrls)
+    await loginAnonymously(page)
+
+    listener = await startNdrListen(dataDir)
+    await waitForNdrListenRunning(listener.child)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
+
+    const createdSessionPromise = waitForNdrJson(
+      listener,
+      (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
+      60000,
+      'session_created after web accepts ndr invite for group bootstrap'
+    )
+
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(invite.data?.url)
+    const createdSession = await createdSessionPromise
+
+    const bootstrapAck = `ndr group bootstrap ack ${Date.now()}`
+    await runNdrRetry(['send', createdSession.chat_id, bootstrapAck], dataDir, 30000, 500)
+    await expectChatBubbleVisible(page, bootstrapAck)
+
+    await page.getByRole('button', { name: 'Back' }).click()
+    await expect(page.getByRole('button', { name: 'Create Group' })).toBeVisible({
+      timeout: 20000,
+    })
+
+    const groupName = `web-to-ndr-group-${Date.now()}`
+    const groupMetadataPromise = waitForNdrJson(
+      listener,
+      (json) =>
+        json.event === 'group_metadata' &&
+        json.action === 'created' &&
+        json.name === groupName &&
+        typeof json.group_id === 'string',
+      60000,
+      'ndr receiving created group metadata from web'
+    )
+
+    await page.getByRole('button', { name: 'Create Group' }).click()
+    const createGroupView = page.getByTestId('create-group-view')
+    await createGroupView.getByTestId('create-group-member').first().click()
+    await createGroupView.getByTestId('create-group-next').click()
+    await page.getByPlaceholder('Enter group name...').fill(groupName)
+    await createGroupView.getByTestId('create-group-submit').click()
+
+    const createdGroup = await groupMetadataPromise
+    const groupId = createdGroup.group_id as string
+
+    const accepted = await runNdrRetry(['group', 'accept', groupId], dataDir, 30000, 500)
+    expect(accepted.status).toBe('ok')
+    await waitForNdrGroupRefresh()
+
+    const ndrMessageOne = `ndr->web group 1 ${Date.now()}`
+    await runNdrRetry(['group', 'send', groupId, ndrMessageOne], dataDir, 30000, 500)
+    await expectChatBubbleVisible(page, ndrMessageOne)
+
+    const ndrMessageTwo = `ndr->web group 2 ${Date.now()}`
+    await runNdrRetry(['group', 'send', groupId, ndrMessageTwo], dataDir, 30000, 500)
+    await expectChatBubbleVisible(page, ndrMessageTwo)
+
+    const webMessageOne = `web->ndr group 1 ${Date.now()}`
+    await page.getByPlaceholder('Type a message...').fill(webMessageOne)
+    await page.getByRole('button', { name: 'Send' }).click()
+
+    await waitForNdrJson(
+      listener,
+      (json) =>
+        json.event === 'group_message' &&
+        json.group_id === groupId &&
+        json.content === webMessageOne,
+      60000,
+      'ndr receiving first web group message'
+    )
+
+    const webMessageTwo = `web->ndr group 2 ${Date.now()}`
+    await page.getByPlaceholder('Type a message...').fill(webMessageTwo)
+    await page.getByRole('button', { name: 'Send' }).click()
+
+    await waitForNdrJson(
+      listener,
+      (json) =>
+        json.event === 'group_message' &&
+        json.group_id === groupId &&
+        json.content === webMessageTwo,
+      60000,
+      'ndr receiving second web group message'
+    )
+    await silentRelayConnectionsReady
+  } finally {
+    if (listener) {
+      await stopNdrListen(listener.child)
+    }
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('iris-chat group interop (ndr creates group and web receives)', async ({
+  page,
+  silentRelay,
+  testRelayUrls,
+}) => {
+  skipIfNdrWorkspaceMissing()
+  test.setTimeout(240000)
+
+  const dataDir = createNdrDataDir(testRelayUrls)
+  let listener: NdrListener | null = null
+
+  try {
+    const login = await runNdr(['login', NDR_SECRET], dataDir)
+    expect(login.status).toBe('ok')
+
+    await useTestRelay(page.context(), testRelayUrls)
+    await loginAnonymously(page)
+    const webPrivkeyHex = await getStoredIdentityPrivkeyHex(page)
+    const webPubkeyHex = getPublicKey(Buffer.from(webPrivkeyHex, 'hex')).toLowerCase()
+
+    listener = await startNdrListen(dataDir)
+    await waitForNdrListenRunning(listener.child)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
+
+    const invite = await runNdr(['invite', 'create'], dataDir)
+    expect(invite.status).toBe('ok')
+
+    const createdSessionPromise = waitForNdrJson(
+      listener,
+      (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
+      60000,
+      'session_created after web accepts ndr invite for ndr-created group bootstrap'
+    )
+
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    await page.getByPlaceholder('Paste invite link').fill(invite.data?.url)
+    const createdSession = await createdSessionPromise
+
+    const bootstrapAck = `ndr created-group bootstrap ack ${Date.now()}`
+    await runNdrRetry(['send', createdSession.chat_id, bootstrapAck], dataDir, 30000, 500)
+    await expectChatBubbleVisible(page, bootstrapAck)
+
+    const groupName = `ndr-to-web-group-${Date.now()}`
+    const createdGroup = await runNdrRetry(
+      ['group', 'create', '--name', groupName, '--members', webPubkeyHex],
+      dataDir,
+      30000,
+      500
+    )
+    expect(createdGroup.status).toBe('ok')
+    const groupId = createdGroup.data?.id as string
+    expect(groupId).toBeTruthy()
+    await waitForNdrGroupRefresh()
+
+    await openGroupFromSidebar(page, groupName)
+    await acceptOpenGroupIfNeeded(page)
+
+    const ndrMessageOne = `ndr->web created group 1 ${Date.now()}`
+    await runNdrRetry(['group', 'send', groupId, ndrMessageOne], dataDir, 30000, 500)
+    await expectChatBubbleVisible(page, ndrMessageOne)
+
+    const ndrMessageTwo = `ndr->web created group 2 ${Date.now()}`
+    await runNdrRetry(['group', 'send', groupId, ndrMessageTwo], dataDir, 30000, 500)
+    await expectChatBubbleVisible(page, ndrMessageTwo)
+    await silentRelayConnectionsReady
+  } finally {
+    if (listener) {
+      await stopNdrListen(listener.child)
+    }
     fs.rmSync(dataDir, { recursive: true, force: true })
   }
 })
