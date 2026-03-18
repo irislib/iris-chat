@@ -640,6 +640,33 @@ describe('groups', () => {
     })
   })
 
+  describe('clearGroupData', () => {
+    it('clears all group state for logout', async () => {
+      const { createGroup, clearGroupData, groups, groupMessages, currentGroupId } = await import('./groups')
+      const group = await createGroup('Logout Test', [MEMBER_B])
+
+      currentGroupId.set(group.id)
+      groupMessages.update(gm => {
+        gm.set(group.id, [{
+          id: 'msg-1',
+          content: 'hello',
+          timestamp: Date.now(),
+          isMine: true,
+        }])
+        return gm
+      })
+
+      clearGroupData()
+
+      expect(get(groups).size).toBe(0)
+      expect(get(groupMessages).size).toBe(0)
+      expect(get(currentGroupId)).toBe(null)
+
+      const groupChannels = await import('./groupChannels')
+      expect(groupChannels.teardownGroupChannel).toHaveBeenCalledWith(group.id)
+    })
+  })
+
   describe('isAdmin', () => {
     it('returns true for admin', async () => {
       const { createGroup, isAdmin } = await import('./groups')

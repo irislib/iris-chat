@@ -957,6 +957,21 @@ export async function deleteGroup(groupId: string): Promise<void> {
   await deleteMessagesForSession(`group:${groupId}`)
 }
 
+export function clearGroupData(): void {
+  const groupIds = Array.from(get(groups).keys())
+  for (const groupId of groupIds) {
+    teardownGroupChannel(groupId)
+    teardownNativeGroupRuntime(groupId)
+    clearRemoteTyping(`group:${groupId}`)
+  }
+
+  teardownNativeGroupManager()
+  pendingGroupEvents.clear()
+  groups.set(new Map())
+  groupMessages.set(new Map())
+  currentGroupId.set(null)
+}
+
 export function acceptGroupInvitation(groupId: string): void {
   const currentGroups = get(groups)
   const group = currentGroups.get(groupId)

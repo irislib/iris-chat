@@ -12,7 +12,7 @@
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToSessionManager } from './lib/disappearingMessages'
   import type { ChatSession } from './lib/chat'
-  import { loadGroupsFromStorage, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
+  import { loadGroupsFromStorage, clearGroupData, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
   import { initMultiDevice, resetManagers } from './lib/privateChats'
   import { initFollowing } from './lib/following'
@@ -465,6 +465,7 @@
     logout()
     leaveChat()
     await clearChatData()
+    clearGroupData()
     resetManagers()
     loggedIn = false
     selectedChat = null
