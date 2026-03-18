@@ -16,6 +16,10 @@ const NDR_CWD = path.resolve(__dirname, '../../nostr-double-ratchet/rust')
 const NDR_SECRET =
   '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 
+function skipIfNdrWorkspaceMissing() {
+  test.skip(!fs.existsSync(NDR_CWD), `NDR workspace missing: ${NDR_CWD}`)
+}
+
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((byte) => byte.toString(16).padStart(2, '0'))
@@ -353,6 +357,7 @@ async function stopNdrListen(child: ReturnType<typeof startNdrListen>['child']) 
 }
 
 test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
+  skipIfNdrWorkspaceMissing()
   test.setTimeout(240000)
 
   const dataDir = createNdrDataDir(testRelayUrl)
@@ -411,6 +416,7 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
 })
 
 test('iris-chat linked devices <-> ndr interop', async ({ browser, testRelayUrl, testRelay }) => {
+  skipIfNdrWorkspaceMissing()
   test.setTimeout(300000)
 
   const ownerSecret = generateSecretKey()
