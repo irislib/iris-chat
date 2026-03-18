@@ -164,6 +164,64 @@ async function expectChatMessageVisible(page: Page, text: string): Promise<void>
   await expect(visibleText).toBeVisible({ timeout: 90_000 })
 }
 
+async function expectIrisClientMessageVisible(page: Page, text: string): Promise<void> {
+  await expect(page.locator('.whitespace-pre-wrap').getByText(text).last()).toBeVisible({
+    timeout: 60_000,
+  })
+}
+
+async function sendWebMessages(page: Page, texts: string[]): Promise<void> {
+  const input = page.getByPlaceholder('Type a message...')
+  for (const text of texts) {
+    await input.fill(text)
+    await page.getByRole('button', { name: 'Send' }).click()
+  }
+}
+
+async function sendIrisClientMessages(page: Page, texts: string[]): Promise<void> {
+  const input = page.getByPlaceholder('Message').last()
+  for (const text of texts) {
+    await input.fill(text)
+    await input.press('Enter')
+    await expectIrisClientMessageVisible(page, text)
+  }
+}
+
+async function sendFlutterMessages(
+  bridge: FlutterInteropBridge,
+  sessionId: string,
+  texts: string[]
+): Promise<void> {
+  for (const text of texts) {
+    await bridge.command(
+      'send_message_ui',
+      {
+        sessionId,
+        text,
+      },
+      30000
+    )
+  }
+}
+
+async function expectFlutterMessages(
+  bridge: FlutterInteropBridge,
+  texts: string[],
+  incomingOnly = false
+): Promise<void> {
+  for (const text of texts) {
+    await bridge.command(
+      'wait_for_message_meta',
+      {
+        text,
+        timeoutMs: 40000,
+        incomingOnly,
+      },
+      50000
+    )
+  }
+}
+
 async function waitForNextCreatedAtSecond(): Promise<void> {
   const currentSecond = Math.floor(Date.now() / 1000)
   while (Math.floor(Date.now() / 1000) === currentSecond) {
@@ -580,7 +638,8 @@ class FlutterInteropBridge {
   constructor(
     private readonly relayUrl: string,
     private readonly privateKeyNsec: string,
-    private readonly registerDeviceOnLogin = false
+    private readonly registerDeviceOnLogin = false,
+    private readonly dataDir?: string
   ) {}
 
   async start(): Promise<{ pubkeyHex: string; devicePubkeyHex?: string }> {
@@ -600,6 +659,7 @@ class FlutterInteropBridge {
         `--dart-define=IRIS_INTEROP_BRIDGE_DIR=${this.bridgeDir}`,
         `--dart-define=IRIS_INTEROP_PRIVATE_KEY_NSEC=${this.privateKeyNsec}`,
         `--dart-define=IRIS_INTEROP_REGISTER_DEVICE=${this.registerDeviceOnLogin ? '1' : '0'}`,
+        ...(this.dataDir ? [`--dart-define=IRIS_INTEROP_DATA_DIR=${this.dataDir}`] : []),
       ],
       {
         cwd: FLUTTER_REPO,
@@ -1056,57 +1116,145 @@ test('self-chat interop (same key) across web, flutter, and iris-client', async 
       30000
     )
 
-    const flutterBootstrapMessage = `flutter->all same key ${Date.now()}`
-    await flutterBridge.command(
-      'send_message_ui',
-      {
-        sessionId: flutterSelfSession.sessionId,
-        text: flutterBootstrapMessage,
-      },
-      30000
-    )
-    await expectChatMessageVisible(webPage, flutterBootstrapMessage)
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(flutterBootstrapMessage).last()
-    ).toBeVisible({ timeout: 60000 })
+    const flutterMessages = [
+      `flutter->all same key #1 ${Date.now()}`,
+      `flutter->all same key #2 ${Date.now() + 1}`,
+    ]
+    await sendFlutterMessages(flutterBridge, flutterSelfSession.sessionId, flutterMessages)
+    for (const text of flutterMessages) {
+      await expectChatMessageVisible(webPage, text)
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
 
-    const irisClientMessage = `iris-client->all same key ${Date.now()}`
-    const irisClientInput = irisClientPage.getByPlaceholder('Message').last()
-    await irisClientInput.fill(irisClientMessage)
-    await irisClientInput.press('Enter')
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(irisClientMessage).last()
-    ).toBeVisible({ timeout: 10000 })
-    await expectChatMessageVisible(webPage, irisClientMessage)
-    await flutterBridge.command(
-      'wait_for_message_meta',
-      {
-        text: irisClientMessage,
-        timeoutMs: 30000,
-      },
-      40000
-    )
+    const irisClientMessages = [
+      `iris-client->all same key #1 ${Date.now()}`,
+      `iris-client->all same key #2 ${Date.now() + 1}`,
+    ]
+    await sendIrisClientMessages(irisClientPage, irisClientMessages)
+    for (const text of irisClientMessages) {
+      await expectChatMessageVisible(webPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, irisClientMessages)
 
-    const webMessage = `web->all same key ${Date.now()}`
-    await webPage.getByPlaceholder('Type a message...').fill(webMessage)
-    await webPage.getByRole('button', { name: 'Send' }).click()
-    await expectChatMessageVisible(webPage, webMessage)
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(webMessage).last()
-    ).toBeVisible({ timeout: 60000 })
-    await flutterBridge.command(
-      'wait_for_message_meta',
-      {
-        text: webMessage,
-        timeoutMs: 30000,
-      },
-      40000
-    )
+    const webMessages = [
+      `web->all same key #1 ${Date.now()}`,
+      `web->all same key #2 ${Date.now() + 1}`,
+    ]
+    await sendWebMessages(webPage, webMessages)
+    for (const text of webMessages) {
+      await expectChatMessageVisible(webPage, text)
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, webMessages)
   } finally {
     await irisClientContext.close()
     await irisClientServer.stop()
     await webContext.close()
     await flutterBridge.stop()
+  }
+})
+
+test('self-chat interop across web, flutter, and iris-client still receives after flutter restart', async ({
+  browser,
+  testRelay,
+  testRelayUrl,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.skip(!fs.existsSync(IRIS_CLIENT_REPO), `Iris client repo missing: ${IRIS_CLIENT_REPO}`)
+  test.setTimeout(420000)
+
+  const secretKey = generateSecretKey()
+  const privkeyHex = toHex(secretKey)
+  const privateKeyNsec = nip19.nsecEncode(secretKey)
+  const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
+  const expectedNpub = nip19.npubEncode(expectedPubkeyHex)
+  const flutterDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iris-flutter-interop-data-'))
+
+  const webContext = await browser.newContext()
+  await useTestRelay(webContext, testRelayUrl)
+  await setIdentity(webContext, privkeyHex)
+  const webPage = await webContext.newPage()
+
+  let flutterBridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true, flutterDataDir)
+  const irisClientServer = new IrisClientServer(await getAvailablePort())
+  const irisClientBaseUrl = await irisClientServer.start()
+  const irisClientContext = await browser.newContext()
+  await seedIrisClientRelay(irisClientContext, testRelayUrl)
+  const irisClientPage = await irisClientContext.newPage()
+
+  try {
+    const flutterReady = await flutterBridge.start()
+    expect(flutterReady.pubkeyHex).toBe(expectedPubkeyHex)
+    await waitForNextCreatedAtSecond()
+
+    await loginWithStoredKey(webPage)
+    await loginIrisClientWithKey(irisClientPage, irisClientBaseUrl, privateKeyNsec)
+    await waitForIrisClientRelays(irisClientPage)
+    await ensureIrisClientCurrentDeviceRegistered(irisClientPage, irisClientBaseUrl)
+
+    await webPage.getByRole('button', { name: 'New Chat' }).click()
+    await webPage
+      .getByPlaceholder('Paste invite link')
+      .fill(`https://chat.iris.to/#${expectedNpub}`)
+    await expect(webPage.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+
+    await waitForLatestOwnerAppKeysDeviceCount(testRelay, expectedPubkeyHex, 3, 30000)
+    await openIrisClientSelfChat(irisClientPage)
+
+    const preRestartWebMessages = [
+      `web pre-restart #1 ${Date.now()}`,
+      `web pre-restart #2 ${Date.now() + 1}`,
+    ]
+    await sendWebMessages(webPage, preRestartWebMessages)
+    for (const text of preRestartWebMessages) {
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, preRestartWebMessages)
+
+    const preRestartIrisClientMessages = [
+      `iris-client pre-restart #1 ${Date.now()}`,
+      `iris-client pre-restart #2 ${Date.now() + 1}`,
+    ]
+    await sendIrisClientMessages(irisClientPage, preRestartIrisClientMessages)
+    for (const text of preRestartIrisClientMessages) {
+      await expectChatMessageVisible(webPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, preRestartIrisClientMessages)
+
+    await flutterBridge.stop()
+    flutterBridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true, flutterDataDir)
+    const reopenedFlutterReady = await flutterBridge.start()
+    expect(reopenedFlutterReady.pubkeyHex).toBe(expectedPubkeyHex)
+    expect(reopenedFlutterReady.devicePubkeyHex).toBe(flutterReady.devicePubkeyHex)
+
+    const webPostRestartMessages = [
+      `web post-restart #1 ${Date.now()}`,
+      `web post-restart #2 ${Date.now() + 1}`,
+    ]
+    await sendWebMessages(webPage, webPostRestartMessages)
+    for (const text of webPostRestartMessages) {
+      await expectChatMessageVisible(webPage, text)
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, webPostRestartMessages)
+
+    const irisClientPostRestartMessages = [
+      `iris-client post-restart #1 ${Date.now()}`,
+      `iris-client post-restart #2 ${Date.now() + 1}`,
+    ]
+    await sendIrisClientMessages(irisClientPage, irisClientPostRestartMessages)
+    for (const text of irisClientPostRestartMessages) {
+      await expectChatMessageVisible(webPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, irisClientPostRestartMessages)
+  } finally {
+    await irisClientContext.close()
+    await irisClientServer.stop()
+    await webContext.close()
+    await flutterBridge.stop()
+    await fsp.rm(flutterDataDir, { recursive: true, force: true }).catch(() => {})
   }
 })
 
@@ -1223,72 +1371,37 @@ test('flutter nsec owner + iris-client sibling interop with web owner + linked w
       50000
     )
 
-    const aliceFlutterMessage = `af ${Date.now()}`
-    await flutterBridge.command(
-      'send_message_ui',
-      {
-        sessionId: aliceFlutterSession.sessionId,
-        text: aliceFlutterMessage,
-      },
-      30000
-    )
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(aliceFlutterMessage).last()
-    ).toBeVisible({ timeout: 60000 })
-    await expectChatMessageVisible(bobOwnerPage, aliceFlutterMessage)
-    await expectChatMessageVisible(bobLinkedPage, aliceFlutterMessage)
+    const aliceFlutterMessages = [`af #1 ${Date.now()}`, `af #2 ${Date.now() + 1}`]
+    await sendFlutterMessages(flutterBridge, aliceFlutterSession.sessionId, aliceFlutterMessages)
+    for (const text of aliceFlutterMessages) {
+      await expectIrisClientMessageVisible(irisClientPage, text)
+      await expectChatMessageVisible(bobOwnerPage, text)
+      await expectChatMessageVisible(bobLinkedPage, text)
+    }
 
-    const aliceIrisClientMessage = `ai ${Date.now()}`
-    const irisClientInput = irisClientPage.getByPlaceholder('Message').last()
-    await irisClientInput.fill(aliceIrisClientMessage)
-    await irisClientInput.press('Enter')
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(aliceIrisClientMessage).last()
-    ).toBeVisible({ timeout: 10000 })
-    await expectChatMessageVisible(bobOwnerPage, aliceIrisClientMessage)
-    await expectChatMessageVisible(bobLinkedPage, aliceIrisClientMessage)
-    await flutterBridge.command(
-      'wait_for_message_meta',
-      {
-        text: aliceIrisClientMessage,
-        timeoutMs: 40000,
-      },
-      50000
-    )
+    const aliceIrisClientMessages = [`ai #1 ${Date.now()}`, `ai #2 ${Date.now() + 1}`]
+    await sendIrisClientMessages(irisClientPage, aliceIrisClientMessages)
+    for (const text of aliceIrisClientMessages) {
+      await expectChatMessageVisible(bobOwnerPage, text)
+      await expectChatMessageVisible(bobLinkedPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, aliceIrisClientMessages)
 
-    const bobOwnerMessage = `bo ${Date.now()}`
-    await bobOwnerPage.getByPlaceholder('Type a message...').fill(bobOwnerMessage)
-    await bobOwnerPage.getByRole('button', { name: 'Send' }).click()
-    await expectChatMessageVisible(bobLinkedPage, bobOwnerMessage)
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(bobOwnerMessage).last()
-    ).toBeVisible({ timeout: 60000 })
-    await flutterBridge.command(
-      'wait_for_message_meta',
-      {
-        text: bobOwnerMessage,
-        timeoutMs: 40000,
-        incomingOnly: true,
-      },
-      50000
-    )
+    const bobOwnerMessages = [`bo #1 ${Date.now()}`, `bo #2 ${Date.now() + 1}`]
+    await sendWebMessages(bobOwnerPage, bobOwnerMessages)
+    for (const text of bobOwnerMessages) {
+      await expectChatMessageVisible(bobLinkedPage, text)
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, bobOwnerMessages, true)
 
-    const bobLinkedMessage = `bl ${Date.now()}`
-    await bobLinkedPage.getByPlaceholder('Type a message...').fill(bobLinkedMessage)
-    await bobLinkedPage.getByRole('button', { name: 'Send' }).click()
-    await expectChatMessageVisible(bobOwnerPage, bobLinkedMessage)
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(bobLinkedMessage).last()
-    ).toBeVisible({ timeout: 60000 })
-    await flutterBridge.command(
-      'wait_for_message_meta',
-      {
-        text: bobLinkedMessage,
-        timeoutMs: 40000,
-        incomingOnly: true,
-      },
-      50000
-    )
+    const bobLinkedMessages = [`bl #1 ${Date.now()}`, `bl #2 ${Date.now() + 1}`]
+    await sendWebMessages(bobLinkedPage, bobLinkedMessages)
+    for (const text of bobLinkedMessages) {
+      await expectChatMessageVisible(bobOwnerPage, text)
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
+    await expectFlutterMessages(flutterBridge, bobLinkedMessages, true)
   } finally {
     await irisClientContext.close()
     await irisClientServer.stop()
