@@ -332,8 +332,10 @@ async function waitForHttpReady(url: string, timeoutMs: number, onTimeout: () =>
   throw new Error(`Timed out waiting for ${url}\n${onTimeout()}`)
 }
 
-async function seedIrisClientRelay(context: BrowserContext, relayUrl: string) {
-  await context.addInitScript((url: string) => {
+async function seedIrisClientRelay(context: BrowserContext, relayUrlOrUrls: string | string[]) {
+  const relayUrls = Array.isArray(relayUrlOrUrls) ? relayUrlOrUrls : [relayUrlOrUrls]
+
+  await context.addInitScript((urls: string[]) => {
     try {
       const raw = window.localStorage.getItem('user-storage')
       const parsed =
@@ -347,8 +349,8 @@ async function seedIrisClientRelay(context: BrowserContext, relayUrl: string) {
           version: typeof parsed.version === 'number' ? parsed.version : 2,
           state: {
             ...state,
-            relays: [url],
-            relayConfigs: [{ url }],
+            relays: urls,
+            relayConfigs: urls.map((url) => ({ url })),
             ndkOutboxModel: false,
             autoConnectUserRelays: false,
           },
@@ -357,7 +359,7 @@ async function seedIrisClientRelay(context: BrowserContext, relayUrl: string) {
     } catch {
       // ignore opaque origins (about:blank)
     }
-  }, relayUrl)
+  }, relayUrls)
 }
 
 async function loginIrisClientWithKey(page: Page, baseUrl: string, privateKeyNsec: string): Promise<void> {
@@ -599,6 +601,25 @@ async function waitForLatestOwnerAppKeysDeviceCount(
   )
 }
 
+async function waitForRelayConnectionCount(
+  relay: { totalConnections: number },
+  minConnectionCount: number,
+  timeoutMs = 10000
+) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    if (relay.totalConnections >= minConnectionCount) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  throw new Error(
+    `Timed out waiting for relay connections >= ${minConnectionCount}; got ${relay.totalConnections}`
+  )
+}
+
 function reapFlutterInteropAppProcesses(): void {
   if (process.platform !== 'darwin') {
     return
@@ -622,7 +643,15 @@ function reapFlutterInteropAppProcesses(): void {
 }
 
 type BridgeEvent =
-  | { type: 'ready'; data?: { pubkeyHex?: string; devicePubkeyHex?: string; relayUrl?: string } }
+  | {
+      type: 'ready'
+      data?: {
+        pubkeyHex?: string
+        devicePubkeyHex?: string
+        relayUrl?: string
+        relayUrls?: string[]
+      }
+    }
   | { type: 'response'; id?: string; ok?: boolean; data?: unknown; error?: string }
   | { type: string; id?: string; ok?: boolean; data?: unknown; error?: string }
 
@@ -636,7 +665,7 @@ class FlutterInteropBridge {
   private stderr = ''
 
   constructor(
-    private readonly relayUrl: string,
+    private readonly relayUrls: string[],
     private readonly privateKeyNsec: string,
     private readonly registerDeviceOnLogin = false,
     private readonly dataDir?: string
@@ -655,7 +684,8 @@ class FlutterInteropBridge {
         'integration_test/flutter_interop_bridge_macos_suite.dart',
         '-d',
         'macos',
-        `--dart-define=IRIS_INTEROP_RELAY_URL=${this.relayUrl}`,
+        `--dart-define=IRIS_INTEROP_RELAY_URL=${this.relayUrls[0] ?? ''}`,
+        `--dart-define=IRIS_INTEROP_RELAY_URLS=${this.relayUrls.join(',')}`,
         `--dart-define=IRIS_INTEROP_BRIDGE_DIR=${this.bridgeDir}`,
         `--dart-define=IRIS_INTEROP_PRIVATE_KEY_NSEC=${this.privateKeyNsec}`,
         `--dart-define=IRIS_INTEROP_REGISTER_DEVICE=${this.registerDeviceOnLogin ? '1' : '0'}`,
@@ -817,7 +847,11 @@ class FlutterInteropBridge {
   }
 }
 
-test('self-chat interop (same key) between web and flutter', async ({ browser, testRelayUrl }) => {
+test('self-chat interop (same key) between web and flutter', async ({
+  browser,
+  silentRelay,
+  testRelayUrls,
+}) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
   test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
@@ -829,15 +863,16 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
   const expectedPubkeyHex = getPublicKey(secretKey).toLowerCase()
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(page)
@@ -875,6 +910,7 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
     )
 
     await expectChatMessageVisible(page, flutterMessage)
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()
@@ -883,7 +919,8 @@ test('self-chat interop (same key) between web and flutter', async ({ browser, t
 
 test('direct self-chat interop (same key) between web and flutter', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -897,15 +934,16 @@ test('direct self-chat interop (same key) between web and flutter', async ({
   const expectedNpub = nip19.npubEncode(expectedPubkeyHex)
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(page)
@@ -944,6 +982,7 @@ test('direct self-chat interop (same key) between web and flutter', async ({
     )
 
     await expectChatMessageVisible(page, flutterMessage)
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()
@@ -952,8 +991,9 @@ test('direct self-chat interop (same key) between web and flutter', async ({
 
 test('direct self-chat interop (same key) from flutter first between web and flutter', async ({
   browser,
+  silentRelay,
   testRelay,
-  testRelayUrl,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -967,16 +1007,17 @@ test('direct self-chat interop (same key) from flutter first between web and flu
   const expectedNpub = nip19.npubEncode(expectedPubkeyHex)
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
     expect(ready.devicePubkeyHex).toBeTruthy()
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(page)
@@ -1051,6 +1092,7 @@ test('direct self-chat interop (same key) from flutter first between web and flu
       },
       40000
     )
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()
@@ -1059,8 +1101,9 @@ test('direct self-chat interop (same key) from flutter first between web and flu
 
 test('self-chat interop (same key) across web, flutter, and iris-client', async ({
   browser,
+  silentRelay,
   testRelay,
-  testRelayUrl,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -1075,23 +1118,21 @@ test('self-chat interop (same key) across web, flutter, and iris-client', async 
   const expectedNpub = nip19.npubEncode(expectedPubkeyHex)
 
   const webContext = await browser.newContext()
-  await useTestRelay(webContext, testRelayUrl)
+  await useTestRelay(webContext, testRelayUrls)
   await setIdentity(webContext, privkeyHex)
   const webPage = await webContext.newPage()
 
-  const flutterBridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+  const flutterBridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true)
   const irisClientServer = new IrisClientServer(await getAvailablePort())
   const irisClientBaseUrl = await irisClientServer.start()
   const irisClientContext = await browser.newContext()
-  await seedIrisClientRelay(irisClientContext, testRelayUrl)
+  await seedIrisClientRelay(irisClientContext, testRelayUrls)
   const irisClientPage = await irisClientContext.newPage()
-  irisClientPage.on('console', (msg) => {
-    console.log(`[iris-client console] ${msg.type()}: ${msg.text()}`)
-  })
 
   try {
     const flutterReady = await flutterBridge.start()
     expect(flutterReady.pubkeyHex).toBe(expectedPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(webPage)
@@ -1146,6 +1187,7 @@ test('self-chat interop (same key) across web, flutter, and iris-client', async 
       await expectIrisClientMessageVisible(irisClientPage, text)
     }
     await expectFlutterMessages(flutterBridge, webMessages)
+    await silentRelayConnectionsReady
   } finally {
     await irisClientContext.close()
     await irisClientServer.stop()
@@ -1156,8 +1198,9 @@ test('self-chat interop (same key) across web, flutter, and iris-client', async 
 
 test('self-chat interop across web, flutter, and iris-client still receives after flutter restart', async ({
   browser,
+  silentRelay,
   testRelay,
-  testRelayUrl,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -1173,20 +1216,21 @@ test('self-chat interop across web, flutter, and iris-client still receives afte
   const flutterDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iris-flutter-interop-data-'))
 
   const webContext = await browser.newContext()
-  await useTestRelay(webContext, testRelayUrl)
+  await useTestRelay(webContext, testRelayUrls)
   await setIdentity(webContext, privkeyHex)
   const webPage = await webContext.newPage()
 
-  let flutterBridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true, flutterDataDir)
+  let flutterBridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true, flutterDataDir)
   const irisClientServer = new IrisClientServer(await getAvailablePort())
   const irisClientBaseUrl = await irisClientServer.start()
   const irisClientContext = await browser.newContext()
-  await seedIrisClientRelay(irisClientContext, testRelayUrl)
+  await seedIrisClientRelay(irisClientContext, testRelayUrls)
   const irisClientPage = await irisClientContext.newPage()
 
   try {
     const flutterReady = await flutterBridge.start()
     expect(flutterReady.pubkeyHex).toBe(expectedPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 4, 180000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(webPage)
@@ -1202,6 +1246,13 @@ test('self-chat interop across web, flutter, and iris-client still receives afte
 
     await waitForLatestOwnerAppKeysDeviceCount(testRelay, expectedPubkeyHex, 3, 30000)
     await openIrisClientSelfChat(irisClientPage)
+    await flutterBridge.command<{ sessionId: string }>(
+      'ensure_session_for_recipient',
+      {
+        recipientPubkeyHex: expectedPubkeyHex,
+      },
+      30000
+    )
 
     const preRestartWebMessages = [
       `web pre-restart #1 ${Date.now()}`,
@@ -1224,7 +1275,7 @@ test('self-chat interop across web, flutter, and iris-client still receives afte
     await expectFlutterMessages(flutterBridge, preRestartIrisClientMessages)
 
     await flutterBridge.stop()
-    flutterBridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true, flutterDataDir)
+    flutterBridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true, flutterDataDir)
     const reopenedFlutterReady = await flutterBridge.start()
     expect(reopenedFlutterReady.pubkeyHex).toBe(expectedPubkeyHex)
     expect(reopenedFlutterReady.devicePubkeyHex).toBe(flutterReady.devicePubkeyHex)
@@ -1249,6 +1300,7 @@ test('self-chat interop across web, flutter, and iris-client still receives afte
       await expectChatMessageVisible(webPage, text)
     }
     await expectFlutterMessages(flutterBridge, irisClientPostRestartMessages)
+    await silentRelayConnectionsReady
   } finally {
     await irisClientContext.close()
     await irisClientServer.stop()
@@ -1260,8 +1312,9 @@ test('self-chat interop across web, flutter, and iris-client still receives afte
 
 test('flutter nsec owner + iris-client sibling interop with web owner + linked web sibling', async ({
   browser,
+  silentRelay,
   testRelay,
-  testRelayUrl,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -1279,24 +1332,25 @@ test('flutter nsec owner + iris-client sibling interop with web owner + linked w
 
   const bobOwnerContext = await browser.newContext()
   const bobLinkedContext = await browser.newContext()
-  await useTestRelay(bobOwnerContext, testRelayUrl)
-  await useTestRelay(bobLinkedContext, testRelayUrl)
+  await useTestRelay(bobOwnerContext, testRelayUrls)
+  await useTestRelay(bobLinkedContext, testRelayUrls)
   await setIdentity(bobOwnerContext, bobOwnerPrivkeyHex)
   await clearIdentity(bobLinkedContext)
 
   const bobOwnerPage = await bobOwnerContext.newPage()
   const bobLinkedPage = await bobLinkedContext.newPage()
 
-  const flutterBridge = new FlutterInteropBridge(testRelayUrl, aliceNsec, true)
+  const flutterBridge = new FlutterInteropBridge(testRelayUrls, aliceNsec, true)
   const irisClientServer = new IrisClientServer(await getAvailablePort())
   const irisClientBaseUrl = await irisClientServer.start()
   const irisClientContext = await browser.newContext()
-  await seedIrisClientRelay(irisClientContext, testRelayUrl)
+  await seedIrisClientRelay(irisClientContext, testRelayUrls)
   const irisClientPage = await irisClientContext.newPage()
 
   try {
     const flutterReady = await flutterBridge.start()
     expect(flutterReady.pubkeyHex).toBe(alicePubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 4, 180000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(bobOwnerPage)
@@ -1402,6 +1456,7 @@ test('flutter nsec owner + iris-client sibling interop with web owner + linked w
       await expectIrisClientMessageVisible(irisClientPage, text)
     }
     await expectFlutterMessages(flutterBridge, bobLinkedMessages, true)
+    await silentRelayConnectionsReady
   } finally {
     await irisClientContext.close()
     await irisClientServer.stop()
@@ -1413,7 +1468,8 @@ test('flutter nsec owner + iris-client sibling interop with web owner + linked w
 
 test('flutter existing-nsec invite interop (different keys) between flutter and web', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -1425,14 +1481,15 @@ test('flutter existing-nsec invite interop (different keys) between flutter and 
   const expectedFlutterPubkeyHex = getPublicKey(flutterSecret).toLowerCase()
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, flutterNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, flutterNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedFlutterPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     const created = await bridge.command<{ inviteUrl: string }>(
@@ -1472,13 +1529,18 @@ test('flutter existing-nsec invite interop (different keys) between flutter and 
     )
 
     await expectChatMessageVisible(page, flutterMessage)
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()
   }
 })
 
-test('group interop (same key) between web and flutter', async ({ browser, testRelayUrl }) => {
+test('group interop (same key) between web and flutter', async ({
+  browser,
+  silentRelay,
+  testRelayUrls,
+}) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
   test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
@@ -1491,15 +1553,16 @@ test('group interop (same key) between web and flutter', async ({ browser, testR
   const groupName = `interop-group-${Date.now()}`
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(page)
@@ -1571,6 +1634,7 @@ test('group interop (same key) between web and flutter', async ({ browser, testR
       },
       40000
     )
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()
@@ -1579,7 +1643,8 @@ test('group interop (same key) between web and flutter', async ({ browser, testR
 
 test('group interop (different keys) web creates group and flutter receives it', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -1592,14 +1657,15 @@ test('group interop (different keys) web creates group and flutter receives it',
   const groupName = `web-to-flutter-group-${Date.now()}`
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, flutterNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, flutterNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedFlutterPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginAnonymously(page)
@@ -1695,6 +1761,7 @@ test('group interop (different keys) web creates group and flutter receives it',
     await expectChatMessageVisible(page, flutterMessage)
 
     expect(webPubkeyHex).toHaveLength(64)
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()
@@ -1703,7 +1770,8 @@ test('group interop (different keys) web creates group and flutter receives it',
 
 test('group interop (different keys) flutter creates group and web sees flutter messages', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -1716,14 +1784,15 @@ test('group interop (different keys) flutter creates group and web sees flutter 
   const groupName = `flutter-to-web-group-${Date.now()}`
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, flutterNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, flutterNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedFlutterPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginAnonymously(page)
@@ -1804,6 +1873,7 @@ test('group interop (different keys) flutter creates group and web sees flutter 
       },
       40000
     )
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()
@@ -1812,7 +1882,8 @@ test('group interop (different keys) flutter creates group and web sees flutter 
 
 test('group interop (same key) between web-created groups and flutter', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -1826,15 +1897,16 @@ test('group interop (same key) between web-created groups and flutter', async ({
   const groupName = `web-created-interop-group-${Date.now()}`
 
   const context = await browser.newContext()
-  await useTestRelay(context, testRelayUrl)
+  await useTestRelay(context, testRelayUrls)
   await setIdentity(context, privkeyHex)
   const page = await context.newPage()
 
-  const bridge = new FlutterInteropBridge(testRelayUrl, privateKeyNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, privateKeyNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(expectedPubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
     await waitForNextCreatedAtSecond()
 
     await loginWithStoredKey(page)
@@ -1924,6 +1996,7 @@ test('group interop (same key) between web-created groups and flutter', async ({
     await expect(
       page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterMessage }).first()
     ).toBeVisible({ timeout: 30000 })
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     await bridge.stop()

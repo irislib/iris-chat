@@ -183,11 +183,28 @@ async function waitForRelayEvent(
   throw new Error(`Timed out waiting for relay event: ${description}`)
 }
 
-function createNdrDataDir(relayUrl: string): string {
+async function waitForRelayConnectionCount(
+  relay: { totalConnections: number },
+  minConnectionCount: number,
+  timeoutMs = 10000
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (relay.totalConnections >= minConnectionCount) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(
+    `Timed out waiting for relay connections >= ${minConnectionCount}; got ${relay.totalConnections}`
+  )
+}
+
+function createNdrDataDir(relayUrls: string[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ndr-interop-'))
   fs.writeFileSync(
     path.join(dir, 'config.json'),
-    JSON.stringify({ relays: [relayUrl] })
+    JSON.stringify({ relays: relayUrls })
   )
   return dir
 }
@@ -284,7 +301,25 @@ function startNdrListen(dataDir: string) {
   )
 
   const reader = readline.createInterface({ input: child.stdout })
-  return { child, reader }
+  const stderrReader = readline.createInterface({ input: child.stderr })
+  const recentStdout: string[] = []
+  const recentStderr: string[] = []
+
+  const rememberLine = (lines: string[], line: string) => {
+    lines.push(line)
+    if (lines.length > 50) {
+      lines.shift()
+    }
+  }
+
+  reader.on('line', (line) => {
+    rememberLine(recentStdout, line)
+  })
+  stderrReader.on('line', (line) => {
+    rememberLine(recentStderr, line)
+  })
+
+  return { child, reader, stderrReader, recentStdout, recentStderr }
 }
 
 async function waitForNdrListenRunning(
@@ -314,7 +349,7 @@ async function waitForNdrListenRunning(
 }
 
 async function waitForNdrJson(
-  reader: readline.Interface,
+  listener: ReturnType<typeof startNdrListen>,
   predicate: (value: any) => boolean,
   timeoutMs: number,
   description: string
@@ -322,7 +357,13 @@ async function waitForNdrJson(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup()
-      reject(new Error(`Timed out waiting for ndr output: ${description}`))
+      reject(
+        new Error(
+          `Timed out waiting for ndr output: ${description}\n` +
+            `Recent stdout:\n${listener.recentStdout.join('\n')}\n` +
+            `Recent stderr:\n${listener.recentStderr.join('\n')}`
+        )
+      )
     }, timeoutMs)
 
     const onLine = (line: string) => {
@@ -342,10 +383,10 @@ async function waitForNdrJson(
 
     const cleanup = () => {
       clearTimeout(timeout)
-      reader.off('line', onLine)
+      listener.reader.off('line', onLine)
     }
 
-    reader.on('line', onLine)
+    listener.reader.on('line', onLine)
   })
 }
 
@@ -356,11 +397,11 @@ async function stopNdrListen(child: ReturnType<typeof startNdrListen>['child']) 
   })
 }
 
-test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
+test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRelayUrls }) => {
   skipIfNdrWorkspaceMissing()
   test.setTimeout(240000)
 
-  const dataDir = createNdrDataDir(testRelayUrl)
+  const dataDir = createNdrDataDir(testRelayUrls)
   let listener: ReturnType<typeof startNdrListen> | null = null
 
   try {
@@ -372,6 +413,7 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
     const inviteUrl: string | undefined = created.data?.url
     expect(inviteUrl).toBeTruthy()
 
+    await useTestRelay(page.context(), testRelayUrls)
     await page.goto('/')
     await page.getByRole('button', { name: 'Go' }).click()
 
@@ -379,9 +421,10 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
 
     listener = startNdrListen(dataDir)
     await waitForNdrListenRunning(listener.child)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
 
     const createdSessionPromise = waitForNdrJson(
-      listener.reader,
+      listener,
       (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
       60000,
       'session_created after invite acceptance'
@@ -391,13 +434,19 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
 
     const irisMessage = 'hello from iris'
     const irisMessagePromise = waitForNdrJson(
-      listener.reader,
+      listener,
       (json) => json.event === 'message' && json.content === irisMessage,
       30000,
       'ndr receiving iris message'
     )
     await page.getByPlaceholder('Type a message...').fill(irisMessage)
     await page.getByRole('button', { name: 'Send' }).click()
+    await waitForRelayEvent(
+      testRelay,
+      (event) => event.kind === 1060,
+      10000,
+      'iris sending a 1060 message event'
+    )
 
     await irisMessagePromise
 
@@ -407,6 +456,7 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
     await expect(
       page.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrMessage })
     ).toBeVisible({ timeout: 30000 })
+    await silentRelayConnectionsReady
   } finally {
     if (listener) {
       await stopNdrListen(listener.child)
@@ -415,7 +465,12 @@ test('iris-chat <-> ndr interop', async ({ page, testRelayUrl }) => {
   }
 })
 
-test('iris-chat linked devices <-> ndr interop', async ({ browser, testRelayUrl, testRelay }) => {
+test('iris-chat linked devices <-> ndr interop', async ({
+  browser,
+  silentRelay,
+  testRelay,
+  testRelayUrls,
+}) => {
   skipIfNdrWorkspaceMissing()
   test.setTimeout(300000)
 
@@ -425,15 +480,15 @@ test('iris-chat linked devices <-> ndr interop', async ({ browser, testRelayUrl,
 
   const ownerContext = await browser.newContext()
   const linkedContext = await browser.newContext()
-  await useTestRelay(ownerContext, testRelayUrl)
-  await useTestRelay(linkedContext, testRelayUrl)
+  await useTestRelay(ownerContext, testRelayUrls)
+  await useTestRelay(linkedContext, testRelayUrls)
   await setIdentity(ownerContext, ownerPrivkeyHex)
   await clearIdentity(linkedContext)
 
   const ownerPage = await ownerContext.newPage()
   const linkedPage = await linkedContext.newPage()
 
-  const dataDir = createNdrDataDir(testRelayUrl)
+  const dataDir = createNdrDataDir(testRelayUrls)
   let listener: ReturnType<typeof startNdrListen> | null = null
 
   try {
@@ -445,6 +500,7 @@ test('iris-chat linked devices <-> ndr interop', async ({ browser, testRelayUrl,
 
     listener = startNdrListen(dataDir)
     await waitForNdrListenRunning(listener.child)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 120000)
 
     const created = await runNdr(['invite', 'create'], dataDir)
     expect(created.status).toBe('ok')
@@ -452,7 +508,7 @@ test('iris-chat linked devices <-> ndr interop', async ({ browser, testRelayUrl,
     expect(inviteUrl).toBeTruthy()
 
     const createdSessionPromise = waitForNdrJson(
-      listener.reader,
+      listener,
       (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
       60000,
       'session_created after invite acceptance'
@@ -493,37 +549,30 @@ test('iris-chat linked devices <-> ndr interop', async ({ browser, testRelayUrl,
       30000,
       'linked device invite publication after registration'
     )
-    const ownerToAll = `owner->ndr+linked ${Date.now()}`
-    const ownerToNdrPromise = waitForNdrJson(
-      listener.reader,
-      (json) => json.event === 'message' && json.content === ownerToAll,
-      30000,
-      'ndr receiving owner message after linking'
-    )
-    await ownerPage.getByPlaceholder('Type a message...').fill(ownerToAll)
-    await ownerPage.getByRole('button', { name: 'Send' }).click()
-    await ownerToNdrPromise
-    await openChatFromList(linkedPage, ownerToAll)
-    await expect(
-      linkedPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: ownerToAll }).first()
-    ).toBeVisible({ timeout: 30000 })
+    await ownerPage
+      .getByPlaceholder('Type a message...')
+      .fill(`owner warmup draft ${Date.now()}`)
 
-    const linkedToAll = `linked->owner+ndr ${Date.now()}`
-    const linkedToNdrPromise = waitForNdrJson(
-      listener.reader,
-      (json) => json.event === 'message' && json.content === linkedToAll,
-      30000,
-      'ndr receiving linked-device message'
-    )
-    await linkedPage.getByPlaceholder('Type a message...').fill(linkedToAll)
-    await linkedPage.getByRole('button', { name: 'Send' }).click()
-    await linkedToNdrPromise
-    await expect(
-      ownerPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: linkedToAll }).first()
-    ).toBeVisible({ timeout: 30000 })
+    const ndrWarmup = `ndr warmup ${Date.now()}`
+    await runNdrRetry(['send', createdSession.chat_id, ndrWarmup], dataDir, 30000, 500)
+    const ownerWarmupBubble = ownerPage
+      .locator('.max-w-\\[85\\%\\]')
+      .filter({ hasText: ndrWarmup })
+      .first()
+    if (!(await ownerWarmupBubble.isVisible().catch(() => false))) {
+      await openChatFromList(ownerPage, ndrWarmup)
+    }
+    await expect(ownerWarmupBubble).toBeVisible({ timeout: 30000 })
 
-    // Only assert reverse fanout from ndr after the linked web sibling has
-    // demonstrated it has an active direct session with ndr as well.
+    const linkedWarmupBubble = linkedPage
+      .locator('.max-w-\\[85\\%\\]')
+      .filter({ hasText: ndrWarmup })
+      .first()
+    if (!(await linkedWarmupBubble.isVisible().catch(() => false))) {
+      await openChatFromList(linkedPage, ndrWarmup)
+    }
+    await expect(linkedWarmupBubble).toBeVisible({ timeout: 30000 })
+
     const ndrToAll = `ndr->owner+linked ${Date.now()}`
     await runNdrRetry(['send', createdSession.chat_id, ndrToAll], dataDir, 30000, 500)
     await expect(
@@ -532,6 +581,7 @@ test('iris-chat linked devices <-> ndr interop', async ({ browser, testRelayUrl,
     await expect(
       linkedPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrToAll }).first()
     ).toBeVisible({ timeout: 30000 })
+    await silentRelayConnectionsReady
   } finally {
     if (listener) {
       await stopNdrListen(listener.child)

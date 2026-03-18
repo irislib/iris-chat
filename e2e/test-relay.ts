@@ -215,3 +215,62 @@ export class TestRelay {
     this.events.clear()
   }
 }
+
+/**
+ * WebSocket relay stub that accepts connections but never responds to any
+ * Nostr traffic. Used to verify clients tolerate a connected-but-deaf relay
+ * in multi-client interop tests.
+ */
+export class SilentTestRelay {
+  private server: http.Server
+  private wss: WebSocketServer
+  public port = 0
+  public totalConnections = 0
+
+  constructor() {
+    this.server = http.createServer()
+    this.wss = new WebSocketServer({ server: this.server })
+
+    this.wss.on('connection', (ws) => {
+      this.totalConnections += 1
+
+      ws.on('message', () => {
+        // Intentionally ignore all client traffic.
+      })
+
+      ws.on('error', (err) => {
+        console.error(`[silent-relay:${this.port}] ws error:`, err.message)
+      })
+    })
+
+    this.wss.on('error', (err) => {
+      console.error(`[silent-relay] wss error:`, err.message)
+    })
+  }
+
+  async start(): Promise<number> {
+    return new Promise((resolve) => {
+      this.server.listen(0, '127.0.0.1', () => {
+        this.port = (this.server.address() as AddressInfo).port
+        resolve(this.port)
+      })
+    })
+  }
+
+  async stop(): Promise<void> {
+    return new Promise((resolve) => {
+      for (const ws of this.wss.clients) {
+        ws.close()
+      }
+      this.wss.close(() => {
+        this.server.close(() => {
+          resolve()
+        })
+      })
+    })
+  }
+
+  get url(): string {
+    return `ws://127.0.0.1:${this.port}`
+  }
+}

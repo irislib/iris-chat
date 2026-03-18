@@ -125,6 +125,25 @@ async function waitForLatestOwnerAppKeysDeviceCount(
   )
 }
 
+async function waitForRelayConnectionCount(
+  relay: { totalConnections: number },
+  minConnectionCount: number,
+  timeoutMs = 10000
+) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    if (relay.totalConnections >= minConnectionCount) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  throw new Error(
+    `Timed out waiting for relay connections >= ${minConnectionCount}; got ${relay.totalConnections}`
+  )
+}
+
 async function waitForNextCreatedAtSecond(): Promise<void> {
   const currentSecond = Math.floor(Date.now() / 1000)
   while (Math.floor(Date.now() / 1000) === currentSecond) {
@@ -208,7 +227,7 @@ async function openLinkThisDevice(page: Page): Promise<void> {
 
 async function getInviteUrl(page: Page): Promise<string> {
   const copyButton = page.locator('button[title*="#"]').first()
-  await expect(copyButton).toBeVisible({ timeout: 10000 })
+  await expect(copyButton).toBeVisible({ timeout: 30000 })
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get invite URL')
   return url.replace('https://chat.iris.to', 'http://localhost:4173')
@@ -216,7 +235,7 @@ async function getInviteUrl(page: Page): Promise<string> {
 
 async function getLinkInviteUrl(page: Page): Promise<string> {
   const copyButton = page.locator('button[title*="#"]').first()
-  await expect(copyButton).toBeVisible({ timeout: 10000 })
+  await expect(copyButton).toBeVisible({ timeout: 30000 })
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get link invite URL')
   return url
@@ -255,7 +274,7 @@ function reapFlutterInteropAppProcesses(): void {
 }
 
 type BridgeEvent =
-  | { type: 'ready'; data?: { pubkeyHex?: string; relayUrl?: string } }
+  | { type: 'ready'; data?: { pubkeyHex?: string; relayUrl?: string; relayUrls?: string[] } }
   | { type: 'response'; id?: string; ok?: boolean; data?: unknown; error?: string }
   | { type: string; id?: string; ok?: boolean; data?: unknown; error?: string }
 
@@ -269,7 +288,7 @@ class FlutterInteropBridge {
   private stderr = ''
 
   constructor(
-    private readonly relayUrl: string,
+    private readonly relayUrls: string[],
     private readonly privateKeyNsec: string,
     private readonly registerDeviceOnLogin = false
   ) {}
@@ -287,7 +306,8 @@ class FlutterInteropBridge {
         'integration_test/flutter_interop_bridge_macos_suite.dart',
         '-d',
         'macos',
-        `--dart-define=IRIS_INTEROP_RELAY_URL=${this.relayUrl}`,
+        `--dart-define=IRIS_INTEROP_RELAY_URL=${this.relayUrls[0] ?? ''}`,
+        `--dart-define=IRIS_INTEROP_RELAY_URLS=${this.relayUrls.join(',')}`,
         `--dart-define=IRIS_INTEROP_BRIDGE_DIR=${this.bridgeDir}`,
         `--dart-define=IRIS_INTEROP_PRIVATE_KEY_NSEC=${this.privateKeyNsec}`,
         `--dart-define=IRIS_INTEROP_REGISTER_DEVICE=${this.registerDeviceOnLogin ? '1' : '0'}`,
@@ -438,7 +458,11 @@ class FlutterInteropBridge {
   }
 }
 
-test('link device interop: flutter new device -> web owner accept', async ({ browser, testRelayUrl }) => {
+test('link device interop: flutter new device -> web owner accept', async ({
+  browser,
+  silentRelay,
+  testRelayUrls,
+}) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
   test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
@@ -457,14 +481,14 @@ test('link device interop: flutter new device -> web owner accept', async ({ bro
 
   const ownerContext = await browser.newContext()
   const user2Context = await browser.newContext()
-  await useTestRelay(ownerContext, testRelayUrl)
-  await useTestRelay(user2Context, testRelayUrl)
+  await useTestRelay(ownerContext, testRelayUrls)
+  await useTestRelay(user2Context, testRelayUrls)
   await setIdentity(ownerContext, ownerPrivkeyHex)
   await setIdentity(user2Context, user2PrivkeyHex)
 
   const ownerPage = await ownerContext.newPage()
   const user2Page = await user2Context.newPage()
-  const bridge = new FlutterInteropBridge(testRelayUrl, flutterNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrls, flutterNsec)
 
   try {
     await loginWithStoredKey(ownerPage)
@@ -473,6 +497,7 @@ test('link device interop: flutter new device -> web owner accept', async ({ bro
 
     await bridge.start()
     await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 120000)
 
     const created = await bridge.command<{ inviteUrl: string }>('create_link_invite', {}, 30000)
     await acceptLinkInvite(ownerPage, created.inviteUrl)
@@ -520,6 +545,7 @@ test('link device interop: flutter new device -> web owner accept', async ({ bro
     await expect(
       user2Page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterToUser2 }).first()
     ).toBeVisible({ timeout: 30000 })
+    await silentRelayConnectionsReady
   } finally {
     await ownerContext.close()
     await user2Context.close()
@@ -529,8 +555,9 @@ test('link device interop: flutter new device -> web owner accept', async ({ bro
 
 test('link device interop: linked flutter invite can be messaged by web user', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
   testRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -550,14 +577,14 @@ test('link device interop: linked flutter invite can be messaged by web user', a
 
   const ownerContext = await browser.newContext()
   const user2Context = await browser.newContext()
-  await useTestRelay(ownerContext, testRelayUrl)
-  await useTestRelay(user2Context, testRelayUrl)
+  await useTestRelay(ownerContext, testRelayUrls)
+  await useTestRelay(user2Context, testRelayUrls)
   await setIdentity(ownerContext, ownerPrivkeyHex)
   await setIdentity(user2Context, user2PrivkeyHex)
 
   const ownerPage = await ownerContext.newPage()
   const user2Page = await user2Context.newPage()
-  const bridge = new FlutterInteropBridge(testRelayUrl, flutterNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrls, flutterNsec)
 
   try {
     await loginWithStoredKey(ownerPage)
@@ -567,6 +594,7 @@ test('link device interop: linked flutter invite can be messaged by web user', a
 
     await bridge.start()
     await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 120000)
 
     const linkInvite = await bridge.command<{ inviteUrl: string }>('create_link_invite', {}, 30000)
     await acceptLinkInvite(ownerPage, linkInvite.inviteUrl)
@@ -607,6 +635,7 @@ test('link device interop: linked flutter invite can be messaged by web user', a
       ownerPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: user2ToLinkedFlutter }).first()
     ).toBeVisible({ timeout: 30000 })
     expect(flutterSession.sessionId).toBeTruthy()
+    await silentRelayConnectionsReady
   } finally {
     await ownerContext.close()
     await user2Context.close()
@@ -614,7 +643,11 @@ test('link device interop: linked flutter invite can be messaged by web user', a
   }
 })
 
-test('link device interop: web new device -> flutter owner accept', async ({ browser, testRelayUrl }) => {
+test('link device interop: web new device -> flutter owner accept', async ({
+  browser,
+  silentRelay,
+  testRelayUrls,
+}) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
   test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
@@ -629,19 +662,20 @@ test('link device interop: web new device -> flutter owner accept', async ({ bro
 
   const linkedContext = await browser.newContext()
   const user2Context = await browser.newContext()
-  await useTestRelay(linkedContext, testRelayUrl)
-  await useTestRelay(user2Context, testRelayUrl)
+  await useTestRelay(linkedContext, testRelayUrls)
+  await useTestRelay(user2Context, testRelayUrls)
   await clearIdentity(linkedContext)
   await setIdentity(user2Context, user2PrivkeyHex)
 
   const linkedPage = await linkedContext.newPage()
   const user2Page = await user2Context.newPage()
-  const bridge = new FlutterInteropBridge(testRelayUrl, ownerNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, ownerNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(ownerPubkeyHex)
     await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 120000)
 
     await loginWithStoredKey(user2Page)
     await registerDevice(user2Page)
@@ -674,6 +708,7 @@ test('link device interop: web new device -> flutter owner accept', async ({ bro
       { text: linkedToUser2, timeoutMs: 40000, incomingOnly: false },
       50000
     )
+    await silentRelayConnectionsReady
   } finally {
     await linkedContext.close()
     await user2Context.close()
@@ -683,8 +718,9 @@ test('link device interop: web new device -> flutter owner accept', async ({ bro
 
 test('link device interop: flutter owner keeps multiple web appkeys and sees web sender copies', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
   testRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -701,9 +737,9 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
   const linkedContext1 = await browser.newContext()
   const linkedContext2 = await browser.newContext()
   const user2Context = await browser.newContext()
-  await useTestRelay(linkedContext1, testRelayUrl)
-  await useTestRelay(linkedContext2, testRelayUrl)
-  await useTestRelay(user2Context, testRelayUrl)
+  await useTestRelay(linkedContext1, testRelayUrls)
+  await useTestRelay(linkedContext2, testRelayUrls)
+  await useTestRelay(user2Context, testRelayUrls)
   await clearIdentity(linkedContext1)
   await clearIdentity(linkedContext2)
   await setIdentity(user2Context, user2PrivkeyHex)
@@ -711,12 +747,13 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
   const linkedPage1 = await linkedContext1.newPage()
   const linkedPage2 = await linkedContext2.newPage()
   const user2Page = await user2Context.newPage()
-  const bridge = new FlutterInteropBridge(testRelayUrl, ownerNsec, true)
+  const bridge = new FlutterInteropBridge(testRelayUrls, ownerNsec, true)
 
   try {
     const ready = await bridge.start()
     expect(ready.pubkeyHex).toBe(ownerPubkeyHex)
     await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 4, 180000)
 
     await loginWithStoredKey(user2Page)
     await registerDevice(user2Page)
@@ -769,6 +806,7 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
       { text: linkedWebToUser2, timeoutMs: 40000, incomingOnly: false },
       50000
     )
+    await silentRelayConnectionsReady
   } finally {
     await linkedContext1.close()
     await linkedContext2.close()
@@ -779,8 +817,9 @@ test('link device interop: flutter owner keeps multiple web appkeys and sees web
 
 test('link device interop: linked web sender reaches linked flutter receiver across four devices', async ({
   browser,
-  testRelayUrl,
+  silentRelay,
   testRelay,
+  testRelayUrls,
 }) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
@@ -801,9 +840,9 @@ test('link device interop: linked web sender reaches linked flutter receiver acr
   const aliceOwnerContext = await browser.newContext()
   const bobOwnerContext = await browser.newContext()
   const bobLinkedContext = await browser.newContext()
-  await useTestRelay(aliceOwnerContext, testRelayUrl)
-  await useTestRelay(bobOwnerContext, testRelayUrl)
-  await useTestRelay(bobLinkedContext, testRelayUrl)
+  await useTestRelay(aliceOwnerContext, testRelayUrls)
+  await useTestRelay(bobOwnerContext, testRelayUrls)
+  await useTestRelay(bobLinkedContext, testRelayUrls)
   await setIdentity(aliceOwnerContext, aliceOwnerPrivkeyHex)
   await setIdentity(bobOwnerContext, bobOwnerPrivkeyHex)
   await clearIdentity(bobLinkedContext)
@@ -811,7 +850,7 @@ test('link device interop: linked web sender reaches linked flutter receiver acr
   const aliceOwnerPage = await aliceOwnerContext.newPage()
   const bobOwnerPage = await bobOwnerContext.newPage()
   const bobLinkedPage = await bobLinkedContext.newPage()
-  const bridge = new FlutterInteropBridge(testRelayUrl, aliceFlutterNsec)
+  const bridge = new FlutterInteropBridge(testRelayUrls, aliceFlutterNsec)
 
   try {
     await loginWithStoredKey(aliceOwnerPage)
@@ -822,6 +861,7 @@ test('link device interop: linked web sender reaches linked flutter receiver acr
     const ready = await bridge.start()
     expect(ready.pubkeyHex).not.toBe(aliceOwnerPubkeyHex)
     await bridge.command('wait_for_connected_relays', { minConnected: 1, timeoutMs: 30000 }, 40000)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 4, 180000)
 
     const aliceLinkInvite = await bridge.command<{ inviteUrl: string }>('create_link_invite', {}, 30000)
     await acceptLinkInvite(aliceOwnerPage, aliceLinkInvite.inviteUrl)
@@ -906,6 +946,7 @@ test('link device interop: linked web sender reaches linked flutter receiver acr
           `Recent relay 1060 events:\n${JSON.stringify(relayMessages, null, 2)}`
       )
     }
+    await silentRelayConnectionsReady
   } finally {
     await aliceOwnerContext.close()
     await bobOwnerContext.close()

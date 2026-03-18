@@ -58,9 +58,28 @@ async function waitForNextCreatedAtSecond(): Promise<void> {
   }
 }
 
-async function configureRelays(context: BrowserContext, testRelayUrl: string) {
+async function waitForRelayConnectionCount(
+  relay: { totalConnections: number },
+  minConnectionCount: number,
+  timeoutMs = 10000
+) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    if (relay.totalConnections >= minConnectionCount) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  throw new Error(
+    `Timed out waiting for relay connections >= ${minConnectionCount}; got ${relay.totalConnections}`
+  )
+}
+
+async function configureRelays(context: BrowserContext, relayUrls: string[]) {
   if (!RUN_PRODUCTION_RELAYS) {
-    await useTestRelay(context, testRelayUrl)
+    await useTestRelay(context, relayUrls)
     return
   }
 
@@ -282,7 +301,11 @@ class FlutterInteropBridge {
   }
 }
 
-test('npub link interop (different keys) between web and flutter', async ({ browser, testRelayUrl }) => {
+test('npub link interop (different keys) between web and flutter', async ({
+  browser,
+  silentRelay,
+  testRelayUrls,
+}) => {
   test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
   test.skip(process.platform !== 'darwin', 'Requires macOS')
   test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
@@ -294,11 +317,11 @@ test('npub link interop (different keys) between web and flutter', async ({ brow
 
   const flutterSecret = generateSecretKey()
   const flutterNsec = nip19.nsecEncode(flutterSecret)
-  const relayUrls = RUN_PRODUCTION_RELAYS ? EFFECTIVE_PROD_RELAYS : [testRelayUrl]
+  const relayUrls = RUN_PRODUCTION_RELAYS ? EFFECTIVE_PROD_RELAYS : testRelayUrls
   const flutterDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iris-flutter-interop-data-'))
 
   const context = await browser.newContext()
-  await configureRelays(context, testRelayUrl)
+  await configureRelays(context, relayUrls)
   await setIdentity(context, webPrivkeyHex)
   const page = await context.newPage()
   const humanPauseMs = RUN_PRODUCTION_RELAYS ? 2200 : 1200
@@ -315,6 +338,9 @@ test('npub link interop (different keys) between web and flutter', async ({ brow
       },
       RUN_PRODUCTION_RELAYS ? 190000 : 40000
     )
+    const silentRelayConnectionsReady = RUN_PRODUCTION_RELAYS
+      ? Promise.resolve()
+      : waitForRelayConnectionCount(silentRelay, 2, 120000)
     await bridge.command('ensure_default_invite_published', {}, 30000)
 
     await loginWithStoredKey(page)
@@ -532,6 +558,7 @@ test('npub link interop (different keys) between web and flutter', async ({ brow
     await expect(
       page.locator('.max-w-\\[85\\%\\]').filter({ hasText: flutterAfterReopen }).first()
     ).toBeVisible({ timeout: RUN_PRODUCTION_RELAYS ? 60000 : 30000 })
+    await silentRelayConnectionsReady
   } finally {
     await context.close()
     if (bridge) {
