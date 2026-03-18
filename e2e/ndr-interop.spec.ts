@@ -572,15 +572,33 @@ test('iris-chat linked devices <-> ndr interop', async ({
       await openChatFromList(linkedPage, ndrWarmup)
     }
     await expect(linkedWarmupBubble).toBeVisible({ timeout: 30000 })
+    const linkedAcceptButton = linkedPage.getByRole('button', { name: 'Accept' }).first()
+    if (await linkedAcceptButton.isVisible().catch(() => false)) {
+      await linkedAcceptButton.click()
+      await expect(linkedPage.getByPlaceholder('Type a message...')).toBeVisible({
+        timeout: 30000,
+      })
+    }
 
     const ndrToAll = `ndr->owner+linked ${Date.now()}`
     await runNdrRetry(['send', createdSession.chat_id, ndrToAll], dataDir, 30000, 500)
-    await expect(
-      ownerPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrToAll }).first()
-    ).toBeVisible({ timeout: 30000 })
-    await expect(
-      linkedPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrToAll }).first()
-    ).toBeVisible({ timeout: 30000 })
+    const ownerSecondBubble = ownerPage
+      .locator('.max-w-\\[85\\%\\]')
+      .filter({ hasText: ndrToAll })
+      .first()
+    if (!(await ownerSecondBubble.isVisible().catch(() => false))) {
+      await openChatFromList(ownerPage, ndrToAll)
+    }
+    await expect(ownerSecondBubble).toBeVisible({ timeout: 30000 })
+
+    const linkedSecondBubble = linkedPage
+      .locator('.max-w-\\[85\\%\\]')
+      .filter({ hasText: ndrToAll })
+      .first()
+    if (!(await linkedSecondBubble.isVisible().catch(() => false))) {
+      await openChatFromList(linkedPage, ndrToAll)
+    }
+    await expect(linkedSecondBubble).toBeVisible({ timeout: 30000 })
     await silentRelayConnectionsReady
   } finally {
     if (listener) {
