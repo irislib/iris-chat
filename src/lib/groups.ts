@@ -20,7 +20,7 @@ import {
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
 import type { Rumor, NostrSubscribe, GroupDecryptedEvent } from 'nostr-double-ratchet'
-import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { NDKEvent, NDKSubscriptionCacheUsage } from '@nostr-dev-kit/ndk'
 import { getPubkey, ndk } from './identity'
 import { devices } from './devices'
 import { chats, type ChatMessage } from './chat'
@@ -29,7 +29,7 @@ import {
   waitForPeerSendReadySessionManager,
 } from './privateChats'
 import { DexieStorageAdapter } from './sessionManagerStorage'
-import { getEventHash, type Event as NostrEvent } from 'nostr-tools'
+import { getEventHash, type Event as NostrEvent, type VerifiedEvent } from 'nostr-tools'
 import {
   saveGroup as saveGroupToDb,
   getAllGroups,
@@ -63,6 +63,13 @@ export const currentGroupId = writable<string | null>(null)
 const pendingGroupEvents = new Map<string, Array<{ rumor: Rumor, senderPubkey: string, senderDevicePubkey?: string }>>()
 const MAX_PENDING_PER_GROUP = 50
 const PENDING_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
+const GROUP_OUTER_BACKFILL_LOOKBACK_SECONDS = 3600
+const GROUP_OUTER_BACKFILL_RETRY_DELAYS_MS = [0, 500, 1500]
+const GROUP_OUTER_BACKFILL_DEBOUNCE_MS = 1500
+const recentNativeGroupOuterBackfillAt = new Map<string, number>()
+const recentNativeGroupOuterEventIds = new Map<string, number>()
+const RECENT_NATIVE_GROUP_OUTER_EVENT_TTL_MS = 5 * 60 * 1000
+const nativeGroupSendQueue = new Map<string, Promise<void>>()
 
 type NativeGroupRuntime = {
   manager: GroupManager
@@ -72,6 +79,22 @@ type NativeGroupRuntime = {
 
 let nativeGroupRuntime: NativeGroupRuntime | null = null
 const nativeGroupStorage = new DexieStorageAdapter()
+
+function enqueueNativeGroupSend<T>(groupId: string, action: () => Promise<T>): Promise<T> {
+  const previous = nativeGroupSendQueue.get(groupId) ?? Promise.resolve()
+  const result = previous.catch(() => undefined).then(action)
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  nativeGroupSendQueue.set(groupId, settled)
+  settled.finally(() => {
+    if (nativeGroupSendQueue.get(groupId) === settled) {
+      nativeGroupSendQueue.delete(groupId)
+    }
+  })
+  return result
+}
 
 function queuePendingEvent(groupId: string, rumor: Rumor, senderPubkey: string, senderDevicePubkey?: string): void {
   let queue = pendingGroupEvents.get(groupId)
@@ -171,6 +194,102 @@ function createNativeGroupSubscribe(): NostrSubscribe | undefined {
   }
 }
 
+function parseGroupSenderEventPubkey(rumor: Rumor): string | null {
+  if (rumor.kind !== GROUP_SENDER_KEY_DISTRIBUTION_KIND) return null
+  try {
+    const parsed = JSON.parse(rumor.content) as { senderEventPubkey?: unknown }
+    const senderEventPubkey = parsed.senderEventPubkey
+    if (typeof senderEventPubkey === 'string' && /^[0-9a-f]{64}$/i.test(senderEventPubkey)) {
+      return senderEventPubkey.toLowerCase()
+    }
+  } catch {
+    // ignore malformed distributions
+  }
+  return null
+}
+
+function parseOuterMessageNumber(content: string): number {
+  try {
+    const binary = atob(content)
+    if (binary.length < 8) return 0
+    return (
+      ((binary.charCodeAt(4) & 0xff) << 24) |
+      ((binary.charCodeAt(5) & 0xff) << 16) |
+      ((binary.charCodeAt(6) & 0xff) << 8) |
+      (binary.charCodeAt(7) & 0xff)
+    ) >>> 0
+  } catch {
+    return 0
+  }
+}
+
+function pruneRecentNativeGroupOuterEventIds(now: number): void {
+  for (const [eventId, seenAt] of recentNativeGroupOuterEventIds.entries()) {
+    if (now - seenAt > RECENT_NATIVE_GROUP_OUTER_EVENT_TTL_MS) {
+      recentNativeGroupOuterEventIds.delete(eventId)
+    }
+  }
+}
+
+function backfillRecentNativeGroupOuterEvents(manager: GroupManager, senderEventPubkeys: string[]): void {
+  const now = Date.now()
+  const authors = Array.from(new Set(senderEventPubkeys.filter((pubkey) => {
+    if (!pubkey) return false
+    const lastBackfillAt = recentNativeGroupOuterBackfillAt.get(pubkey) || 0
+    if (now - lastBackfillAt < GROUP_OUTER_BACKFILL_DEBOUNCE_MS) {
+      return false
+    }
+    recentNativeGroupOuterBackfillAt.set(pubkey, now)
+    return true
+  })))
+  if (authors.length === 0) return
+
+  for (const delayMs of GROUP_OUTER_BACKFILL_RETRY_DELAYS_MS) {
+    setTimeout(() => {
+      void (async () => {
+        const ndkInstance = get(ndk)
+        const events = await ndkInstance.fetchEvents(
+          {
+            kinds: [1060 as any],
+            authors,
+            since: Math.max(
+              0,
+              Math.floor(Date.now() / 1000) - GROUP_OUTER_BACKFILL_LOOKBACK_SECONDS,
+            ),
+          },
+          {
+            cacheUsage: NDKSubscriptionCacheUsage.PARALLEL,
+          },
+        )
+
+        const attemptNow = Date.now()
+        pruneRecentNativeGroupOuterEventIds(attemptNow)
+
+        const fetched = Array.from(events)
+          .map((event) => {
+            const rawEvent = event.rawEvent?.()
+            return rawEvent ? (rawEvent as unknown as VerifiedEvent) : null
+          })
+          .filter((event): event is VerifiedEvent => event !== null)
+          .sort((a, b) => {
+            if (a.pubkey !== b.pubkey) return a.pubkey.localeCompare(b.pubkey)
+            const aNumber = parseOuterMessageNumber(a.content)
+            const bNumber = parseOuterMessageNumber(b.content)
+            if (aNumber !== bNumber) return aNumber - bNumber
+            if (a.created_at !== b.created_at) return a.created_at - b.created_at
+            return a.id.localeCompare(b.id)
+          })
+
+        for (const outer of fetched) {
+          if (recentNativeGroupOuterEventIds.has(outer.id)) continue
+          recentNativeGroupOuterEventIds.set(outer.id, attemptNow)
+          await manager.handleOuterEvent(outer).catch(() => {})
+        }
+      })().catch(() => {})
+    }, delayMs)
+  }
+}
+
 function teardownNativeGroupManager(): void {
   if (!nativeGroupRuntime) return
   try {
@@ -252,6 +371,11 @@ async function processSenderKeyDistribution(
     senderOwnerPubkey,
     resolvedSenderDevice,
   )
+
+  const senderEventPubkey = parseGroupSenderEventPubkey(rumor)
+  if (senderEventPubkey) {
+    backfillRecentNativeGroupOuterEvents(runtime.manager, [senderEventPubkey])
+  }
 }
 
 function syncNativeGroupTransport(groupId: string): void {
@@ -362,30 +486,32 @@ async function sendNativeGroupEvent(
   partialEvent: { content: string, kind: number, tags: string[][] },
   options?: { includeSelfPairwiseCopy?: boolean },
 ): Promise<void> {
-  const runtime = ensureNativeGroupRuntime()
-  const groupData = get(groups).get(groupId)
-  if (!runtime || !groupData) {
-    fanOutToMembers(
-      groupId,
-      partialEvent,
-      undefined,
-      options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
-    )
-    return
-  }
+  await enqueueNativeGroupSend(groupId, async () => {
+    const runtime = ensureNativeGroupRuntime()
+    const groupData = get(groups).get(groupId)
+    if (!runtime || !groupData) {
+      fanOutToMembers(
+        groupId,
+        partialEvent,
+        undefined,
+        options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
+      )
+      return
+    }
 
-  await runtime.manager.upsertGroup(groupData)
-  await runtime.manager.sendEvent(groupId, partialEvent, {
-    sendPairwise: async (recipientOwnerPubkey, rumor) => {
-      const ready = await waitForPeerSendReadySessionManager(recipientOwnerPubkey)
-      await ready.sendEvent(recipientOwnerPubkey, rumor)
-    },
-    publishOuter: publishGroupOuterEvent,
+    await runtime.manager.upsertGroup(groupData)
+    await runtime.manager.sendEvent(groupId, partialEvent, {
+      sendPairwise: async (recipientOwnerPubkey, rumor) => {
+        const ready = await waitForPeerSendReadySessionManager(recipientOwnerPubkey)
+        await ready.sendEvent(recipientOwnerPubkey, rumor)
+      },
+      publishOuter: publishGroupOuterEvent,
+    })
+
+    if (options?.includeSelfPairwiseCopy) {
+      await fanOutToOwnDevices(groupId, partialEvent)
+    }
   })
-
-  if (options?.includeSelfPairwiseCopy) {
-    await fanOutToOwnDevices(groupId, partialEvent)
-  }
 }
 
 function senderCopyGroupMetadataToSelf(groupId: string, content: string): void {

@@ -503,6 +503,43 @@ async function openIrisClientChatByRecipient(
   await expect(messageInput).toBeEnabled({ timeout: 60000 })
 }
 
+async function openIrisClientGroupByName(page: Page, groupName: string): Promise<void> {
+  const deadline = Date.now() + 60_000
+  const groupPattern = new RegExp(escapeRegExp(groupName))
+
+  const chatsLink = page.getByRole('link', { name: 'Chats' })
+  if (await chatsLink.isVisible().catch(() => false)) {
+    await chatsLink.click().catch(() => {})
+  }
+
+  while (Date.now() < deadline) {
+    const candidates = [
+      page.locator('a[href*="/chats/group/"]').filter({ hasText: groupName }),
+      page.locator('a[href*="/chats/group/"]').filter({ hasText: groupPattern }),
+      page.locator('#main-content').getByText(groupName, { exact: false }),
+    ]
+
+    for (const locator of candidates) {
+      const count = await locator.count().catch(() => 0)
+      for (let index = 0; index < count; index += 1) {
+        const item = locator.nth(index)
+        if (await item.isVisible().catch(() => false)) {
+          await item.click()
+          await expect(page).toHaveURL(/\/chats\/group\//, { timeout: 15000 })
+          await expect(page.getByPlaceholder('Message').last()).toBeVisible({
+            timeout: 30000,
+          })
+          return
+        }
+      }
+    }
+
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`Could not find iris-client group: ${groupName}`)
+}
+
 class IrisClientServer {
   private child: ChildProcessWithoutNullStreams | null = null
   private stdout = ''
@@ -1459,6 +1496,227 @@ test('flutter nsec owner + iris-client sibling interop with web owner + linked w
     await irisClientServer.stop()
     await bobOwnerContext.close()
     await bobLinkedContext.close()
+    await flutterBridge.stop()
+  }
+})
+
+test('flutter first peer messages materialize in iris-client sibling before peer chat exists', async ({
+  browser,
+  silentRelay,
+  testRelay,
+  testRelayUrls,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.skip(!fs.existsSync(IRIS_CLIENT_REPO), `Iris client repo missing: ${IRIS_CLIENT_REPO}`)
+  test.setTimeout(300000)
+
+  const aliceSecret = generateSecretKey()
+  const aliceNsec = nip19.nsecEncode(aliceSecret)
+  const alicePubkeyHex = getPublicKey(aliceSecret).toLowerCase()
+
+  const bobSecret = generateSecretKey()
+  const bobPrivkeyHex = toHex(bobSecret)
+  const bobPubkeyHex = getPublicKey(bobSecret).toLowerCase()
+
+  const bobContext = await browser.newContext()
+  await useTestRelay(bobContext, testRelayUrls)
+  await setIdentity(bobContext, bobPrivkeyHex)
+  const bobPage = await bobContext.newPage()
+
+  const flutterBridge = new FlutterInteropBridge(testRelayUrls, aliceNsec, true)
+  const irisClientServer = new IrisClientServer(await getAvailablePort())
+  const irisClientBaseUrl = await irisClientServer.start()
+  const irisClientContext = await browser.newContext()
+  await seedIrisClientRelay(irisClientContext, testRelayUrls)
+  const irisClientPage = await irisClientContext.newPage()
+
+  try {
+    const flutterReady = await flutterBridge.start()
+    expect(flutterReady.pubkeyHex).toBe(alicePubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 180000)
+    await waitForNextCreatedAtSecond()
+
+    await loginWithStoredKey(bobPage)
+    await loginIrisClientWithKey(irisClientPage, irisClientBaseUrl, aliceNsec)
+    await waitForIrisClientRelays(irisClientPage)
+    await ensureIrisClientCurrentDeviceRegistered(irisClientPage, irisClientBaseUrl)
+    await waitForLatestOwnerAppKeysDeviceCount(testRelay, alicePubkeyHex, 2, 30000)
+
+    const invite = await flutterBridge.command<{ inviteUrl: string }>(
+      'create_invite',
+      { maxUses: 5 },
+      30000
+    )
+
+    await bobPage.getByRole('button', { name: 'New Chat' }).click()
+    await bobPage.getByPlaceholder('Paste invite link').fill(invite.inviteUrl)
+    await expect(bobPage.getByPlaceholder('Type a message...')).toBeVisible({
+      timeout: 20000,
+    })
+
+    const flutterSession = await flutterBridge.command<{ sessionId: string }>(
+      'ensure_session_for_recipient',
+      {
+        recipientPubkeyHex: bobPubkeyHex,
+      },
+      30000
+    )
+
+    const flutterMessages = [`fip #1 ${Date.now()}`, `fip #2 ${Date.now() + 1}`]
+    await sendFlutterMessages(flutterBridge, flutterSession.sessionId, flutterMessages)
+
+    for (const text of flutterMessages) {
+      await expectChatMessageVisible(bobPage, text)
+    }
+
+    await openIrisClientChatByRecipient(irisClientPage, irisClientBaseUrl, bobPubkeyHex)
+    for (const text of flutterMessages) {
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
+
+    await silentRelayConnectionsReady
+  } finally {
+    await irisClientContext.close()
+    await irisClientServer.stop()
+    await bobContext.close()
+    await flutterBridge.stop()
+  }
+})
+
+test('flutter-created group reaches web member and iris-client sibling with metadata', async ({
+  browser,
+  silentRelay,
+  testRelay,
+  testRelayUrls,
+}) => {
+  test.skip(!RUN_FLUTTER_INTEROP, 'Set IRIS_FLUTTER_INTEROP=1 to run Flutter interop tests')
+  test.skip(process.platform !== 'darwin', 'Requires macOS')
+  test.skip(!fs.existsSync(FLUTTER_REPO), `Flutter repo missing: ${FLUTTER_REPO}`)
+  test.skip(!fs.existsSync(IRIS_CLIENT_REPO), `Iris client repo missing: ${IRIS_CLIENT_REPO}`)
+  test.setTimeout(360000)
+
+  const aliceSecret = generateSecretKey()
+  const aliceNsec = nip19.nsecEncode(aliceSecret)
+  const alicePubkeyHex = getPublicKey(aliceSecret).toLowerCase()
+  const groupName = `flutter-group-${Date.now()}`
+
+  const bobSecret = generateSecretKey()
+  const bobPrivkeyHex = toHex(bobSecret)
+  const bobPubkeyHex = getPublicKey(bobSecret).toLowerCase()
+
+  const bobContext = await browser.newContext()
+  await useTestRelay(bobContext, testRelayUrls)
+  await setIdentity(bobContext, bobPrivkeyHex)
+  const bobPage = await bobContext.newPage()
+
+  const flutterBridge = new FlutterInteropBridge(testRelayUrls, aliceNsec, true)
+  const irisClientServer = new IrisClientServer(await getAvailablePort())
+  const irisClientBaseUrl = await irisClientServer.start()
+  const irisClientContext = await browser.newContext()
+  await seedIrisClientRelay(irisClientContext, testRelayUrls)
+  const irisClientPage = await irisClientContext.newPage()
+
+  try {
+    const flutterReady = await flutterBridge.start()
+    expect(flutterReady.pubkeyHex).toBe(alicePubkeyHex)
+    const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 180000)
+    await waitForNextCreatedAtSecond()
+
+    await loginWithStoredKey(bobPage)
+    await loginIrisClientWithKey(irisClientPage, irisClientBaseUrl, aliceNsec)
+    await waitForIrisClientRelays(irisClientPage)
+    await ensureIrisClientCurrentDeviceRegistered(irisClientPage, irisClientBaseUrl)
+    await waitForLatestOwnerAppKeysDeviceCount(testRelay, alicePubkeyHex, 2, 30000)
+
+    const invite = await flutterBridge.command<{ inviteUrl: string }>(
+      'create_invite',
+      { maxUses: 5 },
+      30000
+    )
+
+    await bobPage.getByRole('button', { name: 'New Chat' }).click()
+    await bobPage.getByPlaceholder('Paste invite link').fill(invite.inviteUrl)
+    await expect(bobPage.getByPlaceholder('Type a message...')).toBeVisible({
+      timeout: 20000,
+    })
+
+    const dmBootstrapText = `group bootstrap ${Date.now()}`
+    await bobPage.getByPlaceholder('Type a message...').fill(dmBootstrapText)
+    await bobPage.getByRole('button', { name: 'Send' }).click()
+    const flutterBootstrapMessage = await flutterBridge.command<{ sessionId: string }>(
+      'wait_for_message_meta',
+      {
+        text: dmBootstrapText,
+        timeoutMs: 30000,
+        incomingOnly: true,
+      },
+      40000
+    )
+
+    const dmBootstrapAck = `group bootstrap ack ${Date.now()}`
+    await sendFlutterMessages(flutterBridge, flutterBootstrapMessage.sessionId, [
+      dmBootstrapAck,
+    ])
+    await expectChatMessageVisible(bobPage, dmBootstrapAck)
+    await openIrisClientChatByRecipient(irisClientPage, irisClientBaseUrl, bobPubkeyHex)
+    await expectIrisClientMessageVisible(irisClientPage, dmBootstrapAck)
+
+    const flutterGroup = await flutterBridge.command<{ groupId: string }>(
+      'create_group',
+      {
+        name: groupName,
+        memberPubkeysHex: [bobPubkeyHex],
+      },
+      30000
+    )
+
+    await openGroupFromSidebar(bobPage, groupName)
+    await acceptOpenGroupIfNeeded(bobPage)
+    await openIrisClientGroupByName(irisClientPage, groupName)
+
+    const flutterGroupMessages = [
+      `fg #1 ${Date.now()}`,
+      `fg #2 ${Date.now() + 1}`,
+    ]
+    for (const text of flutterGroupMessages) {
+      await flutterBridge.command(
+        'send_group_message',
+        {
+          groupId: flutterGroup.groupId,
+          text,
+        },
+        30000
+      )
+    }
+
+    for (const text of flutterGroupMessages) {
+      await expectChatMessageVisible(bobPage, text)
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
+
+    const bobGroupMessages = [`bg #1 ${Date.now()}`, `bg #2 ${Date.now() + 1}`]
+    await sendWebMessages(bobPage, bobGroupMessages)
+    for (const text of bobGroupMessages) {
+      await expectIrisClientMessageVisible(irisClientPage, text)
+      await flutterBridge.command(
+        'wait_for_group_message',
+        {
+          groupId: flutterGroup.groupId,
+          text,
+          timeoutMs: 30000,
+          incomingOnly: true,
+        },
+        40000
+      )
+    }
+
+    await silentRelayConnectionsReady
+  } finally {
+    await irisClientContext.close()
+    await irisClientServer.stop()
+    await bobContext.close()
     await flutterBridge.stop()
   }
 })
