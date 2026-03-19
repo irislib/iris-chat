@@ -766,6 +766,7 @@ function resolveManagerIsFromSelf(
   meta?: OnEventMeta
 ): boolean {
   if (meta?.isSelf) return true
+  if (meta?.senderOwnerPubkey === myPubkey) return true
   if (effectiveFromPubkey === myPubkey) return true
   if (rumor.pubkey === myPubkey) return true
   if (isKnownOwnDevice(rumor.pubkey)) return true

@@ -63,6 +63,8 @@ vi.mock('./privateChats', () => ({
   getSessionManager: () => null,
   waitForSessionManager: () => Promise.reject(new Error('manager unavailable in test')),
   ensureDeviceRegistered: vi.fn(),
+  waitForPeerSendReadySessionManager: () =>
+    Promise.reject(new Error('manager unavailable in test')),
   republishInvite: vi.fn().mockResolvedValue(undefined),
 }))
 

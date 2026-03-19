@@ -50,6 +50,12 @@ vi.mock('./privateChats', () => ({
   getSessionManager: () => sessionState.manager,
   waitForSessionManager: privateChatsMocks.waitForSessionManager,
   ensureDeviceRegistered: privateChatsMocks.ensureDeviceRegistered,
+  waitForPeerSendReadySessionManager: async (recipientPubkey: string) => {
+    await privateChatsMocks.ensureDeviceRegistered()
+    const manager = await privateChatsMocks.waitForSessionManager()
+    await manager.setupUser(recipientPubkey)
+    return manager
+  },
   republishInvite: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -101,6 +107,7 @@ vi.mock('nostr-tools', async () => {
 })
 
 import {handleManagerEvent, chats, sendMessage} from './chat'
+import {countUnseenMessages} from './unseenCount'
 import {devices} from './devices'
 
 beforeEach(() => {
@@ -270,6 +277,38 @@ describe('handleManagerEvent', () => {
     expect(peerChat?.messages[0].content).toBe('hello peer despite stale device state')
     expect(peerChat?.messages[0].isMine).toBe(true)
     expect(chatMap.get(MY_PUBKEY)).toBeUndefined()
+  })
+
+  it('marks self-targeted sender copies from another client as mine when sender owner resolves to us', async () => {
+    const OWN_OTHER_DEVICE = 'd'.repeat(64)
+
+    const rumor = {
+      id: 'msg-self-targeted-owner-meta',
+      pubkey: OWN_OTHER_DEVICE,
+      content: 'hello from another app to self',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', MY_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, OWN_OTHER_DEVICE, {
+      senderOwnerPubkey: MY_PUBKEY,
+      senderDevicePubkey: OWN_OTHER_DEVICE,
+      fromDeviceId: OWN_OTHER_DEVICE,
+      origin: 'same-owner-other-device',
+    })
+
+    const chatMap = get(chats)
+    const selfChat = chatMap.get(MY_PUBKEY)
+
+    expect(selfChat).toBeTruthy()
+    expect(selfChat?.messages).toHaveLength(1)
+    expect(selfChat?.messages[0]).toMatchObject({
+      id: 'msg-self-targeted-owner-meta',
+      content: 'hello from another app to self',
+      isMine: true,
+    })
+    expect(countUnseenMessages(selfChat?.messages || [])).toBe(0)
   })
 
   it('bootstraps peer setup when a self-copy creates a new peer chat', async () => {
