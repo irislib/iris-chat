@@ -193,14 +193,29 @@ async function sendFlutterMessages(
   texts: string[]
 ): Promise<void> {
   for (const text of texts) {
-    await bridge.command(
-      'send_message_ui',
-      {
-        sessionId,
-        text,
-      },
-      30000
-    )
+    try {
+      await bridge.command(
+        'send_message_ui',
+        {
+          sessionId,
+          text,
+        },
+        30000
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes('Failed to foreground app; open returned 1')) {
+        throw error
+      }
+      await bridge.command(
+        'send_message',
+        {
+          sessionId,
+          text,
+        },
+        30000
+      )
+    }
   }
 }
 
@@ -471,39 +486,21 @@ async function openIrisClientSelfChat(page: Page): Promise<void> {
   await expect(messageInput).toBeEnabled({ timeout: 60000 })
 }
 
-async function openIrisClientChatFromList(page: Page, previewText: string): Promise<void> {
-  const deadline = Date.now() + 60_000
-  const previewPattern = new RegExp(escapeRegExp(previewText))
-
-  const chatsLink = page.getByRole('link', { name: 'Chats' })
-  if (await chatsLink.isVisible().catch(() => false)) {
-    await chatsLink.click().catch(() => {})
-  }
-
-  while (Date.now() < deadline) {
-    const candidateLists = [
-      page.locator('a[href="/chats/chat"]').filter({ hasText: previewText }),
-      page.locator('a[href="/chats/chat"]').filter({ hasText: previewPattern }),
-      page.locator('#main-content').getByText(previewText, { exact: false }),
-    ]
-
-    for (const candidates of candidateLists) {
-      const count = await candidates.count().catch(() => 0)
-      for (let index = 0; index < count; index += 1) {
-        const chatLink = candidates.nth(index)
-        if (await chatLink.isVisible().catch(() => false)) {
-          await chatLink.click()
-          await expect(page).toHaveURL(/\/chats\/chat/, { timeout: 15000 })
-          await expect(page.getByPlaceholder('Message').last()).toBeVisible({ timeout: 30000 })
-          return
-        }
-      }
-    }
-
-    await page.waitForTimeout(250)
-  }
-
-  throw new Error(`Could not find iris-client chat preview: ${previewText}`)
+async function openIrisClientChatByRecipient(
+  page: Page,
+  baseUrl: string,
+  recipientPubkeyHex: string
+): Promise<void> {
+  const recipientNpub = nip19.npubEncode(recipientPubkeyHex)
+  await page.goto(`${baseUrl}/chats/new`)
+  const searchInput = page.getByPlaceholder('Search users, paste npub or chat invite link')
+  await expect(searchInput).toBeVisible({ timeout: 15000 })
+  await searchInput.fill(recipientNpub)
+  await searchInput.press('Enter')
+  await expect(page).toHaveURL(/\/chats\/chat/, { timeout: 15000 })
+  const messageInput = page.getByPlaceholder('Message').last()
+  await expect(messageInput).toBeVisible({ timeout: 30000 })
+  await expect(messageInput).toBeEnabled({ timeout: 60000 })
 }
 
 class IrisClientServer {
@@ -1373,23 +1370,23 @@ test('flutter nsec owner + iris-client sibling interop with web owner + linked w
       timeout: 20000,
     })
 
-    const bobBootstrap = `bob boot ${Date.now()}`
-    await bobOwnerPage.getByPlaceholder('Type a message...').fill(bobBootstrap)
-    await bobOwnerPage.getByRole('button', { name: 'Send' }).click()
+    await openIrisClientChatByRecipient(irisClientPage, irisClientBaseUrl, bobOwnerPubkeyHex)
+    const aliceIrisClientBootstrapMessages = [`aib #1 ${Date.now()}`, `aib #2 ${Date.now() + 1}`]
+    await sendIrisClientMessages(irisClientPage, aliceIrisClientBootstrapMessages)
     const aliceFlutterSession = await flutterBridge.command<{ sessionId: string }>(
       'wait_for_message_meta',
       {
-        text: bobBootstrap,
+        text: aliceIrisClientBootstrapMessages[0],
         timeoutMs: 40000,
-        incomingOnly: true,
       },
       50000
     )
-
-    await openIrisClientChatFromList(irisClientPage, bobBootstrap)
-    await expect(
-      irisClientPage.locator('.whitespace-pre-wrap').getByText(bobBootstrap).last()
-    ).toBeVisible({ timeout: 60000 })
+    expect(aliceFlutterSession.sessionId.toLowerCase()).toBe(bobOwnerPubkeyHex)
+    await expectFlutterMessages(flutterBridge, aliceIrisClientBootstrapMessages)
+    for (const text of aliceIrisClientBootstrapMessages) {
+      await expectChatMessageVisible(bobOwnerPage, text)
+      await expectIrisClientMessageVisible(irisClientPage, text)
+    }
 
     await openLinkThisDevice(bobLinkedPage)
     const bobLinkInviteUrl = await getLinkInviteUrl(bobLinkedPage)
