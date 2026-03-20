@@ -17,16 +17,21 @@ import {
   type NostrSubscribe,
   type SessionManager,
 } from 'nostr-double-ratchet'
-import { ndk, identity, isLinkedDeviceLogin } from './identity'
+import { ndk, identity, getPrivkeyHex, getPrivkeyBytes, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { DexieStorageAdapter } from './sessionManagerStorage'
+import {
+  getCurrentDeviceRegistrationLabels,
+  getLinkedDeviceRegistrationLabels,
+} from './deviceLabels'
 
 let runtime: NdrRuntime | null = null
 let runtimeCleanup: (() => void) | null = null
 let previousRuntimeState: NdrRuntimeState | null = null
 let rotateInvitePromise: Promise<void> | null = null
 let linkedInviteRepublishTimer: ReturnType<typeof setTimeout> | null = null
+let runtimeOwnerIdentityKeyHex: string | null = null
 
 const APP_KEYS_FETCH_TIMEOUT_MS = 8000
 const APP_KEYS_FAST_TIMEOUT_MS = 2000
@@ -90,18 +95,30 @@ const republishInviteWithRetry = async (reason: string): Promise<void> => {
 }
 
 const getRuntime = (): NdrRuntime => {
-  if (runtime) {
+  const ownerIdentityKeyHex = getPrivkeyHex()
+
+  if (runtime && runtimeOwnerIdentityKeyHex === ownerIdentityKeyHex) {
     return runtime
   }
 
+  runtimeCleanup?.()
+  runtimeCleanup = null
+  runtime?.close()
+  runtime = null
+  previousRuntimeState = null
+  runtimeOwnerIdentityKeyHex = ownerIdentityKeyHex
+
   const ndkInstance = getNDK()
+  const ownerIdentityKey = getPrivkeyBytes()
   runtime = new NdrRuntime({
     nostrSubscribe: createSubscribe(ndkInstance),
     nostrPublish: createPublish(ndkInstance),
     storage: new DexieStorageAdapter(),
     appKeysFetchTimeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
     appKeysFastTimeoutMs: APP_KEYS_FAST_TIMEOUT_MS,
+    ...(ownerIdentityKey ? { ownerIdentityKey } : {}),
   })
+  runtimeOwnerIdentityKeyHex = ownerIdentityKeyHex
 
   runtimeCleanup = runtime.onStateChange((state) => {
     const previousState = previousRuntimeState
@@ -238,11 +255,14 @@ export const registerDevice = async (): Promise<void> => {
     throw new Error('Owner pubkey not available')
   }
 
+  const labels = await getCurrentDeviceRegistrationLabels()
+
   await ensureConnected()
   await getRuntime().initForOwner(ownerPubkey)
   await getRuntime().registerCurrentDevice({
     ownerPubkey,
     timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
+    ...labels,
   })
 }
 
@@ -256,12 +276,15 @@ export const registerLinkedDevice = async (identityPubkey: string): Promise<void
     throw new Error('Owner pubkey not available')
   }
 
+  const labels = await getLinkedDeviceRegistrationLabels()
+
   await ensureConnected()
   await getRuntime().initForOwner(ownerPubkey)
   await getRuntime().registerDeviceIdentity({
     ownerPubkey,
     identityPubkey,
     timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
+    ...labels,
   })
 }
 
@@ -342,10 +365,14 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
 
   await ensureConnected()
   await getRuntime().initForOwner(ownerPubkey)
-  await getRuntime().ensureCurrentDeviceRegistered(
-    ownerPubkey,
-    APP_KEYS_FETCH_TIMEOUT_MS
-  )
+  if (!getRuntime().getState().isCurrentDeviceRegistered) {
+    const labels = await getCurrentDeviceRegistrationLabels()
+    await getRuntime().registerCurrentDevice({
+      ownerPubkey,
+      timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
+      ...labels,
+    })
+  }
   await republishInvite().catch(() => {})
 }
 
@@ -384,6 +411,7 @@ export const resetManagers = (): void => {
   runtime = null
   previousRuntimeState = null
   rotateInvitePromise = null
+  runtimeOwnerIdentityKeyHex = null
   devices.reset()
 }
 

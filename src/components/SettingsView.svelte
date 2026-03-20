@@ -16,8 +16,15 @@
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
   import { messageRequestSettings, setReceiveMessageRequests } from '../lib/messageRequestSettings'
   import { devices } from '../lib/devices'
+  import { describeRegisteredDevice } from '../lib/deviceLabels'
   import { parseLinkInviteInput } from '../lib/linkInvites'
-  import { acceptLinkInvite, ensureDeviceRegistered, registerLinkedDevice, revokeDevice } from '../lib/privateChats'
+  import {
+    acceptLinkInvite,
+    ensureDeviceRegistered,
+    getAppKeysManager,
+    registerLinkedDevice,
+    revokeDevice,
+  } from '../lib/privateChats'
   import { uploadProfilePictureToBlossom } from '../lib/blossomUpload'
   import { getErrorMessage } from '../lib/utils'
 
@@ -422,6 +429,17 @@
     return pubkey.slice(0, 8) + '...' + pubkey.slice(-4)
   }
 
+  function getDeviceDisplay(identityPubkey: string) {
+    try {
+      return describeRegisteredDevice(
+        identityPubkey,
+        getAppKeysManager().getDeviceLabels(identityPubkey)
+      )
+    } catch {
+      return describeRegisteredDevice(identityPubkey)
+    }
+  }
+
   function truncateEndpoint(endpoint: string): string {
     try {
       const url = new URL(endpoint)
@@ -671,7 +689,14 @@
             <div class="space-y-2">
               {#each deviceState.registeredDevices as device}
                 <div class="flex items-center justify-between gap-2 p-2 bg-surface-light rounded">
-                  <span class="text-xs font-mono text-gray-300">{truncatePubkey(device.identityPubkey)}</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm text-gray-200 truncate">{getDeviceDisplay(device.identityPubkey).title}</div>
+                    {#if getDeviceDisplay(device.identityPubkey).subtitle}
+                      <div class="text-xs text-gray-400 truncate">
+                        {getDeviceDisplay(device.identityPubkey).subtitle}
+                      </div>
+                    {/if}
+                  </div>
                   {#if device.identityPubkey === deviceState.identityPubkey}
                     <span class="text-xs text-primary">This device</span>
                   {:else}

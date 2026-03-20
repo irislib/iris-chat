@@ -39,8 +39,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: 0.0.89
-        version: 0.0.89(typescript@5.9.3)
+        specifier: 0.0.91
+        version: 0.0.91(typescript@5.9.3)
       nostr-tools:
         specifier: ^2.19.3
         version: 2.20.0(typescript@5.9.3)
@@ -1507,8 +1507,8 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  baseline-browser-mapping@2.10.8:
-    resolution: {integrity: sha512-PCLz/LXGBsNTErbtB6i5u4eLpHeMfi93aUv5duMmj6caNu6IphS4q6UevDnL36sZQv9lrP11dbPKGMaXPwMKfQ==}
+  baseline-browser-mapping@2.10.9:
+    resolution: {integrity: sha512-OZd0e2mU11ClX8+IdXe3r0dbqMEznRiT4TfbhYIbcRPZkqJ7Qwer8ij3GZAmLsRKa+II9V1v5czCkvmHH3XZBg==}
     engines: {node: '>=6.0.0'}
     hasBin: true
 
@@ -2249,8 +2249,8 @@ packages:
   node-releases@2.0.36:
     resolution: {integrity: sha512-TdC8FSgHz8Mwtw9g5L4gR/Sh9XhSP/0DEkQxfEFXOpiul5IiHgHan2VhYYb6agDSfp4KuvltmGApc8HMgUrIkA==}
 
-  nostr-double-ratchet@0.0.89:
-    resolution: {integrity: sha512-MJx90Poj0LkccpfK18Qbmgyyb5IjHs51V14dhLibiODKLa+0Q0Bh7rzchV2rHN2tICwBV621hJwYIG6fPjmp8g==}
+  nostr-double-ratchet@0.0.91:
+    resolution: {integrity: sha512-euJt6dVgz47QqmYZgiikWIU65o5JXriCRZ5tfvOJ6dy65zVL4r31a9dQPABY+ZsxDMeGmHo0+ZqgMKC5fg66hA==}
 
   nostr-tools@2.20.0:
     resolution: {integrity: sha512-Kq/2lMyeOdGvpDsYH2an8HP4H0aFCqwKythhTzxfgZTVv4L3NOgrJw2SxH8jkWlH8xPhWxGfN6lFtC+EAa2qYQ==}
@@ -4607,7 +4607,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  baseline-browser-mapping@2.10.8: {}
+  baseline-browser-mapping@2.10.9: {}
 
   brace-expansion@2.0.2:
     dependencies:
@@ -4619,7 +4619,7 @@ snapshots:
 
   browserslist@4.28.1:
     dependencies:
-      baseline-browser-mapping: 2.10.8
+      baseline-browser-mapping: 2.10.9
       caniuse-lite: 1.0.30001780
       electron-to-chromium: 1.5.321
       node-releases: 2.0.36
@@ -5412,7 +5412,7 @@ snapshots:
 
   node-releases@2.0.36: {}
 
-  nostr-double-ratchet@0.0.89(typescript@5.9.3):
+  nostr-double-ratchet@0.0.91(typescript@5.9.3):
     dependencies:
       nostr-tools: 2.23.3(typescript@5.9.3)
     transitivePeerDependencies:
