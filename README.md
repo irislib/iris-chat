@@ -1,5 +1,7 @@
 # iris chat
 
+> Main development is on [decentralized git](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat): `htree://npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat`
+
 Decentralized encrypted messaging over Nostr using the double-ratchet protocol.
 
 ## Features
