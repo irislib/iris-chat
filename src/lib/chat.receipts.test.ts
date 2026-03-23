@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => {
       return nextRank > currentRank
     }),
     updateMessageStatus: vi.fn().mockResolvedValue(undefined),
+    waitForPeerSendReadySessionManager: vi
+      .fn()
+      .mockRejectedValue(new Error('manager unavailable in test')),
   }
 })
 
@@ -63,8 +66,8 @@ vi.mock('./privateChats', () => ({
   getSessionManager: () => null,
   waitForSessionManager: () => Promise.reject(new Error('manager unavailable in test')),
   ensureDeviceRegistered: vi.fn(),
-  waitForPeerSendReadySessionManager: () =>
-    Promise.reject(new Error('manager unavailable in test')),
+  waitForPeerSendReadySessionManager: (...args: [string]) =>
+    mocks.waitForPeerSendReadySessionManager(...args),
   republishInvite: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -108,16 +111,29 @@ vi.mock('./receipts', () => ({
     mocks.shouldAdvanceStatus(...args),
 }))
 
-import { chats, currentChat, handleManagerEvent } from './chat'
+import { chats, currentChat, handleManagerEvent, type ChatSession } from './chat'
 import { devices } from './devices'
+import { following } from './following'
+import { messageRequests } from './messageRequests'
+import { messageRequestSettings } from './messageRequestSettings'
+import { getMessageRequestPolicyContext, isMessageRequestChat } from './messageRequestPolicy'
+import { receiptSettings } from './receiptSettings'
 
 beforeEach(() => {
   chats.set(new Map())
   currentChat.set(null)
   devices.reset()
+  following.set(new Set())
+  messageRequests.set({ acceptedChats: {}, rejectedChats: {} })
+  messageRequestSettings.set({ receiveMessageRequests: true })
+  receiptSettings.set({
+    sendDeliveryReceipts: false,
+    sendReadReceipts: false,
+  })
   mocks.parseReceipt.mockClear()
   mocks.shouldAdvanceStatus.mockClear()
   mocks.updateMessageStatus.mockClear()
+  mocks.waitForPeerSendReadySessionManager.mockClear()
 })
 
 describe('manager receipts', () => {
@@ -232,5 +248,45 @@ describe('manager receipts', () => {
       status: 'seen',
     })
     expect(mocks.updateMessageStatus).toHaveBeenCalledWith('out-1', 'seen')
+  })
+
+  it('keeps preexisting empty manager chats from unknown senders in requests', async () => {
+    receiptSettings.set({
+      sendDeliveryReceipts: true,
+      sendReadReceipts: false,
+    })
+
+    const existingChat: ChatSession = {
+      id: THEIR_PUBKEY,
+      recipientPubkey: THEIR_PUBKEY,
+      mode: 'manager',
+      messages: [],
+    }
+    chats.set(new Map([[THEIR_PUBKEY, existingChat]]))
+
+    const now = Date.now()
+    const createdAt = Math.floor(now / 1000)
+
+    await handleManagerEvent(
+      {
+        id: 'msg-request-1',
+        kind: CHAT_MESSAGE_KIND,
+        pubkey: THEIR_PUBKEY,
+        content: 'hello from unknown sender',
+        created_at: createdAt,
+        tags: [['p', MY_PUBKEY], ['ms', String(now)]],
+      } as never,
+      THEIR_PUBKEY
+    )
+
+    const chat = get(chats).get(THEIR_PUBKEY)
+    expect(chat?.messages).toHaveLength(1)
+    expect(chat?.messages[0]).toMatchObject({
+      id: 'msg-request-1',
+      isMine: false,
+    })
+    expect(chat?.messages[0]?.status).toBeUndefined()
+    expect(isMessageRequestChat(chat!, getMessageRequestPolicyContext())).toBe(true)
+    expect(mocks.waitForPeerSendReadySessionManager).not.toHaveBeenCalled()
   })
 })
