@@ -19,6 +19,7 @@
   import Name from './Name.svelte'
   import GroupAvatar from './GroupAvatar.svelte'
   import DisappearingMessagesModal from './DisappearingMessagesModal.svelte'
+  import EmojiPicker from './EmojiPicker.svelte'
 
   interface Props {
     group: Group
@@ -28,6 +29,8 @@
   }
 
   let { group, onleave, showBackButton = true, onViewDetails }: Props = $props()
+  let showEmojiPicker = $state(false)
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 
   interface PendingAttachment {
     file: File
@@ -672,6 +675,25 @@
           oncancel={handleVoiceCancel}
         />
       {:else}
+        <!-- Emoji picker button (desktop only) -->
+        {#if !isMobile}
+          <div class="relative flex-shrink-0">
+            <button
+              class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
+              onclick={() => showEmojiPicker = !showEmojiPicker}
+              aria-label="Emoji picker"
+            >
+              <span class="i-carbon-face-add text-xl"></span>
+            </button>
+            {#if showEmojiPicker}
+              <EmojiPicker
+                onselect={(emoji) => { messageText += emoji; inputRef?.focus() }}
+                onclose={() => showEmojiPicker = false}
+              />
+            {/if}
+          </div>
+        {/if}
+
         <button
           class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
           onclick={() => fileInputRef?.click()}
