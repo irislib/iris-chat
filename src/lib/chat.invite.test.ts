@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => {
     ensureDeviceRegistered: vi.fn(),
     getSessionManager: vi.fn(() => state.sessionManager),
     waitForSessionManager: vi.fn(() => Promise.resolve(state.sessionManager)),
+    waitForSendReadySessionManager: vi.fn(() => Promise.resolve(state.sessionManager)),
+    waitForPeerSendReadySessionManager: vi.fn(() => Promise.resolve(state.sessionManager)),
     setSessionManager: (value: any | null) => {
       state.sessionManager = value
     },
@@ -31,6 +33,9 @@ vi.mock('./identity', () => {
 vi.mock('./privateChats', () => ({
   getSessionManager: () => mocks.getSessionManager(),
   waitForSessionManager: () => mocks.waitForSessionManager(),
+  waitForSendReadySessionManager: () => mocks.waitForSendReadySessionManager(),
+  waitForPeerSendReadySessionManager: (...args: any[]) =>
+    mocks.waitForPeerSendReadySessionManager(...args),
   ensureDeviceRegistered: (...args: any[]) => mocks.ensureDeviceRegistered(...args),
 }))
 
@@ -100,7 +105,12 @@ beforeEach(() => {
   mocks.ensureDeviceRegistered.mockResolvedValue(undefined)
   mocks.getSessionManager.mockClear()
   mocks.waitForSessionManager.mockClear()
-  mocks.setSessionManager({ setupUser: vi.fn().mockResolvedValue(undefined) })
+  mocks.waitForSendReadySessionManager.mockClear()
+  mocks.waitForPeerSendReadySessionManager.mockClear()
+  const sessionManager = { setupUser: vi.fn().mockResolvedValue(undefined) }
+  mocks.setSessionManager(sessionManager)
+  mocks.waitForSendReadySessionManager.mockResolvedValue(sessionManager)
+  mocks.waitForPeerSendReadySessionManager.mockResolvedValue(sessionManager)
 })
 
 function defer<T>() {
@@ -136,7 +146,7 @@ describe('Invite Parsing / Acceptance', () => {
     const invite = { type: 'pubkey', pubkey } as const
     const registration = defer<void>()
 
-    mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
+    mocks.waitForSendReadySessionManager.mockReturnValue(registration.promise)
 
     const session = await Promise.race([
       acceptInvite(invite),
@@ -147,7 +157,8 @@ describe('Invite Parsing / Acceptance', () => {
 
     expect(session?.id).toBe(pubkey)
     expect(get(chats).has(pubkey)).toBe(true)
-    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    expect(mocks.waitForSendReadySessionManager).toHaveBeenCalledTimes(1)
+    expect(mocks.ensureDeviceRegistered).not.toHaveBeenCalled()
 
     registration.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))

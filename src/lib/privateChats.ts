@@ -1,6 +1,5 @@
 import { get } from 'svelte/store'
 import {
-  NDKEvent,
   NDKSubscriptionCacheUsage,
   type NDKFilter,
 } from '@nostr-dev-kit/ndk'
@@ -19,12 +18,12 @@ import {
 } from 'nostr-double-ratchet'
 import { ndk, identity, getPrivkeyHex, getPrivkeyBytes, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
-import { asNdkEventSubscription } from './ndkSubscription'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import {
   getCurrentDeviceRegistrationLabels,
   getLinkedDeviceRegistrationLabels,
 } from './deviceLabels'
+import { createRuntimeSubscribe } from './runtimeSubscribe'
 
 let runtime: NdrRuntime | null = null
 let runtimeCleanup: (() => void) | null = null
@@ -41,21 +40,7 @@ const createSubscribe = (
   ndkInstance: ReturnType<typeof getNDK>,
   cacheUsage: NDKSubscriptionCacheUsage = NDKSubscriptionCacheUsage.PARALLEL
 ): NostrSubscribe => {
-  return (filter, onEvent) => {
-    const relayUrls = ndkInstance.pool.connectedRelays().map((relay) => relay.url)
-    const subscription = asNdkEventSubscription(
-      ndkInstance.subscribe(filter, {
-        closeOnEose: false,
-        cacheUsage,
-        ...(relayUrls.length > 0 ? { relayUrls } : {}),
-      })
-    )
-    subscription.on('event', (event: NDKEvent) => {
-      onEvent(event.rawEvent() as Parameters<typeof onEvent>[0])
-    })
-    subscription.start()
-    return () => subscription.stop()
-  }
+  return createRuntimeSubscribe(ndkInstance, cacheUsage)
 }
 
 const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => {
