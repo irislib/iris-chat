@@ -64,12 +64,14 @@
   let styleLast = $derived(isLast || hasReactions)
 
   let showEmojiPicker = $state(false)
+  let showExtendedPicker = $state(false)
   let showMenu = $state(false)
   let showInfoModal = $state(false)
   let openUpward = $state(true)
   let openLeft = $state(false)
   let menuButton = $state<HTMLButtonElement | null>(null)
   let menuContent = $state<HTMLDivElement | null>(null)
+  let emojiContainer = $state<HTMLDivElement | null>(null)
 
 
   function checkDirection(e: MouseEvent) {
@@ -82,6 +84,8 @@
     // Need ~288px for emoji picker width
     openLeft = (window.innerWidth - rect.right) < 288
   }
+
+  const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
 
   async function handleCopy() {
     try {
@@ -172,6 +176,7 @@
 
   async function handleReact(emoji: string) {
     showEmojiPicker = false
+    showExtendedPicker = false
     await onreact?.(message.id, emoji)
   }
 
@@ -188,6 +193,7 @@
 
   function closePicker() {
     showEmojiPicker = false
+    showExtendedPicker = false
   }
 
   // Listen for escape key
@@ -204,10 +210,14 @@
       const insideMenu = menuContent?.contains(target) || menuButton?.contains(target)
       if (!insideMenu) showMenu = false
     }
+    if (showEmojiPicker && !showExtendedPicker) {
+      const insideEmoji = emojiContainer?.contains(target)
+      if (!insideEmoji) closePicker()
+    }
   }
 
   $effect(() => {
-    if (!showMenu) return
+    if (!showMenu && !showEmojiPicker) return
     document.addEventListener('mousedown', handleDocumentPointerDown)
     return () => document.removeEventListener('mousedown', handleDocumentPointerDown)
   })
@@ -269,7 +279,7 @@
       : `${base} rounded-r-2xl rounded-l-sm`
   }
 
-  let actionsVisible = $derived(showEmojiPicker || showMenu)
+  let actionsVisible = $derived(showEmojiPicker || showExtendedPicker || showMenu)
 </script>
 
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'} {actionsVisible ? 'relative z-50' : ''}" id="msg-{message.id}">
@@ -337,22 +347,39 @@
             {/if}
           </div>
           {#if onreact}
-            <div class="relative">
+            <div class="relative" bind:this={emojiContainer}>
               <button
                 class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-
-                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker }}
+                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker; showExtendedPicker = false }}
                 aria-label="Add reaction"
               >
                 <span class="i-carbon-face-add text-sm"></span>
               </button>
-              {#if showEmojiPicker}
+              {#if showExtendedPicker}
                 <EmojiPicker
                   onselect={handleReact}
                   onclose={closePicker}
                   openUp={openUpward}
                   openLeft={true}
                 />
+              {:else if showEmojiPicker}
+                <div class="absolute right-0 {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl">
+                  {#each quickEmojis as emoji}
+                    <button
+                      class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+                      onclick={() => handleReact(emoji)}
+                    >
+                      {emoji}
+                    </button>
+                  {/each}
+                  <button
+                    class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                    onclick={() => showExtendedPicker = true}
+                    aria-label="More emojis"
+                  >
+                    <span class="i-carbon-overflow-menu-horizontal text-sm"></span>
+                  </button>
+                </div>
               {/if}
             </div>
           {/if}
@@ -467,22 +494,39 @@
             </button>
           {/if}
           {#if onreact}
-            <div class="relative">
+            <div class="relative" bind:this={emojiContainer}>
               <button
                 class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-
-                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker }}
+                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker; showExtendedPicker = false }}
                 aria-label="Add reaction"
               >
                 <span class="i-carbon-face-add text-sm"></span>
               </button>
-              {#if showEmojiPicker}
+              {#if showExtendedPicker}
                 <EmojiPicker
                   onselect={handleReact}
                   onclose={closePicker}
                   openUp={openUpward}
                   openLeft={openLeft}
                 />
+              {:else if showEmojiPicker}
+                <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl">
+                  {#each quickEmojis as emoji}
+                    <button
+                      class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+                      onclick={() => handleReact(emoji)}
+                    >
+                      {emoji}
+                    </button>
+                  {/each}
+                  <button
+                    class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                    onclick={() => showExtendedPicker = true}
+                    aria-label="More emojis"
+                  >
+                    <span class="i-carbon-overflow-menu-horizontal text-sm"></span>
+                  </button>
+                </div>
               {/if}
             </div>
           {/if}

@@ -27,8 +27,6 @@
     { name: 'Flags', icon: '🏁', emojis: ['🏁','🚩','🎌','🏴','🏳️','🏳️‍🌈','🏳️‍⚧️','🏴‍☠️','🇺🇸','🇬🇧','🇫🇷','🇩🇪','🇯🇵','🇨🇳','🇰🇷','🇮🇳','🇧🇷','🇷🇺','🇮🇹','🇪🇸','🇨🇦','🇦🇺','🇲🇽','🇳🇱','🇸🇪','🇳🇴','🇩🇰','🇫🇮','🇵🇱','🇺🇦','🇹🇷','🇸🇦','🇦🇪','🇹🇭','🇻🇳','🇮🇩','🇵🇭','🇸🇬','🇲🇾','🇳🇿','🇿🇦','🇪🇬','🇳🇬','🇰🇪','🇦🇷','🇨🇱','🇨🇴','🇵🇪'] },
   ]
 
-  const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
-
   function handleClickOutside(e: MouseEvent) {
     if (pickerRef && !pickerRef.contains(e.target as Node)) {
       onclose()
@@ -53,18 +51,6 @@
   bind:this={pickerRef}
   class="absolute {openLeft ? 'right-0' : 'left-0'} {openUp ? 'bottom-full mb-1' : 'top-full mt-1'} w-72 bg-surface-light rounded-xl border border-surface-lighter shadow-xl flex flex-col z-50 overflow-hidden {openUp ? 'max-h-80' : 'max-h-80'}"
 >
-  <!-- Quick reaction row -->
-  <div class="flex items-center gap-1 px-2 py-1.5 border-b border-surface-lighter">
-    {#each quickEmojis as emoji}
-      <button
-        class="w-9 h-9 rounded-full hover:bg-surface-lighter flex items-center justify-center text-xl transition-colors"
-        onclick={() => onselect(emoji)}
-      >
-        {emoji}
-      </button>
-    {/each}
-  </div>
-
   <!-- Category tabs -->
   <div class="flex border-b border-surface-lighter overflow-x-auto px-1 flex-shrink-0">
     {#each categories as cat, i}
