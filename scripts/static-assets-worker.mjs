@@ -1,14 +1,38 @@
+import { buildSpaDocumentRequest } from './static-assets-worker-lib.mjs'
+
+/**
+ * @typedef {{
+ *   ASSETS: {
+ *     fetch: (request: Request) => Promise<Response>
+ *   }
+ * }} AssetsEnv
+ */
+
+/**
+ * @param {Request} request
+ * @returns {boolean}
+ */
 function wantsHtml(request) {
   return request.method === 'GET' && (request.headers.get('accept') || '').includes('text/html')
 }
 
+/**
+ * @param {string} pathname
+ * @returns {boolean}
+ */
 function hasFileExtension(pathname) {
   return pathname.split('/').pop()?.includes('.') ?? false
 }
 
+/**
+ * @param {Response} response
+ * @returns {Response}
+ */
 function injectBaseTag(response) {
-  return new HTMLRewriter()
+  const HtmlRewriter = /** @type {any} */ (Reflect.get(globalThis, 'HTMLRewriter'))
+  return new HtmlRewriter()
     .on('head', {
+      /** @param {{ prepend: (html: string, options: { html: boolean }) => void }} element */
       element(element) {
         element.prepend('<base href="/">', { html: true })
       },
@@ -17,12 +41,17 @@ function injectBaseTag(response) {
 }
 
 export default {
+  /**
+   * @param {Request} request
+   * @param {AssetsEnv} env
+   * @returns {Promise<Response>}
+   */
   async fetch(request, env) {
     const url = new URL(request.url)
     const navigationRequest = wantsHtml(request) && !hasFileExtension(url.pathname)
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
-      const indexResponse = await env.ASSETS.fetch(new Request(new URL('/index.html', url), request))
+      const indexResponse = await env.ASSETS.fetch(buildSpaDocumentRequest(request, url))
       return injectBaseTag(indexResponse)
     }
 
@@ -31,7 +60,7 @@ export default {
       return assetResponse
     }
 
-    const indexResponse = await env.ASSETS.fetch(new Request(new URL('/index.html', url), request))
+    const indexResponse = await env.ASSETS.fetch(buildSpaDocumentRequest(request, url))
     return injectBaseTag(indexResponse)
   },
 }

@@ -200,6 +200,7 @@ export function createReleasePlan(options) {
         'run',
         'src/portableBuildConfig.test.ts',
         'src/releaseSiteConfig.test.ts',
+        'src/staticAssetsWorker.test.ts',
       ],
       cwd: appDir,
     },
