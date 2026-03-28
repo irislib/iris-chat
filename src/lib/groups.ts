@@ -500,16 +500,26 @@ async function sendNativeGroupEvent(
     }
 
     await runtime.manager.upsertGroup(groupData)
-    await runtime.manager.sendEvent(groupId, partialEvent, {
-      sendPairwise: async (recipientOwnerPubkey, rumor) => {
-        const ready = await waitForPeerSendReadySessionManager(recipientOwnerPubkey)
-        await ready.sendEvent(recipientOwnerPubkey, rumor)
-      },
-      publishOuter: publishGroupOuterEvent,
-    })
+    try {
+      await runtime.manager.sendEvent(groupId, partialEvent, {
+        sendPairwise: async (recipientOwnerPubkey, rumor) => {
+          const ready = await waitForPeerSendReadySessionManager(recipientOwnerPubkey)
+          await ready.sendEvent(recipientOwnerPubkey, rumor)
+        },
+        publishOuter: publishGroupOuterEvent,
+      })
 
-    if (options?.includeSelfPairwiseCopy) {
-      await fanOutToOwnDevices(groupId, partialEvent)
+      if (options?.includeSelfPairwiseCopy) {
+        await fanOutToOwnDevices(groupId, partialEvent)
+      }
+    } catch (error) {
+      console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
+      fanOutToMembers(
+        groupId,
+        partialEvent,
+        undefined,
+        options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
+      )
     }
   })
 }

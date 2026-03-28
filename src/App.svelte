@@ -486,7 +486,7 @@
   {:else if duplicateTab}
     <div class="h-full flex flex-col items-center justify-center p-4">
       <div class="text-center flex flex-col items-center select-none">
-        <img src="/iris-logo.png" alt="Iris" class="w-16 h-16 mb-4 opacity-50" draggable="false" />
+        <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-16 h-16 mb-4 opacity-50" draggable="false" />
         <h1 class="text-2xl font-bold text-gray-400 mb-4">Already open in another tab</h1>
         <p class="text-gray-500 max-w-sm">
           iris chat can only run in one tab at a time to keep your encrypted messages in sync.
@@ -496,7 +496,7 @@
   {:else if !loggedIn}
     <div class="h-full flex flex-col items-center justify-center p-4">
       <div class="mb-8 text-center flex flex-col items-center select-none">
-        <img src="/iris-logo.png" alt="Iris" class="w-16 h-16 mb-4" draggable="false" />
+        <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-16 h-16 mb-4" draggable="false" />
         <h1 class="text-4xl font-bold">
           <span class="text-primary">iris</span> chat
         </h1>

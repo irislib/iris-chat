@@ -21,6 +21,15 @@ vi.mock('./identity', () => {
 
 // Track sendEvent calls per recipient
 const sendEventCalls: Array<{ recipient: string, event: unknown }> = []
+const sessionManagerValues = new Map<string, unknown>()
+
+async function waitForRecipients(...recipients: string[]) {
+  await vi.waitFor(() => {
+    for (const recipient of recipients) {
+      expect(sendEventCalls.some((call) => call.recipient === recipient)).toBe(true)
+    }
+  })
+}
 
 vi.mock('./chat', () => {
   const { writable } = require('svelte/store')
@@ -38,6 +47,12 @@ vi.mock('./chat', () => {
 
 vi.mock('./privateChats', () => ({
   getSessionManager: () => ({
+    sendEvent: (recipient: string, event: unknown) => {
+      sendEventCalls.push({ recipient, event })
+      return Promise.resolve(undefined)
+    },
+  }),
+  waitForPeerSendReadySessionManager: async () => ({
     sendEvent: (recipient: string, event: unknown) => {
       sendEventCalls.push({ recipient, event })
       return Promise.resolve(undefined)
@@ -68,6 +83,18 @@ vi.mock('./storage', () => ({
   saveMessage: vi.fn().mockResolvedValue(undefined),
   getMessagesForSession: vi.fn().mockResolvedValue([]),
   deleteMessagesForSession: vi.fn().mockResolvedValue(undefined),
+  getSessionManagerValue: vi.fn((key: string) => Promise.resolve(sessionManagerValues.get(key))),
+  putSessionManagerValue: vi.fn((key: string, value: unknown) => {
+    sessionManagerValues.set(key, value)
+    return Promise.resolve(undefined)
+  }),
+  deleteSessionManagerValue: vi.fn((key: string) => {
+    sessionManagerValues.delete(key)
+    return Promise.resolve(undefined)
+  }),
+  listSessionManagerKeys: vi.fn((prefix = '') =>
+    Promise.resolve([...sessionManagerValues.keys()].filter((key) => key.startsWith(prefix)))
+  ),
 }))
 
 vi.mock('./typingState', () => ({
@@ -86,6 +113,7 @@ vi.mock('./groupChannels', () => ({
 describe('groups', () => {
   beforeEach(async () => {
     sendEventCalls.length = 0
+    sessionManagerValues.clear()
     // Reset group stores between tests
     const { groups, groupMessages, currentGroupId } = await import('./groups')
     groups.set(new Map())
@@ -207,10 +235,7 @@ describe('groups', () => {
       addGroupMember(group.id, MEMBER_C)
 
       // Should send to both MEMBER_B and MEMBER_C
-      const sentToB = sendEventCalls.some(c => c.recipient === MEMBER_B)
-      const sentToC = sendEventCalls.some(c => c.recipient === MEMBER_C)
-      expect(sentToB).toBe(true)
-      expect(sentToC).toBe(true)
+      await waitForRecipients(MEMBER_B, MEMBER_C)
     })
   })
 
@@ -257,8 +282,7 @@ describe('groups', () => {
       removeGroupMember(group.id, MEMBER_C)
 
       // Removed member should still receive the update
-      const sentToC = sendEventCalls.some(c => c.recipient === MEMBER_C)
-      expect(sentToC).toBe(true)
+      await waitForRecipients(MEMBER_C)
     })
   })
 
@@ -485,12 +509,7 @@ describe('groups', () => {
 
       sendGroupMessage(group.id, 'Hello all!')
 
-      const sentToSelf = sendEventCalls.some(c => c.recipient === MY_PUBKEY)
-      const sentToB = sendEventCalls.some(c => c.recipient === MEMBER_B)
-      const sentToC = sendEventCalls.some(c => c.recipient === MEMBER_C)
-      expect(sentToSelf).toBe(true)
-      expect(sentToB).toBe(true)
-      expect(sentToC).toBe(true)
+      await waitForRecipients(MY_PUBKEY, MEMBER_B, MEMBER_C)
     })
 
     it('applies group disappearing TTL to outgoing messages', async () => {
@@ -510,9 +529,15 @@ describe('groups', () => {
       expect(msgs[0].expiresAt).toBeGreaterThanOrEqual(before + 60)
       expect(msgs[0].expiresAt).toBeLessThanOrEqual(after + 60)
 
-      expect(sendEventCalls.length).toBeGreaterThan(0)
-      for (const call of sendEventCalls) {
-        const event = call.event as { tags?: string[][] }
+      await vi.waitFor(() => {
+        expect(sendEventCalls.length).toBeGreaterThan(0)
+      })
+      const sentMessages = sendEventCalls
+        .map((call) => call.event as { content?: string; tags?: string[][] })
+        .filter((event) => event.content === 'TTL hello')
+
+      expect(sentMessages.length).toBeGreaterThan(0)
+      for (const event of sentMessages) {
         const expirationTag = event.tags?.find((t) => t[0] === 'expiration')
         expect(expirationTag).toBeDefined()
         expect(expirationTag?.[1]).toMatch(/^\d+$/)
@@ -539,10 +564,7 @@ describe('groups', () => {
         })
       )
 
-      const sentToB = sendEventCalls.some(c => c.recipient === MEMBER_B)
-      const sentToSelf = sendEventCalls.some(c => c.recipient === MY_PUBKEY)
-      expect(sentToB).toBe(true)
-      expect(sentToSelf).toBe(true)
+      await waitForRecipients(MEMBER_B, MY_PUBKEY)
     })
   })
 
@@ -731,8 +753,10 @@ describe('groups', () => {
       removeGroupMember(group.id, MEMBER_C)
 
       // Find what was sent to the removed member
+      await vi.waitFor(() => {
+        expect(sendEventCalls.filter(c => c.recipient === MEMBER_C).length).toBeGreaterThan(0)
+      })
       const sentToC = sendEventCalls.filter(c => c.recipient === MEMBER_C)
-      expect(sentToC.length).toBeGreaterThan(0)
 
       // Parse the event sent to removed member - it should not contain the new secret
       const removedEvent = sentToC[0].event as { content: string }
@@ -740,8 +764,10 @@ describe('groups', () => {
       expect(removedMetadata.secret).toBeUndefined()
 
       // But remaining members should get the new secret
+      await vi.waitFor(() => {
+        expect(sendEventCalls.filter(c => c.recipient === MEMBER_B).length).toBeGreaterThan(0)
+      })
       const sentToB = sendEventCalls.filter(c => c.recipient === MEMBER_B)
-      expect(sentToB.length).toBeGreaterThan(0)
       const memberEvent = sentToB[0].event as { content: string }
       const memberMetadata = JSON.parse(memberEvent.content)
       expect(memberMetadata.secret).toBeDefined()

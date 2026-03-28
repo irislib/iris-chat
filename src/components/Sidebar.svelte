@@ -79,7 +79,7 @@
       class="flex items-center gap-2 select-none bg-transparent border-none p-0 cursor-pointer hover:opacity-80 transition-opacity"
       onclick={onNewChat}
     >
-      <img src="/iris-logo.png" alt="Iris" class="w-8 h-8" draggable="false" />
+      <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-8 h-8" draggable="false" />
       <h1 class="text-xl font-bold">
         <span class="text-primary">iris</span> chat
       </h1>

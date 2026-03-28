@@ -129,6 +129,7 @@ class IrisChatDB extends Dexie {
 }
 
 const db = new IrisChatDB()
+const appLogoUrl = new URL('iris-logo.png', self.registration.scope).toString()
 
 // Track currently open chat (only one can be open at a time)
 let currentOpenChatId: string | null = null
@@ -182,7 +183,7 @@ async function getSessionManagerStates(): Promise<SessionManagerStateEntry[]> {
 
 // Get display info from profile
 async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: string }> {
-  const fallbackIcon = '/iris-logo.png'
+  const fallbackIcon = appLogoUrl
   try {
     const profile = await db.profiles.get(pubkey)
     if (profile) {
@@ -443,8 +444,8 @@ self.addEventListener('push', (event) => {
         const body = inviteLabel ? `New chat via ${inviteLabel}` : 'New chat via invite link'
         await self.registration.showNotification('iris chat', {
           body,
-          icon: '/iris-logo.png',
-          badge: '/iris-logo.png',
+          icon: appLogoUrl,
+          badge: appLogoUrl,
           tag: 'invite-response'
         })
         return
@@ -485,7 +486,7 @@ self.addEventListener('push', (event) => {
           await self.registration.showNotification(sender.name, {
             body,
             icon: sender.icon,
-            badge: '/iris-logo.png',
+            badge: appLogoUrl,
             tag,
             data: { chatId: result.chatId }
           })
@@ -509,8 +510,8 @@ self.addEventListener('push', (event) => {
 async function showFallbackNotification() {
   await self.registration.showNotification('iris chat', {
     body: 'You have a new message',
-    icon: '/iris-logo.png',
-    badge: '/iris-logo.png'
+    icon: appLogoUrl,
+    badge: appLogoUrl
   })
 }
 

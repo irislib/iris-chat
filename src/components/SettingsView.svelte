@@ -98,6 +98,7 @@
     return `data:image/svg+xml;utf8,${encodeURIComponent(identicon)}`
   })
   let modalPicture = $derived((proxiedFullPicture || profilePicture || fallbackProfilePicture) ?? null)
+  const appLogoUrl = `${import.meta.env.BASE_URL}iris-logo.png`
 
   // Device state
   let deviceState = $state($devices)
@@ -368,12 +369,12 @@
         if (registration) {
           await registration.showNotification('Test Notification', {
             body: 'This is a test notification from iris chat',
-            icon: '/iris-logo.png'
+            icon: appLogoUrl
           })
         } else {
           new Notification('Test Notification', {
             body: 'This is a test notification from iris chat',
-            icon: '/iris-logo.png'
+            icon: appLogoUrl
           })
         }
         statusMessage = { type: 'success', text: 'Test notification sent' }
@@ -1062,7 +1063,7 @@
       <!-- Source Code & Releases -->
       <div class="bg-surface rounded-lg p-4 space-y-3">
         <a
-          href="https://files.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat"
+          href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat"
           target="_blank"
           rel="noopener noreferrer"
           class="flex items-center gap-2 text-primary hover:underline"

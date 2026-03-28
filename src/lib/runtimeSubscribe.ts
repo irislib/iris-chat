@@ -2,6 +2,7 @@ import {
   NDKSubscriptionCacheUsage,
   type NDKEvent,
   type NDKFilter,
+  type NDKSubscription,
 } from '@nostr-dev-kit/ndk'
 import {
   buildDirectMessageBackfillFilter,
@@ -25,7 +26,7 @@ interface RuntimeSubscribeNdk {
       cacheUsage: NDKSubscriptionCacheUsage
       relayUrls?: string[]
     }
-  ) => unknown
+  ) => NDKSubscription
 }
 
 export const createRuntimeSubscribe = (

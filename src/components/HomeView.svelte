@@ -46,7 +46,7 @@
   <!-- Header -->
   <header class="h-16 px-4 flex items-center justify-between border-b border-surface-lighter">
     <div class="flex items-center gap-2 select-none">
-      <img src="/iris-logo.png" alt="Iris" class="w-8 h-8" draggable="false" />
+      <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-8 h-8" draggable="false" />
       <h1 class="text-xl font-bold">
         <span class="text-primary">iris</span> chat
       </h1>
@@ -109,7 +109,7 @@
   <!-- Footer -->
   <footer class="py-4 text-center">
     <a
-      href="https://github.com/irislib/iris-chat"
+      href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat"
       target="_blank"
       rel="noopener noreferrer"
       class="text-sm text-gray-500 hover:text-gray-400"

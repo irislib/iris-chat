@@ -99,7 +99,7 @@
   <div class="fixed inset-0 z-[100] bg-[#121212] flex flex-col overflow-y-auto">
     <!-- Content -->
     <div class="flex-1 flex flex-col items-center justify-center px-6 text-center">
-      <img src="/iris-logo.png" alt="Iris" class="w-20 h-20 mb-6" draggable="false" />
+      <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-20 h-20 mb-6" draggable="false" />
 
       <h1 class="text-2xl font-bold mb-2">
         Install <span class="text-primary">iris</span> chat

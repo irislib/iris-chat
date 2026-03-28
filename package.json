@@ -13,6 +13,9 @@
     "test:watch": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs",
     "test:e2e": "env -u NO_COLOR playwright test",
     "test:e2e:flutter-interop": "IRIS_FLUTTER_INTEROP=1 env -u NO_COLOR playwright test e2e/flutter-interop-self-chat.spec.ts",
+    "smoke:portable": "node ./scripts/smoke-iris-chat-portable.mjs",
+    "publish:iris": "node ./scripts/publish-iris-build.mjs",
+    "release:iris": "node ./scripts/release-site.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

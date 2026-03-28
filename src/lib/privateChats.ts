@@ -1,5 +1,6 @@
 import { get } from 'svelte/store'
 import {
+  NDKEvent,
   NDKSubscriptionCacheUsage,
   type NDKFilter,
 } from '@nostr-dev-kit/ndk'

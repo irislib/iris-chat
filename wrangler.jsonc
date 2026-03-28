@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "iris-chat",
+  "main": "scripts/static-assets-worker.mjs",
+  "compatibility_date": "2026-03-26",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": ["/**"]
+  }
+}

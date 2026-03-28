@@ -4,6 +4,7 @@ import UnoCSS from 'unocss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  base: './',
   plugins: [
     UnoCSS(),
     svelte(),
@@ -29,7 +30,7 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 1500,
     rollupOptions: {
-      onwarn(warning, warn) {
+      onwarn(warning: any, warn: any) {
         if (warning.code === 'EVAL' && warning.id?.includes('tseep')) return
         warn(warning)
       },
