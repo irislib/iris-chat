@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { createReleasePlan, defaultSiteTreeName, parseArgs } from '../scripts/release-site.mjs'
+import { createReleasePlan, defaultSiteTreeName, parseArgs, runRelease } from '../scripts/release-site.mjs'
 
 describe('release site config', () => {
   it('uses a dedicated mutable tree for the published site by default', () => {
@@ -31,5 +31,46 @@ describe('release site config', () => {
 
     expect(publishStep?.command).toContain(defaultSiteTreeName)
     expect(publishStep?.command).not.toContain('iris-chat')
+  })
+
+  it('runs hashtree publish and Cloudflare deploy in parallel after tests', async () => {
+    let activeReleaseSteps = 0
+    let maxActiveReleaseSteps = 0
+    const calls: string[] = []
+
+    await runRelease(
+      {
+        dryRun: false,
+        skipCloudflare: false,
+        pagesOnly: false,
+        treeName: defaultSiteTreeName,
+        branch: undefined,
+        pagesProject: undefined,
+        workerName: 'iris-chat',
+        routes: [],
+        domains: ['chat.iris.to'],
+        workerCompatibilityDate: '2026-03-26',
+      },
+      async (step) => {
+        calls.push(step.id)
+        if (step.id === 'publish' || step.id === 'deploy') {
+          activeReleaseSteps += 1
+          maxActiveReleaseSteps = Math.max(maxActiveReleaseSteps, activeReleaseSteps)
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          activeReleaseSteps -= 1
+          if (step.id === 'publish') {
+            return {
+              status: 0,
+              stdout: 'published: npub1example/iris-chat-site\nnhash1ace',
+              stderr: '',
+            }
+          }
+        }
+        return { status: 0, stdout: '', stderr: '' }
+      },
+    )
+
+    expect(calls).toEqual(['build', 'test-portable', 'test-smoke', 'publish', 'deploy'])
+    expect(maxActiveReleaseSteps).toBe(2)
   })
 })
