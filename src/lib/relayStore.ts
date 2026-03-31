@@ -4,6 +4,7 @@
 import { writable, derived, get } from 'svelte/store'
 import type NDK from '@nostr-dev-kit/ndk'
 import { NDKRelayStatus } from '@nostr-dev-kit/ndk'
+import { DEFAULT_RELAYS } from './defaultRelays'
 
 export type RelayStatus = 'disconnected' | 'connecting' | 'connected'
 
@@ -22,13 +23,7 @@ function normalizeRelayUrl(url: string): string {
   return url.replace(/\/$/, '')
 }
 
-export const DEFAULT_RELAYS = [
-  'wss://relay.primal.net',
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://temp.iris.to',
-  'wss://offchain.pub',
-]
+export { DEFAULT_RELAYS }
 
 function loadRelays(): Set<string> {
   try {

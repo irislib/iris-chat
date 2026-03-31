@@ -7,6 +7,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
+import { DEFAULT_RELAYS as DEFAULT_PROD_RELAYS } from '../src/lib/defaultRelays'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -17,13 +18,6 @@ const FLUTTER_MACOS_APP_BINARY = path.join(
 )
 const RUN_FLUTTER_INTEROP = process.env.IRIS_FLUTTER_INTEROP === '1'
 const RUN_PRODUCTION_RELAYS = process.env.IRIS_FLUTTER_INTEROP_PROD === '1'
-const DEFAULT_PROD_RELAYS = [
-  'wss://relay.primal.net',
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://temp.iris.to',
-  'wss://offchain.pub',
-]
 const PROD_RELAYS = (process.env.IRIS_FLUTTER_INTEROP_RELAYS ?? '')
   .split(',')
   .map((v) => v.trim())
