@@ -6,7 +6,7 @@ Decentralized encrypted messaging over Nostr using the double-ratchet protocol.
 
 ## Features
 
-- **End-to-end encryption** via [nostr-double-ratchet](https://github.com/mmalmi/nostr-double-ratchet)
+- **End-to-end encryption** via [nostr-double-ratchet](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/nostr-double-ratchet)
 - **QR code invites** for easy contact sharing
 - **Push notifications** with service worker integration
 - **PWA** installable on mobile and desktop
