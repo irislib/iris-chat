@@ -3,6 +3,12 @@
   "private": true,
   "version": "2.6.3",
   "type": "module",
+  "description": "Decentralized encrypted messaging over Nostr",
+  "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
+  "homepage": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
+  "bugs": {
+    "url": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat?tab=issues"
+  },
   "packageManager": "pnpm@10.24.0",
   "scripts": {
     "dev": "vite",

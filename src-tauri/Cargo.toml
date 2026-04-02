@@ -4,7 +4,8 @@ version = "0.1.2"
 description = "Iris Chat - Private messaging over Nostr"
 authors = ["Martti Malmi"]
 license = "MIT"
-repository = "https://github.com/irislib/iris-chat.git"
+repository = "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat"
+homepage = "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat"
 edition = "2021"
 rust-version = "1.77.2"
 
