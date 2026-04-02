@@ -2,12 +2,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { resolveHtreeCommand } from './hashtreePaths.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const appDir = path.resolve(__dirname, '..')
-const workspaceDir = path.resolve(appDir, '..')
-const manifestPath = path.join(workspaceDir, 'hashtree', 'rust', 'Cargo.toml')
 const distDir = path.join(appDir, 'dist')
 const defaultWorkerCompatibilityDate = '2026-03-26'
 export const defaultSiteTreeName = 'iris-chat-site'
@@ -213,21 +212,7 @@ export function createReleasePlan(options) {
     {
       id: 'publish',
       label: `Publish ${profile.appName} to hashtree`,
-      command: [
-        'cargo',
-        'run',
-        '--manifest-path',
-        manifestPath,
-        '-p',
-        'hashtree-cli',
-        '--bin',
-        'htree',
-        '--',
-        'add',
-        '.',
-        '--publish',
-        options.treeName,
-      ],
+      command: resolveHtreeCommand('add', '.', '--publish', options.treeName),
       cwd: distDir,
     },
   ]
@@ -323,6 +308,9 @@ function defaultRunner(step) {
   })
 }
 
+/**
+ * @param {(path: import('node:fs').PathLike) => boolean} [buildOutputExists]
+ */
 function ensureDistExists(buildOutputExists = existsSync) {
   if (!buildOutputExists(distDir)) {
     throw new Error(`Build output directory not found: ${distDir}`)
@@ -359,10 +347,18 @@ function parsePagesOutput(output) {
   return pagesUrlMatch ? pagesUrlMatch[0] : null
 }
 
+/**
+ * @param {ReleaseStep} step
+ * @returns {boolean}
+ */
 function isReleaseStep(step) {
   return step.id === 'publish' || step.id === 'deploy'
 }
 
+/**
+ * @param {ReleaseStep} step
+ * @param {StepResult} result
+ */
 function assertStepSucceeded(step, result) {
   if (result.status !== 0) {
     throw new Error(`${step.label} failed with exit code ${result.status}`)
@@ -372,7 +368,7 @@ function assertStepSucceeded(step, result) {
 /**
  * @param {ReleaseOptions} options
  * @param {(step: ReleaseStep) => StepResult | Promise<StepResult>} [runner]
- * @param {{ buildOutputExists?: (path: string) => boolean }} [hooks]
+ * @param {{ buildOutputExists?: (path: import('node:fs').PathLike) => boolean }} [hooks]
  * @returns {Promise<ReleaseResult | {dryRun: true, steps: ReleaseStep[]}>}
  */
 export async function runRelease(options, runner = defaultRunner, hooks = {}) {
