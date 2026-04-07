@@ -22,6 +22,17 @@ vi.mock('./identity', () => {
 // Track sendEvent calls per recipient
 const sendEventCalls: Array<{ recipient: string, event: unknown }> = []
 const sessionManagerValues = new Map<string, unknown>()
+const runtimeGroups = new Map<string, {
+  id: string
+  name: string
+  description: string
+  picture: string
+  members: string[]
+  admins: string[]
+  createdAt: number
+  accepted: boolean
+  secret: string
+}>()
 
 async function waitForRecipients(...recipients: string[]) {
   await vi.waitFor(() => {
@@ -56,6 +67,114 @@ vi.mock('./privateChats', () => ({
     sendEvent: (recipient: string, event: unknown) => {
       sendEventCalls.push({ recipient, event })
       return Promise.resolve(undefined)
+    },
+  }),
+  waitForSendReadySessionManager: async () => ({
+    sendEvent: (recipient: string, event: unknown) => {
+      sendEventCalls.push({ recipient, event })
+      return Promise.resolve(undefined)
+    },
+  }),
+  getNdrRuntime: () => ({
+    syncGroups: async (groups: Array<{
+      id: string
+      name: string
+      description?: string
+      picture?: string
+      members: string[]
+      admins: string[]
+      createdAt: number
+      accepted?: boolean
+      secret?: string
+    }>) => {
+      runtimeGroups.clear()
+      for (const group of groups) {
+        runtimeGroups.set(group.id, {
+          id: group.id,
+          name: group.name,
+          description: group.description || '',
+          picture: group.picture || '',
+          members: [...group.members],
+          admins: [...group.admins],
+          createdAt: group.createdAt,
+          accepted: group.accepted ?? true,
+          secret: group.secret || `secret-${group.id}`,
+        })
+      }
+    },
+    upsertGroup: async (group: {
+      id: string
+      name: string
+      description?: string
+      picture?: string
+      members: string[]
+      admins: string[]
+      createdAt: number
+      accepted?: boolean
+      secret?: string
+    }) => {
+      runtimeGroups.set(group.id, {
+        id: group.id,
+        name: group.name,
+        description: group.description || '',
+        picture: group.picture || '',
+        members: [...group.members],
+        admins: [...group.admins],
+        createdAt: group.createdAt,
+        accepted: group.accepted ?? true,
+        secret: group.secret || `secret-${group.id}`,
+      })
+    },
+    createGroup: async (name: string, memberPubkeys: string[]) => {
+      const members = Array.from(new Set([MY_PUBKEY, ...memberPubkeys]))
+      const group = {
+        id: `group-${Math.random().toString(36).slice(2, 10)}`,
+        name,
+        description: '',
+        picture: '',
+        members,
+        admins: [MY_PUBKEY],
+        createdAt: Date.now(),
+        accepted: true,
+        secret: 'f'.repeat(64),
+      }
+      runtimeGroups.set(group.id, group)
+      return { group }
+    },
+    sendGroupEvent: async (
+      groupId: string,
+      event: { kind: number; content: string; tags?: string[][] },
+    ) => {
+      const group = runtimeGroups.get(groupId)
+      if (group) {
+        for (const recipient of group.members) {
+          if (recipient === MY_PUBKEY) continue
+          sendEventCalls.push({
+            recipient,
+            event: {
+              content: event.content,
+              kind: event.kind,
+              tags: event.tags || [],
+            },
+          })
+        }
+      }
+      return {
+        inner: {
+          id: `inner-${Math.random().toString(36).slice(2, 10)}`,
+          kind: event.kind,
+          content: event.content,
+          tags: event.tags || [],
+          created_at: Math.floor(Date.now() / 1000),
+          pubkey: MY_PUBKEY,
+        },
+        outer: {
+          id: `outer-${Math.random().toString(36).slice(2, 10)}`,
+        },
+      }
+    },
+    removeGroup: (groupId: string) => {
+      runtimeGroups.delete(groupId)
     },
   }),
 }))
@@ -114,6 +233,7 @@ describe('groups', () => {
   beforeEach(async () => {
     sendEventCalls.length = 0
     sessionManagerValues.clear()
+    runtimeGroups.clear()
     // Reset group stores between tests
     const { groups, groupMessages, currentGroupId } = await import('./groups')
     groups.set(new Map())

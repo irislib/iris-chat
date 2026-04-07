@@ -13,6 +13,7 @@ import {
   type DelegateManager,
   type DeviceEntry,
   type NdrRuntimeState,
+  type NostrFetch,
   type NostrPublish,
   type NostrSubscribe,
   type SessionManager,
@@ -20,6 +21,7 @@ import {
 import { ndk, identity, getPrivkeyHex, getPrivkeyBytes, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
 import { DexieStorageAdapter } from './sessionManagerStorage'
+import type { VerifiedEvent } from 'nostr-tools'
 import {
   getCurrentDeviceRegistrationLabels,
   getLinkedDeviceRegistrationLabels,
@@ -50,6 +52,19 @@ const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => 
     await e.publish()
     return event as never
   }) as NostrPublish
+}
+
+const createFetch = (
+  ndkInstance: ReturnType<typeof getNDK>,
+): NostrFetch => {
+  return async (filter) => {
+    const events = await ndkInstance.fetchEvents(filter, {
+      cacheUsage: NDKSubscriptionCacheUsage.PARALLEL,
+    })
+    return Array.from(events)
+      .map((event) => event.rawEvent() as VerifiedEvent | undefined)
+      .filter((event): event is VerifiedEvent => !!event)
+  }
 }
 
 function getNDK() {
@@ -99,6 +114,7 @@ const getRuntime = (): NdrRuntime => {
   runtime = new NdrRuntime({
     nostrSubscribe: createSubscribe(ndkInstance),
     nostrPublish: createPublish(ndkInstance),
+    nostrFetch: createFetch(ndkInstance),
     storage: new DexieStorageAdapter(),
     appKeysFetchTimeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
     appKeysFastTimeoutMs: APP_KEYS_FAST_TIMEOUT_MS,
@@ -125,6 +141,10 @@ const getRuntime = (): NdrRuntime => {
   })
 
   return runtime
+}
+
+export const getNdrRuntime = (): NdrRuntime => {
+  return getRuntime()
 }
 
 const ensureConnected = async (): Promise<void> => {

@@ -22,6 +22,9 @@ vi.mock('./identity', () => ({
 
 vi.mock('./privateChats', () => ({
   getSessionManager: () => mocked.sessionManager,
+  getNdrRuntime: () => ({
+    onGroupEvent: () => () => {},
+  }),
 }))
 
 vi.mock('./groups', async () => {

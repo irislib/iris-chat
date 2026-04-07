@@ -21,6 +21,7 @@ import { getPubkey, hasNip44Support, isNip07Login } from './identity'
 import { devices } from './devices'
 import {
   ensureDeviceRegistered,
+  getNdrRuntime,
   getSessionManager,
   waitForPeerSendReadySessionManager,
   waitForSendReadySessionManager,
@@ -99,6 +100,8 @@ let invitesInitialized = false
 let sessionManagerPoller: ReturnType<typeof setInterval> | null = null
 
 let sessionManagerSubscribed = false
+let groupRuntimeSubscribed = false
+let groupRuntimeCleanup: (() => void) | null = null
 const managerChatBootstrapInFlight = new Set<string>()
 const pendingAutoOpenChats = new Set<string>()
 const autoOpenedChats = new Set<string>()
@@ -244,6 +247,21 @@ function updateChatSession(
 }
 
 export function initSessionManagerEvents(): void {
+  if (!groupRuntimeSubscribed) {
+    const runtime = getNdrRuntime()
+    groupRuntimeSubscribed = true
+    groupRuntimeCleanup = runtime.onGroupEvent((event) => {
+      const senderPubkey =
+        event.senderOwnerPubkey || event.senderDevicePubkey || event.inner.pubkey
+      handleGroupEvent(
+        event.inner,
+        senderPubkey,
+        undefined,
+        event.senderDevicePubkey,
+      )
+    })
+  }
+
   if (sessionManagerSubscribed) return
 
   const subscribe = (manager: SessionManager) => {
@@ -790,7 +808,6 @@ export async function handleManagerEvent(
 
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
-    handleGroupEvent(rumor, effectiveFromPubkey, undefined, meta?.fromDeviceId)
     return
   }
 
@@ -956,7 +973,6 @@ function handleIncomingRumor(
   // Route group events to group handler
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
-    handleGroupEvent(rumor, chatSession.recipientPubkey, undefined, rumor.pubkey)
     return
   }
 
@@ -1516,6 +1532,9 @@ export async function clearChatData(): Promise<void> {
     isInitialized = false
     invitesInitialized = false
     sessionManagerSubscribed = false
+    groupRuntimeCleanup?.()
+    groupRuntimeCleanup = null
+    groupRuntimeSubscribed = false
     if (sessionManagerPoller) {
       clearInterval(sessionManagerPoller)
       sessionManagerPoller = null

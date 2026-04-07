@@ -50,6 +50,9 @@ vi.mock('./privateChats', () => ({
   getSessionManager: () => sessionState.manager,
   waitForSessionManager: privateChatsMocks.waitForSessionManager,
   ensureDeviceRegistered: privateChatsMocks.ensureDeviceRegistered,
+  getNdrRuntime: () => ({
+    onGroupEvent: () => () => {},
+  }),
   waitForPeerSendReadySessionManager: async (recipientPubkey: string) => {
     await privateChatsMocks.ensureDeviceRegistered()
     const manager = await privateChatsMocks.waitForSessionManager()

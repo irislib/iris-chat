@@ -68,6 +68,9 @@ vi.mock('./privateChats', () => ({
   ensureDeviceRegistered: vi.fn(),
   waitForPeerSendReadySessionManager: (...args: [string]) =>
     mocks.waitForPeerSendReadySessionManager(...args),
+  getNdrRuntime: () => ({
+    onGroupEvent: () => () => {},
+  }),
   republishInvite: vi.fn().mockResolvedValue(undefined),
 }))
 

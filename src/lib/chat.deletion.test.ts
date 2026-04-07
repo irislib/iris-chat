@@ -51,6 +51,9 @@ vi.mock('./privateChats', () => ({
   getSessionManager: () => mocks.getSessionManager(),
   waitForSessionManager: () => Promise.reject(new Error('manager unavailable in test')),
   ensureDeviceRegistered: vi.fn(),
+  getNdrRuntime: () => ({
+    onGroupEvent: () => () => {},
+  }),
   republishInvite: vi.fn().mockResolvedValue(undefined),
 }))
 

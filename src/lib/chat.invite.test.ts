@@ -37,6 +37,9 @@ vi.mock('./privateChats', () => ({
   waitForPeerSendReadySessionManager: (...args: any[]) =>
     mocks.waitForPeerSendReadySessionManager(...args),
   ensureDeviceRegistered: (...args: any[]) => mocks.ensureDeviceRegistered(...args),
+  getNdrRuntime: () => ({
+    onGroupEvent: () => () => {},
+  }),
 }))
 
 vi.mock('./storage', () => ({
