@@ -1199,8 +1199,10 @@ function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Ru
 function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
   if (messageIds.length === 0) return
 
-  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
-    .then((ready) => ready.sendReceipt(chatSession.recipientPubkey, type, messageIds))
+  void ensureDeviceRegistered()
+    .then(() =>
+      getNdrRuntime().sendReceipt(chatSession.recipientPubkey, type, messageIds)
+    )
     .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
 }
 
@@ -1256,8 +1258,8 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
   // Always await device registration + SessionManager init. It is possible to have a
   // non-null manager while init is still in progress, and an unregistered owner-side
   // device cannot be trusted by linked recipients for multidevice fanout.
-  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
-    .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
+  void ensureDeviceRegistered()
+    .then(() => getNdrRuntime().sendEvent(chatSession.recipientPubkey, rumor))
     .catch((e) => console.error('[chat] Failed to send via SessionManager:', e))
 
   // Get current state from store (not the passed reference which may be stale)
@@ -1301,8 +1303,8 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
     kind: REACTION_KIND,
     tags: [['e', messageId]],
   })
-  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
-    .then((ready) => ready.sendEvent(chatSession.recipientPubkey, rumor))
+  void ensureDeviceRegistered()
+    .then(() => getNdrRuntime().sendEvent(chatSession.recipientPubkey, rumor))
     .catch((e) => console.error('[chat] Failed to send reaction via SessionManager:', e))
 
   // Get current state from store (not the passed reference which may be stale)
@@ -1511,8 +1513,8 @@ export function sendTypingEvent(chatSession: ChatSession): void {
   const policyCtx = getMessageRequestPolicyContext()
   if (!isChatAccepted(chatSession, policyCtx)) return
 
-  void waitForPeerSendReadySessionManager(chatSession.recipientPubkey)
-    .then((ready) => ready.sendTyping(chatSession.recipientPubkey))
+  void ensureDeviceRegistered()
+    .then(() => getNdrRuntime().sendTyping(chatSession.recipientPubkey))
     .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
 }
 

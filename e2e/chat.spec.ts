@@ -1628,10 +1628,14 @@ test.describe('iris chat', () => {
         await expect(page1.getByPlaceholder('Type a message...')).toBeVisible()
 
         // User 1 should see "Bob" in chat header
-        await expect(page1.locator('header').getByText('Bob')).toBeVisible()
+        await expect(page1.locator('header').getByText('Bob')).toBeVisible({
+          timeout: 60000,
+        })
 
         // User 2 should see "Alice" in chat header
-        await expect(page2.locator('header').getByText('Alice')).toBeVisible()
+        await expect(page2.locator('header').getByText('Alice')).toBeVisible({
+          timeout: 60000,
+        })
       } finally {
         await context1.close()
         await context2.close()

@@ -12,6 +12,12 @@ const privateChatsMocks = vi.hoisted(() => ({
   waitForSessionManager: vi.fn(() => Promise.reject(new Error('manager unavailable in test'))),
 }))
 
+const runtimeMocks = vi.hoisted(() => ({
+  sendEvent: vi.fn().mockResolvedValue(undefined),
+  sendReceipt: vi.fn().mockResolvedValue(undefined),
+  sendTyping: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('./identity', () => {
   const {writable} = require('svelte/store')
   return {
@@ -51,6 +57,9 @@ vi.mock('./privateChats', () => ({
   waitForSessionManager: privateChatsMocks.waitForSessionManager,
   ensureDeviceRegistered: privateChatsMocks.ensureDeviceRegistered,
   getNdrRuntime: () => ({
+    sendEvent: runtimeMocks.sendEvent,
+    sendReceipt: runtimeMocks.sendReceipt,
+    sendTyping: runtimeMocks.sendTyping,
     onGroupEvent: () => () => {},
   }),
   waitForPeerSendReadySessionManager: async (recipientPubkey: string) => {
@@ -124,6 +133,12 @@ beforeEach(() => {
   privateChatsMocks.waitForSessionManager.mockImplementation(() =>
     Promise.reject(new Error('manager unavailable in test'))
   )
+  runtimeMocks.sendEvent.mockReset()
+  runtimeMocks.sendEvent.mockResolvedValue(undefined)
+  runtimeMocks.sendReceipt.mockReset()
+  runtimeMocks.sendReceipt.mockResolvedValue(undefined)
+  runtimeMocks.sendTyping.mockReset()
+  runtimeMocks.sendTyping.mockResolvedValue(undefined)
   sessionState.manager = null
 })
 
@@ -513,22 +528,13 @@ describe('handleManagerEvent', () => {
     expect(typingMocks.clearRemoteTyping).toHaveBeenCalledWith(PEER_PUBKEY)
   })
 
-  it('waits for current-device registration before sending via SessionManager', async () => {
+  it('waits for current-device registration before sending via runtime', async () => {
     let resolveRegistration!: () => void
     const registrationReady = new Promise<void>((resolve) => {
       resolveRegistration = resolve
     })
-    const setupUser = vi.fn().mockResolvedValue(undefined)
-    const sendEvent = vi.fn().mockResolvedValue(undefined)
-    const manager = {
-      getDeviceId: () => MY_PUBKEY,
-      sendEvent,
-      setupUser,
-    }
 
     privateChatsMocks.ensureDeviceRegistered.mockReturnValue(registrationReady)
-    privateChatsMocks.waitForSessionManager.mockResolvedValue(manager as never)
-    sessionState.manager = manager
 
     chats.set(
       new Map([
@@ -549,37 +555,19 @@ describe('handleManagerEvent', () => {
     await new Promise((resolve) => setTimeout(resolve, 10))
 
     expect(privateChatsMocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
-    expect(privateChatsMocks.waitForSessionManager).not.toHaveBeenCalled()
-    expect(sendEvent).not.toHaveBeenCalled()
+    expect(runtimeMocks.sendEvent).not.toHaveBeenCalled()
 
     resolveRegistration()
-    await new Promise((resolve) => setTimeout(resolve, 10))
-
-    expect(privateChatsMocks.waitForSessionManager).toHaveBeenCalledTimes(1)
-    expect(setupUser).toHaveBeenCalledTimes(1)
-    expect(setupUser).toHaveBeenCalledWith(MY_PUBKEY)
-    expect(sendEvent).toHaveBeenCalledTimes(1)
-    expect(sendEvent.mock.calls[0]?.[0]).toBe(MY_PUBKEY)
+    await vi.waitFor(() => expect(runtimeMocks.sendEvent).toHaveBeenCalledTimes(1))
+    expect(runtimeMocks.sendEvent.mock.calls[0]?.[0]).toBe(MY_PUBKEY)
+    expect(runtimeMocks.sendEvent.mock.calls[0]?.[1]).toMatchObject({
+      pubkey: MY_PUBKEY,
+      content: 'register before send',
+    })
   })
 
-  it('waits for peer setup before sending the first linked-device message', async () => {
-    let resolvePeerSetup!: () => void
-    const peerSetupReady = new Promise<void>((resolve) => {
-      resolvePeerSetup = resolve
-    })
+  it('delegates first peer message sends to the runtime', async () => {
     const PEER_PUBKEY = 'c'.repeat(64)
-    const sendEvent = vi.fn().mockResolvedValue(undefined)
-    const setupUser = vi.fn((pubkey: string) =>
-      pubkey === PEER_PUBKEY ? peerSetupReady : Promise.resolve()
-    )
-    const manager = {
-      getDeviceId: () => MY_PUBKEY,
-      sendEvent,
-      setupUser,
-    }
-
-    privateChatsMocks.waitForSessionManager.mockResolvedValue(manager as never)
-    sessionState.manager = manager
 
     chats.set(
       new Map([
@@ -599,29 +587,19 @@ describe('handleManagerEvent', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10))
 
-    expect(setupUser).toHaveBeenCalledWith(PEER_PUBKEY)
-    expect(sendEvent).not.toHaveBeenCalled()
-
-    resolvePeerSetup()
-    await new Promise((resolve) => setTimeout(resolve, 10))
-
-    expect(sendEvent).toHaveBeenCalledTimes(1)
-    expect(sendEvent.mock.calls[0]?.[0]).toBe(PEER_PUBKEY)
+    expect(runtimeMocks.sendEvent).toHaveBeenCalledTimes(1)
+    expect(runtimeMocks.sendEvent.mock.calls[0]?.[0]).toBe(PEER_PUBKEY)
+    expect(runtimeMocks.sendEvent.mock.calls[0]?.[1]).toMatchObject({
+      pubkey: MY_PUBKEY,
+      content: 'linked first send waits for setup',
+    })
   })
 
   it('uses the current device pubkey when sending manager rumors from a linked device', async () => {
     const LINKED_DEVICE_PUBKEY = 'b'.repeat(64)
     const PEER_PUBKEY = 'c'.repeat(64)
-    const sendEvent = vi.fn().mockResolvedValue(undefined)
-    const manager = {
-      getDeviceId: () => LINKED_DEVICE_PUBKEY,
-      setupUser: vi.fn().mockResolvedValue(undefined),
-      sendEvent,
-    }
 
     devices.setIdentityPubkey(LINKED_DEVICE_PUBKEY)
-    privateChatsMocks.waitForSessionManager.mockResolvedValue(manager as never)
-    sessionState.manager = manager
 
     chats.set(
       new Map([
@@ -641,9 +619,9 @@ describe('handleManagerEvent', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10))
 
-    expect(sendEvent).toHaveBeenCalledTimes(1)
-    expect(sendEvent.mock.calls[0]?.[0]).toBe(PEER_PUBKEY)
-    expect(sendEvent.mock.calls[0]?.[1]).toMatchObject({
+    expect(runtimeMocks.sendEvent).toHaveBeenCalledTimes(1)
+    expect(runtimeMocks.sendEvent.mock.calls[0]?.[0]).toBe(PEER_PUBKEY)
+    expect(runtimeMocks.sendEvent.mock.calls[0]?.[1]).toMatchObject({
       pubkey: LINKED_DEVICE_PUBKEY,
       content: 'send from linked device',
     })

@@ -23,9 +23,9 @@ import { getPubkey } from './identity'
 import { devices } from './devices'
 import { chats, type ChatMessage } from './chat'
 import {
+  ensureDeviceRegistered,
   getNdrRuntime,
   getSessionManager,
-  waitForPeerSendReadySessionManager,
   waitForSendReadySessionManager,
 } from './privateChats'
 import { getEventHash } from 'nostr-tools'
@@ -175,8 +175,8 @@ function fanOutToMembers(
 
     try {
       const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
-      void waitForPeerSendReadySessionManager(memberPubkey)
-        .then((ready) => ready.sendEvent(memberPubkey, rumor))
+      void ensureDeviceRegistered()
+        .then(() => getNdrRuntime().sendEvent(memberPubkey, rumor))
         .catch((error) => {
           console.warn(
             '[groups] Failed to send to member:',
@@ -197,12 +197,12 @@ async function fanOutToOwnDevices(
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  const ready = await waitForPeerSendReadySessionManager(myPubkey)
+  await ensureDeviceRegistered()
   const rumor = buildGroupRumor(myPubkey, {
     ...partialEvent,
     tags: [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]],
   })
-  await ready.sendEvent(myPubkey, rumor)
+  await getNdrRuntime().sendEvent(myPubkey, rumor)
 }
 
 async function sendNativeGroupEvent(

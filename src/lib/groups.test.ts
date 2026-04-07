@@ -57,6 +57,7 @@ vi.mock('./chat', () => {
 })
 
 vi.mock('./privateChats', () => ({
+  ensureDeviceRegistered: vi.fn().mockResolvedValue(undefined),
   getSessionManager: () => ({
     sendEvent: (recipient: string, event: unknown) => {
       sendEventCalls.push({ recipient, event })
@@ -76,6 +77,10 @@ vi.mock('./privateChats', () => ({
     },
   }),
   getNdrRuntime: () => ({
+    sendEvent: (recipient: string, event: unknown) => {
+      sendEventCalls.push({ recipient, event })
+      return Promise.resolve(undefined)
+    },
     syncGroups: async (groups: Array<{
       id: string
       name: string

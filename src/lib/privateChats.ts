@@ -188,8 +188,9 @@ export const waitForSendReadySessionManager = async (): Promise<SessionManager> 
 export const waitForPeerSendReadySessionManager = async (
   recipientPubkey: string
 ): Promise<SessionManager> => {
+  const currentRuntime = getRuntime()
   const manager = await waitForSendReadySessionManager()
-  await manager.setupUser(recipientPubkey).catch((e) => {
+  await currentRuntime.setupUser(recipientPubkey).catch((e) => {
     console.warn(
       '[privateChats] Failed to prepare peer SessionManager user setup:',
       recipientPubkey,

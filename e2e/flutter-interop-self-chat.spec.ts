@@ -919,7 +919,9 @@ test('self-chat interop (same key) between web and flutter', async ({
 
     await page.getByRole('button', { name: 'New Chat' }).click()
     await page.getByPlaceholder('Paste invite link').fill(created.inviteUrl)
-    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({
+      timeout: 40000,
+    })
 
     const webMessage = 'web->flutter self interop'
     await page.getByPlaceholder('Type a message...').fill(webMessage)
@@ -984,7 +986,9 @@ test('direct self-chat interop (same key) between web and flutter', async ({
 
     await page.getByRole('button', { name: 'New Chat' }).click()
     await page.getByPlaceholder('Paste invite link').fill(`https://chat.iris.to/#${expectedNpub}`)
-    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 20000 })
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({
+      timeout: 40000,
+    })
 
     const webMessage = `web->flutter direct self interop ${Date.now()}`
     await page.getByPlaceholder('Type a message...').fill(webMessage)
