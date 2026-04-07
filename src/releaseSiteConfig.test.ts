@@ -1,21 +1,8 @@
 // @vitest-environment node
 
-import fs from 'node:fs'
-import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { createReleasePlan, defaultSiteTreeName, parseArgs, runRelease } from '../scripts/release-site.mjs'
-
-const distDir = path.resolve(__dirname, '../dist')
-
-async function withDistFixture(run: () => Promise<void>) {
-  fs.mkdirSync(distDir, { recursive: true })
-  try {
-    await run()
-  } finally {
-    fs.rmSync(distDir, { recursive: true, force: true })
-  }
-}
 
 describe('release site config', () => {
   it('uses a dedicated mutable tree for the published site by default', () => {
@@ -53,39 +40,40 @@ describe('release site config', () => {
     let maxActiveReleaseSteps = 0
     const calls: string[] = []
 
-    await withDistFixture(async () => {
-      await runRelease(
-        {
-          dryRun: false,
-          skipCloudflare: false,
-          pagesOnly: false,
-          treeName: defaultSiteTreeName,
-          branch: undefined,
-          pagesProject: undefined,
-          workerName: 'iris-chat',
-          routes: [],
-          domains: ['chat.iris.to'],
-          workerCompatibilityDate: '2026-03-26',
-        },
-        async (step) => {
-          calls.push(step.id)
-          if (step.id === 'publish' || step.id === 'deploy') {
-            activeReleaseSteps += 1
-            maxActiveReleaseSteps = Math.max(maxActiveReleaseSteps, activeReleaseSteps)
-            await new Promise((resolve) => setTimeout(resolve, 10))
-            activeReleaseSteps -= 1
-            if (step.id === 'publish') {
-              return {
-                status: 0,
-                stdout: 'published: npub1example/iris-chat-site\nnhash1ace',
-                stderr: '',
-              }
+    await runRelease(
+      {
+        dryRun: false,
+        skipCloudflare: false,
+        pagesOnly: false,
+        treeName: defaultSiteTreeName,
+        branch: undefined,
+        pagesProject: undefined,
+        workerName: 'iris-chat',
+        routes: [],
+        domains: ['chat.iris.to'],
+        workerCompatibilityDate: '2026-03-26',
+      },
+      async (step) => {
+        calls.push(step.id)
+        if (step.id === 'publish' || step.id === 'deploy') {
+          activeReleaseSteps += 1
+          maxActiveReleaseSteps = Math.max(maxActiveReleaseSteps, activeReleaseSteps)
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          activeReleaseSteps -= 1
+          if (step.id === 'publish') {
+            return {
+              status: 0,
+              stdout: 'published: npub1example/iris-chat-site\nnhash1ace',
+              stderr: '',
             }
           }
-          return { status: 0, stdout: '', stderr: '' }
-        },
-      )
-    })
+        }
+        return { status: 0, stdout: '', stderr: '' }
+      },
+      {
+        buildOutputExists: () => true,
+      },
+    )
 
     expect(calls).toEqual(['build', 'test-portable', 'test-smoke', 'publish', 'deploy'])
     expect(maxActiveReleaseSteps).toBe(2)
