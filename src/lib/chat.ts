@@ -551,10 +551,6 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
 
-  // Sharing a pubkey invite before this device is published in AppKeys leaves
-  // peers guessing which device should receive the first inbound message.
-  await ensureDeviceRegistered()
-
   const invite = createInvite()
   const id = crypto.randomUUID()
 
@@ -587,6 +583,12 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
 
   // Update notification subscription to include this invite's ephemeral key
   updateDMSubscription()
+
+  // Publish device AppKeys / invite in the background. The invite URL is just
+  // our npub, so it can be shown immediately while relay work catches up.
+  void ensureDeviceRegistered().catch((e) =>
+    console.warn('[chat] invite device registration failed:', e)
+  )
 
   return activeInvite
 }
