@@ -1,10 +1,12 @@
 import { get } from 'svelte/store'
 import {
   NDKEvent,
+  NDKRelaySet,
   NDKSubscriptionCacheUsage,
   type NDKFilter,
 } from '@nostr-dev-kit/ndk'
 import {
+  AppKeys,
   Invite,
   INVITE_RESPONSE_KIND,
   NdrRuntime,
@@ -20,6 +22,7 @@ import {
 } from 'nostr-double-ratchet'
 import { ndk, identity, getPrivkeyHex, getPrivkeyBytes, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
+import { relayStore } from './relayStore'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import type { VerifiedEvent } from 'nostr-tools'
 import {
@@ -27,6 +30,7 @@ import {
   getLinkedDeviceRegistrationLabels,
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
+import { asNdkEventSubscription } from './ndkSubscription'
 
 let runtime: NdrRuntime | null = null
 let runtimeCleanup: (() => void) | null = null
@@ -34,10 +38,101 @@ let previousRuntimeState: NdrRuntimeState | null = null
 let rotateInvitePromise: Promise<void> | null = null
 let linkedInviteRepublishTimer: ReturnType<typeof setTimeout> | null = null
 let runtimeOwnerIdentityKeyHex: string | null = null
+const verifiedDeviceRegistrations = new Set<string>()
+let activeDeviceRegistration:
+  | { ownerPubkey: string; promise: Promise<void> }
+  | null = null
 
 const APP_KEYS_FETCH_TIMEOUT_MS = 8000
 const APP_KEYS_FAST_TIMEOUT_MS = 2000
 const LINKED_INVITE_REPUBLISH_RETRY_MS = 1500
+
+const registrationKey = (ownerPubkey: string, devicePubkey: string): string =>
+  `${ownerPubkey}:${devicePubkey}`
+
+const stateIncludesDevice = (
+  state: NdrRuntimeState,
+  devicePubkey: string | null | undefined
+): devicePubkey is string => {
+  const normalizedDevice = devicePubkey?.trim().toLowerCase()
+  if (!normalizedDevice) return false
+  return state.registeredDevices.some(
+    (device) => device.identityPubkey.trim().toLowerCase() === normalizedDevice
+  )
+}
+
+const isVerifiedCurrentDevice = (ownerPubkey: string, state: NdrRuntimeState): boolean => {
+  const devicePubkey = state.currentDevicePubkey
+  return !!(
+    devicePubkey &&
+    stateIncludesDevice(state, devicePubkey) &&
+    verifiedDeviceRegistrations.has(registrationKey(ownerPubkey, devicePubkey))
+  )
+}
+
+const verifyCurrentDeviceOnRelay = async (
+  currentRuntime: NdrRuntime,
+  ownerPubkey: string,
+  timeoutMs: number = APP_KEYS_FETCH_TIMEOUT_MS
+): Promise<void> => {
+  const devicePubkey = currentRuntime.getState().currentDevicePubkey
+  if (!devicePubkey) {
+    throw new Error('Current device pubkey not available')
+  }
+
+  const relayAppKeys = await AppKeys.waitFor(
+    ownerPubkey,
+    createRelayOnlySubscribe(getNDK()),
+    timeoutMs
+  )
+  const relayIncludesDevice =
+    relayAppKeys
+      ?.getAllDevices()
+      .some(
+        (device) =>
+          device.identityPubkey.trim().toLowerCase() ===
+          devicePubkey.trim().toLowerCase()
+      ) ?? false
+
+  if (!relayIncludesDevice) {
+    throw new Error(
+      `Relay AppKeys for ${ownerPubkey} do not include current device ${devicePubkey}`
+    )
+  }
+
+  await currentRuntime
+    .refreshOwnAppKeysFromRelay(ownerPubkey, APP_KEYS_FAST_TIMEOUT_MS)
+    .catch(() => {})
+  verifiedDeviceRegistrations.add(registrationKey(ownerPubkey, devicePubkey))
+}
+
+const registerCurrentDeviceAndVerify = async (
+  currentRuntime: NdrRuntime,
+  ownerPubkey: string,
+  labels?: Awaited<ReturnType<typeof getCurrentDeviceRegistrationLabels>>
+): Promise<void> => {
+  if (activeDeviceRegistration?.ownerPubkey === ownerPubkey) {
+    return activeDeviceRegistration.promise
+  }
+
+  const promise = (async () => {
+    await currentRuntime.registerCurrentDevice({
+      ownerPubkey,
+      timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
+      ...labels,
+    })
+    await verifyCurrentDeviceOnRelay(currentRuntime, ownerPubkey)
+  })()
+
+  activeDeviceRegistration = { ownerPubkey, promise }
+  try {
+    await promise
+  } finally {
+    if (activeDeviceRegistration?.promise === promise) {
+      activeDeviceRegistration = null
+    }
+  }
+}
 
 const createSubscribe = (
   ndkInstance: ReturnType<typeof getNDK>,
@@ -46,10 +141,37 @@ const createSubscribe = (
   return createRuntimeSubscribe(ndkInstance, cacheUsage)
 }
 
+const createRelayOnlySubscribe = (
+  ndkInstance: ReturnType<typeof getNDK>
+): NostrSubscribe => {
+  return (filter, onEvent) => {
+    const relayUrls = [...relayStore.getState().relays]
+    const relayOptions = relayUrls.length > 0 ? { relayUrls } : {}
+    const subscription = asNdkEventSubscription(
+      ndkInstance.subscribe(filter as NDKFilter, {
+        closeOnEose: false,
+        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+        skipOptimisticPublishEvent: true,
+        ...relayOptions,
+      })
+    )
+    subscription.on('event', (event) => {
+      onEvent(event.rawEvent() as Parameters<typeof onEvent>[0])
+    })
+    subscription.start()
+    return () => subscription.stop()
+  }
+}
+
 const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => {
   return (async (event) => {
     const e = new NDKEvent(ndkInstance, event)
-    await e.publish()
+    const relayUrls = [...relayStore.getState().relays]
+    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
+    const publishedRelays = await e.publish(relaySet, 10000, 1)
+    if (publishedRelays.size === 0) {
+      throw new Error('No relay accepted runtime event')
+    }
     return event as never
   }) as NostrPublish
 }
@@ -108,6 +230,8 @@ const getRuntime = (): NdrRuntime => {
   runtime = null
   previousRuntimeState = null
   runtimeOwnerIdentityKeyHex = ownerIdentityKeyHex
+  verifiedDeviceRegistrations.clear()
+  activeDeviceRegistration = null
 
   const ndkInstance = getNDK()
   const ownerIdentityKey = getPrivkeyBytes()
@@ -265,12 +389,9 @@ export const registerDevice = async (): Promise<void> => {
   const labels = await getCurrentDeviceRegistrationLabels()
 
   await ensureConnected()
-  await getRuntime().initForOwner(ownerPubkey)
-  await getRuntime().registerCurrentDevice({
-    ownerPubkey,
-    timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
-    ...labels,
-  })
+  const currentRuntime = getRuntime()
+  await currentRuntime.initForOwner(ownerPubkey)
+  await registerCurrentDeviceAndVerify(currentRuntime, ownerPubkey, labels)
 }
 
 export const registerLinkedDevice = async (identityPubkey: string): Promise<void> => {
@@ -371,14 +492,30 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
   }
 
   await ensureConnected()
-  await getRuntime().initForOwner(ownerPubkey)
-  if (!getRuntime().getState().isCurrentDeviceRegistered) {
+  const currentRuntime = getRuntime()
+  await currentRuntime.initForOwner(ownerPubkey)
+
+  let state = currentRuntime.getState()
+  if (!isVerifiedCurrentDevice(ownerPubkey, state)) {
+    if (stateIncludesDevice(state, state.currentDevicePubkey)) {
+      try {
+        await verifyCurrentDeviceOnRelay(
+          currentRuntime,
+          ownerPubkey,
+          APP_KEYS_FAST_TIMEOUT_MS
+        )
+        state = currentRuntime.getState()
+      } catch {
+        verifiedDeviceRegistrations.delete(
+          registrationKey(ownerPubkey, state.currentDevicePubkey!)
+        )
+      }
+    }
+  }
+
+  if (!isVerifiedCurrentDevice(ownerPubkey, state)) {
     const labels = await getCurrentDeviceRegistrationLabels()
-    await getRuntime().registerCurrentDevice({
-      ownerPubkey,
-      timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
-      ...labels,
-    })
+    await registerCurrentDeviceAndVerify(currentRuntime, ownerPubkey, labels)
   }
   await republishInvite().catch(() => {})
 }
@@ -420,6 +557,8 @@ export const resetManagers = (): void => {
   rotateInvitePromise = null
   runtimeOwnerIdentityKeyHex = null
   devices.reset()
+  verifiedDeviceRegistrations.clear()
+  activeDeviceRegistration = null
 }
 
 export const republishInvite = async (): Promise<void> => {
@@ -458,6 +597,7 @@ export const acceptLinkInvite = async (invite: Invite): Promise<void> => {
   }
 
   await ensureConnected()
-  await getRuntime().initForOwner(currentIdentity.pubkey)
-  await getRuntime().acceptLinkInvite(invite, currentIdentity.pubkey)
+  const currentRuntime = getRuntime()
+  await currentRuntime.initForOwner(currentIdentity.pubkey)
+  await currentRuntime.acceptLinkInvite(invite, currentIdentity.pubkey)
 }
