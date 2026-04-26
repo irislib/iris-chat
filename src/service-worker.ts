@@ -254,8 +254,10 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       const state = deserializeSessionState(entry.stateJson)
 
       // Check if this message is from this session's peer
+      const skippedAuthors = Object.keys(state.skippedKeys || {})
       if (state.theirCurrentNostrPublicKey !== eventData.pubkey &&
-          state.theirNextNostrPublicKey !== eventData.pubkey) {
+          state.theirNextNostrPublicKey !== eventData.pubkey &&
+          !skippedAuthors.includes(eventData.pubkey)) {
         continue
       }
 
@@ -278,26 +280,8 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
         tags: eventData.tags.filter(([key]) => key === 'header'),
       }
 
-      let deliverToSession: ((event: NostrEvent) => void) | undefined
-      const session = new Session((_, onEvent) => {
-        deliverToSession = onEvent
-        return () => { deliverToSession = undefined }
-      }, state)
-
-      const innerEvent = await new Promise<Rumor | null>((resolve) => {
-        const timeout = setTimeout(() => resolve(null), 500)
-        session.onEvent((rumor) => {
-          clearTimeout(timeout)
-          resolve(rumor)
-        })
-        if (deliverToSession) {
-          try {
-            deliverToSession(eventForSession)
-          } catch {
-            resolve(null)
-          }
-        }
-      })
+      const session = new Session(state)
+      const innerEvent = session.receiveEvent(eventForSession) || null
 
       if (innerEvent) {
         const innerId = innerEvent.id
