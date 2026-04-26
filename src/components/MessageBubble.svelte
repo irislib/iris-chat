@@ -360,10 +360,10 @@
                   onselect={handleReact}
                   onclose={closePicker}
                   openUp={openUpward}
-                  openLeft={true}
+                  openLeft={openLeft}
                 />
               {:else if showEmojiPicker}
-                <div class="absolute right-0 {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl">
+                <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl">
                   {#each quickEmojis as emoji}
                     <button
                       class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
