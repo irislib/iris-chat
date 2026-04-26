@@ -69,26 +69,30 @@
   let showInfoModal = $state(false)
   let openUpward = $state(true)
   let openLeft = $state(false)
+  let emojiPickerOffsetX = $state(0)
   let menuButton = $state<HTMLButtonElement | null>(null)
   let menuContent = $state<HTMLDivElement | null>(null)
   let emojiContainer = $state<HTMLDivElement | null>(null)
 
 
-  function checkDirection(e: MouseEvent) {
+  function checkDirection(e: MouseEvent, popupWidth = 288) {
     const button = (e.currentTarget as HTMLElement)
     const rect = button.getBoundingClientRect()
     const spaceAbove = rect.top
     const spaceBelow = window.innerHeight - rect.bottom
-    const pickerWidth = 288
     const viewportPadding = 8
-    const rightFits = rect.left + pickerWidth <= window.innerWidth - viewportPadding
-    const leftFits = rect.right - pickerWidth >= viewportPadding
+    const maxPopupLeft = window.innerWidth - viewportPadding - popupWidth
+    const preferredLeft = rect.left
+    const safeLeft = Math.min(Math.max(preferredLeft, viewportPadding), Math.max(viewportPadding, maxPopupLeft))
+    const rightFits = rect.left + popupWidth <= window.innerWidth - viewportPadding
+    const leftFits = rect.right - popupWidth >= viewportPadding
     const spaceLeft = rect.right - viewportPadding
     const spaceRight = window.innerWidth - viewportPadding - rect.left
     // Prefer opening toward the roomier side, require a minimum buffer above
     openUpward = spaceAbove > 180 && spaceAbove >= spaceBelow
     // Prefer a side that fully fits. If neither does, use the side with more room.
     openLeft = !rightFits && (leftFits || spaceLeft > spaceRight)
+    emojiPickerOffsetX = safeLeft - rect.left
   }
 
   const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
@@ -367,9 +371,13 @@
                   onclose={closePicker}
                   openUp={openUpward}
                   openLeft={openLeft}
+                  offsetX={emojiPickerOffsetX}
                 />
               {:else if showEmojiPicker}
-                <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl">
+                <div
+                  class="absolute {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl"
+                  style={`left: ${emojiPickerOffsetX}px`}
+                >
                   {#each quickEmojis as emoji}
                     <button
                       class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
@@ -514,9 +522,13 @@
                   onclose={closePicker}
                   openUp={openUpward}
                   openLeft={openLeft}
+                  offsetX={emojiPickerOffsetX}
                 />
               {:else if showEmojiPicker}
-                <div class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl">
+                <div
+                  class="absolute {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl"
+                  style={`left: ${emojiPickerOffsetX}px`}
+                >
                   {#each quickEmojis as emoji}
                     <button
                       class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"

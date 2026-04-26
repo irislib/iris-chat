@@ -4,11 +4,13 @@
     onclose,
     openUp = true,
     openLeft = false,
+    offsetX,
   }: {
     onselect: (emoji: string) => void
     onclose: () => void
     openUp?: boolean
     openLeft?: boolean
+    offsetX?: number
   } = $props()
 
   let activeCategory = $state(0)
@@ -49,7 +51,8 @@
 
 <div
   bind:this={pickerRef}
-  class="absolute {openLeft ? 'right-0' : 'left-0'} {openUp ? 'bottom-full mb-1' : 'top-full mt-1'} w-72 bg-surface-light rounded-xl border border-surface-lighter shadow-xl flex flex-col z-50 overflow-hidden {openUp ? 'max-h-80' : 'max-h-80'}"
+  class="absolute {offsetX === undefined ? (openLeft ? 'right-0' : 'left-0') : ''} {openUp ? 'bottom-full mb-1' : 'top-full mt-1'} w-72 bg-surface-light rounded-xl border border-surface-lighter shadow-xl flex flex-col z-50 overflow-hidden {openUp ? 'max-h-80' : 'max-h-80'}"
+  style={offsetX === undefined ? undefined : `left: ${offsetX}px`}
 >
   <!-- Category tabs -->
   <div class="flex border-b border-surface-lighter overflow-x-auto px-1 flex-shrink-0">
