@@ -163,16 +163,30 @@ const createRelayOnlySubscribe = (
   }
 }
 
+export const publishRuntimeEventFireAndForget = <T>(
+  event: T,
+  publish: () => Promise<{ size: number }>
+): T => {
+  void publish()
+    .then((publishedRelays) => {
+      if (publishedRelays.size === 0) {
+        console.warn('[privateChats] Runtime event was not accepted by any relay')
+      }
+    })
+    .catch((error) => {
+      console.warn('[privateChats] Runtime event publish failed:', error)
+    })
+  return event
+}
+
 const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => {
   return (async (event) => {
-    const e = new NDKEvent(ndkInstance, event)
-    const relayUrls = [...relayStore.getState().relays]
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
-    const publishedRelays = await e.publish(relaySet, 10000, 1)
-    if (publishedRelays.size === 0) {
-      throw new Error('No relay accepted runtime event')
-    }
-    return event as never
+    return publishRuntimeEventFireAndForget(event, async () => {
+      const e = new NDKEvent(ndkInstance, event)
+      const relayUrls = [...relayStore.getState().relays]
+      const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
+      return e.publish(relaySet, 10000, 1)
+    }) as never
   }) as NostrPublish
 }
 

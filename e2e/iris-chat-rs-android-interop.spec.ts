@@ -177,8 +177,10 @@ function waitForAndroidMessage(message: string) {
   const output = runAndroidHarnessTest('wait_for_message_from_args', [
     `message=${message}`,
     'direction=incoming',
+    'expected_count=1',
   ])
   expect(output).toContain(`INSTRUMENTATION_STATUS: message=${message}`)
+  expect(output).toContain('INSTRUMENTATION_STATUS: matching_count=1')
 }
 
 async function expectIncomingWebMessage(page: import('@playwright/test').Page, message: string) {
