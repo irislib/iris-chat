@@ -79,10 +79,16 @@
     const rect = button.getBoundingClientRect()
     const spaceAbove = rect.top
     const spaceBelow = window.innerHeight - rect.bottom
+    const pickerWidth = 288
+    const viewportPadding = 8
+    const rightFits = rect.left + pickerWidth <= window.innerWidth - viewportPadding
+    const leftFits = rect.right - pickerWidth >= viewportPadding
+    const spaceLeft = rect.right - viewportPadding
+    const spaceRight = window.innerWidth - viewportPadding - rect.left
     // Prefer opening toward the roomier side, require a minimum buffer above
     openUpward = spaceAbove > 180 && spaceAbove >= spaceBelow
-    // Need ~288px for emoji picker width
-    openLeft = (window.innerWidth - rect.right) < 288
+    // Prefer a side that fully fits. If neither does, use the side with more room.
+    openLeft = !rightFits && (leftFits || spaceLeft > spaceRight)
   }
 
   const quickEmojis = ['❤️', '👍', '😂', '😮', '😢', '🙏']
