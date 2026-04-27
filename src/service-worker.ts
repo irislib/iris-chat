@@ -4,6 +4,11 @@ import { Session, type Rumor, type NostrSubscribe, deserializeSessionState, MESS
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'
+
+// Avoid importing from profilePicture.ts here so the service worker doesn't pull in @hashtree/core.
+function isHashtreePicture(picture: string | undefined): boolean {
+  return !!picture && (picture.startsWith('htree://') || picture.startsWith('nhash://'))
+}
 import { shouldShowInviteResponseNotification, shouldShowSystemNotificationForMessagePush } from './lib/swNotificationPolicy'
 
 declare let self: ServiceWorkerGlobalScope
@@ -188,7 +193,8 @@ async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: stri
     const profile = await db.profiles.get(pubkey)
     if (profile) {
       const name = profile.display_name || profile.name || getAnimalName(pubkey)
-      const icon = profile.picture
+      // htree:// pictures require hashtree decryption which isn't wired into the SW; fall back to the app icon.
+      const icon = profile.picture && !isHashtreePicture(profile.picture)
         ? await generateProxyUrl(profile.picture, { width: 96, height: 96, square: true })
         : fallbackIcon
       return { name, icon }

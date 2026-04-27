@@ -10,7 +10,8 @@
   import MediaModal from './MediaModal.svelte'
   import QRScanner from './QRScanner.svelte'
   import { createProfileStore, getProfileName } from '../lib/profile'
-  import { generateProxyUrl } from '../lib/imgproxy'
+  import { resolvePictureUrl, formatHtreePicture } from '../lib/profilePicture'
+  import { uploadFile } from '../lib/hashtree'
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
@@ -25,7 +26,6 @@
     registerLinkedDevice,
     revokeDevice,
   } from '../lib/privateChats'
-  import { uploadProfilePictureToBlossom } from '../lib/blossomUpload'
   import { getErrorMessage } from '../lib/utils'
 
   interface Props {
@@ -247,11 +247,14 @@
   $effect(() => {
     const pic = profilePicture
     proxiedFullPicture = null
-    if (pic) {
-      generateProxyUrl(pic, { width: 800 }).then(url => {
-        proxiedFullPicture = url
-      })
-    }
+    if (!pic) return
+
+    let cancelled = false
+    resolvePictureUrl(pic, { width: 800 })
+      .then(url => { if (!cancelled) proxiedFullPicture = url })
+      .catch(() => {})
+
+    return () => { cancelled = true }
   })
 
   $effect(() => {
@@ -499,12 +502,11 @@
     statusMessage = null
 
     try {
-      const picture = await uploadProfilePictureToBlossom(file, {
-        onProgress: ({ bytesUploaded, totalBytes }) => {
-          if (totalBytes <= 0) return
-          profileUploadProgress = Math.round((bytesUploaded / totalBytes) * 100)
-        },
+      const { nhash, filename } = await uploadFile(file, (bytesUploaded, totalBytes) => {
+        if (totalBytes <= 0) return
+        profileUploadProgress = Math.round((bytesUploaded / totalBytes) * 100)
       })
+      const picture = formatHtreePicture(nhash, filename)
       await updateOwnProfile({ picture, baseProfile: profile })
       statusMessage = { type: 'success', text: 'Profile picture updated' }
     } catch (error) {

@@ -2,7 +2,7 @@
   import { minidenticon } from 'minidenticons'
   import { createProfileStore, getProfileName } from '../lib/profile'
   import { getAnimalName } from '../lib/animalNames'
-  import { generateProxyUrl } from '../lib/imgproxy'
+  import { resolvePictureUrl } from '../lib/profilePicture'
 
   interface Props {
     pubkey: string
@@ -22,11 +22,14 @@
     const pic = profile?.picture
     imgError = false
     proxiedSrc = null
-    if (pic) {
-      generateProxyUrl(pic, { width: size, height: size, square: true }).then(url => {
-        proxiedSrc = url
-      })
-    }
+    if (!pic) return
+
+    let cancelled = false
+    resolvePictureUrl(pic, { width: size, height: size, square: true })
+      .then(url => { if (!cancelled) proxiedSrc = url })
+      .catch(() => {})
+
+    return () => { cancelled = true }
   })
 
   let identicon = $derived(minidenticon(pubkey, 90, 50))

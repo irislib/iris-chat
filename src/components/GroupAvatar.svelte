@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseFileLink, getMediaUrl, isImageFile } from '../lib/hashtree'
+  import { resolvePictureUrl } from '../lib/profilePicture'
 
   interface Props {
     picture?: string
@@ -10,19 +10,16 @@
 
   let imageUrl = $state<string | null>(null)
 
-  // Resolve hashtree picture URIs to blob URLs
   $effect(() => {
     imageUrl = null
     if (!picture) return
 
-    // nhash://nhash1.../filename format
-    const stripped = picture.replace(/^nhash:\/\//, '')
-    const parsed = parseFileLink(stripped)
-    if (parsed && isImageFile(parsed.filename)) {
-      getMediaUrl(parsed.nhash, 'image/*').then(url => {
-        imageUrl = url
-      }).catch(() => {})
-    }
+    let cancelled = false
+    resolvePictureUrl(picture, { width: size, height: size, square: true })
+      .then(url => { if (!cancelled) imageUrl = url })
+      .catch(() => {})
+
+    return () => { cancelled = true }
   })
 </script>
 

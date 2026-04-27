@@ -151,14 +151,10 @@ export function formatFileLink(nhash: string, filename: string): string {
 }
 
 /**
- * Parse a file link: nhash/filename or htree://nhash/filename
+ * Parse a file link: nhash/filename, htree://nhash/filename, or nhash://nhash/filename
  */
 export function parseFileLink(link: string): { nhash: string; filename: string } | null {
-  // Remove htree:// prefix if present
-  let cleaned = link
-  if (cleaned.startsWith('htree://')) {
-    cleaned = cleaned.substring(8)
-  }
+  const cleaned = link.replace(/^(?:htree|nhash):\/\//, '')
 
   // Match nhash1.../filename pattern
   const match = cleaned.match(/^(nhash1[a-z0-9]+)\/(.+)$/i)
