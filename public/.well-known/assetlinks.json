@@ -1,0 +1,26 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "to.iris.chat",
+      "sha256_cert_fingerprints": [
+        "DB:33:BF:DD:25:01:5E:02:78:AB:BA:89:1D:6F:32:C3:68:AB:AF:51:BC:C5:52:7A:1A:6E:46:E3:84:A5:AA:6D"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "to.iris.chat.beta",
+      "sha256_cert_fingerprints": [
+        "DB:33:BF:DD:25:01:5E:02:78:AB:BA:89:1D:6F:32:C3:68:AB:AF:51:BC:C5:52:7A:1A:6E:46:E3:84:A5:AA:6D"
+      ]
+    }
+  }
+]

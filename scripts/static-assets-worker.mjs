@@ -25,6 +25,29 @@ function hasFileExtension(pathname) {
 }
 
 /**
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+function isAssociationFile(pathname) {
+  return pathname === '/.well-known/apple-app-site-association' ||
+    pathname === '/apple-app-site-association'
+}
+
+/**
+ * @param {Response} response
+ * @returns {Response}
+ */
+function withJsonContentType(response) {
+  const headers = new Headers(response.headers)
+  headers.set('content-type', 'application/json')
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+/**
  * @param {Response} response
  * @returns {Response}
  */
@@ -56,6 +79,9 @@ export default {
     }
 
     const assetResponse = await env.ASSETS.fetch(request)
+    if (assetResponse.status !== 404 && isAssociationFile(url.pathname)) {
+      return withJsonContentType(assetResponse)
+    }
     if (assetResponse.status !== 404 || !navigationRequest) {
       return assetResponse
     }

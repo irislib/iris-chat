@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "J8PPJKD7TA.to.iris.chat",
+        "paths": [
+          "/*"
+        ]
+      }
+    ]
+  }
+}
