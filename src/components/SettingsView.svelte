@@ -246,12 +246,17 @@
 
   $effect(() => {
     const pic = profilePicture
-    proxiedFullPicture = null
-    if (!pic) return
+    if (!pic) {
+      proxiedFullPicture = null
+      return
+    }
 
     let cancelled = false
     resolvePictureUrl(pic, { width: 800 })
-      .then(url => { if (!cancelled) proxiedFullPicture = url })
+      .then(url => {
+        if (cancelled) return
+        if (url !== proxiedFullPicture) proxiedFullPicture = url
+      })
       .catch(() => {})
 
     return () => { cancelled = true }

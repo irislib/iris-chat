@@ -20,13 +20,19 @@
 
   $effect(() => {
     const pic = profile?.picture
-    imgError = false
-    proxiedSrc = null
-    if (!pic) return
+    if (!pic) {
+      proxiedSrc = null
+      imgError = false
+      return
+    }
 
     let cancelled = false
     resolvePictureUrl(pic, { width: size, height: size, square: true })
-      .then(url => { if (!cancelled) proxiedSrc = url })
+      .then(url => {
+        if (cancelled) return
+        if (url !== proxiedSrc) proxiedSrc = url
+        imgError = false
+      })
       .catch(() => {})
 
     return () => { cancelled = true }

@@ -11,12 +11,17 @@
   let imageUrl = $state<string | null>(null)
 
   $effect(() => {
-    imageUrl = null
-    if (!picture) return
+    if (!picture) {
+      imageUrl = null
+      return
+    }
 
     let cancelled = false
     resolvePictureUrl(picture, { width: size, height: size, square: true })
-      .then(url => { if (!cancelled) imageUrl = url })
+      .then(url => {
+        if (cancelled) return
+        if (url !== imageUrl) imageUrl = url
+      })
       .catch(() => {})
 
     return () => { cancelled = true }
