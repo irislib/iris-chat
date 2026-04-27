@@ -1,6 +1,14 @@
 /// <reference lib="webworker" />
 import { precacheAndRoute } from 'workbox-precaching'
-import { Session, type Rumor, type NostrSubscribe, deserializeSessionState, MESSAGE_EVENT_KIND, INVITE_RESPONSE_KIND } from 'nostr-double-ratchet'
+import {
+  Session,
+  type Rumor,
+  type NostrSubscribe,
+  deserializeSessionState,
+  MESSAGE_EVENT_KIND,
+  INVITE_RESPONSE_KIND,
+  REACTION_KIND,
+} from 'nostr-double-ratchet'
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'
@@ -9,7 +17,7 @@ import { generateProxyUrl } from './lib/imgproxy'
 function isHashtreePicture(picture: string | undefined): boolean {
   return !!picture && (picture.startsWith('htree://') || picture.startsWith('nhash://'))
 }
-import { shouldShowInviteResponseNotification, shouldShowSystemNotificationForMessagePush } from './lib/swNotificationPolicy'
+import { isUserFacingInnerKind, shouldShowInviteResponseNotification, shouldShowSystemNotificationForMessagePush } from './lib/swNotificationPolicy'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -205,10 +213,11 @@ async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: stri
   return { name: getAnimalName(pubkey), icon: fallbackIcon }
 }
 
-// Inner event kinds that should not trigger notifications
-const KIND_REACTION = 7
-const KIND_RECEIPT = 15
-const KIND_TYPING = 25
+// Web push cannot be suppressed server-side, so the SW must classify every
+// incoming inner-rumor kind. Display rules are centralized in
+// `isUserFacingInnerKind` (allowlist: chat messages + reactions). All other
+// kinds (typing, receipts, settings sync, group metadata, sender-key
+// distribution, future kinds, ...) are silent.
 
 interface DecryptResult {
   success: boolean
@@ -224,16 +233,17 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
     try {
       const processed = await db.processedEvents.get(eventData.id)
       if (processed) {
-        if (processed.kind === KIND_TYPING || processed.kind === KIND_RECEIPT) {
+        if (!isUserFacingInnerKind(processed.kind)) {
           return { success: true, chatId: processed.chatId, silent: true }
         }
-        if (processed.kind === KIND_REACTION) {
+        if (processed.kind === REACTION_KIND) {
           return {
             success: true,
             content: `Reacted ${processed.content || ''}`,
             chatId: processed.chatId,
           }
         }
+        // CHAT_MESSAGE_KIND falls through to the db.messages lookup below.
       }
     } catch (err) {
       console.error('[sw] error checking processedEvents:', err)
@@ -293,10 +303,10 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
         const innerId = innerEvent.id
         const processedInner = await db.processedEvents.get(innerId)
         if (processedInner) {
-          if (processedInner.kind === KIND_TYPING || processedInner.kind === KIND_RECEIPT) {
+          if (!isUserFacingInnerKind(processedInner.kind)) {
             return { success: true, chatId: processedInner.chatId, silent: true }
           }
-          if (processedInner.kind === KIND_REACTION) {
+          if (processedInner.kind === REACTION_KIND) {
             return {
               success: true,
               content: `Reacted ${processedInner.content || ''}`,
@@ -324,12 +334,15 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           }
         }
 
-        // Suppress notifications for typing, receipts, and our own messages from other devices
+        // Allowlist: only chat messages and reactions surface. Typing,
+        // receipts, settings sync, group metadata, key distribution, and any
+        // future kinds stay silent. Messages from our own pubkey on another
+        // device are also silenced (we already saw them locally).
         const isSelfMessage = ownerPubkey != null && innerEvent.pubkey === ownerPubkey
-        const silent = innerEvent.kind === KIND_RECEIPT || innerEvent.kind === KIND_TYPING || isSelfMessage
+        const silent = isSelfMessage || !isUserFacingInnerKind(innerEvent.kind)
         return {
           success: true,
-          content: innerEvent.kind === KIND_REACTION
+          content: innerEvent.kind === REACTION_KIND
             ? `Reacted ${innerEvent.content}`
             : innerEvent.content,
           chatId,
