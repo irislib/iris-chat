@@ -21,17 +21,12 @@
     "test:e2e:flutter-interop": "IRIS_FLUTTER_INTEROP=1 env -u NO_COLOR playwright test e2e/flutter-interop-self-chat.spec.ts",
     "smoke:portable": "node ./scripts/smoke-iris-chat-portable.mjs",
     "publish:iris": "node ./scripts/publish-iris-build.mjs",
-    "release:iris": "node ./scripts/release-site.mjs",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "release:iris": "node ./scripts/release-site.mjs"
   },
   "devDependencies": {
     "@iconify-json/carbon": "^1.2.15",
     "@playwright/test": "^1.57.0",
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
-    "@tauri-apps/api": "^2.9.1",
-    "@tauri-apps/cli": "^2.9.6",
     "@tsconfig/svelte": "^5.0.6",
     "@types/dompurify": "^3.2.0",
     "@types/node": "^24.10.1",

@@ -352,9 +352,7 @@ export function createInvite(): ChatInvite {
 // Get the base URL for invite links
 function getInviteBaseUrl(): string {
   const origin = window.location.origin
-  // Use production URL for local/tauri environments
-  if (origin.startsWith('tauri://') ||
-      origin.startsWith('http://localhost') ||
+  if (origin.startsWith('http://localhost') ||
       origin.startsWith('http://127.0.0.1')) {
     return 'https://chat.iris.to'
   }

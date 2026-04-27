@@ -66,7 +66,6 @@
   function getLinkInviteBaseUrl(): string {
     const origin = window.location.origin
     if (
-      origin.startsWith('tauri://') ||
       origin.startsWith('http://localhost') ||
       origin.startsWith('http://127.0.0.1')
     ) {
