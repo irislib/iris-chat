@@ -125,39 +125,35 @@ async function waitForServiceWorkerReady(page: Page) {
   })
 }
 
-// Patch `self.registration.showNotification` inside the SW to capture every
-// call into a global array. Idempotent — subsequent calls reset the buffer.
-async function instrumentSW(sw: Worker) {
-  await sw.evaluate(() => {
-    interface IrisInstrumentedGlobal {
-      __irisCapturedNotifications: Array<{ title: string; options: NotificationOptions | undefined }>
-      __irisInstrumented?: boolean
-    }
-    const g = self as unknown as IrisInstrumentedGlobal
-    g.__irisCapturedNotifications = []
-    if (g.__irisInstrumented) return
-    g.__irisInstrumented = true
-    const reg = self.registration
-    const original = reg.showNotification.bind(reg)
-    reg.showNotification = (title: string, options?: NotificationOptions) => {
-      g.__irisCapturedNotifications.push({ title, options })
-      // Don't actually surface the notification in test; permission is denied
-      // by default in headless Chrome anyway, but skipping avoids any flake.
-      return Promise.resolve()
-        .then(() => undefined)
-        .catch(() => original(title, options))
-    }
+type ObservedNotification = {
+  title: string
+  body: string
+  tag: string
+  silent: boolean | null
+}
+
+// Read every active notification belonging to this SW registration. We rely
+// on the real `showNotification` having fired (notification permission must
+// be granted on the context). Browsers de-duplicate by `tag`, so the caller
+// is responsible for closing notifications between scenarios.
+async function readAllNotifications(sw: Worker): Promise<ObservedNotification[]> {
+  return await sw.evaluate(async () => {
+    const list = await self.registration.getNotifications()
+    return list.map((n) => ({
+      title: n.title,
+      body: n.body,
+      tag: n.tag,
+      // Some Chromium versions expose silent via the Notification instance;
+      // others return null even when the option was set. We tolerate both.
+      silent: typeof n.silent === 'boolean' ? n.silent : null,
+    }))
   })
 }
 
-async function getCapturedNotifications(
-  sw: Worker
-): Promise<Array<{ title: string; options: NotificationOptions | undefined }>> {
-  return await sw.evaluate(() => {
-    const g = self as unknown as { __irisCapturedNotifications?: Array<{ title: string; options: NotificationOptions | undefined }> }
-    const captured = g.__irisCapturedNotifications ?? []
-    g.__irisCapturedNotifications = []
-    return captured
+async function clearAllNotifications(sw: Worker) {
+  await sw.evaluate(async () => {
+    const list = await self.registration.getNotifications()
+    for (const n of list) n.close()
   })
 }
 
@@ -197,6 +193,12 @@ async function configureRelays(context: BrowserContext, relays: string[]) {
   }, relays)
 }
 
+// Old chrome-headless-shell ignores Browser.grantPermissions for
+// notifications, so showNotification silently no-ops and the e2e becomes
+// useless. Force the full Chromium binary in new headless mode for this
+// file — that's the same engine real users hit.
+test.use({ channel: 'chromium' })
+
 test.describe('SW push handler', () => {
   test.setTimeout(180_000)
 
@@ -205,6 +207,11 @@ test.describe('SW push handler', () => {
     const bobContext = await browser.newContext()
     await useTestRelay(aliceContext, testRelayUrl)
     await useTestRelay(bobContext, testRelayUrl)
+    // Real notification permission so showNotification actually fires and
+    // the resulting Notification instances appear in getNotifications().
+    // Headless Chromium denies by default; without this, the SW silently
+    // drops every showNotification call and we'd be testing nothing.
+    await bobContext.grantPermissions(['notifications'], { origin: 'http://localhost:4173' })
 
     const alice = await aliceContext.newPage()
     const bob = await bobContext.newPage()
@@ -243,12 +250,20 @@ test.describe('SW push handler', () => {
       await expect(bob.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 30000 })
 
       const bobSW = await getServiceWorker(bobContext)
-      await instrumentSW(bobSW)
+      await clearAllNotifications(bobSW)
+
+      // Confirm permission really is granted in the SW context — without it,
+      // the browser silently drops every showNotification call and our
+      // assertions would be meaningless.
+      const permission = await bobSW.evaluate(() => self.Notification?.permission ?? 'unknown')
+      expect(permission, 'notification permission must be granted for this test to be meaningful').toBe('granted')
 
       // Bob is on the chat list, not focused inside any specific chat.
 
-      // 3. Alice sends a chat message → captured on the test relay.
-      // Alice should already have the chat with Bob open from joinAndExchange.
+      // 3. Alice sends a chat message. Bob's SW must decrypt the captured
+      //    envelope and render a notification whose body is the *exact*
+      //    plaintext Alice typed — proving end-to-end ratchet decryption
+      //    in the real worker.
       await expect(alice.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 10_000 })
 
       const messageBody = 'Hello Bob from Alice ' + Math.random().toString(36).slice(2, 8)
@@ -258,25 +273,31 @@ test.describe('SW push handler', () => {
 
       const chatEnvelope = await waitForNewKind1060(testRelay, beforeCount)
 
-      // 4. Inject into Bob's SW.
       await dispatchPush(bobSW, { event: chatEnvelope })
 
-      let captured = await getCapturedNotifications(bobSW)
-      const msgNotif = captured.find((n) => n.options?.body === messageBody)
-      expect(msgNotif, `expected chat-message notification with body "${messageBody}", got ${JSON.stringify(captured)}`).toBeTruthy()
-      expect(msgNotif!.options!.tag).toMatch(/^dm-/)
-      expect(msgNotif!.options!.tag).not.toMatch(/-status$/)
-      expect(msgNotif!.options!.silent).toBeFalsy()
+      let notifications = await readAllNotifications(bobSW)
+      // Decryption succeeded ⇒ the SW must have produced a notification
+      // whose body exactly matches Alice's plaintext. Anything else
+      // (fallback "New message", "You have a new message", missing notif)
+      // would indicate decryption failure or routing bug.
+      const msgNotif = notifications.find((n) => n.body === messageBody)
+      expect(
+        msgNotif,
+        `expected DECRYPTED chat-message notification with body "${messageBody}", got ${JSON.stringify(notifications)}`
+      ).toBeTruthy()
+      expect(msgNotif!.tag).toMatch(/^dm-/)
+      expect(msgNotif!.tag).not.toMatch(/-status$/)
+      expect(msgNotif!.silent).not.toBe(true)
 
-      // 5. Engagement gate: when Bob is focused on the source chat, the SW
-      //    should skip the notification entirely.
+      // 4. Engagement gate: when Bob is focused on the source chat, the SW
+      //    must skip showNotification entirely (silent push allowed by UA
+      //    when user is engaged).
+      await clearAllNotifications(bobSW)
       await bob.getByTestId('sidebar-chat-list').locator('button').filter({ hasText: messageBody }).first().click().catch(async () => {
-        // Fall back: open whichever chat with Alice is in the list.
         await bob.getByTestId('sidebar-chat-list').locator('button').first().click()
       })
-      await expect(bob.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 10000 })
-      await waitForServiceWorkerReady(bob)
-      // Allow Bob's app to inform the SW about the open chat (via GET_OPEN_CHAT message handshake).
+      await expect(bob.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 10_000 })
+      // Let Bob's app reply to GET_OPEN_CHAT.
       await bob.waitForTimeout(300)
 
       const messageBody2 = 'Second hello ' + Math.random().toString(36).slice(2, 8)
@@ -287,62 +308,66 @@ test.describe('SW push handler', () => {
 
       await dispatchPush(bobSW, { event: chatEnvelope2 })
 
-      captured = await getCapturedNotifications(bobSW)
-      const msgNotif2 = captured.find((n) => n.options?.body === messageBody2)
-      expect(msgNotif2, `expected NO notification when focused on source chat, got ${JSON.stringify(captured)}`).toBeUndefined()
+      notifications = await readAllNotifications(bobSW)
+      expect(
+        notifications,
+        `expected NO notification when Bob focused on source chat, got ${JSON.stringify(notifications)}`
+      ).toEqual([])
 
-      // 6. Typing indicator: Bob navigates back out of the chat, Alice keeps
-      //    typing → produces a TYPING_KIND inner rumor wrapped in a kind-1060
-      //    envelope. SW should render a silent ephemeral notification.
+      // 5. Typing indicator: Bob navigates back to chat list, Alice keeps
+      //    typing → TYPING_KIND inner rumor. SW must decrypt and render
+      //    "is typing…" as silent ephemeral notification.
+      await clearAllNotifications(bobSW)
       await bob.getByRole('button', { name: 'Back' }).click()
       await expect(bob.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 10_000 })
 
-      // The typing throttle is 3000 ms inside ChatView. Wait it out so the next
-      // keystroke fires sendThrottledTyping immediately.
+      // ChatView throttles typing to 3000 ms; clear the input and wait it out.
       await alice.getByPlaceholder('Type a message...').fill('').catch(() => {})
       await alice.waitForTimeout(3500)
 
       const beforeCount3 = testRelay.publishedEvents.filter((e) => e.kind === 1060).length
-      // Type a single char (don't send) — fires sendTypingEvent (throttle: leading edge).
       await alice.getByPlaceholder('Type a message...').focus()
       await alice.keyboard.type('t')
       const typingEnvelope = await waitForNewKind1060(testRelay, beforeCount3, 10_000)
 
       await dispatchPush(bobSW, { event: typingEnvelope })
 
-      captured = await getCapturedNotifications(bobSW)
-      const typingNotif = captured.find((n) => n.options?.body === 'is typing…')
+      notifications = await readAllNotifications(bobSW)
+      const typingNotif = notifications.find((n) => n.body === 'is typing…')
       expect(
         typingNotif,
-        `expected silent typing notification, got ${JSON.stringify(captured)}`
+        `expected DECRYPTED typing notification "is typing…", got ${JSON.stringify(notifications)}`
       ).toBeTruthy()
-      expect(typingNotif!.options!.tag).toMatch(/-status$/)
-      expect(typingNotif!.options!.silent).toBe(true)
+      expect(typingNotif!.tag).toMatch(/-status$/)
+      expect(typingNotif!.silent).toBe(true)
 
-      // 7. Decryption-failure with a visible client: SW must skip
+      // 6. Decryption-failure with a visible client: SW must skip
       //    showNotification (UA allows silent push when user is engaged) so
-      //    the placeholder doesn't trip on every undecryptable envelope.
+      //    the browser placeholder doesn't trip on every undecryptable
+      //    envelope.
+      await clearAllNotifications(bobSW)
       const garbageEnvelope = {
         ...typingEnvelope,
         id: 'aa'.repeat(32),
         content: 'YmFkLWNvbnRlbnQtZm9yLXRlc3Rpbmc=',
       }
       await dispatchPush(bobSW, { event: garbageEnvelope })
-      captured = await getCapturedNotifications(bobSW)
+      notifications = await readAllNotifications(bobSW)
       expect(
-        captured,
-        `expected NO notification on decrypt-failure when client visible, got ${JSON.stringify(captured)}`
+        notifications,
+        `expected NO notification on decrypt-failure when client visible, got ${JSON.stringify(notifications)}`
       ).toEqual([])
 
-      // 8. Empty/missing event payload: SW always shows the generic
-      //    "You have a new message" fallback so the browser doesn't
-      //    surface its own background-update placeholder.
+      // 7. Empty/missing event payload: SW must show the generic fallback
+      //    so the browser doesn't surface its own background-update
+      //    placeholder.
+      await clearAllNotifications(bobSW)
       await dispatchPush(bobSW, { event: undefined as unknown as object })
-      captured = await getCapturedNotifications(bobSW)
-      const fallback = captured.find((n) => n.options?.body === 'You have a new message')
+      notifications = await readAllNotifications(bobSW)
+      const fallback = notifications.find((n) => n.body === 'You have a new message')
       expect(
         fallback,
-        `expected empty-payload fallback notification, got ${JSON.stringify(captured)}`
+        `expected empty-payload fallback notification, got ${JSON.stringify(notifications)}`
       ).toBeTruthy()
     } finally {
       // Clear input to avoid throttled typing leaking into other tests.
