@@ -61,6 +61,7 @@ export interface ProcessedEvent {
   kind: number         // inner event kind (7=reaction, 15=receipt, 25=typing)
   chatId: string       // session/chat ID
   content?: string     // e.g. emoji for reactions
+  isSelfMessage?: boolean
   timestamp: number
 }
 

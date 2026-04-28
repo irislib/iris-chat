@@ -923,7 +923,8 @@ export async function handleManagerEvent(
       console.warn('[chat] republishInvite failed:', e)
     )
   }
-  handleIncomingRumor(chatSession, rumor, isFromSelf)
+  const outerEventId = (meta as (OnEventMeta & { outerEventId?: string }) | undefined)?.outerEventId
+  handleIncomingRumor(chatSession, rumor, isFromSelf, outerEventId)
 }
 
 // Accept an invite and create a session
@@ -1004,7 +1005,8 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
 function handleIncomingRumor(
   chatSession: ChatSession,
   rumor: Rumor,
-  isFromSelfOverride?: boolean
+  isFromSelfOverride?: boolean,
+  outerEventId?: string
 ) {
   const myPubkey = getPubkey()
   const sessionId = chatSession.id
@@ -1023,12 +1025,26 @@ function handleIncomingRumor(
   }
 
   const processedId = rumor.id
+  const saveProcessedRumor = (content?: string) => {
+    const event = {
+      id: processedId,
+      kind: rumor.kind,
+      chatId: sessionId,
+      content,
+      isSelfMessage: isMine,
+      timestamp: Date.now(),
+    }
+    saveProcessedEvent(event)
+    if (outerEventId && outerEventId !== processedId) {
+      saveProcessedEvent({ ...event, id: outerEventId })
+    }
+  }
 
   // Dispatch on inner event kind
   if (rumor.kind === RECEIPT_KIND) {
     // Persist content ('delivered'|'seen') so the SW push handler can render
     // the right notification text via its fast path.
-    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
+    saveProcessedRumor(rumor.content)
     const receipt = parseReceipt(rumor)
     if (!receipt) return
     handleIncomingReceipt(currentSession, receipt, isMine)
@@ -1036,7 +1052,7 @@ function handleIncomingRumor(
   }
 
   if (rumor.kind === REACTION_KIND) {
-    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
+    saveProcessedRumor(rumor.content)
     const parsed = parseReaction(rumor)
     const emoji = parsed?.emoji ?? rumor.content // fallback for old plain-emoji format
     const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
@@ -1046,7 +1062,7 @@ function handleIncomingRumor(
   }
 
   if (rumor.kind === CHAT_SETTINGS_KIND) {
-    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+    saveProcessedRumor()
     const settings = parseChatSettingsContent(rumor.content)
     if (settings) {
       expirationStore.setExpiration(sessionId, settings.messageTtlSeconds)
@@ -1055,7 +1071,7 @@ function handleIncomingRumor(
   }
 
   if (isTyping(rumor)) {
-    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+    saveProcessedRumor()
     const expiresAt = getExpirationTimestampSeconds(rumor)
     const nowSeconds = Math.floor(Date.now() / 1000)
     if (expiresAt !== undefined && expiresAt <= nowSeconds) {
@@ -1101,6 +1117,8 @@ function handleIncomingRumor(
     ...(shouldAckDelivered && { status: 'delivered' as const }),
     ...(expiresAt !== undefined && { expiresAt }),
   }
+
+  saveProcessedRumor(message.content)
 
   // Check if message already exists
   const updatedSession = updateChatSession(sessionId, (latestSession) => {

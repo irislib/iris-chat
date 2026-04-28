@@ -66,6 +66,7 @@ interface ProcessedEvent {
   kind: number
   chatId: string
   content?: string
+  isSelfMessage?: boolean
   timestamp: number
 }
 
@@ -300,6 +301,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           chatId: processed.chatId,
           kind: processed.kind,
           content: processed.content,
+          isSelfMessage: processed.isSelfMessage,
         }
       }
     } catch (err) {
