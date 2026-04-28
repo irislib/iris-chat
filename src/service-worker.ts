@@ -17,7 +17,7 @@ import { generateProxyUrl } from './lib/imgproxy'
 function isHashtreePicture(picture: string | undefined): boolean {
   return !!picture && (picture.startsWith('htree://') || picture.startsWith('nhash://'))
 }
-import { isUserFacingInnerKind, shouldShowInviteResponseNotification } from './lib/swNotificationPolicy'
+import { isUserFacingInnerKind } from './lib/swNotificationPolicy'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -357,28 +357,34 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
   return { success: false }
 }
 
-type VisibleClientState = {
+type EngagementState = {
   anyVisible: boolean
+  // True iff at least one client has the document focused (i.e. window is the
+  // top app and the tab is foregrounded). A visibilityState of 'visible' is
+  // not enough — a tab can be visible but the window can be behind another.
+  focused: boolean
+  // chatId of the currently-open chat in any visible client. If multiple
+  // clients are visible, the most recently observed wins.
   openChatId: string | null
 }
 
-// Find visible clients and ask them which chat is currently open.
-async function getVisibleClientState(): Promise<VisibleClientState> {
+// Ask clients about visibility, focus, and which chat they currently have open.
+async function getEngagementState(): Promise<EngagementState> {
   // includeUncontrolled ensures we still detect already-open tabs/windows
   // after an SW restart/update before the page is fully controlled.
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
 
-  // Find visible clients
   const visibleClients = clients.filter(c => c.visibilityState === 'visible')
-  
+
   if (visibleClients.length === 0) {
     currentOpenChatId = null
-    console.log('[sw] isChatOpen: no visible clients')
-    return { anyVisible: false, openChatId: null }
+    return { anyVisible: false, focused: false, openChatId: null }
   }
 
-  // Ask visible clients what chat is currently open
-  // This handles the case where SW was restarted and lost in-memory state
+  const focused = visibleClients.some(c => c.focused)
+
+  // Ask visible clients what chat is currently open. This handles the case
+  // where the SW was restarted and lost its in-memory currentOpenChatId.
   for (const client of visibleClients) {
     try {
       const channel = new MessageChannel()
@@ -397,7 +403,7 @@ async function getVisibleClientState(): Promise<VisibleClientState> {
     }
   }
 
-  return { anyVisible: true, openChatId: currentOpenChatId }
+  return { anyVisible: true, focused, openChatId: currentOpenChatId }
 }
 
 // Handle push notifications
@@ -416,14 +422,10 @@ self.addEventListener('push', (event) => {
 
       // Handle invite response notifications
       if (eventKind === INVITE_RESPONSE_KIND) {
-        console.log('[sw] received invite response notification')
-
-        const visible = await getVisibleClientState()
-        if (!shouldShowInviteResponseNotification({ anyVisibleClient: visible.anyVisible })) {
-          // App is visible — UA considers the user engaged, so skipping
-          // showNotification is allowed without triggering the browser's
-          // "site updated in background" fallback.
-          console.log('[sw] app visible, skipping invite response notification')
+        const engagement = await getEngagementState()
+        if (engagement.focused) {
+          // User is actively in iris-chat — UA considers them engaged, the
+          // in-app UI will surface the new chat, and silent push is allowed.
           return
         }
 
@@ -460,39 +462,40 @@ self.addEventListener('push', (event) => {
       // Handle regular message notifications
       if (eventKind === MESSAGE_EVENT_KIND) {
         const result = await decryptPushMessage(payload.event)
-        const visible = await getVisibleClientState()
+        const engagement = await getEngagementState()
 
         if (!result.chatId) {
-          // Could not identify a session for this push. If the app is open it
-          // will catch up over its own subscription; otherwise show a generic
-          // fallback so the browser doesn't surface its own placeholder.
-          if (visible.anyVisible) return
+          // Could not identify a session for this push. If a client is
+          // visible the main app's relay subscription will catch up.
+          // Otherwise fall back to a generic notification.
+          if (engagement.anyVisible) return
           await showFallbackNotification()
           return
         }
 
-        if (visible.anyVisible) {
-          // App is visible — UA allows skipping showNotification.
-          console.log('[sw] app visible, skipping notification', {
-            chatId: result.chatId,
-            openChatId: visible.openChatId,
-          })
+        // Non-user-facing inner rumors (typing, receipts, settings sync,
+        // group metadata, sender-key distribution, self-messages from
+        // another device, future kinds). The UA permits silent push when a
+        // client is visible. When no client is visible we cannot reliably
+        // suppress — the show-then-close "ghost" pattern is not supported by
+        // Chrome — and showing a real notification for a typing keystroke
+        // would be worse than the browser's bland background placeholder.
+        // Skipping is the lesser evil.
+        if (result.silent) {
           return
         }
 
-        if (result.silent) {
-          // Non-user-facing inner rumor (typing, receipts, settings sync,
-          // group metadata, sender-key distribution, our own message from
-          // another device, ...). We must still call showNotification —
-          // suppress visually with the show-then-close ghost pattern.
-          await showGhostNotification()
+        // User-facing: chat message or reaction. Skip only when the user is
+        // already looking at this exact conversation (focused window, same
+        // chat open). If the window is unfocused, on a different chat, or
+        // not visible at all, surface a notification.
+        if (engagement.focused && engagement.openChatId === result.chatId) {
           return
         }
 
         const sender = await getSenderInfo(result.chatId)
         const body = result.success && result.content ? result.content : 'New message'
         const tag = `dm-${result.chatId}`
-        console.log('[sw] showing notification with tag:', tag)
         await self.registration.showNotification(sender.name, {
           body,
           icon: sender.icon,
@@ -503,11 +506,8 @@ self.addEventListener('push', (event) => {
         return
       }
 
-      // Unknown outer event kind. Treat as background activity: ghost-dismiss
-      // when the app is closed, skip when visible.
-      const visible = await getVisibleClientState()
-      if (visible.anyVisible) return
-      await showGhostNotification()
+      // Unknown outer event kind — let the main app catch up via its
+      // subscription, skip the notification.
     } catch (error) {
       console.error('[sw] push error:', error)
       await showFallbackNotification()
@@ -523,29 +523,6 @@ async function showFallbackNotification() {
     icon: appLogoUrl,
     badge: appLogoUrl
   })
-}
-
-const GHOST_NOTIFICATION_TAG = 'iris-bg'
-
-// Web push spec requires showNotification to be called for every push event
-// unless the user is "engaged" (a same-origin client is visible). For
-// non-user-facing inner rumors that arrive while the app is in the background,
-// we satisfy the spec with a tagged silent notification we immediately
-// dismiss. Skipping showNotification entirely would let browsers display
-// their own "Site updated in the background" placeholder and eventually
-// revoke push permission.
-async function showGhostNotification() {
-  await self.registration.showNotification('', {
-    tag: GHOST_NOTIFICATION_TAG,
-    silent: true,
-    body: '',
-    badge: appLogoUrl,
-    icon: appLogoUrl,
-  })
-  const ghosts = await self.registration.getNotifications({ tag: GHOST_NOTIFICATION_TAG })
-  for (const n of ghosts) {
-    n.close()
-  }
 }
 
 // Handle notification clicks

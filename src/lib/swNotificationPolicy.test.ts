@@ -10,10 +10,7 @@ import {
   RECEIPT_KIND,
   TYPING_KIND,
 } from 'nostr-double-ratchet'
-import {
-  isUserFacingInnerKind,
-  shouldShowInviteResponseNotification,
-} from './swNotificationPolicy'
+import { isUserFacingInnerKind } from './swNotificationPolicy'
 
 describe('isUserFacingInnerKind', () => {
   it('treats chat messages and reactions as user-facing', () => {
@@ -40,9 +37,3 @@ describe('isUserFacingInnerKind', () => {
   })
 })
 
-describe('shouldShowInviteResponseNotification', () => {
-  it('skips when any client is visible (UA treats user as engaged)', () => {
-    expect(shouldShowInviteResponseNotification({ anyVisibleClient: true })).toBe(false)
-    expect(shouldShowInviteResponseNotification({ anyVisibleClient: false })).toBe(true)
-  })
-})

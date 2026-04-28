@@ -16,11 +16,3 @@ export function isUserFacingInnerKind(kind: number): boolean {
   return USER_FACING_INNER_KINDS.has(kind)
 }
 
-export function shouldShowInviteResponseNotification(args: {
-  anyVisibleClient: boolean
-}): boolean {
-  // App visible → user agent considers user "engaged", spec allows skipping
-  // showNotification without triggering the browser's background-update
-  // placeholder.
-  return !args.anyVisibleClient
-}
