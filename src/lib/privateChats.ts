@@ -18,7 +18,6 @@ import {
   type NostrFetch,
   type NostrPublish,
   type NostrSubscribe,
-  type SessionManager,
 } from 'nostr-double-ratchet'
 import { ndk, identity, getPrivkeyHex, getPrivkeyBytes, isLinkedDeviceLogin } from './identity'
 import { devices } from './devices'
@@ -300,46 +299,41 @@ export const initDelegateManager = async (): Promise<void> => {
   await getRuntime().initDelegateManager()
 }
 
-export const initSessionManager = async (ownerPubkey: string): Promise<void> => {
-  await getRuntime().initSessionManager(ownerPubkey)
+export const initNdrRuntime = async (ownerPubkey: string): Promise<void> => {
+  await getRuntime().initForOwner(ownerPubkey)
 }
 
-export const waitForSessionManager = async (): Promise<SessionManager> => {
+export const waitForNdrRuntime = async (): Promise<NdrRuntime> => {
   const currentRuntime = getRuntime()
-  const manager = currentRuntime.getSessionManager()
-  if (manager) {
-    return manager
+  if (currentRuntime.getState().sessionManagerReady) {
+    return currentRuntime
   }
 
   const ownerPubkey = currentRuntime.getState().ownerPubkey || get(identity)?.pubkey
   if (!ownerPubkey) {
-    throw new Error('SessionManager not initialized')
+    throw new Error('NdrRuntime owner not initialized')
   }
-  return currentRuntime.waitForSessionManager(ownerPubkey)
+  await currentRuntime.initForOwner(ownerPubkey)
+  return currentRuntime
 }
 
-export const waitForSendReadySessionManager = async (): Promise<SessionManager> => {
+export const waitForSendReadyRuntime = async (): Promise<NdrRuntime> => {
   await ensureDeviceRegistered()
-  return waitForSessionManager()
+  return waitForNdrRuntime()
 }
 
-export const waitForPeerSendReadySessionManager = async (
+export const preparePeerNdrRuntime = async (
   recipientPubkey: string
-): Promise<SessionManager> => {
-  const currentRuntime = getRuntime()
-  const manager = await waitForSendReadySessionManager()
+): Promise<NdrRuntime> => {
+  const currentRuntime = await waitForSendReadyRuntime()
   await currentRuntime.setupUser(recipientPubkey).catch((e) => {
     console.warn(
-      '[privateChats] Failed to prepare peer SessionManager user setup:',
+      '[privateChats] Failed to prepare peer runtime user setup:',
       recipientPubkey,
       e
     )
   })
-  return manager
-}
-
-export const getSessionManager = (): SessionManager | null => {
-  return runtime?.getSessionManager() || null
+  return currentRuntime
 }
 
 export const getDelegateManager = (): DelegateManager => {

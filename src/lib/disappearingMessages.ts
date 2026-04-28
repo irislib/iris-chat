@@ -1,9 +1,8 @@
 import {
   buildGroupMetadataContent,
-  GROUP_METADATA_KIND,
 } from 'nostr-double-ratchet'
 import { get } from 'svelte/store'
-import { getSessionManager } from './privateChats'
+import { getNdrRuntime } from './privateChats'
 import { getPubkey } from './identity'
 import { expirationStore } from './expirationStore'
 import { groups } from './groups'
@@ -26,12 +25,10 @@ export async function setDmDisappearingMessages(
 
   expirationStore.setExpiration(peerPubkey, normalizedTtl)
 
-  const sessionManager = getSessionManager()
   const myPubKey = getPubkey()
   if (!myPubKey) return
-  if (!sessionManager) return
 
-  await sessionManager.setChatSettingsForPeer(peerPubkey, normalizedTtl)
+  await getNdrRuntime().setChatSettingsForPeer(peerPubkey, normalizedTtl)
 }
 
 export async function setGroupDisappearingMessages(
@@ -52,15 +49,12 @@ export async function setGroupDisappearingMessages(
 
   expirationStore.setExpiration(groupId, normalizedTtl)
 
-  const sessionManager = getSessionManager()
-  if (sessionManager) {
-    await sessionManager
-      .setExpirationForGroup(
-        groupId,
-        normalizedTtl ? { ttlSeconds: normalizedTtl } : null
-      )
-      .catch(() => {})
-  }
+  await getNdrRuntime()
+    .setExpirationForGroup(
+      groupId,
+      normalizedTtl ? { ttlSeconds: normalizedTtl } : null
+    )
+    .catch(() => {})
 
   // Publish group metadata update so all members converge on the same setting
   const base = JSON.parse(buildGroupMetadataContent(group)) as Record<string, unknown>
@@ -69,10 +63,7 @@ export async function setGroupDisappearingMessages(
   fanOutGroupMetadata(groupId, JSON.stringify(base))
 }
 
-export async function syncDisappearingMessagesToSessionManager(): Promise<void> {
-  const sessionManager = getSessionManager()
-  if (!sessionManager) return
-
+export async function syncDisappearingMessagesToNdrRuntime(): Promise<void> {
   const expirations = expirationStore.getAllExpirations()
   const entries = Object.entries(expirations).filter(([, ttl]) => ttl !== undefined)
 
@@ -81,9 +72,9 @@ export async function syncDisappearingMessagesToSessionManager(): Promise<void> 
       const isPubkey = /^[0-9a-f]{64}$/i.test(chatId)
       const options = ttl ? { ttlSeconds: ttl } : null
       if (isPubkey) {
-        await sessionManager.setExpirationForPeer(chatId, options).catch(() => {})
+        await getNdrRuntime().setExpirationForPeer(chatId, options).catch(() => {})
       } else {
-        await sessionManager.setExpirationForGroup(chatId, options).catch(() => {})
+        await getNdrRuntime().setExpirationForGroup(chatId, options).catch(() => {})
       }
     })
   )

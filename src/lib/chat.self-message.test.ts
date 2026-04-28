@@ -60,8 +60,37 @@ vi.mock('./privateChats', () => ({
     sendEvent: runtimeMocks.sendEvent,
     sendReceipt: runtimeMocks.sendReceipt,
     sendTyping: runtimeMocks.sendTyping,
+    getState: () => ({
+      currentDevicePubkey: sessionState.manager?.getDeviceId?.() || null,
+      sessionManagerReady: true,
+    }),
+    getSessionUserRecords: () => sessionState.manager?.getUserRecords?.() || new Map(),
     onGroupEvent: () => () => {},
   }),
+  waitForNdrRuntime: async () => ({
+    sendEvent: runtimeMocks.sendEvent,
+    sendReceipt: runtimeMocks.sendReceipt,
+    sendTyping: runtimeMocks.sendTyping,
+    setupUser: sessionState.manager?.setupUser,
+  }),
+  waitForSendReadyRuntime: async () => {
+    await privateChatsMocks.ensureDeviceRegistered()
+    return {
+      sendEvent: runtimeMocks.sendEvent,
+      sendReceipt: runtimeMocks.sendReceipt,
+      sendTyping: runtimeMocks.sendTyping,
+    }
+  },
+  preparePeerNdrRuntime: async (recipientPubkey: string) => {
+    await privateChatsMocks.ensureDeviceRegistered()
+    const manager = await privateChatsMocks.waitForSessionManager()
+    await manager.setupUser(recipientPubkey)
+    return {
+      sendEvent: runtimeMocks.sendEvent,
+      sendReceipt: runtimeMocks.sendReceipt,
+      sendTyping: runtimeMocks.sendTyping,
+    }
+  },
   waitForPeerSendReadySessionManager: async (recipientPubkey: string) => {
     await privateChatsMocks.ensureDeviceRegistered()
     const manager = await privateChatsMocks.waitForSessionManager()
@@ -489,6 +518,32 @@ describe('handleManagerEvent', () => {
 
     await handleManagerEvent(rumor as never, MY_PUBKEY)
 
+    expect(typingMocks.clearRemoteTyping).not.toHaveBeenCalled()
+  })
+
+  it('ignores typing events from our own linked devices', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const OWN_OTHER_DEVICE = 'd'.repeat(64)
+
+    const rumor = {
+      id: 'typing-own-device-1',
+      pubkey: OWN_OTHER_DEVICE,
+      content: 'typing',
+      kind: TYPING_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', PEER_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, OWN_OTHER_DEVICE, {
+      isSelf: true,
+      isCrossDeviceSelf: true,
+      senderOwnerPubkey: MY_PUBKEY,
+      senderDevicePubkey: OWN_OTHER_DEVICE,
+      fromDeviceId: OWN_OTHER_DEVICE,
+      origin: 'same-owner-other-device',
+    })
+
+    expect(typingMocks.setRemoteTyping).not.toHaveBeenCalled()
     expect(typingMocks.clearRemoteTyping).not.toHaveBeenCalled()
   })
 

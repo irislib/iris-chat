@@ -52,6 +52,9 @@ vi.mock('./privateChats', () => ({
   waitForSessionManager: () => Promise.reject(new Error('manager unavailable in test')),
   ensureDeviceRegistered: vi.fn(),
   getNdrRuntime: () => ({
+    deleteChat: (...args: [string]) => mocks.getSessionManager()?.deleteChat?.(...args),
+    getState: () => ({ currentDevicePubkey: MY_PUBKEY, sessionManagerReady: true }),
+    getSessionUserRecords: () => new Map(),
     onGroupEvent: () => () => {},
   }),
   republishInvite: vi.fn().mockResolvedValue(undefined),

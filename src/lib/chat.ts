@@ -4,9 +4,7 @@ import {
   type OnEventMeta,
   type Rumor,
   resolveSessionPubkeyToOwner as resolveSessionPubkeyToOwnerFromRecords,
-  type SessionManager,
   type SessionUserRecordsLike,
-  type UserRecord,
   REACTION_KIND,
   RECEIPT_KIND,
   CHAT_MESSAGE_KIND,
@@ -22,11 +20,10 @@ import { devices } from './devices'
 import {
   ensureDeviceRegistered,
   getNdrRuntime,
-  getSessionManager,
-  waitForPeerSendReadySessionManager,
-  waitForSendReadySessionManager,
-  waitForSessionManager,
+  preparePeerNdrRuntime,
   republishInvite,
+  waitForNdrRuntime,
+  waitForSendReadyRuntime,
 } from './privateChats'
 import {
   saveSession as saveSessionToDb,
@@ -100,15 +97,19 @@ export const currentChat = writable<ChatSession | null>(null)
 export const invites = writable<Map<string, ActiveInvite>>(new Map())
 let isInitialized = false
 let invitesInitialized = false
-let sessionManagerPoller: ReturnType<typeof setInterval> | null = null
+let runtimePoller: ReturnType<typeof setInterval> | null = null
 
-let sessionManagerSubscribed = false
-let sessionManagerSubscriptionPromise: Promise<void> | null = null
+let runtimeSessionSubscribed = false
+let runtimeSubscriptionPromise: Promise<void> | null = null
+let runtimeSessionEventCleanup: (() => void) | null = null
 let groupRuntimeSubscribed = false
 let groupRuntimeCleanup: (() => void) | null = null
 const managerChatBootstrapInFlight = new Set<string>()
 const pendingAutoOpenChats = new Set<string>()
 const autoOpenedChats = new Set<string>()
+
+type SessionUserRecordEntry =
+  SessionUserRecordsLike extends Map<string, infer Record> ? Record : never
 
 function triggerAutoOpen(chatSession: ChatSession): void {
   if (autoOpenedChats.has(chatSession.id)) return
@@ -250,21 +251,24 @@ function updateChatSession(
   return updatedSession
 }
 
-function subscribeToSessionManagerEvents(manager: SessionManager): void {
-  if (sessionManagerSubscribed) return
-  sessionManagerSubscribed = true
-  manager.onEvent((rumor, from, meta) => {
+function subscribeToNdrRuntimeEvents(): void {
+  if (runtimeSessionSubscribed) return
+  runtimeSessionSubscribed = true
+  runtimeSessionEventCleanup = getNdrRuntime().onSessionEvent((rumor, from, meta) => {
     handleManagerEvent(rumor, from, meta).catch((e) =>
-      console.error('[chat] Failed to handle SessionManager event:', e)
+      console.error('[chat] Failed to handle NdrRuntime event:', e)
     )
   })
-  if (!sessionManagerPoller) {
-    sessionManagerPoller = setInterval(() => syncManagerChats(manager), 500)
-    syncManagerChats(manager)
+}
+
+function startNdrRuntimePoller(): void {
+  if (!runtimePoller) {
+    runtimePoller = setInterval(() => syncRuntimeChats(), 500)
+    syncRuntimeChats()
   }
 }
 
-export function initSessionManagerEvents(): Promise<void> {
+export function initNdrRuntimeEvents(): Promise<void> {
   if (!groupRuntimeSubscribed) {
     const runtime = getNdrRuntime()
     groupRuntimeSubscribed = true
@@ -280,31 +284,30 @@ export function initSessionManagerEvents(): Promise<void> {
     })
   }
 
-  if (sessionManagerSubscribed) return Promise.resolve()
+  subscribeToNdrRuntimeEvents()
 
-  const manager = getSessionManager()
-  if (manager) {
-    subscribeToSessionManagerEvents(manager)
+  if (getNdrRuntime().getState().sessionManagerReady) {
+    startNdrRuntimePoller()
     return Promise.resolve()
   }
 
-  // SessionManager may still be initializing (e.g. right after login). If we return early
-  // we can miss the first incoming manager events and end up with chats that have sessions
+  // Runtime may still be initializing right after login. If we return early
+  // we can miss the first incoming events and end up with chats that have sessions
   // but no messages. Wait for it and subscribe as soon as it's ready.
-  if (!sessionManagerSubscriptionPromise) {
-    sessionManagerSubscriptionPromise = waitForSessionManager()
-      .then(subscribeToSessionManagerEvents)
+  if (!runtimeSubscriptionPromise) {
+    runtimeSubscriptionPromise = waitForNdrRuntime()
+      .then(() => startNdrRuntimePoller())
       .catch((e) => {
-        console.error('[chat] Failed to init SessionManager events:', e)
+        console.error('[chat] Failed to init NdrRuntime events:', e)
         throw e
       })
       .finally(() => {
-        sessionManagerSubscriptionPromise = null
+        runtimeSubscriptionPromise = null
       })
-    void sessionManagerSubscriptionPromise.catch(() => {})
+    void runtimeSubscriptionPromise.catch(() => {})
   }
 
-  return sessionManagerSubscriptionPromise
+  return runtimeSubscriptionPromise
 }
 
 const pushEventIngestInFlight = new Set<string>()
@@ -316,7 +319,7 @@ export async function ingestPushNostrEvent(event: unknown): Promise<boolean> {
 
   pushEventIngestInFlight.add(verifiedEvent.id)
   try {
-    await initSessionManagerEvents()
+    await initNdrRuntimeEvents()
     const handled = getNdrRuntime().processReceivedEvent(verifiedEvent)
     await deletePendingPushEvent(verifiedEvent.id)
     if (handled) {
@@ -338,7 +341,7 @@ export async function drainPendingPushNostrEvents(): Promise<void> {
   }
 }
 
-function syncManagerChats(manager: SessionManager): void {
+function syncRuntimeChats(): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
@@ -347,11 +350,12 @@ function syncManagerChats(manager: SessionManager): void {
   const policyCtx = getMessageRequestPolicyContext()
 
   const currentChats = get(chats)
-  for (const [pubkey, record] of manager.getUserRecords()) {
+  const runtime = getNdrRuntime()
+  for (const [pubkey, record] of runtime.getSessionUserRecords()) {
     if (pubkey === myPubkey) continue
     if (needsManagerUserSetup(record)) {
-      void manager.setupUser(pubkey).catch((e) =>
-        console.error('[chat] Failed to refresh manager user setup:', e)
+      void runtime.setupUser(pubkey).catch((e) =>
+        console.error('[chat] Failed to refresh runtime user setup:', e)
       )
     }
     if (currentChats.has(pubkey)) continue
@@ -364,8 +368,8 @@ function syncManagerChats(manager: SessionManager): void {
       continue
     }
 
-    const hasSession = Array.from(record.devices.values()).some((device) =>
-      Boolean(device.activeSession) || device.inactiveSessions.length > 0
+    const hasSession = Array.from(record.devices?.values() ?? []).some((device) =>
+      Boolean(device.activeSession) || (device.inactiveSessions?.length ?? 0) > 0
     )
     if (!hasSession) continue
 
@@ -375,16 +379,17 @@ function syncManagerChats(manager: SessionManager): void {
   }
 }
 
-export function needsManagerUserSetup(record: UserRecord): boolean {
-  const knownDeviceCount = record.devices.size
-  const appKeysDeviceCount = record.appKeys?.getAllDevices().length ?? 0
+export function needsManagerUserSetup(record: SessionUserRecordEntry): boolean {
+  const devicesMap = record.devices ?? new Map()
+  const knownDeviceCount = devicesMap.size
+  const appKeysDeviceCount = record.appKeys?.getAllDevices?.().length ?? 0
 
   if (appKeysDeviceCount > knownDeviceCount) {
     return true
   }
 
-  return Array.from(record.devices.values()).some(
-    (device) => !device.activeSession && device.inactiveSessions.length === 0
+  return Array.from(devicesMap.values()).some(
+    (device) => !device.activeSession && (device.inactiveSessions?.length ?? 0) === 0
   )
 }
 
@@ -595,6 +600,8 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
 
+  await ensureDeviceRegistered()
+
   const invite = createInvite()
   const id = crypto.randomUUID()
 
@@ -627,12 +634,6 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
 
   // Update notification subscription to include this invite's ephemeral key
   updateDMSubscription()
-
-  // Publish device AppKeys / invite in the background. The invite URL is just
-  // our npub, so it can be shown immediately while relay work catches up.
-  void ensureDeviceRegistered().catch((e) =>
-    console.warn('[chat] invite device registration failed:', e)
-  )
 
   return activeInvite
 }
@@ -784,7 +785,7 @@ function bootstrapManagerChatSession(recipientPubkey: string): void {
   }
 
   managerChatBootstrapInFlight.add(recipientPubkey)
-  void waitForPeerSendReadySessionManager(recipientPubkey)
+  void preparePeerNdrRuntime(recipientPubkey)
     .catch((e) =>
       console.warn('[chat] Failed to bootstrap manager chat session:', recipientPubkey, e)
     )
@@ -808,8 +809,9 @@ function resolveManagerSender(fromPubkey: string, myPubkey: string | null): stri
 function resolveSessionPubkeyToOwner(pubkey: string): string {
   if (!pubkey) return pubkey
 
-  const manager = getSessionManager()
-  const userRecords = manager?.getUserRecords() as SessionUserRecordsLike | undefined
+  const userRecords = getNdrRuntime().getSessionUserRecords() as
+    | SessionUserRecordsLike
+    | undefined
   if (!userRecords) return pubkey
   return resolveSessionPubkeyToOwnerFromRecords(userRecords, pubkey)
 }
@@ -918,7 +920,7 @@ export async function handleManagerEvent(
       triggerAutoOpen(chatSession)
     }
     // Republish our current device invite after the first successful inbound session
-    // so it is present on relays without invalidating the SessionManager's invite-response listener.
+    // so it is present on relays without invalidating the runtime invite-response listener.
     void republishInvite().catch((e) =>
       console.warn('[chat] republishInvite failed:', e)
     )
@@ -933,22 +935,22 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     const existing = get(chats).get(invite.pubkey)
     const myPubkey = getPubkey()
     const isSelfChat = !!myPubkey && invite.pubkey === myPubkey
-    const requiresSessionManagerReady =
+    const requiresRuntimeReady =
       !existing &&
       !!myPubkey &&
       isSelfChat
-    const sessionManagerReadyPromise = requiresSessionManagerReady
-      ? waitForSessionManager()
-          .then(async (ready) => {
+    const runtimeReadyPromise = requiresRuntimeReady
+      ? waitForNdrRuntime()
+          .then(async (runtime) => {
             try {
-              await ready.setupUser(myPubkey)
+              await runtime.setupUser(myPubkey)
             } catch (e) {
               console.warn('[chat] Failed to bootstrap self user during acceptInvite:', e)
             }
-            return ready
+            return runtime
           })
           .catch((e) => {
-            console.warn('[chat] waitForSessionManager failed during acceptInvite:', e)
+            console.warn('[chat] waitForNdrRuntime failed during acceptInvite:', e)
             throw e
           })
       : null
@@ -958,12 +960,12 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     // User-initiated join: treat as accepted even before sending a message.
     acceptChat(invite.pubkey)
     if (!existing && !isSelfChat) {
-      void waitForSendReadySessionManager().catch((e) => {
+      void waitForSendReadyRuntime().catch((e) => {
         console.warn('[chat] Failed to pre-register device for pubkey invite:', e)
       })
     }
-    if (!existing && sessionManagerReadyPromise) {
-      await sessionManagerReadyPromise
+    if (!existing && runtimeReadyPromise) {
+      await runtimeReadyPromise
     }
     return chatSession
   }
@@ -975,26 +977,11 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     throw new Error('NIP-07 extension does not support NIP-44')
   }
 
-  const manager = getSessionManager()
-  const readyManager = manager || (await waitForSessionManager().catch(() => null))
-  const managerWithInviteAccept = readyManager as
-    | (SessionManager & {
-        getDeviceId?: () => string
-        acceptInvite: (
-          invite: Invite,
-          options?: { ownerPublicKey?: string }
-        ) => Promise<{ ownerPublicKey?: string }>
-      })
-    | null
-
-  if (!managerWithInviteAccept?.acceptInvite) {
-    throw new Error('SessionManager is not available')
-  }
-
   // Legacy invite responses need a stable owner claim so the inviter can route
   // the new session under the responder account rather than a transient device key.
   await ensureDeviceRegistered()
-  const accepted = await managerWithInviteAccept.acceptInvite(invite.invite, { ownerPublicKey })
+  const runtime = await waitForNdrRuntime()
+  const accepted = await runtime.acceptInvite(invite.invite, { ownerPublicKey })
   const chatTarget = accepted.ownerPublicKey || ownerPublicKey
   const chatSession = await ensureManagerChat(chatTarget)
   acceptChat(chatSession.recipientPubkey)
@@ -1072,6 +1059,9 @@ function handleIncomingRumor(
 
   if (isTyping(rumor)) {
     saveProcessedRumor()
+    if (isMine) {
+      return
+    }
     const expiresAt = getExpirationTimestampSeconds(rumor)
     const nowSeconds = Math.floor(Date.now() / 1000)
     if (expiresAt !== undefined && expiresAt <= nowSeconds) {
@@ -1216,9 +1206,9 @@ function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload
 }
 
 function getManagerRumorAuthorPubkey(): string {
-  const managerDeviceId = getSessionManager()?.getDeviceId()?.trim()
-  if (managerDeviceId) {
-    return managerDeviceId
+  const runtimeDeviceId = getNdrRuntime().getState().currentDevicePubkey?.trim()
+  if (runtimeDeviceId) {
+    return runtimeDeviceId
   }
 
   const deviceIdentityPubkey = get(devices).identityPubkey?.trim()
@@ -1269,7 +1259,7 @@ function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messa
     .then(() =>
       getNdrRuntime().sendReceipt(chatSession.recipientPubkey, type, messageIds)
     )
-    .catch((e) => console.error('[chat] SessionManager not ready for receipt:', e))
+    .catch((e) => console.error('[chat] NdrRuntime not ready for receipt:', e))
 }
 
 // Send seen receipts for incoming messages - called from ChatView
@@ -1321,12 +1311,12 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     tags,
   })
   messageId = rumor.id
-  // Always await device registration + SessionManager init. It is possible to have a
+  // Always await device registration + runtime init. It is possible to have a
   // non-null manager while init is still in progress, and an unregistered owner-side
   // device cannot be trusted by linked recipients for multidevice fanout.
   void ensureDeviceRegistered()
     .then(() => getNdrRuntime().sendEvent(chatSession.recipientPubkey, rumor))
-    .catch((e) => console.error('[chat] Failed to send via SessionManager:', e))
+    .catch((e) => console.error('[chat] Failed to send via NdrRuntime:', e))
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1371,7 +1361,7 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
   })
   void ensureDeviceRegistered()
     .then(() => getNdrRuntime().sendEvent(chatSession.recipientPubkey, rumor))
-    .catch((e) => console.error('[chat] Failed to send reaction via SessionManager:', e))
+    .catch((e) => console.error('[chat] Failed to send reaction via NdrRuntime:', e))
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1455,8 +1445,7 @@ export function leaveChat(): void {
 
 // Delete a chat completely
 export function deleteChat(chatSession: ChatSession): void {
-  const manager = getSessionManager()
-  manager?.deleteChat(chatSession.recipientPubkey).catch(() => {})
+  getNdrRuntime().deleteChat(chatSession.recipientPubkey).catch(() => {})
 
   // Remove from store
   chats.update(c => {
@@ -1526,7 +1515,7 @@ export async function loadChatsFromStorage(): Promise<void> {
 
   try {
     const storedSessions = await getAllSessions()
-    initSessionManagerEvents()
+    initNdrRuntimeEvents()
 
     for (const stored of storedSessions) {
       try {
@@ -1581,7 +1570,7 @@ export function sendTypingEvent(chatSession: ChatSession): void {
 
   void ensureDeviceRegistered()
     .then(() => getNdrRuntime().sendTyping(chatSession.recipientPubkey))
-    .catch((e) => console.error('[chat] SessionManager not ready for typing:', e))
+    .catch((e) => console.error('[chat] NdrRuntime not ready for typing:', e))
 }
 
 // Clear all chat data (for logout)
@@ -1599,14 +1588,16 @@ export async function clearChatData(): Promise<void> {
     invites.set(new Map())
     isInitialized = false
     invitesInitialized = false
-    sessionManagerSubscribed = false
-    sessionManagerSubscriptionPromise = null
+    runtimeSessionSubscribed = false
+    runtimeSubscriptionPromise = null
+    runtimeSessionEventCleanup?.()
+    runtimeSessionEventCleanup = null
     groupRuntimeCleanup?.()
     groupRuntimeCleanup = null
     groupRuntimeSubscribed = false
-    if (sessionManagerPoller) {
-      clearInterval(sessionManagerPoller)
-      sessionManagerPoller = null
+    if (runtimePoller) {
+      clearInterval(runtimePoller)
+      runtimePoller = null
     }
     pendingAutoOpenChats.clear()
     autoOpenedChats.clear()

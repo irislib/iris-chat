@@ -68,7 +68,12 @@ vi.mock('./privateChats', () => ({
   ensureDeviceRegistered: vi.fn(),
   waitForPeerSendReadySessionManager: (...args: [string]) =>
     mocks.waitForPeerSendReadySessionManager(...args),
+  preparePeerNdrRuntime: (...args: [string]) =>
+    mocks.waitForPeerSendReadySessionManager(...args),
   getNdrRuntime: () => ({
+    sendReceipt: vi.fn().mockResolvedValue(undefined),
+    getState: () => ({ currentDevicePubkey: MY_PUBKEY, sessionManagerReady: true }),
+    getSessionUserRecords: () => new Map(),
     onGroupEvent: () => () => {},
   }),
   republishInvite: vi.fn().mockResolvedValue(undefined),

@@ -23,6 +23,9 @@ vi.mock('./identity', () => ({
 vi.mock('./privateChats', () => ({
   getSessionManager: () => mocked.sessionManager,
   getNdrRuntime: () => ({
+    setExpirationForPeer: mocked.sessionManager.setExpirationForPeer,
+    setExpirationForGroup: mocked.sessionManager.setExpirationForGroup,
+    setChatSettingsForPeer: mocked.sessionManager.setChatSettingsForPeer,
     onGroupEvent: () => () => {},
   }),
 }))

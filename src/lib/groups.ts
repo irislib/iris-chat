@@ -25,8 +25,7 @@ import { chats, type ChatMessage } from './chat'
 import {
   ensureDeviceRegistered,
   getNdrRuntime,
-  getSessionManager,
-  waitForSendReadySessionManager,
+  waitForSendReadyRuntime,
 } from './privateChats'
 import { getEventHash } from 'nostr-tools'
 import {
@@ -119,6 +118,11 @@ function syncNativeGroupTransport(groupId: string): void {
   void runtime.syncGroups(currentGroups, ownerPubkey || undefined).catch((error) => {
     console.warn('[groups] Failed to sync runtime groups:', groupId, error)
   })
+}
+
+function isRuntimeSessionReady(): boolean {
+  const runtime = getNdrRuntime()
+  return typeof runtime.getState !== 'function' || runtime.getState().sessionManagerReady
 }
 
 export const isAdmin = isGroupAdmin
@@ -223,7 +227,7 @@ async function sendNativeGroupEvent(
       return
     }
 
-    await waitForSendReadySessionManager()
+    await waitForSendReadyRuntime()
     await runtime.upsertGroup(groupData)
     try {
       await runtime.sendGroupEvent(groupId, partialEvent)
@@ -246,7 +250,7 @@ async function sendNativeGroupEvent(
 function senderCopyGroupMetadataToSelf(groupId: string, content: string): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
-  if (!getSessionManager()) return
+  if (!isRuntimeSessionReady()) return
 
   fanOutToMembers(
     groupId,
@@ -299,10 +303,10 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
 
   let group = createGroupData(name, myPubkey, memberPubkeys)
   try {
-    await waitForSendReadySessionManager()
+    await waitForSendReadyRuntime()
     group = (
       await getNdrRuntime().createGroup(name, memberPubkeys, {
-        fanoutMetadata: Boolean(getSessionManager()),
+        fanoutMetadata: isRuntimeSessionReady(),
       })
     ).group
   } catch (error) {

@@ -4,7 +4,7 @@ import { identity, ndk } from './identity'
 import { notificationSettings } from './notificationStore'
 import { getInviteEphemeralPubkeys } from './chat'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
-import { getSessionManager } from './privateChats'
+import { getNdrRuntime } from './privateChats'
 
 // NIP-98 HTTP Authentication event (KIND 27235)
 const KIND_HTTP_AUTH = 27235
@@ -223,25 +223,23 @@ function getSessionAuthors(): string[] {
 
   const authors: string[] = []
 
-  const manager = getSessionManager()
-  if (manager) {
-    const userRecords = manager.getUserRecords()
-    for (const [userPubkey, record] of userRecords.entries()) {
-      // Skip self-sessions (our own devices) to avoid notifications for our own messages
-      if (userPubkey === currentIdentity.pubkey) continue
-      for (const device of record.devices.values()) {
-        const sessions = [
-          ...(device.activeSession ? [device.activeSession] : []),
-          ...device.inactiveSessions,
-        ]
-        for (const session of sessions) {
-          const state = session.state
-          if (state.theirCurrentNostrPublicKey) {
-            authors.push(state.theirCurrentNostrPublicKey)
-          }
-          if (state.theirNextNostrPublicKey) {
-            authors.push(state.theirNextNostrPublicKey)
-          }
+  const userRecords = getNdrRuntime().getSessionUserRecords()
+  for (const [userPubkey, record] of userRecords.entries()) {
+    // Skip self-sessions (our own devices) to avoid notifications for our own messages
+    if (userPubkey === currentIdentity.pubkey) continue
+    for (const device of record.devices?.values() ?? []) {
+      const sessions = [
+        ...(device.activeSession ? [device.activeSession] : []),
+        ...(device.inactiveSessions ?? []),
+      ]
+      for (const session of sessions) {
+        const state = session?.state
+        if (!state) continue
+        if (state.theirCurrentNostrPublicKey) {
+          authors.push(state.theirCurrentNostrPublicKey)
+        }
+        if (state.theirNextNostrPublicKey) {
+          authors.push(state.theirNextNostrPublicKey)
         }
       }
     }

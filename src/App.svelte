@@ -8,9 +8,9 @@
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import InstallPrompt from './components/InstallPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initSessionManagerEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
+  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
-  import { syncDisappearingMessagesToSessionManager } from './lib/disappearingMessages'
+  import { syncDisappearingMessagesToNdrRuntime } from './lib/disappearingMessages'
   import type { ChatSession } from './lib/chat'
   import { loadGroupsFromStorage, clearGroupData, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
@@ -228,7 +228,7 @@
       const currentIdentity = get(identity)
       if (currentIdentity?.pubkey) {
         // Subscribe ASAP so we don't miss early incoming manager events.
-        initSessionManagerEvents()
+        initNdrRuntimeEvents()
         void initMultiDevice(currentIdentity.pubkey).catch((e) =>
           console.error('[app] initMultiDevice failed:', e)
         )
@@ -258,7 +258,7 @@
 
       // Start message expiration cleanup and sync settings
       startMessageExpirationCleanup()
-      syncDisappearingMessagesToSessionManager().catch(() => {})
+      syncDisappearingMessagesToNdrRuntime().catch(() => {})
       void drainPendingPushNostrEvents()
 
       loggedIn = true
@@ -319,7 +319,7 @@
     const currentIdentity = get(identity)
     if (currentIdentity?.pubkey) {
       // Subscribe ASAP so we don't miss early incoming manager events.
-      initSessionManagerEvents()
+      initNdrRuntimeEvents()
       void initMultiDevice(currentIdentity.pubkey).catch((e) =>
         console.error('[app] initMultiDevice failed:', e)
       )
@@ -349,7 +349,7 @@
 
     // Start message expiration cleanup and sync settings
     startMessageExpirationCleanup()
-    syncDisappearingMessagesToSessionManager().catch(() => {})
+    syncDisappearingMessagesToNdrRuntime().catch(() => {})
     void drainPendingPushNostrEvents()
   }
 
