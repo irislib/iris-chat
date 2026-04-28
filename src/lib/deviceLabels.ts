@@ -1,3 +1,5 @@
+import { nip19 } from 'nostr-tools'
+
 export interface DeviceLabels {
   deviceLabel?: string
   clientLabel?: string
@@ -13,8 +15,12 @@ const normalizeLabel = (value?: string | null): string | undefined => {
   return normalized ? normalized : undefined
 }
 
-export function truncateDevicePubkey(pubkey: string): string {
-  return pubkey.slice(0, 8) + '...' + pubkey.slice(-4)
+export function formatDeviceIdentifier(pubkey: string): string {
+  try {
+    return nip19.npubEncode(pubkey)
+  } catch {
+    return pubkey.trim() || 'Unknown device'
+  }
 }
 
 const platformLabelFromUserAgent = (userAgent: string): string | undefined => {
@@ -81,14 +87,14 @@ export const describeRegisteredDevice = (
   identityPubkey: string,
   labels?: DeviceLabels
 ): RegisteredDeviceDisplay => {
-  const fallback = truncateDevicePubkey(identityPubkey)
+  const fallback = formatDeviceIdentifier(identityPubkey)
   const deviceLabel = normalizeLabel(labels?.deviceLabel)
   const clientLabel = normalizeLabel(labels?.clientLabel)
 
   if (deviceLabel) {
     return {
       title: deviceLabel,
-      subtitle: clientLabel ? `${clientLabel} • ${fallback}` : fallback,
+      subtitle: clientLabel,
     }
   }
 
