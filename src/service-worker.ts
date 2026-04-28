@@ -7,8 +7,9 @@ import {
   deserializeSessionState,
   MESSAGE_EVENT_KIND,
   INVITE_RESPONSE_KIND,
-  REACTION_KIND,
+  CHAT_MESSAGE_KIND,
 } from 'nostr-double-ratchet'
+import { renderRumor } from './lib/pushRumorRender'
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'
@@ -17,7 +18,6 @@ import { generateProxyUrl } from './lib/imgproxy'
 function isHashtreePicture(picture: string | undefined): boolean {
   return !!picture && (picture.startsWith('htree://') || picture.startsWith('nhash://'))
 }
-import { isUserFacingInnerKind } from './lib/swNotificationPolicy'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -213,17 +213,23 @@ async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: stri
   return { name: getAnimalName(pubkey), icon: fallbackIcon }
 }
 
-// Web push cannot be suppressed server-side, so the SW must classify every
-// incoming inner-rumor kind. Display rules are centralized in
-// `isUserFacingInnerKind` (allowlist: chat messages + reactions). All other
-// kinds (typing, receipts, settings sync, group metadata, sender-key
-// distribution, future kinds, ...) are silent.
+// Web push cannot be suppressed server-side, so the SW must decrypt and
+// classify every incoming inner-rumor kind, then render an appropriate
+// notification. Suppressing showNotification when the app isn't engaged
+// would leave Chrome to surface a generic "site updated in the background"
+// placeholder; the user prefers to see what was actually received.
 
 interface DecryptResult {
   success: boolean
-  content?: string
   chatId?: string
-  silent?: boolean
+  // Inner rumor kind, when known. Drives notification rendering.
+  kind?: number
+  // Inner rumor content (raw), when known. Empty/undefined for kinds that
+  // carry no payload (typing).
+  content?: string
+  // True when the rumor was authored by our own pubkey on another device.
+  // Suppressed from notifications (already happened on the other device).
+  isSelfMessage?: boolean
 }
 
 // Find session and decrypt message
@@ -233,17 +239,12 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
     try {
       const processed = await db.processedEvents.get(eventData.id)
       if (processed) {
-        if (!isUserFacingInnerKind(processed.kind)) {
-          return { success: true, chatId: processed.chatId, silent: true }
+        return {
+          success: true,
+          chatId: processed.chatId,
+          kind: processed.kind,
+          content: processed.content,
         }
-        if (processed.kind === REACTION_KIND) {
-          return {
-            success: true,
-            content: `Reacted ${processed.content || ''}`,
-            chatId: processed.chatId,
-          }
-        }
-        // CHAT_MESSAGE_KIND falls through to the db.messages lookup below.
       }
     } catch (err) {
       console.error('[sw] error checking processedEvents:', err)
@@ -281,11 +282,13 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       const outerId = eventData.id
       if (entry.chatId && outerId) {
         const storedMessage = await db.messages.get(outerId)
-        if (storedMessage && !storedMessage.isMine) {
+        if (storedMessage) {
           return {
             success: true,
-            content: storedMessage.content,
             chatId: entry.chatId,
+            kind: CHAT_MESSAGE_KIND,
+            content: storedMessage.content,
+            isSelfMessage: storedMessage.isMine,
           }
         }
       }
@@ -301,52 +304,46 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
 
       if (innerEvent) {
         const innerId = innerEvent.id
+        const isSelfMessage = ownerPubkey != null && innerEvent.pubkey === ownerPubkey
+
         const processedInner = await db.processedEvents.get(innerId)
         if (processedInner) {
-          if (!isUserFacingInnerKind(processedInner.kind)) {
-            return { success: true, chatId: processedInner.chatId, silent: true }
-          }
-          if (processedInner.kind === REACTION_KIND) {
-            return {
-              success: true,
-              content: `Reacted ${processedInner.content || ''}`,
-              chatId: processedInner.chatId,
-            }
+          return {
+            success: true,
+            chatId: processedInner.chatId,
+            kind: processedInner.kind,
+            content: processedInner.content ?? innerEvent.content,
+            isSelfMessage,
           }
         }
 
         const storedInnerMessage = await db.messages.get(innerId)
-        if (storedInnerMessage && !storedInnerMessage.isMine) {
+        if (storedInnerMessage) {
           return {
             success: true,
-            content: storedInnerMessage.content,
             chatId: entry.chatId || storedInnerMessage.sessionId,
+            kind: CHAT_MESSAGE_KIND,
+            content: storedInnerMessage.content,
+            isSelfMessage: storedInnerMessage.isMine || isSelfMessage,
           }
         }
 
         const pTag = innerEvent.tags?.find((t) => t[0] === 'p')?.[1]
         let chatId = entry.chatId
         if (!chatId) {
-          if (ownerPubkey && innerEvent.pubkey === ownerPubkey && pTag) {
+          if (isSelfMessage && pTag) {
             chatId = pTag
           } else {
             chatId = innerEvent.pubkey || pTag
           }
         }
 
-        // Allowlist: only chat messages and reactions surface. Typing,
-        // receipts, settings sync, group metadata, key distribution, and any
-        // future kinds stay silent. Messages from our own pubkey on another
-        // device are also silenced (we already saw them locally).
-        const isSelfMessage = ownerPubkey != null && innerEvent.pubkey === ownerPubkey
-        const silent = isSelfMessage || !isUserFacingInnerKind(innerEvent.kind)
         return {
           success: true,
-          content: innerEvent.kind === REACTION_KIND
-            ? `Reacted ${innerEvent.content}`
-            : innerEvent.content,
           chatId,
-          silent,
+          kind: innerEvent.kind,
+          content: innerEvent.content,
+          isSelfMessage,
         }
       }
     } catch (err) {
@@ -464,43 +461,43 @@ self.addEventListener('push', (event) => {
         const result = await decryptPushMessage(payload.event)
         const engagement = await getEngagementState()
 
-        if (!result.chatId) {
-          // Could not identify a session for this push. If a client is
+        if (!result.success || !result.chatId) {
+          // Couldn't identify a session for this push. If a client is
           // visible the main app's relay subscription will catch up.
-          // Otherwise fall back to a generic notification.
+          // Otherwise fall back to a generic notification so the user knows
+          // something happened.
           if (engagement.anyVisible) return
           await showFallbackNotification()
           return
         }
 
-        // Non-user-facing inner rumors (typing, receipts, settings sync,
-        // group metadata, sender-key distribution, self-messages from
-        // another device, future kinds). The UA permits silent push when a
-        // client is visible. When no client is visible we cannot reliably
-        // suppress — the show-then-close "ghost" pattern is not supported by
-        // Chrome — and showing a real notification for a typing keystroke
-        // would be worse than the browser's bland background placeholder.
-        // Skipping is the lesser evil.
-        if (result.silent) {
-          return
-        }
-
-        // User-facing: chat message or reaction. Skip only when the user is
-        // already looking at this exact conversation (focused window, same
-        // chat open). If the window is unfocused, on a different chat, or
-        // not visible at all, surface a notification.
+        // User is already looking at this exact conversation — silent push
+        // allowed by spec, in-app UI shows the update.
         if (engagement.focused && engagement.openChatId === result.chatId) {
           return
         }
 
+        // Our own rumor sent from another device — already actioned there.
+        if (result.isSelfMessage) {
+          return
+        }
+
+        const rendered = renderRumor(result.kind, result.content)
+        if (!rendered) {
+          // Internal/cryptographic rumor with no user-facing description.
+          // Skip rather than show garbage; the main app handles it on its
+          // own subscription.
+          return
+        }
+
         const sender = await getSenderInfo(result.chatId)
-        const body = result.success && result.content ? result.content : 'New message'
-        const tag = `dm-${result.chatId}`
+        const tag = rendered.durable ? `dm-${result.chatId}` : `dm-${result.chatId}-status`
         await self.registration.showNotification(sender.name, {
-          body,
+          body: rendered.body,
           icon: sender.icon,
           badge: appLogoUrl,
           tag,
+          silent: !rendered.durable,
           data: { chatId: result.chatId }
         })
         return

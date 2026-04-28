@@ -980,7 +980,9 @@ function handleIncomingRumor(
 
   // Dispatch on inner event kind
   if (rumor.kind === RECEIPT_KIND) {
-    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, timestamp: Date.now() })
+    // Persist content ('delivered'|'seen') so the SW push handler can render
+    // the right notification text via its fast path.
+    saveProcessedEvent({ id: processedId, kind: rumor.kind, chatId: sessionId, content: rumor.content, timestamp: Date.now() })
     const receipt = parseReceipt(rumor)
     if (!receipt) return
     handleIncomingReceipt(currentSession, receipt, isMine)
