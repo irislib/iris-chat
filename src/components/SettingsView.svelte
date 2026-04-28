@@ -25,6 +25,7 @@
     getAppKeysManager,
     registerLinkedDevice,
     revokeDevice,
+    revokeDevices,
   } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
 
@@ -102,6 +103,19 @@
 
   // Device state
   let deviceState = $state($devices)
+  let selectedDevicePubkeys = $state<string[]>([])
+  let revocableDevicePubkeys = $derived(
+    deviceState.registeredDevices
+      .map((device) => device.identityPubkey)
+      .filter((pubkey) => pubkey !== deviceState.identityPubkey)
+  )
+  let selectedRevocableDevicePubkeys = $derived(
+    selectedDevicePubkeys.filter((pubkey) => revocableDevicePubkeys.includes(pubkey))
+  )
+  let allRevocableDevicesSelected = $derived(
+    revocableDevicePubkeys.length > 0 &&
+      revocableDevicePubkeys.every((pubkey) => selectedRevocableDevicePubkeys.includes(pubkey))
+  )
   $effect(() => {
     const unsubscribe = devices.subscribe((value) => {
       deviceState = value
@@ -169,12 +183,62 @@
     deviceError = ''
     try {
       await revokeDevice(identityPubkey)
+      selectedDevicePubkeys = selectedDevicePubkeys.filter((pubkey) => pubkey !== identityPubkey)
     } catch (e) {
       deviceError = getErrorMessage(e, 'Failed to revoke device')
     } finally {
       registeringDevice = false
     }
   }
+
+  function isDeviceSelected(identityPubkey: string): boolean {
+    return selectedDevicePubkeys.includes(identityPubkey)
+  }
+
+  function setDeviceSelected(identityPubkey: string, selected: boolean) {
+    if (identityPubkey === deviceState.identityPubkey) return
+
+    if (selected) {
+      selectedDevicePubkeys = Array.from(new Set([...selectedDevicePubkeys, identityPubkey]))
+      return
+    }
+
+    selectedDevicePubkeys = selectedDevicePubkeys.filter((pubkey) => pubkey !== identityPubkey)
+  }
+
+  function setAllRevocableDevicesSelected(selected: boolean) {
+    selectedDevicePubkeys = selected ? [...revocableDevicePubkeys] : []
+  }
+
+  async function handleRevokeSelectedDevices() {
+    if (registeringDevice || selectedRevocableDevicePubkeys.length === 0) return
+
+    const selectedCount = selectedRevocableDevicePubkeys.length
+    const label = selectedCount === 1 ? '1 device' : `${selectedCount} devices`
+    if (!confirm(`Revoke ${label}?`)) return
+
+    registeringDevice = true
+    deviceError = ''
+    try {
+      const revokedPubkeys = [...selectedRevocableDevicePubkeys]
+      await revokeDevices(revokedPubkeys)
+      selectedDevicePubkeys = selectedDevicePubkeys.filter(
+        (pubkey) => !revokedPubkeys.includes(pubkey)
+      )
+    } catch (e) {
+      deviceError = getErrorMessage(e, 'Failed to revoke selected devices')
+    } finally {
+      registeringDevice = false
+    }
+  }
+
+  $effect(() => {
+    const validPubkeys = new Set(revocableDevicePubkeys)
+    const nextSelection = selectedDevicePubkeys.filter((pubkey) => validPubkeys.has(pubkey))
+    if (nextSelection.length !== selectedDevicePubkeys.length) {
+      selectedDevicePubkeys = nextSelection
+    }
+  })
 
   function resetLinkInviteState() {
     linkInviteInput = ''
@@ -695,8 +759,46 @@
             </p>
           {:else}
             <div class="space-y-2">
+              {#if revocableDevicePubkeys.length > 0}
+                <div class="flex items-center justify-between gap-3 pb-1">
+                  <label class="flex items-center gap-2 text-xs text-gray-400">
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4 accent-primary"
+                      checked={allRevocableDevicesSelected}
+                      onchange={(event) =>
+                        setAllRevocableDevicesSelected((event.currentTarget as HTMLInputElement).checked)}
+                      disabled={registeringDevice}
+                      aria-label="Select all devices"
+                    />
+                    <span>
+                      {selectedRevocableDevicePubkeys.length > 0
+                        ? `${selectedRevocableDevicePubkeys.length} selected`
+                        : 'Select devices'}
+                    </span>
+                  </label>
+                  <button
+                    class="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 disabled:hover:text-red-400"
+                    onclick={handleRevokeSelectedDevices}
+                    disabled={registeringDevice || selectedRevocableDevicePubkeys.length === 0}
+                  >
+                    Revoke selected
+                  </button>
+                </div>
+              {/if}
               {#each deviceState.registeredDevices as device}
                 <div class="flex items-center justify-between gap-2 p-2 bg-surface-light rounded">
+                  {#if device.identityPubkey !== deviceState.identityPubkey}
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4 shrink-0 accent-primary"
+                      checked={isDeviceSelected(device.identityPubkey)}
+                      onchange={(event) =>
+                        setDeviceSelected(device.identityPubkey, (event.currentTarget as HTMLInputElement).checked)}
+                      disabled={registeringDevice}
+                      aria-label={`Select ${getDeviceDisplay(device.identityPubkey).title}`}
+                    />
+                  {/if}
                   <div class="min-w-0 flex-1">
                     <div class="text-sm text-gray-200 truncate">{getDeviceDisplay(device.identityPubkey).title}</div>
                     {#if getDeviceDisplay(device.identityPubkey).subtitle}

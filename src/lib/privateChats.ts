@@ -529,18 +529,68 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
 }
 
 export const revokeDevice = async (identityPubkey: string): Promise<void> => {
+  await revokeDevices([identityPubkey])
+}
+
+export const revokeDevices = async (identityPubkeys: string[]): Promise<void> => {
+  if (isLinkedDeviceLogin()) {
+    throw new Error('Linked devices cannot revoke devices')
+  }
+
   const ownerPubkey =
     getRuntime().getState().ownerPubkey || get(identity)?.pubkey
   if (!ownerPubkey) {
     throw new Error('Owner pubkey not available')
   }
 
+  const uniquePubkeys = Array.from(
+    new Set(identityPubkeys.map((pubkey) => pubkey.trim()).filter(Boolean))
+  )
+  if (uniquePubkeys.length === 0) return
+
   await ensureConnected()
-  await getRuntime().initForOwner(ownerPubkey)
-  await getRuntime().revokeDevice({
+  const currentRuntime = getRuntime()
+  await currentRuntime.initForOwner(ownerPubkey)
+
+  const currentDevicePubkey = currentRuntime.getState().currentDevicePubkey
+  const revocablePubkeys = uniquePubkeys.filter(
+    (pubkey) => pubkey !== currentDevicePubkey
+  )
+  if (revocablePubkeys.length === 0) return
+
+  const relayAppKeys = await currentRuntime.resolveBaseAppKeys(
     ownerPubkey,
-    identityPubkey,
-    timeoutMs: APP_KEYS_FAST_TIMEOUT_MS,
+    APP_KEYS_FAST_TIMEOUT_MS
+  )
+  const localAppKeys = currentRuntime.getAppKeysManager()?.getAppKeys()
+  const baseAppKeys =
+    localAppKeys &&
+    localAppKeys.getAllDevices().length > relayAppKeys.getAllDevices().length
+      ? localAppKeys
+      : relayAppKeys
+  const nextAppKeys = new AppKeys(
+    baseAppKeys.getAllDevices(),
+    baseAppKeys.getAllDeviceLabels()
+  )
+  const originalDevices = nextAppKeys.getAllDevices()
+  const originalDevicePubkeys = new Set(originalDevices.map((device) => device.identityPubkey))
+
+  for (const identityPubkey of revocablePubkeys) {
+    nextAppKeys.removeDevice(identityPubkey)
+  }
+
+  const nextDevices = nextAppKeys.getAllDevices()
+  if (
+    nextDevices.length === originalDevices.length ||
+    revocablePubkeys.every((pubkey) => !originalDevicePubkeys.has(pubkey))
+  ) {
+    return
+  }
+
+  await currentRuntime.publishPreparedRevocation({
+    appKeys: nextAppKeys,
+    devices: nextDevices,
+    revokedIdentity: revocablePubkeys[0],
   })
 }
 
