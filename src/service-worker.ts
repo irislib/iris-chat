@@ -17,7 +17,7 @@ import { generateProxyUrl } from './lib/imgproxy'
 function isHashtreePicture(picture: string | undefined): boolean {
   return !!picture && (picture.startsWith('htree://') || picture.startsWith('nhash://'))
 }
-import { isUserFacingInnerKind, shouldShowInviteResponseNotification, shouldShowSystemNotificationForMessagePush } from './lib/swNotificationPolicy'
+import { isUserFacingInnerKind, shouldShowInviteResponseNotification } from './lib/swNotificationPolicy'
 
 declare let self: ServiceWorkerGlobalScope
 
@@ -420,7 +420,10 @@ self.addEventListener('push', (event) => {
 
         const visible = await getVisibleClientState()
         if (!shouldShowInviteResponseNotification({ anyVisibleClient: visible.anyVisible })) {
-          console.log('[sw] suppressing invite response notification because app is visible')
+          // App is visible — UA considers the user engaged, so skipping
+          // showNotification is allowed without triggering the browser's
+          // "site updated in background" fallback.
+          console.log('[sw] app visible, skipping invite response notification')
           return
         }
 
@@ -457,50 +460,54 @@ self.addEventListener('push', (event) => {
       // Handle regular message notifications
       if (eventKind === MESSAGE_EVENT_KIND) {
         const result = await decryptPushMessage(payload.event)
+        const visible = await getVisibleClientState()
 
-        if (result.chatId) {
-          // Suppress notifications when iris-chat is already visible or the inner
-          // event is non-user-facing (typing/receipts/etc.). Brave can surface
-          // "silent" placeholder notifications, so we avoid them entirely.
-          if (result.silent) {
-            return
-          }
-          const visible = await getVisibleClientState()
-          if (!shouldShowSystemNotificationForMessagePush({
-            anyVisibleClient: visible.anyVisible,
-            silentEvent: false,
-          })) {
-            console.log('[sw] suppressing notification', {
-              chatId: result.chatId,
-              openChatId: visible.openChatId,
-            })
-            return
-          }
-
-          const sender = await getSenderInfo(result.chatId)
-          let body: string
-          if (result.success && result.content) {
-            body = result.content
-          } else {
-            body = 'New message'
-          }
-          const tag = `dm-${result.chatId}`
-          console.log('[sw] showing notification with tag:', tag)
-          await self.registration.showNotification(sender.name, {
-            body,
-            icon: sender.icon,
-            badge: appLogoUrl,
-            tag,
-            data: { chatId: result.chatId }
-          })
-        } else {
+        if (!result.chatId) {
+          // Could not identify a session for this push. If the app is open it
+          // will catch up over its own subscription; otherwise show a generic
+          // fallback so the browser doesn't surface its own placeholder.
+          if (visible.anyVisible) return
           await showFallbackNotification()
+          return
         }
+
+        if (visible.anyVisible) {
+          // App is visible — UA allows skipping showNotification.
+          console.log('[sw] app visible, skipping notification', {
+            chatId: result.chatId,
+            openChatId: visible.openChatId,
+          })
+          return
+        }
+
+        if (result.silent) {
+          // Non-user-facing inner rumor (typing, receipts, settings sync,
+          // group metadata, sender-key distribution, our own message from
+          // another device, ...). We must still call showNotification —
+          // suppress visually with the show-then-close ghost pattern.
+          await showGhostNotification()
+          return
+        }
+
+        const sender = await getSenderInfo(result.chatId)
+        const body = result.success && result.content ? result.content : 'New message'
+        const tag = `dm-${result.chatId}`
+        console.log('[sw] showing notification with tag:', tag)
+        await self.registration.showNotification(sender.name, {
+          body,
+          icon: sender.icon,
+          badge: appLogoUrl,
+          tag,
+          data: { chatId: result.chatId }
+        })
         return
       }
 
-      // Unknown event kind, show fallback
-      await showFallbackNotification()
+      // Unknown outer event kind. Treat as background activity: ghost-dismiss
+      // when the app is closed, skip when visible.
+      const visible = await getVisibleClientState()
+      if (visible.anyVisible) return
+      await showGhostNotification()
     } catch (error) {
       console.error('[sw] push error:', error)
       await showFallbackNotification()
@@ -516,6 +523,29 @@ async function showFallbackNotification() {
     icon: appLogoUrl,
     badge: appLogoUrl
   })
+}
+
+const GHOST_NOTIFICATION_TAG = 'iris-bg'
+
+// Web push spec requires showNotification to be called for every push event
+// unless the user is "engaged" (a same-origin client is visible). For
+// non-user-facing inner rumors that arrive while the app is in the background,
+// we satisfy the spec with a tagged silent notification we immediately
+// dismiss. Skipping showNotification entirely would let browsers display
+// their own "Site updated in the background" placeholder and eventually
+// revoke push permission.
+async function showGhostNotification() {
+  await self.registration.showNotification('', {
+    tag: GHOST_NOTIFICATION_TAG,
+    silent: true,
+    body: '',
+    badge: appLogoUrl,
+    icon: appLogoUrl,
+  })
+  const ghosts = await self.registration.getNotifications({ tag: GHOST_NOTIFICATION_TAG })
+  for (const n of ghosts) {
+    n.close()
+  }
 }
 
 // Handle notification clicks
