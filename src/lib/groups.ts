@@ -770,6 +770,7 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
       ...(message.replyTo && { replyTo: message.replyTo }),
       reactions,
       status: message.status,
+      ...(message.sentToRelays && { sentToRelays: message.sentToRelays }),
       senderPubkey: message.senderPubkey,
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
@@ -812,6 +813,7 @@ export async function loadGroupsFromStorage(): Promise<void> {
           ...(m.replyTo && { replyTo: m.replyTo }),
           reactions: m.reactions,
           status: m.status,
+          ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
           ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
         }))
         .sort((a, b) => a.timestamp - b.timestamp)

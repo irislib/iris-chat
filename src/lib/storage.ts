@@ -24,6 +24,7 @@ export interface StoredMessage {
   replyTo?: string
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: 'delivered' | 'seen'
+  sentToRelays?: string[]
   senderPubkey?: string  // pubkey of sender (for group messages)
   expiresAt?: number  // Unix timestamp in seconds when message expires (NIP-40)
 }
@@ -169,6 +170,22 @@ export async function deleteMessage(id: string): Promise<void> {
 
 export async function updateMessageStatus(id: string, status: 'delivered' | 'seen'): Promise<void> {
   await db.messages.update(id, { status })
+}
+
+function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[] {
+  return Array.from(
+    new Set([...(existing || []), ...next].map((url) => url.trim()).filter(Boolean))
+  ).sort()
+}
+
+export async function updateMessageSentToRelays(
+  id: string,
+  relayUrls: string[]
+): Promise<void> {
+  const existing = await db.messages.get(id)
+  const sentToRelays = mergeRelayUrls(existing?.sentToRelays, relayUrls)
+  if (sentToRelays.length === 0) return
+  await db.messages.update(id, { sentToRelays })
 }
 
 // Profile operations

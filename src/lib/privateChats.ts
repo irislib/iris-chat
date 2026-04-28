@@ -30,6 +30,7 @@ import {
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 import { asNdkEventSubscription } from './ndkSubscription'
+import { notifyMessageRelayPublish } from './messageRelayStatus'
 
 let runtime: NdrRuntime | null = null
 let runtimeCleanup: (() => void) | null = null
@@ -164,12 +165,18 @@ const createRelayOnlySubscribe = (
 
 export const publishRuntimeEventFireAndForget = <T>(
   event: T,
-  publish: () => Promise<{ size: number }>
+  publish: () => Promise<RuntimePublishResult>,
+  onAcceptedRelays?: (relayUrls: string[]) => void
 ): T => {
   void publish()
     .then((publishedRelays) => {
       if (publishedRelays.size === 0) {
         console.warn('[privateChats] Runtime event was not accepted by any relay')
+        return
+      }
+      const relayUrls = getPublishedRelayUrls(publishedRelays)
+      if (relayUrls.length > 0) {
+        onAcceptedRelays?.(relayUrls)
       }
     })
     .catch((error) => {
@@ -178,13 +185,48 @@ export const publishRuntimeEventFireAndForget = <T>(
   return event
 }
 
+export type RuntimePublishResult = {
+  size: number
+  [Symbol.iterator]?: () => IterableIterator<unknown>
+}
+
+function relayUrlFromPublishedRelay(relay: unknown): string | null {
+  if (!relay || typeof relay !== 'object') return null
+
+  const directUrl = (relay as { url?: unknown }).url
+  if (typeof directUrl === 'string' && directUrl.trim()) {
+    return directUrl.trim()
+  }
+
+  const nestedUrl = (relay as { relay?: { url?: unknown } }).relay?.url
+  if (typeof nestedUrl === 'string' && nestedUrl.trim()) {
+    return nestedUrl.trim()
+  }
+
+  return null
+}
+
+export function getPublishedRelayUrls(publishedRelays: RuntimePublishResult): string[] {
+  const iterator = publishedRelays[Symbol.iterator]?.()
+  if (!iterator) return []
+
+  const urls: string[] = []
+  for (let next = iterator.next(); !next.done; next = iterator.next()) {
+    const url = relayUrlFromPublishedRelay(next.value)
+    if (url) urls.push(url)
+  }
+  return Array.from(new Set(urls)).sort()
+}
+
 const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => {
-  return (async (event) => {
+  return (async (event, innerEventId) => {
     return publishRuntimeEventFireAndForget(event, async () => {
       const e = new NDKEvent(ndkInstance, event)
       const relayUrls = [...relayStore.getState().relays]
       const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
       return e.publish(relaySet, 10000, 1)
+    }, (relayUrls) => {
+      notifyMessageRelayPublish(innerEventId, relayUrls)
     }) as never
   }) as NostrPublish
 }

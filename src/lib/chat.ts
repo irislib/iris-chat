@@ -39,6 +39,7 @@ import {
   deleteInvite as deleteInviteFromDb,
   updateInviteLabel as updateInviteLabelInDb,
   updateMessageStatus as updateMessageStatusInDb,
+  updateMessageSentToRelays as updateMessageSentToRelaysInDb,
   saveProcessedEvent,
   getPendingPushEvents,
   deletePendingPushEvent,
@@ -57,6 +58,7 @@ import { parseChatSettingsContent } from './chatSettings'
 import { acceptChat } from './messageRequests'
 import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
 import { asVerifiedPushNostrEvent } from './pushEvents'
+import { onMessageRelayPublish } from './messageRelayStatus'
 
 export interface ChatMessage {
   id: string
@@ -66,6 +68,7 @@ export interface ChatMessage {
   replyTo?: string  // ID of the message being replied to
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: MessageStatus
+  sentToRelays?: string[]
   senderPubkey?: string  // pubkey of sender (for group messages)
   expiresAt?: number  // Unix timestamp in seconds when message expires (NIP-40)
 }
@@ -250,6 +253,54 @@ function updateChatSession(
 
   return updatedSession
 }
+
+function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[] {
+  return Array.from(
+    new Set([...(existing || []), ...next].map((url) => url.trim()).filter(Boolean))
+  ).sort()
+}
+
+function findChatSessionIdByMessageId(messageId: string): string | null {
+  for (const [sessionId, chatSession] of get(chats)) {
+    if (chatSession.messages.some((message) => message.id === messageId)) {
+      return sessionId
+    }
+  }
+  return null
+}
+
+function markMessageSentToRelays(messageId: string, relayUrls: string[]): void {
+  const sessionId = findChatSessionIdByMessageId(messageId)
+  if (!sessionId) return
+
+  let sentToRelays: string[] | null = null
+  const updatedSession = updateChatSession(sessionId, (latestSession) => {
+    const messageIndex = latestSession.messages.findIndex((message) => message.id === messageId)
+    if (messageIndex === -1) return null
+
+    const message = latestSession.messages[messageIndex]
+    const mergedRelays = mergeRelayUrls(message.sentToRelays, relayUrls)
+    const currentRelays = message.sentToRelays || []
+    if (
+      mergedRelays.length === currentRelays.length &&
+      mergedRelays.every((url, index) => url === currentRelays[index])
+    ) {
+      return null
+    }
+
+    const updatedMessages = [...latestSession.messages]
+    updatedMessages[messageIndex] = { ...message, sentToRelays: mergedRelays }
+    sentToRelays = mergedRelays
+    return { ...latestSession, messages: updatedMessages }
+  })
+  if (!updatedSession || !sentToRelays) return
+
+  void updateMessageSentToRelaysInDb(messageId, sentToRelays).catch((error) => {
+    console.error('[chat] Failed to persist message relay publish status:', error)
+  })
+}
+
+onMessageRelayPublish(markMessageSentToRelays)
 
 function subscribeToNdrRuntimeEvents(): void {
   if (runtimeSessionSubscribed) return
@@ -749,6 +800,7 @@ async function ensureManagerChat(
       ...(m.replyTo && { replyTo: m.replyTo }),
       reactions: m.reactions,
       status: m.status,
+      ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
       senderPubkey: m.senderPubkey,
       ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
     }))
@@ -1500,6 +1552,7 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       ...(message.replyTo && { replyTo: message.replyTo }),
       reactions,
       status: message.status,
+      ...(message.sentToRelays && { sentToRelays: message.sentToRelays }),
       ...(message.senderPubkey && { senderPubkey: message.senderPubkey }),
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
@@ -1529,6 +1582,7 @@ export async function loadChatsFromStorage(): Promise<void> {
             ...(m.replyTo && { replyTo: m.replyTo }),
             reactions: m.reactions,
             status: m.status,
+            ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
             senderPubkey: m.senderPubkey,
             ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
           }))

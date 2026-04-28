@@ -290,6 +290,9 @@
   }
 
   let actionsVisible = $derived(showEmojiPicker || showExtendedPicker || showMenu)
+  let bubbleStatus = $derived(
+    message.status || (message.sentToRelays?.length ? 'sent' : undefined)
+  )
 </script>
 
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'} {actionsVisible ? 'relative z-50' : ''}" id="msg-{message.id}">
@@ -434,7 +437,7 @@
                   <div class="flex items-center justify-end gap-1 mt-1">
                     <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
                     {#if message.isMine}
-                      <StatusIndicator status={message.status} variant="bubble" />
+                      <StatusIndicator status={bubbleStatus} variant="bubble" />
                     {/if}
                   </div>
                 </div>
@@ -452,7 +455,7 @@
                   <div class="flex items-center gap-1 ml-auto">
                     <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
                     {#if message.isMine}
-                      <StatusIndicator status={message.status} variant="bubble" />
+                      <StatusIndicator status={bubbleStatus} variant="bubble" />
                     {/if}
                   </div>
                 </div>
@@ -473,7 +476,7 @@
           <div class="flex items-center justify-end gap-1 mt-0.5 mr-1">
             <span class="text-[10px] text-gray-500">{formatTime(message.timestamp)}</span>
             {#if message.isMine}
-              <StatusIndicator status={message.status} />
+              <StatusIndicator status={bubbleStatus} />
             {/if}
           </div>
         {/if}

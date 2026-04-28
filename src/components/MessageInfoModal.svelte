@@ -26,6 +26,7 @@
     })
   )
   let receiptStages = $derived(partitionReceiptStages(receiptInfo.receivedBy, receiptInfo.seenBy))
+  let sentRelayUrls = $derived(message.sentToRelays || [])
 
   let messageScopeLabel = $derived(
     receiptInfo.scope === 'dm'
@@ -35,7 +36,9 @@
         : 'Unknown scope'
   )
 
-  let statusLabel = $derived(message.status || 'sent')
+  let statusLabel = $derived(
+    message.status || (sentRelayUrls.length > 0 ? 'sent' : message.isMine ? 'sending' : 'received')
+  )
 
   let rawData = $derived(
     JSON.stringify(
@@ -75,6 +78,10 @@
   function shortPubkey(pubkey: string): string {
     if (pubkey.length <= 16) return pubkey
     return `${pubkey.slice(0, 8)}...${pubkey.slice(-6)}`
+  }
+
+  function formatRelayUrl(url: string): string {
+    return url.replace(/^wss?:\/\//, '')
   }
 </script>
 
@@ -134,6 +141,26 @@
         </div>
         <p class="text-xs font-mono bg-surface-light px-3 py-2 rounded-lg break-all">{message.id}</p>
       </div>
+
+      {#if message.isMine}
+        <div class="space-y-2">
+          <p class="text-sm text-gray-400">Sent Relays</p>
+          {#if sentRelayUrls.length === 0}
+            <p class="text-sm text-gray-500">No relay acknowledgement yet.</p>
+          {:else}
+            <div class="space-y-1">
+              {#each sentRelayUrls as relayUrl}
+                <div class="flex items-center justify-between gap-3 rounded-lg bg-surface-light px-3 py-2">
+                  <span class="min-w-0 truncate text-sm" title={relayUrl}>
+                    {formatRelayUrl(relayUrl)}
+                  </span>
+                  <span class="i-carbon-checkmark text-sm text-green-400 flex-shrink-0"></span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       <div class="space-y-2">
         <p class="text-sm text-gray-400">Delivered To</p>
