@@ -213,7 +213,9 @@ vi.mock('./storage', () => ({
   deleteGroupFromDb: vi.fn().mockResolvedValue(undefined),
   saveMessage: vi.fn().mockResolvedValue(undefined),
   getMessagesForSession: vi.fn().mockResolvedValue([]),
+  deleteMessage: vi.fn().mockResolvedValue(undefined),
   deleteMessagesForSession: vi.fn().mockResolvedValue(undefined),
+  updateMessageSentToRelays: vi.fn().mockResolvedValue(undefined),
   getSessionManagerValue: vi.fn((key: string) => Promise.resolve(sessionManagerValues.get(key))),
   putSessionManagerValue: vi.fn((key: string, value: unknown) => {
     sessionManagerValues.set(key, value)
@@ -642,6 +644,40 @@ describe('groups', () => {
       sendGroupMessage(group.id, 'Hello all!')
 
       await waitForRecipients(MY_PUBKEY, MEMBER_B, MEMBER_C)
+    })
+
+    it('reconciles the local message id to the native group inner id', async () => {
+      const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
+      const group = await createGroup('Runtime ID Test', [MEMBER_B])
+
+      sendGroupMessage(group.id, 'Runtime id hello')
+      const initialMessage = get(groupMessages).get(group.id)![0]
+      expect(initialMessage.id).not.toMatch(/^inner-/)
+
+      await vi.waitFor(() => {
+        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^inner-/)
+      })
+    })
+
+    it('marks group messages sent when their inner id is accepted by relays', async () => {
+      const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
+      const { notifyMessageRelayPublish } = await import('./messageRelayStatus')
+      const group = await createGroup('Relay Ack Test', [MEMBER_B])
+
+      sendGroupMessage(group.id, 'Relay ack hello')
+      await vi.waitFor(() => {
+        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^inner-/)
+      })
+      const messageId = get(groupMessages).get(group.id)![0].id
+
+      notifyMessageRelayPublish(messageId, ['wss://relay.two', 'wss://relay.one'])
+
+      await vi.waitFor(() => {
+        expect(get(groupMessages).get(group.id)![0].sentToRelays).toEqual([
+          'wss://relay.one',
+          'wss://relay.two',
+        ])
+      })
     })
 
     it('applies group disappearing TTL to outgoing messages', async () => {

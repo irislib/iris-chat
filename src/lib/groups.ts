@@ -27,26 +27,30 @@ import {
   getNdrRuntime,
   waitForSendReadyRuntime,
 } from './privateChats'
-import { getEventHash } from 'nostr-tools'
+import { getEventHash, type VerifiedEvent } from 'nostr-tools'
 import {
   saveGroup as saveGroupToDb,
   getAllGroups,
   deleteGroupFromDb,
   saveMessage as saveMessageToDb,
   getMessagesForSession,
+  deleteMessage as deleteMessageFromDb,
   deleteMessagesForSession,
   updateMessageStatus as updateMessageStatusInDb,
+  updateMessageSentToRelays as updateMessageSentToRelaysInDb,
   type StoredGroup,
   type StoredMessage
 } from './storage'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
 import { expirationStore } from './expirationStore'
+import { onMessageRelayPublish } from './messageRelayStatus'
 
 export { GROUP_METADATA_KIND }
 export type Group = GroupData
 
 type OuterEvent = unknown
+type NativeGroupSendResult = { outer: VerifiedEvent; inner: Rumor }
 
 export interface GroupMessage extends ChatMessage {
   senderPubkey?: string
@@ -126,6 +130,92 @@ function isRuntimeSessionReady(): boolean {
 }
 
 export const isAdmin = isGroupAdmin
+
+function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[] {
+  return Array.from(
+    new Set([...(existing || []), ...next].map((url) => url.trim()).filter(Boolean))
+  ).sort()
+}
+
+function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): void {
+  let relaysToPersist: string[] | null = null
+
+  groupMessages.update((groupMap) => {
+    for (const [groupId, messages] of groupMap) {
+      const messageIndex = messages.findIndex((message) => message.id === messageId)
+      if (messageIndex === -1) continue
+
+      const message = messages[messageIndex]
+      const sentToRelays = mergeRelayUrls(message.sentToRelays, relayUrls)
+      const currentRelays = message.sentToRelays || []
+      if (
+        sentToRelays.length === currentRelays.length &&
+        sentToRelays.every((url, index) => url === currentRelays[index])
+      ) {
+        return groupMap
+      }
+
+      const updatedMessages = [...messages]
+      updatedMessages[messageIndex] = { ...message, sentToRelays }
+      relaysToPersist = sentToRelays
+      groupMap.set(groupId, updatedMessages)
+      return groupMap
+    }
+
+    return groupMap
+  })
+
+  if (!relaysToPersist) return
+
+  void updateMessageSentToRelaysInDb(messageId, relaysToPersist).catch((error) => {
+    console.error('[groups] Failed to persist group relay publish status:', error)
+  })
+}
+
+function reconcileLocalGroupMessageId(
+  groupId: string,
+  localMessageId: string,
+  runtimeMessageId: string,
+): void {
+  if (!runtimeMessageId || runtimeMessageId === localMessageId) return
+
+  let reconciledMessage: GroupMessage | null = null
+  let shouldDeleteLocalMessage = false
+
+  groupMessages.update((groupMap) => {
+    const messages = groupMap.get(groupId)
+    if (!messages) return groupMap
+
+    const localIndex = messages.findIndex((message) => message.id === localMessageId)
+    if (localIndex === -1) return groupMap
+
+    const runtimeIndex = messages.findIndex((message) => message.id === runtimeMessageId)
+    const updatedMessages = [...messages]
+    const localMessage = updatedMessages[localIndex]
+    if (!localMessage) return groupMap
+
+    if (runtimeIndex !== -1) {
+      updatedMessages.splice(localIndex, 1)
+      shouldDeleteLocalMessage = true
+    } else {
+      reconciledMessage = { ...localMessage, id: runtimeMessageId }
+      updatedMessages[localIndex] = reconciledMessage
+      shouldDeleteLocalMessage = true
+    }
+
+    groupMap.set(groupId, updatedMessages)
+    return groupMap
+  })
+
+  if (reconciledMessage) {
+    void saveGroupMessageToStorage(groupId, reconciledMessage)
+  }
+  if (shouldDeleteLocalMessage) {
+    void deleteMessageFromDb(localMessageId)
+  }
+}
+
+onMessageRelayPublish(markGroupMessageSentToRelays)
 
 function buildGroupRumor(
   recipientPubkey: string,
@@ -213,8 +303,8 @@ async function sendNativeGroupEvent(
   groupId: string,
   partialEvent: { content: string, kind: number, tags: string[][] },
   options?: { includeSelfPairwiseCopy?: boolean },
-): Promise<void> {
-  await enqueueNativeGroupSend(groupId, async () => {
+): Promise<NativeGroupSendResult | null> {
+  return enqueueNativeGroupSend(groupId, async () => {
     const runtime = getNdrRuntime()
     const groupData = get(groups).get(groupId)
     if (!groupData) {
@@ -224,17 +314,18 @@ async function sendNativeGroupEvent(
         undefined,
         options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
       )
-      return
+      return null
     }
 
     await waitForSendReadyRuntime()
     await runtime.upsertGroup(groupData)
     try {
-      await runtime.sendGroupEvent(groupId, partialEvent)
+      const result = await runtime.sendGroupEvent(groupId, partialEvent)
 
       if (options?.includeSelfPairwiseCopy) {
         await fanOutToOwnDevices(groupId, partialEvent)
       }
+      return result
     } catch (error) {
       console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
       fanOutToMembers(
@@ -243,6 +334,7 @@ async function sendNativeGroupEvent(
         undefined,
         options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
       )
+      return null
     }
   })
 }
@@ -489,9 +581,15 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
       tags,
     },
     { includeSelfPairwiseCopy: true },
-  ).catch((error) => {
-    console.error('[groups] Failed to send group message:', error)
-  })
+  )
+    .then((result) => {
+      if (result?.inner.id) {
+        reconcileLocalGroupMessageId(groupId, message.id, result.inner.id)
+      }
+    })
+    .catch((error) => {
+      console.error('[groups] Failed to send group message:', error)
+    })
 }
 
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {
