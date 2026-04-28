@@ -43,6 +43,8 @@ import {
   updateInviteLabel as updateInviteLabelInDb,
   updateMessageStatus as updateMessageStatusInDb,
   saveProcessedEvent,
+  getPendingPushEvents,
+  deletePendingPushEvent,
   type StoredSession,
   type StoredMessage,
   type StoredInvite
@@ -57,6 +59,7 @@ import { expirationStore } from './expirationStore'
 import { parseChatSettingsContent } from './chatSettings'
 import { acceptChat } from './messageRequests'
 import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
+import { asVerifiedPushNostrEvent } from './pushEvents'
 
 export interface ChatMessage {
   id: string
@@ -100,6 +103,7 @@ let invitesInitialized = false
 let sessionManagerPoller: ReturnType<typeof setInterval> | null = null
 
 let sessionManagerSubscribed = false
+let sessionManagerSubscriptionPromise: Promise<void> | null = null
 let groupRuntimeSubscribed = false
 let groupRuntimeCleanup: (() => void) | null = null
 const managerChatBootstrapInFlight = new Set<string>()
@@ -246,7 +250,21 @@ function updateChatSession(
   return updatedSession
 }
 
-export function initSessionManagerEvents(): void {
+function subscribeToSessionManagerEvents(manager: SessionManager): void {
+  if (sessionManagerSubscribed) return
+  sessionManagerSubscribed = true
+  manager.onEvent((rumor, from, meta) => {
+    handleManagerEvent(rumor, from, meta).catch((e) =>
+      console.error('[chat] Failed to handle SessionManager event:', e)
+    )
+  })
+  if (!sessionManagerPoller) {
+    sessionManagerPoller = setInterval(() => syncManagerChats(manager), 500)
+    syncManagerChats(manager)
+  }
+}
+
+export function initSessionManagerEvents(): Promise<void> {
   if (!groupRuntimeSubscribed) {
     const runtime = getNdrRuntime()
     groupRuntimeSubscribed = true
@@ -262,34 +280,62 @@ export function initSessionManagerEvents(): void {
     })
   }
 
-  if (sessionManagerSubscribed) return
-
-  const subscribe = (manager: SessionManager) => {
-    if (sessionManagerSubscribed) return
-    sessionManagerSubscribed = true
-    manager.onEvent((rumor, from, meta) => {
-      handleManagerEvent(rumor, from, meta).catch((e) =>
-        console.error('[chat] Failed to handle SessionManager event:', e)
-      )
-    })
-    if (!sessionManagerPoller) {
-      sessionManagerPoller = setInterval(() => syncManagerChats(manager), 500)
-      syncManagerChats(manager)
-    }
-  }
+  if (sessionManagerSubscribed) return Promise.resolve()
 
   const manager = getSessionManager()
   if (manager) {
-    subscribe(manager)
-    return
+    subscribeToSessionManagerEvents(manager)
+    return Promise.resolve()
   }
 
   // SessionManager may still be initializing (e.g. right after login). If we return early
   // we can miss the first incoming manager events and end up with chats that have sessions
   // but no messages. Wait for it and subscribe as soon as it's ready.
-  void waitForSessionManager()
-    .then(subscribe)
-    .catch((e) => console.error('[chat] Failed to init SessionManager events:', e))
+  if (!sessionManagerSubscriptionPromise) {
+    sessionManagerSubscriptionPromise = waitForSessionManager()
+      .then(subscribeToSessionManagerEvents)
+      .catch((e) => {
+        console.error('[chat] Failed to init SessionManager events:', e)
+        throw e
+      })
+      .finally(() => {
+        sessionManagerSubscriptionPromise = null
+      })
+    void sessionManagerSubscriptionPromise.catch(() => {})
+  }
+
+  return sessionManagerSubscriptionPromise
+}
+
+const pushEventIngestInFlight = new Set<string>()
+
+export async function ingestPushNostrEvent(event: unknown): Promise<boolean> {
+  const verifiedEvent = asVerifiedPushNostrEvent(event)
+  if (!verifiedEvent?.id) return false
+  if (pushEventIngestInFlight.has(verifiedEvent.id)) return false
+
+  pushEventIngestInFlight.add(verifiedEvent.id)
+  try {
+    await initSessionManagerEvents()
+    const handled = getNdrRuntime().processReceivedEvent(verifiedEvent)
+    await deletePendingPushEvent(verifiedEvent.id)
+    if (handled) {
+      updateDMSubscription()
+    }
+    return handled
+  } catch (error) {
+    console.error('[chat] Failed to ingest push Nostr event:', error)
+    return false
+  } finally {
+    pushEventIngestInFlight.delete(verifiedEvent.id)
+  }
+}
+
+export async function drainPendingPushNostrEvents(): Promise<void> {
+  const pending = await getPendingPushEvents()
+  for (const record of pending) {
+    await ingestPushNostrEvent(record.event)
+  }
 }
 
 function syncManagerChats(manager: SessionManager): void {
@@ -1536,6 +1582,7 @@ export async function clearChatData(): Promise<void> {
     isInitialized = false
     invitesInitialized = false
     sessionManagerSubscribed = false
+    sessionManagerSubscriptionPromise = null
     groupRuntimeCleanup?.()
     groupRuntimeCleanup = null
     groupRuntimeSubscribed = false
@@ -1545,6 +1592,7 @@ export async function clearChatData(): Promise<void> {
     }
     pendingAutoOpenChats.clear()
     autoOpenedChats.clear()
+    pushEventIngestInFlight.clear()
   } catch (e) {
     console.error('Failed to clear chat data:', e)
   }

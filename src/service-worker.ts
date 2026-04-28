@@ -10,6 +10,10 @@ import {
   CHAT_MESSAGE_KIND,
 } from 'nostr-double-ratchet'
 import { renderRumor } from './lib/pushRumorRender'
+import {
+  extractPushNostrEvent,
+  PUSH_NOSTR_EVENT_MESSAGE,
+} from './lib/pushEvents'
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'
@@ -65,6 +69,12 @@ interface ProcessedEvent {
   timestamp: number
 }
 
+interface PendingPushEvent {
+  id: string
+  event: NostrEvent
+  timestamp: number
+}
+
 interface SessionManagerRecord {
   key: string
   value: unknown
@@ -100,6 +110,7 @@ class IrisChatDB extends Dexie {
   invites!: Table<StoredInvite, string>
   processedEvents!: Table<ProcessedEvent, string>
   sessionManager!: Table<SessionManagerRecord, string>
+  pendingPushEvents!: Table<PendingPushEvent, string>
 
   constructor() {
     super('iris-chat')
@@ -138,14 +149,59 @@ class IrisChatDB extends Dexie {
       groups: 'id',
       sessionManager: 'key'
     })
+    this.version(6).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp',
+      groups: 'id',
+      sessionManager: 'key',
+      pendingPushEvents: 'id, timestamp'
+    })
   }
 }
 
 const db = new IrisChatDB()
 const appLogoUrl = new URL('iris-logo.png', self.registration.scope).toString()
+const PENDING_PUSH_EVENT_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const MAX_PENDING_PUSH_EVENTS = 64
 
 // Track currently open chat (only one can be open at a time)
 let currentOpenChatId: string | null = null
+
+async function savePendingPushEvent(event: NostrEvent): Promise<void> {
+  if (!event.id) return
+  const now = Date.now()
+  await db.pendingPushEvents.put({ id: event.id, event, timestamp: now })
+  await db.pendingPushEvents
+    .where('timestamp')
+    .below(now - PENDING_PUSH_EVENT_MAX_AGE_MS)
+    .delete()
+
+  const count = await db.pendingPushEvents.count()
+  if (count <= MAX_PENDING_PUSH_EVENTS) return
+
+  const stale = await db.pendingPushEvents
+    .orderBy('timestamp')
+    .limit(count - MAX_PENDING_PUSH_EVENTS)
+    .toArray()
+  await db.pendingPushEvents.bulkDelete(stale.map((record) => record.id))
+}
+
+async function forwardPushEventToClients(event: NostrEvent): Promise<void> {
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  for (const client of clients) {
+    client.postMessage({ type: PUSH_NOSTR_EVENT_MESSAGE, event })
+  }
+}
+
+async function capturePushNostrEvent(payload: unknown): Promise<void> {
+  const nostrEvent = extractPushNostrEvent(payload)
+  if (!nostrEvent) return
+  await savePendingPushEvent(nostrEvent as NostrEvent)
+  await forwardPushEventToClients(nostrEvent as NostrEvent)
+}
 
 async function getOwnerPubkeyFromSessionManager(): Promise<string | null> {
   try {
@@ -410,6 +466,7 @@ self.addEventListener('push', (event) => {
   const handlePush = async () => {
     try {
       const payload = event.data?.json()
+      await capturePushNostrEvent(payload)
       if (!payload?.event) {
         await showFallbackNotification()
         return

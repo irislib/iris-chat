@@ -64,6 +64,12 @@ export interface ProcessedEvent {
   timestamp: number
 }
 
+export interface PendingPushEvent {
+  id: string
+  event: unknown
+  timestamp: number
+}
+
 class IrisChatDB extends Dexie {
   sessions!: Table<StoredSession, string>
   messages!: Table<StoredMessage, string>
@@ -72,6 +78,7 @@ class IrisChatDB extends Dexie {
   processedEvents!: Table<ProcessedEvent, string>
   groups!: Table<StoredGroup, string>
   sessionManager!: Table<{ key: string; value: unknown }, string>
+  pendingPushEvents!: Table<PendingPushEvent, string>
 
   constructor() {
     super('iris-chat')
@@ -109,6 +116,16 @@ class IrisChatDB extends Dexie {
       processedEvents: 'id, timestamp',
       groups: 'id',
       sessionManager: 'key'
+    })
+    this.version(6).stores({
+      sessions: 'id',
+      messages: 'id, sessionId',
+      profiles: 'pubkey',
+      invites: 'id',
+      processedEvents: 'id, timestamp',
+      groups: 'id',
+      sessionManager: 'key',
+      pendingPushEvents: 'id, timestamp'
     })
   }
 }
@@ -201,6 +218,21 @@ export async function getProcessedEvent(id: string): Promise<ProcessedEvent | un
   return db.processedEvents.get(id)
 }
 
+// Pending push events captured by the service worker while the app runtime is not available.
+export async function savePendingPushEvent(event: PendingPushEvent): Promise<void> {
+  await db.pendingPushEvents.put(event)
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  await db.pendingPushEvents.where('timestamp').below(cutoff).delete()
+}
+
+export async function getPendingPushEvents(): Promise<PendingPushEvent[]> {
+  return db.pendingPushEvents.orderBy('timestamp').toArray()
+}
+
+export async function deletePendingPushEvent(id: string): Promise<void> {
+  await db.pendingPushEvents.delete(id)
+}
+
 // Group operations
 export async function saveGroup(group: StoredGroup): Promise<void> {
   await db.groups.put(group)
@@ -223,7 +255,8 @@ export async function clearAllData(): Promise<void> {
     db.invites.clear(),
     db.processedEvents.clear(),
     db.groups.clear(),
-    db.sessionManager.clear()
+    db.sessionManager.clear(),
+    db.pendingPushEvents.clear()
   ])
 }
 

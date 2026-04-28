@@ -8,13 +8,14 @@
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import InstallPrompt from './components/InstallPrompt.svelte'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initSessionManagerEvents } from './lib/chat'
+  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initSessionManagerEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToSessionManager } from './lib/disappearingMessages'
   import type { ChatSession } from './lib/chat'
   import { loadGroupsFromStorage, clearGroupData, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
   import { initMultiDevice, resetManagers } from './lib/privateChats'
+  import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
   import { initFollowing } from './lib/following'
   import CreateGroup from './components/CreateGroup.svelte'
   import GroupChatView from './components/GroupChatView.svelte'
@@ -204,6 +205,9 @@
           console.log('[app] chat not found in map')
         }
       }
+      if (event.data?.type === PUSH_NOSTR_EVENT_MESSAGE && event.data?.event && loggedIn) {
+        void ingestPushNostrEvent(event.data.event)
+      }
     }
     navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage)
 
@@ -255,6 +259,7 @@
       // Start message expiration cleanup and sync settings
       startMessageExpirationCleanup()
       syncDisappearingMessagesToSessionManager().catch(() => {})
+      void drainPendingPushNostrEvents()
 
       loggedIn = true
 
@@ -287,8 +292,11 @@
 
     // Track visibility changes to update service worker
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && selectedChat) {
-        postToServiceWorker({ type: 'CHAT_OPENED', chatId: selectedChat.id })
+      if (document.visibilityState === 'visible') {
+        if (loggedIn) void drainPendingPushNostrEvents()
+        if (selectedChat) {
+          postToServiceWorker({ type: 'CHAT_OPENED', chatId: selectedChat.id })
+        }
       } else if (document.visibilityState === 'hidden') {
         postToServiceWorker({ type: 'CHAT_OPENED', chatId: null })
       }
@@ -342,6 +350,7 @@
     // Start message expiration cleanup and sync settings
     startMessageExpirationCleanup()
     syncDisappearingMessagesToSessionManager().catch(() => {})
+    void drainPendingPushNostrEvents()
   }
 
   function handleSelectGroup(groupId: string) {
