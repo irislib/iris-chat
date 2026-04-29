@@ -154,22 +154,23 @@ function defer<T>() {
 }
 
 describe('Invite Parsing / Acceptance', () => {
-  it('createAndSaveInvite waits for current-device registration before exposing an invite', async () => {
+  it('createAndSaveInvite exposes an invite without waiting for current-device registration', async () => {
     const registration = defer<void>()
     mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
 
-    const invitePromise = createAndSaveInvite('Test invite')
-
-    await new Promise((resolve) => setTimeout(resolve, 25))
-
-    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
-    expect(saveInvite).not.toHaveBeenCalled()
-
-    registration.resolve()
-    const invite = await invitePromise
+    const invite = await Promise.race([
+      createAndSaveInvite('Test invite'),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 25)
+      ),
+    ])
 
     expect(invite.label).toBe('Test invite')
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
     expect(saveInvite).toHaveBeenCalledTimes(1)
+
+    registration.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
 
   it('parses #/npub... style invite URLs', () => {

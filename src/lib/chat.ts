@@ -651,7 +651,9 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
 
-  await ensureDeviceRegistered()
+  void ensureDeviceRegistered().catch((e) => {
+    console.warn('[chat] Failed to prepare device for invite:', e)
+  })
 
   const invite = createInvite()
   const id = crypto.randomUUID()

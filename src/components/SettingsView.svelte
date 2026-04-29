@@ -167,8 +167,8 @@
     registeringDevice = true
     deviceError = ''
     try {
-      // ensureDeviceRegistered includes invite publishing, which is important for reliable
-      // SessionManager session establishment when other users try to DM this device.
+      // ensureDeviceRegistered starts invite publishing for reliable SessionManager
+      // establishment when other users try to DM this device.
       await ensureDeviceRegistered()
     } catch (e) {
       deviceError = getErrorMessage(e, 'Failed to register device')

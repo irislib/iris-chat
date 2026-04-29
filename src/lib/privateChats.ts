@@ -567,7 +567,9 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
     const labels = await getCurrentDeviceRegistrationLabels()
     await registerCurrentDeviceAndVerify(currentRuntime, ownerPubkey, labels)
   }
-  await republishInvite().catch(() => {})
+  void republishInvite().catch((e) => {
+    console.warn('[privateChats] Invite republish after registration failed:', e)
+  })
 }
 
 export const revokeDevice = async (identityPubkey: string): Promise<void> => {
