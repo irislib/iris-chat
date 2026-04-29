@@ -236,7 +236,7 @@ async function acceptLinkInvite(page: Page, inviteUrl: string): Promise<void> {
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link invite').fill(inviteUrl)
-  await expect(page.getByText('Device linked')).toBeVisible({ timeout: 20000 })
+  await expect(page.getByText('Device linked', { exact: true })).toBeVisible({ timeout: 20000 })
   await page.locator('button[aria-label="Close"]').click()
   await page.getByRole('button', { name: 'Back' }).click()
 }
