@@ -1,5 +1,4 @@
 /// <reference lib="webworker" />
-import { precacheAndRoute } from 'workbox-precaching'
 import {
   Session,
   type Rumor,
@@ -27,8 +26,10 @@ declare let self: ServiceWorkerGlobalScope
 
 type NostrEvent = Parameters<Parameters<NostrSubscribe>[1]>[0]
 
-// Precache assets
-precacheAndRoute(self.__WB_MANIFEST)
+// Keep this worker focused on push notifications. App-shell caching and
+// client-claiming can interrupt active invite joins during service-worker
+// updates, while the chat runtime already works from the network/cache layer
+// provided by the browser and CDN.
 
 // Dexie DB for service worker (must match main app schema)
 interface StoredSession {
@@ -621,16 +622,6 @@ self.addEventListener('notificationclick', (event) => {
   }
 
   event.waitUntil(handleClick())
-})
-
-// Skip waiting to activate new SW immediately
-self.addEventListener('install', () => {
-  self.skipWaiting()
-})
-
-// Handle activation - claim clients
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim())
 })
 
 // Listen for messages from client

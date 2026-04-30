@@ -444,11 +444,21 @@ export function needsManagerUserSetup(record: SessionUserRecordEntry): boolean {
   )
 }
 
-// Create a new invite (chat link) that can be shared
-export function createInvite(): ChatInvite {
+// Create a new invite (chat link) that can be shared privately.
+export async function createInvite(): Promise<ChatInvite> {
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
-  return { type: 'pubkey', pubkey }
+
+  await ensureDeviceRegistered()
+  const runtime = await waitForNdrRuntime()
+  const delegateInvite = runtime.getDelegateManager()?.getInvite()
+  if (!delegateInvite) {
+    throw new Error('Invite is not ready')
+  }
+
+  const invite = Invite.deserialize(delegateInvite.serialize())
+  invite.ownerPubkey = pubkey
+  return { type: 'legacy', invite }
 }
 
 // Get the base URL for invite links
@@ -651,11 +661,7 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
 
-  void ensureDeviceRegistered().catch((e) => {
-    console.warn('[chat] Failed to prepare device for invite:', e)
-  })
-
-  const invite = createInvite()
+  const invite = await createInvite()
   const id = crypto.randomUUID()
 
   // Save to IndexedDB
@@ -740,6 +746,10 @@ export async function loadAndMonitorInvites(): Promise<void> {
     for (const stored of storedInvites) {
       try {
         const invite = deserializeInvite(stored.inviteData)
+        if (invite.type === 'pubkey') {
+          await deleteInviteFromDb(stored.id)
+          continue
+        }
         const unsubscribe = () => {}
 
         const activeInvite: ActiveInvite = {
@@ -782,6 +792,75 @@ export function getInviteEphemeralPubkeys(): string[] {
   }
 
   return pubkeys
+}
+
+type InviteSessionStateLike = {
+  ourCurrentNostrKey?: {
+    publicKey?: unknown
+  } | null
+}
+
+function getSessionInvitePublicKey(session: unknown): string | null {
+  const rawState =
+    (session as { state?: unknown } | null | undefined)?.state ??
+    (session as { sessionState?: unknown } | null | undefined)?.sessionState
+
+  if (!rawState) return null
+
+  let state: InviteSessionStateLike
+  if (typeof rawState === 'string') {
+    try {
+      state = JSON.parse(rawState) as InviteSessionStateLike
+    } catch {
+      return null
+    }
+  } else {
+    state = rawState as InviteSessionStateLike
+  }
+
+  const publicKey = state.ourCurrentNostrKey?.publicKey
+  return typeof publicKey === 'string' ? publicKey : null
+}
+
+function isSessionFromLocalInvite(
+  session: unknown,
+  inviteEphemeralPubkeys: Set<string>
+): boolean {
+  const publicKey = getSessionInvitePublicKey(session)
+  return !!publicKey && inviteEphemeralPubkeys.has(publicKey)
+}
+
+function isChatFromLocalInvite(chatId: string): boolean {
+  const inviteEphemeralPubkeys = new Set(getInviteEphemeralPubkeys())
+  if (inviteEphemeralPubkeys.size === 0) return false
+
+  const runtime = getNdrRuntime()
+  const userRecords = runtime.getSessionUserRecords() as
+    | SessionUserRecordsLike
+    | undefined
+  if (!userRecords) return false
+
+  const canonicalChatId = resolveSessionPubkeyToOwner(chatId)
+  const recordsToCheck = [
+    userRecords.get(chatId),
+    canonicalChatId !== chatId ? userRecords.get(canonicalChatId) : undefined,
+  ]
+
+  for (const record of recordsToCheck) {
+    const devicesMap = record?.devices ?? new Map()
+    for (const device of devicesMap.values()) {
+      const sessions = [
+        device.activeSession,
+        ...(device.inactiveSessions ?? []),
+      ].filter(Boolean)
+
+      if (sessions.some((session) => isSessionFromLocalInvite(session, inviteEphemeralPubkeys))) {
+        return true
+      }
+    }
+  }
+
+  return false
 }
 
 async function ensureManagerChat(
@@ -970,7 +1049,10 @@ export async function handleManagerEvent(
     isEmptyChat
 
   if (isFirstInboundMessage) {
-    if (isChatAccepted(chatSession, policyCtx)) {
+    if (!isChatAccepted(chatSession, policyCtx) && isChatFromLocalInvite(chatId)) {
+      acceptChat(chatSession.recipientPubkey)
+      triggerAutoOpen(chatSession)
+    } else if (isChatAccepted(chatSession, policyCtx)) {
       triggerAutoOpen(chatSession)
     }
     // Republish our current device invite after the first successful inbound session

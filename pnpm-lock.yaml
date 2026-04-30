@@ -105,12 +105,6 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@24.10.9)(jiti@2.6.1)(jsdom@26.1.0)(terser@5.46.2)
-      workbox-core:
-        specifier: ^7.4.0
-        version: 7.4.0
-      workbox-precaching:
-        specifier: ^7.4.0
-        version: 7.4.0
       ws:
         specifier: ^8.19.0
         version: 8.19.0

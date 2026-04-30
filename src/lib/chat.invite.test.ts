@@ -41,6 +41,7 @@ vi.mock('./privateChats', () => ({
     return {
       setupUser: (...args: any[]) => mocks.getSessionManager()?.setupUser?.(...args),
       acceptInvite: (...args: any[]) => mocks.getSessionManager()?.acceptInvite?.(...args),
+      getDelegateManager: () => mocks.getSessionManager()?.getDelegateManager?.(),
     }
   },
   waitForSendReadyRuntime: async () => {
@@ -137,7 +138,13 @@ beforeEach(() => {
   mocks.waitForSessionManager.mockClear()
   mocks.waitForSendReadySessionManager.mockClear()
   mocks.waitForPeerSendReadySessionManager.mockClear()
-  const sessionManager = { setupUser: vi.fn().mockResolvedValue(undefined) }
+  const delegateInvite = Invite.createNew('d'.repeat(64))
+  const sessionManager = {
+    setupUser: vi.fn().mockResolvedValue(undefined),
+    getDelegateManager: () => ({
+      getInvite: () => delegateInvite,
+    }),
+  }
   mocks.setSessionManager(sessionManager)
   mocks.waitForSendReadySessionManager.mockResolvedValue(sessionManager)
   mocks.waitForPeerSendReadySessionManager.mockResolvedValue(sessionManager)
@@ -154,23 +161,31 @@ function defer<T>() {
 }
 
 describe('Invite Parsing / Acceptance', () => {
-  it('createAndSaveInvite exposes an invite without waiting for current-device registration', async () => {
+  it('createAndSaveInvite waits for device registration and stores the delegate invite', async () => {
     const registration = defer<void>()
     mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
 
-    const invite = await Promise.race([
-      createAndSaveInvite('Test invite'),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 25)
-      ),
-    ])
+    const invitePromise = createAndSaveInvite('Test invite')
+    let settled = false
+    void invitePromise.then(() => {
+      settled = true
+    })
 
-    expect(invite.label).toBe('Test invite')
-    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
-    expect(saveInvite).toHaveBeenCalledTimes(1)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+
+    expect(settled).toBe(false)
+    expect(saveInvite).not.toHaveBeenCalled()
 
     registration.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    const invite = await invitePromise
+
+    expect(invite.label).toBe('Test invite')
+    expect(invite.invite.type).toBe('legacy')
+    if (invite.invite.type === 'legacy') {
+      expect(invite.invite.invite.ownerPubkey).toBe(MY_PUBKEY)
+    }
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    expect(saveInvite).toHaveBeenCalledTimes(1)
   })
 
   it('parses #/npub... style invite URLs', () => {

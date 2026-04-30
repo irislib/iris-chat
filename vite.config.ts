@@ -14,7 +14,7 @@ export default defineConfig({
       filename: 'service-worker.ts',
       registerType: 'autoUpdate',
       injectManifest: {
-        globPatterns: ['**/*.{js,css,html,png,svg,ico}']
+        injectionPoint: undefined
       },
       devOptions: {
         enabled: true,

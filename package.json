@@ -43,8 +43,6 @@
     "vite": "^7.2.4",
     "vite-plugin-pwa": "^1.2.0",
     "vitest": "^3.2.4",
-    "workbox-core": "^7.4.0",
-    "workbox-precaching": "^7.4.0",
     "ws": "^8.19.0"
   },
   "dependencies": {

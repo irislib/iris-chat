@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => {
     delivered: 1,
     seen: 2,
   }
+  const state: { userRecords: Map<string, any> } = {
+    userRecords: new Map(),
+  }
 
   return {
     parseReceipt: vi.fn((rumor: { kind?: number; content?: string; tags?: string[][] }) => {
@@ -26,9 +29,14 @@ const mocks = vi.hoisted(() => {
       return nextRank > currentRank
     }),
     updateMessageStatus: vi.fn().mockResolvedValue(undefined),
+    ensureDeviceRegistered: vi.fn().mockResolvedValue(undefined),
     waitForPeerSendReadySessionManager: vi
       .fn()
       .mockRejectedValue(new Error('manager unavailable in test')),
+    getUserRecords: () => state.userRecords,
+    setUserRecords: (value: Map<string, any>) => {
+      state.userRecords = value
+    },
   }
 })
 
@@ -65,7 +73,7 @@ vi.mock('./storage', () => ({
 vi.mock('./privateChats', () => ({
   getSessionManager: () => null,
   waitForSessionManager: () => Promise.reject(new Error('manager unavailable in test')),
-  ensureDeviceRegistered: vi.fn(),
+  ensureDeviceRegistered: (...args: []) => mocks.ensureDeviceRegistered(...args),
   waitForPeerSendReadySessionManager: (...args: [string]) =>
     mocks.waitForPeerSendReadySessionManager(...args),
   preparePeerNdrRuntime: (...args: [string]) =>
@@ -73,7 +81,7 @@ vi.mock('./privateChats', () => ({
   getNdrRuntime: () => ({
     sendReceipt: vi.fn().mockResolvedValue(undefined),
     getState: () => ({ currentDevicePubkey: MY_PUBKEY, sessionManagerReady: true }),
-    getSessionUserRecords: () => new Map(),
+    getSessionUserRecords: () => mocks.getUserRecords(),
     onGroupEvent: () => () => {},
   }),
   republishInvite: vi.fn().mockResolvedValue(undefined),
@@ -119,7 +127,7 @@ vi.mock('./receipts', () => ({
     mocks.shouldAdvanceStatus(...args),
 }))
 
-import { chats, currentChat, handleManagerEvent, type ChatSession } from './chat'
+import { chats, currentChat, handleManagerEvent, invites, type ChatSession } from './chat'
 import { devices } from './devices'
 import { following } from './following'
 import { messageRequests } from './messageRequests'
@@ -130,6 +138,7 @@ import { receiptSettings } from './receiptSettings'
 beforeEach(() => {
   chats.set(new Map())
   currentChat.set(null)
+  invites.set(new Map())
   devices.reset()
   following.set(new Set())
   messageRequests.set({ acceptedChats: {}, rejectedChats: {} })
@@ -141,7 +150,10 @@ beforeEach(() => {
   mocks.parseReceipt.mockClear()
   mocks.shouldAdvanceStatus.mockClear()
   mocks.updateMessageStatus.mockClear()
+  mocks.ensureDeviceRegistered.mockClear()
+  mocks.ensureDeviceRegistered.mockResolvedValue(undefined)
   mocks.waitForPeerSendReadySessionManager.mockClear()
+  mocks.setUserRecords(new Map())
 })
 
 describe('manager receipts', () => {
@@ -296,5 +308,75 @@ describe('manager receipts', () => {
     expect(chat?.messages[0]?.status).toBeUndefined()
     expect(isMessageRequestChat(chat!, getMessageRequestPolicyContext())).toBe(true)
     expect(mocks.waitForPeerSendReadySessionManager).not.toHaveBeenCalled()
+  })
+
+  it('accepts the first inbound message when it arrives through a local invite session', async () => {
+    receiptSettings.set({
+      sendDeliveryReceipts: true,
+      sendReadReceipts: false,
+    })
+
+    const inviteEphemeralPubkey = 'c'.repeat(64)
+    invites.set(new Map([
+      [
+        'invite-1',
+        {
+          id: 'invite-1',
+          invite: {
+            type: 'legacy',
+            invite: { inviterEphemeralPublicKey: inviteEphemeralPubkey },
+          },
+          createdAt: Date.now(),
+          usedBy: [],
+          unsubscribe: () => {},
+        } as never,
+      ],
+    ]))
+    mocks.setUserRecords(new Map([
+      [
+        THEIR_PUBKEY,
+        {
+          devices: new Map([
+            [
+              'peer-device',
+              {
+                activeSession: {
+                  state: {
+                    ourCurrentNostrKey: { publicKey: inviteEphemeralPubkey },
+                  },
+                },
+                inactiveSessions: [],
+              },
+            ],
+          ]),
+        },
+      ],
+    ]))
+
+    const now = Date.now()
+    const createdAt = Math.floor(now / 1000)
+
+    await handleManagerEvent(
+      {
+        id: 'invite-msg-1',
+        kind: CHAT_MESSAGE_KIND,
+        pubkey: THEIR_PUBKEY,
+        content: 'hello through invite',
+        created_at: createdAt,
+        tags: [['p', MY_PUBKEY], ['ms', String(now)]],
+      } as never,
+      THEIR_PUBKEY
+    )
+
+    const chat = get(chats).get(THEIR_PUBKEY)
+    const decisions = get(messageRequests)
+    expect(chat?.messages).toHaveLength(1)
+    expect(chat?.messages[0]).toMatchObject({
+      id: 'invite-msg-1',
+      isMine: false,
+      status: 'delivered',
+    })
+    expect(decisions.acceptedChats[THEIR_PUBKEY]).toBe(true)
+    expect(isMessageRequestChat(chat!, getMessageRequestPolicyContext())).toBe(false)
   })
 })
