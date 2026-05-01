@@ -27,6 +27,14 @@
   )
   let receiptStages = $derived(partitionReceiptStages(receiptInfo.receivedBy, receiptInfo.seenBy))
   let sentRelayUrls = $derived(message.sentToRelays || [])
+  let deliveryChannels = $derived(
+    Array.from(
+      new Set([
+        ...(message.deliveryChannels || []),
+        ...sentRelayUrls.map((relayUrl) => `message server: ${relayUrl}`),
+      ].map((channel) => channel.trim()).filter(Boolean))
+    ).sort()
+  )
 
   let messageScopeLabel = $derived(
     receiptInfo.scope === 'dm'
@@ -80,8 +88,15 @@
     return `${pubkey.slice(0, 8)}...${pubkey.slice(-6)}`
   }
 
-  function formatRelayUrl(url: string): string {
-    return url.replace(/^wss?:\/\//, '')
+  function formatChannel(channel: string): string {
+    return channel.replace(/^message server: wss?:\/\//, 'message server: ')
+  }
+
+  function recipientStatusLabel(status: string): string {
+    if (status === 'seen') return 'Seen'
+    if (status === 'delivered') return 'Delivered'
+    if (status === 'sent') return 'Sent'
+    return 'Waiting'
   }
 </script>
 
@@ -142,23 +157,45 @@
         <p class="text-xs font-mono bg-surface-light px-3 py-2 rounded-lg break-all">{message.id}</p>
       </div>
 
-      {#if message.isMine}
+      {#if deliveryChannels.length > 0 || message.isMine}
         <div class="space-y-2">
-          <p class="text-sm text-gray-400">Sent Relays</p>
-          {#if sentRelayUrls.length === 0}
-            <p class="text-sm text-gray-500">No relay acknowledgement yet.</p>
+          <p class="text-sm text-gray-400">Channels</p>
+          {#if deliveryChannels.length === 0}
+            <p class="text-sm text-gray-500">No message server acknowledgement yet.</p>
           {:else}
             <div class="space-y-1">
-              {#each sentRelayUrls as relayUrl}
+              {#each deliveryChannels as channel}
                 <div class="flex items-center justify-between gap-3 rounded-lg bg-surface-light px-3 py-2">
-                  <span class="min-w-0 truncate text-sm" title={relayUrl}>
-                    {formatRelayUrl(relayUrl)}
+                  <span class="min-w-0 truncate text-sm" title={channel}>
+                    {formatChannel(channel)}
                   </span>
                   <span class="i-carbon-checkmark text-sm text-green-400 flex-shrink-0"></span>
                 </div>
               {/each}
             </div>
           {/if}
+        </div>
+      {/if}
+
+      {#if receiptInfo.recipientRows.length > 0}
+        <div class="space-y-2">
+          <p class="text-sm text-gray-400">Recipients</p>
+          <div class="space-y-1">
+            {#each receiptInfo.recipientRows as row}
+              <div class="flex items-center justify-between gap-3 rounded-lg bg-surface-light px-3 py-2">
+                <div class="min-w-0 text-sm truncate flex items-center gap-2">
+                  <Avatar pubkey={row.pubkey} size={20} />
+                  <Name pubkey={row.pubkey} />
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  {#if myPubkey && row.pubkey === myPubkey}
+                    <span class="text-[10px] uppercase tracking-wide text-primary">You</span>
+                  {/if}
+                  <span class="text-xs text-gray-400">{recipientStatusLabel(row.status)}</span>
+                </div>
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
 
@@ -210,7 +247,7 @@
         {/if}
       </div>
 
-      {#if receiptInfo.potentialRecipients.length > 0}
+      {#if receiptInfo.potentialRecipients.length > 0 && receiptInfo.recipientRows.length === 0}
         <div class="space-y-2">
           <p class="text-sm text-gray-400">Potential Recipients</p>
           <div class="space-y-1">

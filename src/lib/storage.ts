@@ -25,6 +25,10 @@ export interface StoredMessage {
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: 'delivered' | 'seen'
   sentToRelays?: string[]
+  recipientStatuses?: Record<string, 'sent' | 'delivered' | 'seen'>
+  deliveryChannels?: string[]
+  outerEventIds?: string[]
+  pendingRelayEventIds?: string[]
   senderPubkey?: string  // pubkey of sender (for group messages)
   expiresAt?: number  // Unix timestamp in seconds when message expires (NIP-40)
 }
@@ -172,9 +176,9 @@ export async function updateMessageStatus(id: string, status: 'delivered' | 'see
   await db.messages.update(id, { status })
 }
 
-function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[] {
+function mergeStrings(existing: string[] | undefined, next: string[]): string[] {
   return Array.from(
-    new Set([...(existing || []), ...next].map((url) => url.trim()).filter(Boolean))
+    new Set([...(existing || []), ...next].map((value) => value.trim()).filter(Boolean))
   ).sort()
 }
 
@@ -183,9 +187,48 @@ export async function updateMessageSentToRelays(
   relayUrls: string[]
 ): Promise<void> {
   const existing = await db.messages.get(id)
-  const sentToRelays = mergeRelayUrls(existing?.sentToRelays, relayUrls)
+  const sentToRelays = mergeStrings(existing?.sentToRelays, relayUrls)
   if (sentToRelays.length === 0) return
   await db.messages.update(id, { sentToRelays })
+}
+
+export async function updateMessageRecipientStatuses(
+  id: string,
+  recipientStatuses: Record<string, 'sent' | 'delivered' | 'seen'>
+): Promise<void> {
+  const existing = await db.messages.get(id)
+  await db.messages.update(id, {
+    recipientStatuses: {
+      ...(existing?.recipientStatuses || {}),
+      ...recipientStatuses,
+    },
+  })
+}
+
+export async function updateMessageDeliveryTrace(
+  id: string,
+  trace: {
+    deliveryChannels?: string[]
+    outerEventIds?: string[]
+    pendingRelayEventIds?: string[]
+  }
+): Promise<void> {
+  const existing = await db.messages.get(id)
+  const updates: Partial<StoredMessage> = {}
+  if (trace.deliveryChannels) {
+    updates.deliveryChannels = mergeStrings(existing?.deliveryChannels, trace.deliveryChannels)
+  }
+  if (trace.outerEventIds) {
+    updates.outerEventIds = mergeStrings(existing?.outerEventIds, trace.outerEventIds)
+  }
+  if (trace.pendingRelayEventIds) {
+    updates.pendingRelayEventIds = mergeStrings(
+      existing?.pendingRelayEventIds,
+      trace.pendingRelayEventIds
+    )
+  }
+  if (Object.keys(updates).length === 0) return
+  await db.messages.update(id, updates)
 }
 
 // Profile operations

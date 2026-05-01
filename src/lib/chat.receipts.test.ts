@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => {
       return nextRank > currentRank
     }),
     updateMessageStatus: vi.fn().mockResolvedValue(undefined),
+    updateMessageRecipientStatuses: vi.fn().mockResolvedValue(undefined),
+    updateMessageDeliveryTrace: vi.fn().mockResolvedValue(undefined),
     ensureDeviceRegistered: vi.fn().mockResolvedValue(undefined),
     waitForPeerSendReadySessionManager: vi
       .fn()
@@ -67,6 +69,9 @@ vi.mock('./storage', () => ({
   updateInviteLabel: vi.fn().mockResolvedValue(undefined),
   addInviteUsedBy: vi.fn().mockResolvedValue(undefined),
   updateMessageStatus: (...args: [string, 'delivered' | 'seen']) => mocks.updateMessageStatus(...args),
+  updateMessageRecipientStatuses: (...args: [string, Record<string, 'sent' | 'delivered' | 'seen'>]) =>
+    mocks.updateMessageRecipientStatuses(...args),
+  updateMessageDeliveryTrace: (...args: [string, unknown]) => mocks.updateMessageDeliveryTrace(...args),
   saveProcessedEvent: vi.fn(),
 }))
 
@@ -150,6 +155,8 @@ beforeEach(() => {
   mocks.parseReceipt.mockClear()
   mocks.shouldAdvanceStatus.mockClear()
   mocks.updateMessageStatus.mockClear()
+  mocks.updateMessageRecipientStatuses.mockClear()
+  mocks.updateMessageDeliveryTrace.mockClear()
   mocks.ensureDeviceRegistered.mockClear()
   mocks.ensureDeviceRegistered.mockResolvedValue(undefined)
   mocks.waitForPeerSendReadySessionManager.mockClear()
@@ -266,8 +273,14 @@ describe('manager receipts', () => {
       id: 'out-1',
       isMine: true,
       status: 'seen',
+      recipientStatuses: {
+        [THEIR_PUBKEY]: 'seen',
+      },
     })
     expect(mocks.updateMessageStatus).toHaveBeenCalledWith('out-1', 'seen')
+    expect(mocks.updateMessageRecipientStatuses).toHaveBeenCalledWith('out-1', {
+      [THEIR_PUBKEY]: 'seen',
+    })
   })
 
   it('keeps preexisting empty manager chats from unknown senders in requests', async () => {

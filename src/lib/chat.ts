@@ -40,6 +40,8 @@ import {
   updateInviteLabel as updateInviteLabelInDb,
   updateMessageStatus as updateMessageStatusInDb,
   updateMessageSentToRelays as updateMessageSentToRelaysInDb,
+  updateMessageRecipientStatuses as updateMessageRecipientStatusesInDb,
+  updateMessageDeliveryTrace as updateMessageDeliveryTraceInDb,
   saveProcessedEvent,
   getPendingPushEvents,
   deletePendingPushEvent,
@@ -60,6 +62,8 @@ import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEve
 import { asVerifiedPushNostrEvent } from './pushEvents'
 import { onMessageRelayPublish } from './messageRelayStatus'
 
+export type RecipientDeliveryStatus = 'sent' | MessageStatus
+
 export interface ChatMessage {
   id: string
   content: string
@@ -69,6 +73,10 @@ export interface ChatMessage {
   reactions?: Record<string, string[]>  // emoji -> array of pubkeys who reacted
   status?: MessageStatus
   sentToRelays?: string[]
+  recipientStatuses?: Record<string, RecipientDeliveryStatus>
+  deliveryChannels?: string[]
+  outerEventIds?: string[]
+  pendingRelayEventIds?: string[]
   senderPubkey?: string  // pubkey of sender (for group messages)
   expiresAt?: number  // Unix timestamp in seconds when message expires (NIP-40)
 }
@@ -260,6 +268,36 @@ function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[
   ).sort()
 }
 
+function mergeStringList(existing: string[] | undefined, next: string[]): string[] {
+  return Array.from(
+    new Set([...(existing || []), ...next].map((value) => value.trim()).filter(Boolean))
+  ).sort()
+}
+
+function relayChannelLabel(relayUrl: string): string {
+  return `message server: ${relayUrl.trim()}`
+}
+
+function recipientStatusRank(status: RecipientDeliveryStatus | undefined): number {
+  if (status === 'seen') return 3
+  if (status === 'delivered') return 2
+  if (status === 'sent') return 1
+  return 0
+}
+
+function advanceRecipientStatus(
+  existing: Record<string, RecipientDeliveryStatus> | undefined,
+  pubkey: string,
+  status: MessageStatus
+): Record<string, RecipientDeliveryStatus> | null {
+  const previous = existing?.[pubkey]
+  if (recipientStatusRank(previous) >= recipientStatusRank(status)) return null
+  return {
+    ...(existing || {}),
+    [pubkey]: status,
+  }
+}
+
 function findChatSessionIdByMessageId(messageId: string): string | null {
   for (const [sessionId, chatSession] of get(chats)) {
     if (chatSession.messages.some((message) => message.id === messageId)) {
@@ -274,6 +312,7 @@ function markMessageSentToRelays(messageId: string, relayUrls: string[]): void {
   if (!sessionId) return
 
   let sentToRelays: string[] | null = null
+  let deliveryChannels: string[] | null = null
   const updatedSession = updateChatSession(sessionId, (latestSession) => {
     const messageIndex = latestSession.messages.findIndex((message) => message.id === messageId)
     if (messageIndex === -1) return null
@@ -281,22 +320,37 @@ function markMessageSentToRelays(messageId: string, relayUrls: string[]): void {
     const message = latestSession.messages[messageIndex]
     const mergedRelays = mergeRelayUrls(message.sentToRelays, relayUrls)
     const currentRelays = message.sentToRelays || []
+    const mergedChannels = mergeStringList(
+      message.deliveryChannels,
+      relayUrls.map(relayChannelLabel)
+    )
+    const currentChannels = message.deliveryChannels || []
     if (
       mergedRelays.length === currentRelays.length &&
-      mergedRelays.every((url, index) => url === currentRelays[index])
+      mergedRelays.every((url, index) => url === currentRelays[index]) &&
+      mergedChannels.length === currentChannels.length &&
+      mergedChannels.every((channel, index) => channel === currentChannels[index])
     ) {
       return null
     }
 
     const updatedMessages = [...latestSession.messages]
-    updatedMessages[messageIndex] = { ...message, sentToRelays: mergedRelays }
+    updatedMessages[messageIndex] = {
+      ...message,
+      sentToRelays: mergedRelays,
+      deliveryChannels: mergedChannels,
+    }
     sentToRelays = mergedRelays
+    deliveryChannels = mergedChannels
     return { ...latestSession, messages: updatedMessages }
   })
-  if (!updatedSession || !sentToRelays) return
+  if (!updatedSession || !sentToRelays || !deliveryChannels) return
 
   void updateMessageSentToRelaysInDb(messageId, sentToRelays).catch((error) => {
     console.error('[chat] Failed to persist message relay publish status:', error)
+  })
+  void updateMessageDeliveryTraceInDb(messageId, { deliveryChannels }).catch((error) => {
+    console.error('[chat] Failed to persist message delivery channels:', error)
   })
 }
 
@@ -329,7 +383,7 @@ export function initNdrRuntimeEvents(): Promise<void> {
       handleGroupEvent(
         event.inner,
         senderPubkey,
-        undefined,
+        { id: event.outerEventId },
         event.senderDevicePubkey,
       )
     })
@@ -882,6 +936,10 @@ async function ensureManagerChat(
       reactions: m.reactions,
       status: m.status,
       ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
+      ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
+      ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),
+      ...(m.outerEventIds && { outerEventIds: m.outerEventIds }),
+      ...(m.pendingRelayEventIds && { pendingRelayEventIds: m.pendingRelayEventIds }),
       senderPubkey: m.senderPubkey,
       ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
     }))
@@ -1062,7 +1120,8 @@ export async function handleManagerEvent(
     )
   }
   const outerEventId = (meta as (OnEventMeta & { outerEventId?: string }) | undefined)?.outerEventId
-  handleIncomingRumor(chatSession, rumor, isFromSelf, outerEventId)
+  const receiptAuthorPubkey = isFromSelf ? myPubkey : chatId
+  handleIncomingRumor(chatSession, rumor, isFromSelf, outerEventId, receiptAuthorPubkey)
 }
 
 // Accept an invite and create a session
@@ -1129,7 +1188,8 @@ function handleIncomingRumor(
   chatSession: ChatSession,
   rumor: Rumor,
   isFromSelfOverride?: boolean,
-  outerEventId?: string
+  outerEventId?: string,
+  receiptAuthorPubkey?: string
 ) {
   const myPubkey = getPubkey()
   const sessionId = chatSession.id
@@ -1170,7 +1230,7 @@ function handleIncomingRumor(
     saveProcessedRumor(rumor.content)
     const receipt = parseReceipt(rumor)
     if (!receipt) return
-    handleIncomingReceipt(currentSession, receipt, isMine)
+    handleIncomingReceipt(currentSession, receipt, isMine, receiptAuthorPubkey)
     return
   }
 
@@ -1241,6 +1301,8 @@ function handleIncomingRumor(
     isMine,
     ...(replyTag && { replyTo: replyTag }),
     ...(shouldAckDelivered && { status: 'delivered' as const }),
+    deliveryChannels: ['message servers'],
+    outerEventIds: [outerEventId || processedId],
     ...(expiresAt !== undefined && { expiresAt }),
   }
 
@@ -1311,8 +1373,17 @@ function handleIncomingReaction(chatSession: ChatSession, reaction: { messageId:
 // Handle incoming receipt:
 // - peer receipts advance status on our outgoing messages
 // - self/own-device receipts advance status on incoming messages (cross-session unread sync)
-function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload, isFromSelf: boolean) {
-  const changedMessageIds: string[] = []
+function handleIncomingReceipt(
+  chatSession: ChatSession,
+  receipt: ReceiptPayload,
+  isFromSelf: boolean,
+  receiptAuthorPubkey?: string
+) {
+  const changedMessageStatuses: Array<{ messageId: string; status: MessageStatus }> = []
+  const changedRecipientStatuses: Array<{
+    messageId: string
+    recipientStatuses: Record<string, RecipientDeliveryStatus>
+  }> = []
   const updatedSession = updateChatSession(chatSession.id, (latestSession) => {
     let changed = false
     const updatedMessages = [...latestSession.messages]
@@ -1324,10 +1395,29 @@ function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload
       if (index === -1) continue
 
       const message = updatedMessages[index]
-      if (!shouldAdvanceStatus(message.status, receipt.type)) continue
+      const nextRecipientStatuses =
+        !isFromSelf && receiptAuthorPubkey
+          ? advanceRecipientStatus(message.recipientStatuses, receiptAuthorPubkey, receipt.type)
+          : null
+      const nextStatus = shouldAdvanceStatus(message.status, receipt.type)
+        ? receipt.type
+        : message.status
+      if (!nextRecipientStatuses && nextStatus === message.status) continue
 
-      updatedMessages[index] = { ...message, status: receipt.type }
-      changedMessageIds.push(messageId)
+      updatedMessages[index] = {
+        ...message,
+        status: nextStatus,
+        ...(nextRecipientStatuses && { recipientStatuses: nextRecipientStatuses }),
+      }
+      if (nextStatus && nextStatus !== message.status) {
+        changedMessageStatuses.push({ messageId, status: nextStatus })
+      }
+      if (nextRecipientStatuses) {
+        changedRecipientStatuses.push({
+          messageId,
+          recipientStatuses: nextRecipientStatuses,
+        })
+      }
       changed = true
     }
 
@@ -1336,8 +1426,11 @@ function handleIncomingReceipt(chatSession: ChatSession, receipt: ReceiptPayload
   })
   if (!updatedSession) return
 
-  for (const messageId of changedMessageIds) {
-    updateMessageStatusInDb(messageId, receipt.type)
+  for (const { messageId, status } of changedMessageStatuses) {
+    updateMessageStatusInDb(messageId, status)
+  }
+  for (const { messageId, recipientStatuses } of changedRecipientStatuses) {
+    updateMessageRecipientStatusesInDb(messageId, recipientStatuses)
   }
 }
 
@@ -1637,6 +1730,10 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       reactions,
       status: message.status,
       ...(message.sentToRelays && { sentToRelays: message.sentToRelays }),
+      ...(message.recipientStatuses && { recipientStatuses: message.recipientStatuses }),
+      ...(message.deliveryChannels && { deliveryChannels: message.deliveryChannels }),
+      ...(message.outerEventIds && { outerEventIds: message.outerEventIds }),
+      ...(message.pendingRelayEventIds && { pendingRelayEventIds: message.pendingRelayEventIds }),
       ...(message.senderPubkey && { senderPubkey: message.senderPubkey }),
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
@@ -1667,6 +1764,10 @@ export async function loadChatsFromStorage(): Promise<void> {
             reactions: m.reactions,
             status: m.status,
             ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
+            ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
+            ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),
+            ...(m.outerEventIds && { outerEventIds: m.outerEventIds }),
+            ...(m.pendingRelayEventIds && { pendingRelayEventIds: m.pendingRelayEventIds }),
             senderPubkey: m.senderPubkey,
             ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
           }))

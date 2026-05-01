@@ -35,6 +35,7 @@ describe('messageInfo', () => {
       expect(info.scope).toBe('dm')
       expect(info.participants).toEqual(['me', 'alice'])
       expect(info.potentialRecipients).toEqual(['alice'])
+      expect(info.recipientRows).toEqual([{ pubkey: 'alice', status: 'seen' }])
       expect(info.receivedBy).toEqual(['alice'])
       expect(info.seenBy).toEqual(['alice'])
       expect(info.notes).toEqual([])
@@ -54,6 +55,7 @@ describe('messageInfo', () => {
       expect(info.scope).toBe('dm')
       expect(info.receivedBy).toEqual([])
       expect(info.seenBy).toEqual([])
+      expect(info.recipientRows).toEqual([{ pubkey: 'alice', status: 'waiting' }])
       expect(info.notes).toContain('No delivery receipt yet.')
     })
 
@@ -73,11 +75,12 @@ describe('messageInfo', () => {
       expect(info.scope).toBe('dm')
       expect(info.participants).toEqual(['me', 'alice'])
       expect(info.potentialRecipients).toEqual(['me'])
+      expect(info.recipientRows).toEqual([{ pubkey: 'me', status: 'seen' }])
       expect(info.receivedBy).toEqual(['me'])
       expect(info.seenBy).toEqual(['me'])
     })
 
-    it('shows only local seen state for incoming group messages', () => {
+    it('shows local seen state for incoming group messages', () => {
       const info = deriveMessageReceiptInfo(
         {
           isMine: false,
@@ -93,16 +96,24 @@ describe('messageInfo', () => {
       expect(info.scope).toBe('group')
       expect(info.participants).toEqual(['me', 'alice', 'bob'])
       expect(info.potentialRecipients).toEqual(['me', 'bob'])
+      expect(info.recipientRows).toEqual([
+        { pubkey: 'me', status: 'seen' },
+        { pubkey: 'bob', status: 'waiting' },
+      ])
       expect(info.receivedBy).toEqual(['me'])
       expect(info.seenBy).toEqual(['me'])
-      expect(info.notes).toContain('Group chats currently expose only local seen state.')
+      expect(info.notes).toEqual([])
     })
 
-    it('shows potential group recipients for outgoing messages without claiming remote receipts', () => {
+    it('shows per-recipient group receipts for outgoing messages', () => {
       const info = deriveMessageReceiptInfo(
         {
           isMine: true,
           senderPubkey: 'me',
+          recipientStatuses: {
+            alice: 'delivered',
+            bob: 'seen',
+          },
         },
         {
           myPubkey: 'me',
@@ -112,9 +123,13 @@ describe('messageInfo', () => {
 
       expect(info.scope).toBe('group')
       expect(info.potentialRecipients).toEqual(['alice', 'bob'])
-      expect(info.receivedBy).toEqual([])
-      expect(info.seenBy).toEqual([])
-      expect(info.notes).toContain('Remote per-member delivery/read receipts are not tracked yet.')
+      expect(info.recipientRows).toEqual([
+        { pubkey: 'alice', status: 'delivered' },
+        { pubkey: 'bob', status: 'seen' },
+      ])
+      expect(info.receivedBy).toEqual(['alice', 'bob'])
+      expect(info.seenBy).toEqual(['bob'])
+      expect(info.notes).toEqual([])
     })
   })
 })

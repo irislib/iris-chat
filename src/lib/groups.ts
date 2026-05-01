@@ -1,6 +1,6 @@
 import { writable, get } from 'svelte/store'
 import {
-  CHAT_MESSAGE_KIND, REACTION_KIND, TYPING_KIND, parseReaction,
+  CHAT_MESSAGE_KIND, REACTION_KIND, RECEIPT_KIND, TYPING_KIND, parseReaction,
   GROUP_METADATA_KIND,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   type GroupData,
@@ -21,7 +21,7 @@ import {
 import type { Rumor } from 'nostr-double-ratchet'
 import { getPubkey } from './identity'
 import { devices } from './devices'
-import { chats, type ChatMessage } from './chat'
+import { chats, type ChatMessage, type RecipientDeliveryStatus } from './chat'
 import {
   ensureDeviceRegistered,
   getNdrRuntime,
@@ -38,6 +38,8 @@ import {
   deleteMessagesForSession,
   updateMessageStatus as updateMessageStatusInDb,
   updateMessageSentToRelays as updateMessageSentToRelaysInDb,
+  updateMessageRecipientStatuses as updateMessageRecipientStatusesInDb,
+  updateMessageDeliveryTrace as updateMessageDeliveryTraceInDb,
   type StoredGroup,
   type StoredMessage
 } from './storage'
@@ -45,11 +47,13 @@ import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
 import { expirationStore } from './expirationStore'
 import { onMessageRelayPublish } from './messageRelayStatus'
+import { parseReceipt, shouldAdvanceStatus, type MessageStatus, type ReceiptPayload } from './receipts'
+import { receiptSettings } from './receiptSettings'
 
 export { GROUP_METADATA_KIND }
 export type Group = GroupData
 
-type OuterEvent = unknown
+type OuterEvent = { id?: string; outerEventId?: string } | unknown
 type NativeGroupSendResult = { outer: VerifiedEvent; inner: Rumor }
 
 export interface GroupMessage extends ChatMessage {
@@ -62,7 +66,7 @@ export const currentGroupId = writable<string | null>(null)
 
 // Queue for group events that arrive before the group's metadata
 // (e.g., message arrives before creation event due to network reordering)
-const pendingGroupEvents = new Map<string, Array<{ rumor: Rumor, senderPubkey: string, senderDevicePubkey?: string }>>()
+const pendingGroupEvents = new Map<string, Array<{ rumor: Rumor, senderPubkey: string, senderDevicePubkey?: string, outerEventId?: string }>>()
 const MAX_PENDING_PER_GROUP = 50
 const PENDING_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
 const nativeGroupSendQueue = new Map<string, Promise<void>>()
@@ -83,14 +87,20 @@ function enqueueNativeGroupSend<T>(groupId: string, action: () => Promise<T>): P
   return result
 }
 
-function queuePendingEvent(groupId: string, rumor: Rumor, senderPubkey: string, senderDevicePubkey?: string): void {
+function queuePendingEvent(
+  groupId: string,
+  rumor: Rumor,
+  senderPubkey: string,
+  senderDevicePubkey?: string,
+  outerEventId?: string,
+): void {
   let queue = pendingGroupEvents.get(groupId)
   if (!queue) {
     queue = []
     pendingGroupEvents.set(groupId, queue)
   }
   if (queue.length < MAX_PENDING_PER_GROUP) {
-    queue.push({ rumor, senderPubkey, senderDevicePubkey })
+    queue.push({ rumor, senderPubkey, senderDevicePubkey, outerEventId })
   }
 }
 
@@ -100,12 +110,20 @@ function flushPendingEvents(groupId: string): void {
   pendingGroupEvents.delete(groupId)
 
   const now = Date.now()
-  for (const { rumor, senderPubkey, senderDevicePubkey } of queue) {
+  for (const { rumor, senderPubkey, senderDevicePubkey, outerEventId } of queue) {
     // Skip stale events
     if (now - rumor.created_at * 1000 > PENDING_MAX_AGE_MS) continue
     // Re-dispatch through handleGroupEvent (group now exists in store)
-    handleGroupEvent(rumor, senderPubkey, undefined, senderDevicePubkey)
+    handleGroupEvent(rumor, senderPubkey, outerEventId ? { id: outerEventId } : undefined, senderDevicePubkey)
   }
+}
+
+function getOuterEventId(outerEvent: OuterEvent | undefined): string | undefined {
+  if (!outerEvent || typeof outerEvent !== 'object') return undefined
+  const candidate = outerEvent as { id?: unknown; outerEventId?: unknown }
+  if (typeof candidate.id === 'string') return candidate.id
+  if (typeof candidate.outerEventId === 'string') return candidate.outerEventId
+  return undefined
 }
 
 function resolveOurDevicePubkey(): string | null {
@@ -137,8 +155,39 @@ function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[
   ).sort()
 }
 
+function mergeStringList(existing: string[] | undefined, next: string[]): string[] {
+  return Array.from(
+    new Set([...(existing || []), ...next].map((value) => value.trim()).filter(Boolean))
+  ).sort()
+}
+
+function relayChannelLabel(relayUrl: string): string {
+  return `message server: ${relayUrl.trim()}`
+}
+
+function recipientStatusRank(status: RecipientDeliveryStatus | undefined): number {
+  if (status === 'seen') return 3
+  if (status === 'delivered') return 2
+  if (status === 'sent') return 1
+  return 0
+}
+
+function advanceRecipientStatus(
+  existing: Record<string, RecipientDeliveryStatus> | undefined,
+  pubkey: string,
+  status: MessageStatus
+): Record<string, RecipientDeliveryStatus> | null {
+  const previous = existing?.[pubkey]
+  if (recipientStatusRank(previous) >= recipientStatusRank(status)) return null
+  return {
+    ...(existing || {}),
+    [pubkey]: status,
+  }
+}
+
 function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): void {
   let relaysToPersist: string[] | null = null
+  let channelsToPersist: string[] | null = null
 
   groupMessages.update((groupMap) => {
     for (const [groupId, messages] of groupMap) {
@@ -148,16 +197,24 @@ function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): v
       const message = messages[messageIndex]
       const sentToRelays = mergeRelayUrls(message.sentToRelays, relayUrls)
       const currentRelays = message.sentToRelays || []
+      const deliveryChannels = mergeStringList(
+        message.deliveryChannels,
+        relayUrls.map(relayChannelLabel)
+      )
+      const currentChannels = message.deliveryChannels || []
       if (
         sentToRelays.length === currentRelays.length &&
-        sentToRelays.every((url, index) => url === currentRelays[index])
+        sentToRelays.every((url, index) => url === currentRelays[index]) &&
+        deliveryChannels.length === currentChannels.length &&
+        deliveryChannels.every((channel, index) => channel === currentChannels[index])
       ) {
         return groupMap
       }
 
       const updatedMessages = [...messages]
-      updatedMessages[messageIndex] = { ...message, sentToRelays }
+      updatedMessages[messageIndex] = { ...message, sentToRelays, deliveryChannels }
       relaysToPersist = sentToRelays
+      channelsToPersist = deliveryChannels
       groupMap.set(groupId, updatedMessages)
       return groupMap
     }
@@ -170,6 +227,11 @@ function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): v
   void updateMessageSentToRelaysInDb(messageId, relaysToPersist).catch((error) => {
     console.error('[groups] Failed to persist group relay publish status:', error)
   })
+  if (channelsToPersist) {
+    void updateMessageDeliveryTraceInDb(messageId, { deliveryChannels: channelsToPersist }).catch((error) => {
+      console.error('[groups] Failed to persist group delivery channels:', error)
+    })
+  }
 }
 
 function reconcileLocalGroupMessageId(
@@ -646,12 +708,13 @@ export function sendGroupTypingEvent(groupId: string): void {
 export function handleGroupEvent(
   rumor: Rumor,
   senderPubkey: string,
-  _outerEvent?: OuterEvent,
+  outerEvent?: OuterEvent,
   senderDevicePubkey?: string
 ): void {
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (!groupTag) return
   const groupId = groupTag[1]
+  const outerEventId = getOuterEventId(outerEvent)
 
   if (rumor.kind === GROUP_METADATA_KIND) {
     handleGroupMetadata(rumor, senderPubkey)
@@ -663,15 +726,15 @@ export function handleGroupEvent(
   if (rumor.kind === GROUP_SENDER_KEY_DISTRIBUTION_KIND) {
     if (!groupExists) {
       // Queue event — metadata may arrive later (network reordering)
-      queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey)
+      queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
     }
     return
   }
 
   if (!groupExists) {
     // Queue event — metadata may arrive later (network reordering)
-    if (rumor.kind === CHAT_MESSAGE_KIND || rumor.kind === REACTION_KIND) {
-      queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey)
+    if (rumor.kind === CHAT_MESSAGE_KIND || rumor.kind === REACTION_KIND || rumor.kind === RECEIPT_KIND) {
+      queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
     }
     return
   }
@@ -692,12 +755,20 @@ export function handleGroupEvent(
     return
   }
 
+  if (rumor.kind === RECEIPT_KIND) {
+    const receipt = parseReceipt(rumor)
+    if (receipt) {
+      handleGroupReceipt(groupId, receipt, senderPubkey)
+    }
+    return
+  }
+
   if (rumor.kind === CHAT_MESSAGE_KIND) {
     const myPubkey = getPubkey()
     if (!myPubkey || senderPubkey !== myPubkey) {
       clearRemoteTyping(`group:${groupId}`, rumor.created_at)
     }
-    handleGroupMessage(groupId, rumor, senderPubkey, senderDevicePubkey)
+    handleGroupMessage(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
     return
   }
 }
@@ -783,6 +854,7 @@ function handleGroupMessage(
   rumor: Rumor,
   senderPubkey: string,
   senderDevicePubkey?: string,
+  outerEventId?: string,
 ): void {
   const myPubkey = getPubkey()
   const isOwnOwnerMessage = !!myPubkey && senderPubkey === myPubkey
@@ -801,6 +873,11 @@ function handleGroupMessage(
   )?.[1]
 
   const expiresAt = getExpirationTimestampSeconds(rumor)
+  const group = get(groups).get(groupId)
+  const shouldAckDelivered =
+    !isOwnOwnerMessage &&
+    group?.accepted !== false &&
+    get(receiptSettings).sendDeliveryReceipts
 
   const message: GroupMessage = {
     id: rumor.id,
@@ -809,6 +886,9 @@ function handleGroupMessage(
     isMine: isOwnOwnerMessage,
     senderPubkey,
     ...(replyTag && { replyTo: replyTag }),
+    ...(shouldAckDelivered && { status: 'delivered' as const }),
+    deliveryChannels: ['message servers'],
+    outerEventIds: [outerEventId || rumor.id],
     ...(expiresAt !== undefined && { expiresAt }),
   }
 
@@ -820,6 +900,9 @@ function handleGroupMessage(
   })
 
   saveGroupMessageToStorage(groupId, message)
+  if (shouldAckDelivered) {
+    sendGroupReceipt(groupId, 'delivered', [message.id])
+  }
 }
 
 function handleGroupReaction(groupId: string, rumor: Rumor, fromPubkey: string): void {
@@ -853,6 +936,78 @@ function handleGroupReaction(groupId: string, rumor: Rumor, fromPubkey: string):
   if (updatedMsg) saveGroupMessageToStorage(groupId, updatedMsg)
 }
 
+function handleGroupReceipt(groupId: string, receipt: ReceiptPayload, fromPubkey: string): void {
+  const myPubkey = getPubkey()
+  const changedStatuses: Array<{ messageId: string; status: MessageStatus }> = []
+  const changedRecipientStatuses: Array<{
+    messageId: string
+    recipientStatuses: Record<string, RecipientDeliveryStatus>
+  }> = []
+
+  groupMessages.update((gm) => {
+    const msgs = gm.get(groupId) || []
+    if (msgs.length === 0) return gm
+
+    const updated = [...msgs]
+    let changed = false
+
+    for (const messageId of receipt.messageIds) {
+      const index = updated.findIndex((message) => message.id === messageId)
+      if (index === -1) continue
+
+      const message = updated[index]
+      const nextRecipientStatuses =
+        message.isMine && fromPubkey !== myPubkey
+          ? advanceRecipientStatus(message.recipientStatuses, fromPubkey, receipt.type)
+          : null
+      const nextStatus =
+        !message.isMine && fromPubkey === myPubkey && shouldAdvanceStatus(message.status, receipt.type)
+          ? receipt.type
+          : message.status
+      if (!nextRecipientStatuses && nextStatus === message.status) continue
+
+      updated[index] = {
+        ...message,
+        status: nextStatus,
+        ...(nextRecipientStatuses && { recipientStatuses: nextRecipientStatuses }),
+      }
+      if (nextStatus && nextStatus !== message.status) {
+        changedStatuses.push({ messageId, status: nextStatus })
+      }
+      if (nextRecipientStatuses) {
+        changedRecipientStatuses.push({ messageId, recipientStatuses: nextRecipientStatuses })
+      }
+      changed = true
+    }
+
+    if (!changed) return gm
+    gm.set(groupId, updated)
+    return gm
+  })
+
+  for (const { messageId, status } of changedStatuses) {
+    updateMessageStatusInDb(messageId, status)
+  }
+  for (const { messageId, recipientStatuses } of changedRecipientStatuses) {
+    updateMessageRecipientStatusesInDb(messageId, recipientStatuses)
+  }
+}
+
+function sendGroupReceipt(groupId: string, type: MessageStatus, messageIds: string[]): void {
+  if (messageIds.length === 0) return
+  void sendNativeGroupEvent(
+    groupId,
+    {
+      content: type,
+      kind: RECEIPT_KIND,
+      tags: messageIds.map((messageId) => ['e', messageId]),
+    },
+    { includeSelfPairwiseCopy: true },
+  ).catch((error) => {
+    console.error('[groups] Failed to send group receipt:', error)
+  })
+}
+
 async function saveGroupMessageToStorage(groupId: string, message: GroupMessage): Promise<void> {
   try {
     const reactions = message.reactions
@@ -869,6 +1024,10 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
       reactions,
       status: message.status,
       ...(message.sentToRelays && { sentToRelays: message.sentToRelays }),
+      ...(message.recipientStatuses && { recipientStatuses: message.recipientStatuses }),
+      ...(message.deliveryChannels && { deliveryChannels: message.deliveryChannels }),
+      ...(message.outerEventIds && { outerEventIds: message.outerEventIds }),
+      ...(message.pendingRelayEventIds && { pendingRelayEventIds: message.pendingRelayEventIds }),
       senderPubkey: message.senderPubkey,
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
@@ -912,6 +1071,10 @@ export async function loadGroupsFromStorage(): Promise<void> {
           reactions: m.reactions,
           status: m.status,
           ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
+          ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
+          ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),
+          ...(m.outerEventIds && { outerEventIds: m.outerEventIds }),
+          ...(m.pendingRelayEventIds && { pendingRelayEventIds: m.pendingRelayEventIds }),
           ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
         }))
         .sort((a, b) => a.timestamp - b.timestamp)
@@ -939,6 +1102,7 @@ export async function loadGroupsFromStorage(): Promise<void> {
 export function markGroupMessagesSeen(groupId: string, messageIds: string[]): void {
   if (messageIds.length === 0) return
   const idSet = new Set(messageIds)
+  const toAck: string[] = []
 
   groupMessages.update((gm) => {
     const msgs = gm.get(groupId) || []
@@ -948,7 +1112,7 @@ export function markGroupMessagesSeen(groupId: string, messageIds: string[]): vo
     const updated = msgs.map((m) => {
       if (!m.isMine && idSet.has(m.id) && m.status !== 'seen') {
         changed = true
-        // Persist status for local unread tracking (no receipts for groups).
+        toAck.push(m.id)
         updateMessageStatusInDb(m.id, 'seen')
         return { ...m, status: 'seen' as const }
       }
@@ -959,6 +1123,11 @@ export function markGroupMessagesSeen(groupId: string, messageIds: string[]): vo
     gm.set(groupId, updated)
     return gm
   })
+
+  const group = get(groups).get(groupId)
+  if (toAck.length > 0 && group?.accepted !== false && get(receiptSettings).sendReadReceipts) {
+    sendGroupReceipt(groupId, 'seen', toAck)
+  }
 }
 
 export async function deleteGroup(groupId: string): Promise<void> {

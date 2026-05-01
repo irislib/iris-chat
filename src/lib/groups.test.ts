@@ -215,7 +215,10 @@ vi.mock('./storage', () => ({
   getMessagesForSession: vi.fn().mockResolvedValue([]),
   deleteMessage: vi.fn().mockResolvedValue(undefined),
   deleteMessagesForSession: vi.fn().mockResolvedValue(undefined),
+  updateMessageStatus: vi.fn().mockResolvedValue(undefined),
   updateMessageSentToRelays: vi.fn().mockResolvedValue(undefined),
+  updateMessageRecipientStatuses: vi.fn().mockResolvedValue(undefined),
+  updateMessageDeliveryTrace: vi.fn().mockResolvedValue(undefined),
   getSessionManagerValue: vi.fn((key: string) => Promise.resolve(sessionManagerValues.get(key))),
   putSessionManagerValue: vi.fn((key: string, value: unknown) => {
     sessionManagerValues.set(key, value)
@@ -742,13 +745,15 @@ describe('groups', () => {
       const group = await createGroup('Recv Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'Hi from B!', MEMBER_B)
-      handleGroupEvent(rumor, MEMBER_B)
+      handleGroupEvent(rumor, MEMBER_B, { id: 'outer-b' })
 
       const msgs = get(groupMessages).get(group.id)!
       const incoming = msgs.find(m => m.content === 'Hi from B!')
       expect(incoming).toBeDefined()
       expect(incoming!.isMine).toBe(false)
       expect(incoming!.senderPubkey).toBe(MEMBER_B)
+      expect(incoming!.deliveryChannels).toEqual(['message servers'])
+      expect(incoming!.outerEventIds).toEqual(['outer-b'])
     })
 
     it('deduplicates messages by id', async () => {
@@ -788,6 +793,23 @@ describe('groups', () => {
       expect(echo).toBeDefined()
       expect(echo!.isMine).toBe(true)
       expect(echo!.senderPubkey).toBe(MY_PUBKEY)
+    })
+
+    it('tracks group receipts per recipient', async () => {
+      const { createGroup, sendGroupMessage, handleGroupEvent, groupMessages } = await import('./groups')
+      const group = await createGroup('Receipt Test', [MEMBER_B, MEMBER_C])
+
+      sendGroupMessage(group.id, 'Needs receipt')
+      await vi.waitFor(() => {
+        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^inner-/)
+      })
+      const messageId = get(groupMessages).get(group.id)![0].id
+
+      handleGroupEvent(makeReceiptRumor(group.id, 'seen', [messageId], MEMBER_B), MEMBER_B)
+
+      expect(get(groupMessages).get(group.id)![0].recipientStatuses).toEqual({
+        [MEMBER_B]: 'seen',
+      })
     })
 
     it('sets typing indicator for group typing rumor', async () => {
@@ -1052,6 +1074,22 @@ function makeMessageRumor(groupId: string, content: string, pubkey: string): Rum
     pubkey,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['l', groupId]],
+  } as Rumor
+}
+
+function makeReceiptRumor(
+  groupId: string,
+  content: 'delivered' | 'seen',
+  messageIds: string[],
+  pubkey: string,
+): Rumor {
+  return {
+    id: Math.random().toString(36).slice(2),
+    kind: 15,
+    content,
+    pubkey,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['l', groupId], ...messageIds.map((messageId) => ['e', messageId])],
   } as Rumor
 }
 

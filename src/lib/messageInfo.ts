@@ -1,4 +1,4 @@
-import type { ChatMessage } from './chat'
+import type { ChatMessage, RecipientDeliveryStatus } from './chat'
 import type { MessageStatus } from './receipts'
 
 export type MessageInfoScope = 'dm' | 'group' | 'unknown'
@@ -12,13 +12,20 @@ export interface MessageInfoContext {
 export interface MessageInfoInput {
   isMine: boolean
   status?: MessageStatus
+  recipientStatuses?: Record<string, RecipientDeliveryStatus>
   senderPubkey?: string
+}
+
+export interface RecipientReceiptRow {
+  pubkey: string
+  status: RecipientDeliveryStatus | 'waiting'
 }
 
 export interface MessageReceiptInfo {
   scope: MessageInfoScope
   participants: string[]
   potentialRecipients: string[]
+  recipientRows: RecipientReceiptRow[]
   receivedBy: string[]
   seenBy: string[]
   notes: string[]
@@ -75,16 +82,24 @@ function resolveSenderPubkey(
   return null
 }
 
-function hasDelivered(status: MessageStatus | undefined): boolean {
+function hasDelivered(status: RecipientDeliveryStatus | undefined): boolean {
   return status === 'delivered' || status === 'seen'
 }
 
-function hasSeen(status: MessageStatus | undefined): boolean {
+function hasSeen(status: RecipientDeliveryStatus | undefined): boolean {
+  return status === 'seen'
+}
+
+function hasRecipientDelivered(status: RecipientDeliveryStatus | 'waiting' | undefined): boolean {
+  return status === 'delivered' || status === 'seen'
+}
+
+function hasRecipientSeen(status: RecipientDeliveryStatus | 'waiting' | undefined): boolean {
   return status === 'seen'
 }
 
 export function deriveMessageReceiptInfo(
-  message: MessageInfoInput | Pick<ChatMessage, 'isMine' | 'status' | 'senderPubkey'>,
+  message: MessageInfoInput | Pick<ChatMessage, 'isMine' | 'status' | 'recipientStatuses' | 'senderPubkey'>,
   context: MessageInfoContext
 ): MessageReceiptInfo {
   const scope = getScope(context)
@@ -103,30 +118,55 @@ export function deriveMessageReceiptInfo(
 
   const receivedBy: string[] = []
   const seenBy: string[] = []
+  const explicitRecipientStatuses = message.recipientStatuses || {}
+  let recipientRows: RecipientReceiptRow[] = []
 
   if (scope === 'group') {
+    recipientRows = potentialRecipients.map((pubkey) => ({
+      pubkey,
+      status:
+        !message.isMine && pubkey === context.myPubkey
+          ? message.status || 'delivered'
+          : explicitRecipientStatuses[pubkey] || 'waiting',
+    }))
+    for (const row of recipientRows) {
+      if (hasRecipientDelivered(row.status)) receivedBy.push(row.pubkey)
+      if (hasRecipientSeen(row.status)) seenBy.push(row.pubkey)
+    }
+
     if (!message.isMine && context.myPubkey) {
       receivedBy.push(context.myPubkey)
       if (hasSeen(message.status)) {
         seenBy.push(context.myPubkey)
       }
     }
-
-    notes.push('Group chats currently expose only local seen state.')
-    notes.push('Remote per-member delivery/read receipts are not tracked yet.')
   } else if (scope === 'dm') {
     if (message.isMine) {
-      if (hasDelivered(message.status) && context.recipientPubkey) {
+      const recipientStatus = context.recipientPubkey
+        ? explicitRecipientStatuses[context.recipientPubkey]
+        : undefined
+      const effectiveStatus = recipientStatus === 'sent' ? message.status : (recipientStatus || message.status)
+      if (context.recipientPubkey) {
+        recipientRows = [{
+          pubkey: context.recipientPubkey,
+          status: effectiveStatus || 'waiting',
+        }]
+      }
+      if (hasDelivered(effectiveStatus) && context.recipientPubkey) {
         receivedBy.push(context.recipientPubkey)
       }
-      if (hasSeen(message.status) && context.recipientPubkey) {
+      if (hasSeen(effectiveStatus) && context.recipientPubkey) {
         seenBy.push(context.recipientPubkey)
       }
 
-      if (!hasDelivered(message.status)) {
+      if (!hasDelivered(effectiveStatus)) {
         notes.push('No delivery receipt yet.')
       }
     } else if (context.myPubkey) {
+      recipientRows = [{
+        pubkey: context.myPubkey,
+        status: message.status || 'delivered',
+      }]
       receivedBy.push(context.myPubkey)
       if (hasSeen(message.status)) {
         seenBy.push(context.myPubkey)
@@ -134,6 +174,10 @@ export function deriveMessageReceiptInfo(
     }
   } else {
     if (!message.isMine && context.myPubkey) {
+      recipientRows = [{
+        pubkey: context.myPubkey,
+        status: message.status || 'delivered',
+      }]
       receivedBy.push(context.myPubkey)
       if (hasSeen(message.status)) {
         seenBy.push(context.myPubkey)
@@ -146,6 +190,7 @@ export function deriveMessageReceiptInfo(
     scope,
     participants,
     potentialRecipients,
+    recipientRows,
     receivedBy: uniquePubkeys(receivedBy),
     seenBy: uniquePubkeys(seenBy),
     notes: [...new Set(notes)],

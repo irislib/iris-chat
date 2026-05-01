@@ -44,6 +44,8 @@ vi.mock('./storage', () => ({
   updateInviteLabel: vi.fn().mockResolvedValue(undefined),
   addInviteUsedBy: vi.fn().mockResolvedValue(undefined),
   updateMessageStatus: vi.fn().mockResolvedValue(undefined),
+  updateMessageRecipientStatuses: vi.fn().mockResolvedValue(undefined),
+  updateMessageDeliveryTrace: vi.fn().mockResolvedValue(undefined),
   saveProcessedEvent: vi.fn(),
 }))
 
