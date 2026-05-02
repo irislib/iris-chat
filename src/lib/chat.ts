@@ -9,12 +9,17 @@ import {
   RECEIPT_KIND,
   CHAT_MESSAGE_KIND,
   CHAT_SETTINGS_KIND,
+  buildReactionRumor,
+  buildReceiptRumor,
+  buildTextRumor,
+  buildTypingRumor,
+  ensureRecipientTag,
   parseReaction,
   isTyping,
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
 export type { Invite } from 'nostr-double-ratchet'
-import { getEventHash, nip19 } from 'nostr-tools'
+import { nip19 } from 'nostr-tools'
 import { getPubkey, hasNip44Support, isNip07Login } from './identity'
 import { devices } from './devices'
 import {
@@ -1453,31 +1458,11 @@ function getManagerRumorAuthorPubkey(): string {
   throw new Error('Not logged in')
 }
 
-function buildManagerRumor(recipientPubkey: string, partial: Partial<Rumor>): Rumor {
-  const myPubkey = getManagerRumorAuthorPubkey()
-
-  const now = Date.now()
-  const tags = [...(partial.tags || [])]
-
-  if (!tags.some((t) => t[0] === 'p' && t[1] === recipientPubkey)) {
-    tags.unshift(['p', recipientPubkey])
+function buildManagerRumorOptions(recipientPubkey: string, tags: string[][] = []) {
+  return {
+    pubkey: getManagerRumorAuthorPubkey(),
+    tags: ensureRecipientTag(tags, recipientPubkey),
   }
-
-  if (!tags.some((t) => t[0] === 'ms')) {
-    tags.push(['ms', String(now)])
-  }
-
-  const rumor: Rumor = {
-    content: partial.content || '',
-    kind: partial.kind || CHAT_MESSAGE_KIND,
-    created_at: partial.created_at || Math.floor(now / 1000),
-    tags,
-    pubkey: myPubkey,
-    id: '',
-  }
-
-  rumor.id = getEventHash(rumor)
-  return rumor
 }
 
 // Send a receipt via the double ratchet session
@@ -1486,7 +1471,14 @@ function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messa
 
   void ensureDeviceRegistered()
     .then(() =>
-      getNdrRuntime().sendReceipt(chatSession.recipientPubkey, type, messageIds)
+      getNdrRuntime().sendEvent(
+        chatSession.recipientPubkey,
+        buildReceiptRumor(
+          type,
+          messageIds,
+          buildManagerRumorOptions(chatSession.recipientPubkey)
+        )
+      )
     )
     .catch((e) => console.error('[chat] NdrRuntime not ready for receipt:', e))
 }
@@ -1533,13 +1525,11 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     tags.push(['e', replyTo, '', 'reply'])
   }
 
-  let messageId = ''
-  const rumor = buildManagerRumor(chatSession.recipientPubkey, {
-    content: text,
-    kind: CHAT_MESSAGE_KIND,
-    tags,
-  })
-  messageId = rumor.id
+  const rumor = buildTextRumor(
+    text,
+    buildManagerRumorOptions(chatSession.recipientPubkey, tags)
+  )
+  const messageId = rumor.id
   // Always await device registration + runtime init. It is possible to have a
   // non-null manager while init is still in progress, and an unregistered owner-side
   // device cannot be trusted by linked recipients for multidevice fanout.
@@ -1583,11 +1573,11 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
 
 // Send a reaction to a message
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
-  const rumor = buildManagerRumor(chatSession.recipientPubkey, {
-    content: emoji,
-    kind: REACTION_KIND,
-    tags: [['e', messageId]],
-  })
+  const rumor = buildReactionRumor(
+    messageId,
+    emoji,
+    buildManagerRumorOptions(chatSession.recipientPubkey)
+  )
   void ensureDeviceRegistered()
     .then(() => getNdrRuntime().sendEvent(chatSession.recipientPubkey, rumor))
     .catch((e) => console.error('[chat] Failed to send reaction via NdrRuntime:', e))
@@ -1808,7 +1798,12 @@ export function sendTypingEvent(chatSession: ChatSession): void {
   if (!isChatAccepted(chatSession, policyCtx)) return
 
   void ensureDeviceRegistered()
-    .then(() => getNdrRuntime().sendTyping(chatSession.recipientPubkey))
+    .then(() =>
+      getNdrRuntime().sendEvent(
+        chatSession.recipientPubkey,
+        buildTypingRumor(buildManagerRumorOptions(chatSession.recipientPubkey))
+      )
+    )
     .catch((e) => console.error('[chat] NdrRuntime not ready for typing:', e))
 }
 
