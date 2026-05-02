@@ -1,5 +1,5 @@
 import { test, expect, useTestRelay } from './fixtures'
-import { generateSecretKey } from 'nostr-tools'
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
@@ -178,7 +178,7 @@ async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link invite').fill(inviteUrl)
-  await expect(page.getByText('Device linked')).toBeVisible({ timeout: 20000 })
+  await expect(page.getByText('Device linked', { exact: true })).toBeVisible({ timeout: 20000 })
   await page.locator('button[aria-label="Close"]').click()
   await page.getByRole('button', { name: 'Back' }).click()
 }
@@ -249,11 +249,16 @@ test('syncs outgoing messages to another device', async ({ browser, testRelayUrl
 })
 
 test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
+  const ownerPrivkey = generateSecretKey()
+  const ownerPubkey = getPublicKey(ownerPrivkey)
+  const ownerPrivkeyHex = toHex(ownerPrivkey)
+
   const contextOwner = await browser.newContext()
   const contextLinked = await browser.newContext()
 
   await useTestRelay(contextOwner, testRelayUrl)
   await useTestRelay(contextLinked, testRelayUrl)
+  await setIdentity(contextOwner, ownerPrivkeyHex)
   await contextLinked.addInitScript(() => {
     localStorage.removeItem('iris-chat-identity')
   })
@@ -262,9 +267,7 @@ test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
   const linkedPage = await contextLinked.newPage()
 
   try {
-    await ownerPage.goto('/')
-    await ownerPage.getByRole('button', { name: 'Go' }).click()
-    await expect(ownerPage.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 10000 })
+    await loginWithStoredKey(ownerPage)
 
     await registerDevice(ownerPage)
 
@@ -275,9 +278,8 @@ test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
     await expect(linkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 20000 })
 
     await ownerPage.getByRole('button', { name: 'New Chat' }).click()
-    const inviteUrl = await getInviteUrl(ownerPage)
-
-    await ownerPage.getByPlaceholder('Paste invite link').fill(inviteUrl)
+    const selfInviteUrl = `http://localhost:4173/#${nip19.npubEncode(ownerPubkey)}`
+    await ownerPage.getByPlaceholder('Paste invite link').fill(selfInviteUrl)
     await expect(ownerPage.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 15000 })
 
     const message = 'Hello to myself'

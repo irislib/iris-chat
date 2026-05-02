@@ -328,6 +328,139 @@ describe('handleManagerEvent', () => {
     expect(chatMap.get(MY_PUBKEY)).toBeUndefined()
   })
 
+  it('keeps self-origin copies in the peer chat when stale device records map the peer to self', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const OWN_OTHER_DEVICE = 'd'.repeat(64)
+
+    chats.set(
+      new Map([
+        [
+          PEER_PUBKEY,
+          {
+            id: PEER_PUBKEY,
+            recipientPubkey: PEER_PUBKEY,
+            mode: 'manager',
+            messages: [
+              {
+                id: 'old-peer-message',
+                content: 'old peer message',
+                timestamp: 1,
+                isMine: false,
+              },
+            ],
+          },
+        ],
+      ])
+    )
+
+    sessionState.manager = {
+      getUserRecords: () =>
+        new Map([
+          [
+            MY_PUBKEY,
+            {
+              devices: new Map([
+                [
+                  PEER_PUBKEY,
+                  {
+                    activeSession: null,
+                    inactiveSessions: [],
+                  },
+                ],
+              ]),
+              appKeys: {
+                getAllDevices: () => [{ identityPubkey: PEER_PUBKEY }],
+              },
+            },
+          ],
+        ]),
+    }
+
+    const rumor = {
+      id: 'msg-self-peer-stale-owner-map',
+      pubkey: OWN_OTHER_DEVICE,
+      content: 'hello peer despite stale owner map',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', PEER_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, OWN_OTHER_DEVICE, {
+      isSelf: true,
+      isCrossDeviceSelf: true,
+      senderOwnerPubkey: MY_PUBKEY,
+      senderDevicePubkey: OWN_OTHER_DEVICE,
+      fromDeviceId: OWN_OTHER_DEVICE,
+      origin: 'same-owner-other-device',
+    })
+
+    const chatMap = get(chats)
+    const peerChat = chatMap.get(PEER_PUBKEY)
+
+    expect(peerChat).toBeTruthy()
+    expect(chatMap.get(MY_PUBKEY)).toBeUndefined()
+    expect(peerChat?.messages.map((message) => message.content)).toEqual([
+      'old peer message',
+      'hello peer despite stale owner map',
+    ])
+    expect(peerChat?.messages[1].isMine).toBe(true)
+  })
+
+  it('keeps authenticated remote-owner messages out of self chat when stale records map the peer to self', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+
+    sessionState.manager = {
+      getUserRecords: () =>
+        new Map([
+          [
+            MY_PUBKEY,
+            {
+              devices: new Map([
+                [
+                  PEER_PUBKEY,
+                  {
+                    activeSession: null,
+                    inactiveSessions: [],
+                  },
+                ],
+              ]),
+              appKeys: {
+                getAllDevices: () => [{ identityPubkey: PEER_PUBKEY }],
+              },
+            },
+          ],
+        ]),
+    }
+
+    const rumor = {
+      id: 'msg-peer-stale-owner-map',
+      pubkey: PEER_PUBKEY,
+      content: 'remote peer should stay remote',
+      kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['p', MY_PUBKEY], ['ms', String(Date.now())]],
+    }
+
+    await handleManagerEvent(rumor as never, PEER_PUBKEY, {
+      senderOwnerPubkey: PEER_PUBKEY,
+      senderDevicePubkey: PEER_PUBKEY,
+      fromDeviceId: PEER_PUBKEY,
+      origin: 'remote-owner',
+      isSelf: false,
+      isCrossDeviceSelf: false,
+    })
+
+    const chatMap = get(chats)
+    const peerChat = chatMap.get(PEER_PUBKEY)
+
+    expect(peerChat).toBeTruthy()
+    expect(chatMap.get(MY_PUBKEY)).toBeUndefined()
+    expect(peerChat?.messages[0]).toMatchObject({
+      content: 'remote peer should stay remote',
+      isMine: false,
+    })
+  })
+
   it('marks self-targeted sender copies from another client as mine when sender owner resolves to us', async () => {
     const OWN_OTHER_DEVICE = 'd'.repeat(64)
 

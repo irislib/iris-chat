@@ -221,10 +221,31 @@ function canonicalizeManagerChatAlias(chatId: string, canonicalId: string): void
   void persistCanonicalizedChat(chatId, mergedChat)
 }
 
-function canonicalizeKnownManagerChats(): void {
+function shouldSkipSelfCanonicalization(
+  chatId: string,
+  canonicalId: string,
+  myPubkey?: string,
+  authenticatedRemoteOwner?: string
+): boolean {
+  if (!myPubkey || canonicalId !== myPubkey || chatId === myPubkey) {
+    return false
+  }
+  if (authenticatedRemoteOwner && chatId === authenticatedRemoteOwner) {
+    return true
+  }
+  return !isKnownOwnDevice(chatId)
+}
+
+function canonicalizeKnownManagerChats(
+  myPubkey?: string,
+  authenticatedRemoteOwner?: string
+): void {
   const currentChats = Array.from(get(chats).keys())
   for (const chatId of currentChats) {
     const canonicalId = resolveSessionPubkeyToOwner(chatId)
+    if (shouldSkipSelfCanonicalization(chatId, canonicalId, myPubkey, authenticatedRemoteOwner)) {
+      continue
+    }
     if (canonicalId !== chatId) {
       canonicalizeManagerChatAlias(chatId, canonicalId)
     }
@@ -1015,10 +1036,26 @@ function resolveSessionPubkeyToOwner(pubkey: string): string {
 
 function isKnownOwnDevice(pubkey: string): boolean {
   const deviceState = get(devices)
+  const runtimeState = getNdrRuntime().getState()
   return (
     deviceState.identityPubkey === pubkey ||
-    deviceState.registeredDevices.some((device) => device.identityPubkey === pubkey)
+    deviceState.registeredDevices.some((device) => device.identityPubkey === pubkey) ||
+    runtimeState.currentDevicePubkey === pubkey ||
+    (runtimeState.registeredDevices?.some((device) => device.identityPubkey === pubkey) ?? false)
   )
+}
+
+function firstPubkeyTag(rumor: Rumor): string | undefined {
+  const raw = rumor.tags?.find((t: string[]) => t[0] === 'p')?.[1]?.trim()
+  return raw || undefined
+}
+
+function resolvePeerTagForChat(rawPeerTag: string, myPubkey: string): string {
+  const resolvedPeer = resolveSessionPubkeyToOwner(rawPeerTag)
+  if (resolvedPeer && resolvedPeer !== myPubkey) {
+    return resolvedPeer
+  }
+  return rawPeerTag
 }
 
 function resolveManagerIsFromSelf(
@@ -1030,12 +1067,13 @@ function resolveManagerIsFromSelf(
 ): boolean {
   if (meta?.isSelf) return true
   if (meta?.senderOwnerPubkey === myPubkey) return true
+  if (meta?.senderOwnerPubkey && meta.senderOwnerPubkey !== myPubkey) return false
   if (effectiveFromPubkey === myPubkey) return true
   if (rumor.pubkey === myPubkey) return true
   if (isKnownOwnDevice(rumor.pubkey)) return true
 
-  const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')?.[1]
-  const resolvedPTag = pTag ? resolveSessionPubkeyToOwner(pTag) : undefined
+  const pTag = firstPubkeyTag(rumor)
+  const resolvedPTag = pTag ? resolvePeerTagForChat(pTag, myPubkey) : undefined
   // Sender copies from another client can be surfaced via the peer user record.
   return !!resolvedPTag && resolvedPTag !== myPubkey && resolvedPTag === chatId
 }
@@ -1050,41 +1088,64 @@ export async function handleManagerEvent(
 
   const effectiveFromPubkey = resolveManagerSender(fromPubkey, myPubkey)
   const resolvedFromPubkey = resolveSessionPubkeyToOwner(effectiveFromPubkey)
+  const authenticatedRemoteOwner =
+    meta?.senderOwnerPubkey && meta.senderOwnerPubkey !== myPubkey
+      ? meta.senderOwnerPubkey
+      : undefined
 
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (groupTag) {
     return
   }
 
-  let chatId = resolvedFromPubkey
+  let chatId = authenticatedRemoteOwner || resolvedFromPubkey
   const senderResolvesToSelf =
-    meta?.isSelf === true ||
-    meta?.senderOwnerPubkey === myPubkey ||
-    effectiveFromPubkey === myPubkey ||
-    resolvedFromPubkey === myPubkey
+    !authenticatedRemoteOwner &&
+    (meta?.isSelf === true ||
+      meta?.senderOwnerPubkey === myPubkey ||
+      effectiveFromPubkey === myPubkey ||
+      resolvedFromPubkey === myPubkey)
 
   if (senderResolvesToSelf) {
-    const pTag = rumor.tags?.find((t: string[]) => t[0] === 'p')
-    const resolvedPTag = pTag?.[1] ? resolveSessionPubkeyToOwner(pTag[1]) : undefined
-    if (resolvedPTag && resolvedPTag !== myPubkey) {
+    const pTag = firstPubkeyTag(rumor)
+    const resolvedPTag = pTag ? resolvePeerTagForChat(pTag, myPubkey) : undefined
+    if (pTag && pTag !== myPubkey && resolvedPTag && resolvedPTag !== myPubkey) {
       chatId = resolvedPTag
+    } else if (pTag && pTag !== myPubkey) {
+      chatId = pTag
     } else {
       // Self-message (p-tag is us or missing): route to self chat
       chatId = myPubkey
     }
   }
 
-  canonicalizeKnownManagerChats()
+  canonicalizeKnownManagerChats(myPubkey, authenticatedRemoteOwner)
   const canonicalFromPubkey = resolveSessionPubkeyToOwner(fromPubkey)
-  if (canonicalFromPubkey !== fromPubkey) {
+  if (
+    canonicalFromPubkey !== fromPubkey &&
+    !shouldSkipSelfCanonicalization(
+      fromPubkey,
+      canonicalFromPubkey,
+      myPubkey,
+      authenticatedRemoteOwner
+    )
+  ) {
     canonicalizeManagerChatAlias(fromPubkey, canonicalFromPubkey)
   }
   if (effectiveFromPubkey !== chatId) {
     const canonicalEffectiveFromPubkey = resolveSessionPubkeyToOwner(effectiveFromPubkey)
-    canonicalizeManagerChatAlias(
-      effectiveFromPubkey,
+    const canonicalEffectiveChatId =
       canonicalEffectiveFromPubkey === myPubkey ? chatId : canonicalEffectiveFromPubkey
-    )
+    if (
+      !shouldSkipSelfCanonicalization(
+        effectiveFromPubkey,
+        canonicalEffectiveChatId,
+        myPubkey,
+        authenticatedRemoteOwner
+      )
+    ) {
+      canonicalizeManagerChatAlias(effectiveFromPubkey, canonicalEffectiveChatId)
+    }
   }
 
   const isFromSelf = resolveManagerIsFromSelf(
