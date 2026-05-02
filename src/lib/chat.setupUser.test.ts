@@ -20,6 +20,7 @@ function makeDeviceRecord(
     activeSession: undefined,
     inactiveSessions: [],
     createdAt: 0,
+    prepareOutboundEvent: () => undefined,
     ...overrides,
   }
 }
