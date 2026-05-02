@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "2.6.4",
+  "version": "2.6.5",
   "type": "module",
   "description": "Decentralized encrypted messaging over Nostr",
   "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
@@ -55,7 +55,7 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "^0.0.129",
+    "nostr-double-ratchet": "^0.0.130",
     "nostr-tools": "^2.19.3",
     "qrcode": "^1.5.4"
   },
