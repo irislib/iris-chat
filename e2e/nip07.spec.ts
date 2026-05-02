@@ -62,7 +62,7 @@ test.describe('NIP-07 Login', () => {
     // Click New Chat
     await page.getByRole('button', { name: 'New Chat' }).click()
 
-    // Invite creation now waits for current-device registration under NIP-07.
+    // Invite creation must not stay stuck on current-device relay registration.
     const copyButton = page.locator('button[title*="#"]').first()
     await expect(copyButton).toBeVisible({ timeout: 15000 })
     await expect(page.locator('text=Creating invite...')).not.toBeVisible({ timeout: 15000 })

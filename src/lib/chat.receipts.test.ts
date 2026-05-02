@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     updateMessageRecipientStatuses: vi.fn().mockResolvedValue(undefined),
     updateMessageDeliveryTrace: vi.fn().mockResolvedValue(undefined),
     ensureDeviceRegistered: vi.fn().mockResolvedValue(undefined),
+    runtimeSendEvent: vi.fn().mockResolvedValue(undefined),
     waitForPeerSendReadySessionManager: vi
       .fn()
       .mockRejectedValue(new Error('manager unavailable in test')),
@@ -83,8 +84,11 @@ vi.mock('./privateChats', () => ({
     mocks.waitForPeerSendReadySessionManager(...args),
   preparePeerNdrRuntime: (...args: [string]) =>
     mocks.waitForPeerSendReadySessionManager(...args),
+  waitForNdrRuntime: async () => ({
+    sendEvent: (...args: [string, unknown]) => mocks.runtimeSendEvent(...args),
+  }),
   getNdrRuntime: () => ({
-    sendEvent: vi.fn().mockResolvedValue(undefined),
+    sendEvent: (...args: [string, unknown]) => mocks.runtimeSendEvent(...args),
     sendReceipt: vi.fn().mockResolvedValue(undefined),
     getState: () => ({ currentDevicePubkey: MY_PUBKEY, sessionManagerReady: true }),
     getSessionUserRecords: () => mocks.getUserRecords(),
@@ -160,6 +164,8 @@ beforeEach(() => {
   mocks.updateMessageDeliveryTrace.mockClear()
   mocks.ensureDeviceRegistered.mockClear()
   mocks.ensureDeviceRegistered.mockResolvedValue(undefined)
+  mocks.runtimeSendEvent.mockClear()
+  mocks.runtimeSendEvent.mockResolvedValue(undefined)
   mocks.waitForPeerSendReadySessionManager.mockClear()
   mocks.setUserRecords(new Map())
 })

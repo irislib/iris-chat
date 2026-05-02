@@ -163,23 +163,16 @@ function defer<T>() {
 }
 
 describe('Invite Parsing / Acceptance', () => {
-  it('createAndSaveInvite waits for device registration and stores the delegate invite', async () => {
+  it('createAndSaveInvite stores the delegate invite without waiting for relay registration', async () => {
     const registration = defer<void>()
     mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)
 
-    const invitePromise = createAndSaveInvite('Test invite')
-    let settled = false
-    void invitePromise.then(() => {
-      settled = true
-    })
-
-    await new Promise((resolve) => setTimeout(resolve, 25))
-
-    expect(settled).toBe(false)
-    expect(saveInvite).not.toHaveBeenCalled()
-
-    registration.resolve()
-    const invite = await invitePromise
+    const invite = await Promise.race([
+      createAndSaveInvite('Test invite'),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 25)
+      ),
+    ])
 
     expect(invite.label).toBe('Test invite')
     expect(invite.invite.type).toBe('legacy')
@@ -188,6 +181,9 @@ describe('Invite Parsing / Acceptance', () => {
     }
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
     expect(saveInvite).toHaveBeenCalledTimes(1)
+
+    registration.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
 
   it('parses #/npub... style invite URLs', () => {
@@ -288,7 +284,7 @@ describe('Invite Parsing / Acceptance', () => {
     await vi.waitFor(() => expect(managerAccept).toHaveBeenCalledTimes(1))
   })
 
-  it('acceptInvite(legacy) should wait for device registration before publishing owner claims', async () => {
+  it('acceptInvite(legacy) should open without waiting for relay registration', async () => {
     const ownerPubkey = 'h'.repeat(64)
     const devicePubkey = 'i'.repeat(64)
     const registration = defer<void>()
@@ -304,23 +300,20 @@ describe('Invite Parsing / Acceptance', () => {
     const legacyInvite = Invite.createNew(devicePubkey)
     legacyInvite.ownerPubkey = ownerPubkey
 
-    const acceptancePromise = acceptInvite({ type: 'legacy', invite: legacyInvite })
-    let settled = false
-    void acceptancePromise.then(() => {
-      settled = true
-    })
+    const session = await Promise.race([
+      acceptInvite({ type: 'legacy', invite: legacyInvite }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 25)
+      ),
+    ])
 
-    await new Promise((resolve) => setTimeout(resolve, 25))
-
-    expect(settled).toBe(false)
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
-    expect(managerAccept).not.toHaveBeenCalled()
-
-    registration.resolve()
-    const session = await acceptancePromise
     expect(session.id).toBe(ownerPubkey)
     expect(get(chats).has(ownerPubkey)).toBe(true)
     expect(managerAccept).toHaveBeenCalledTimes(1)
+
+    registration.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
 
   it('acceptInvite(legacy) should surface handshake errors', async () => {

@@ -508,12 +508,13 @@ export async function createInvite(): Promise<ChatInvite> {
   const pubkey = getPubkey()
   if (!pubkey) throw new Error('Not logged in')
 
-  await ensureDeviceRegistered()
   const runtime = await waitForNdrRuntime()
   const delegateInvite = runtime.getDelegateManager()?.getInvite()
   if (!delegateInvite) {
     throw new Error('Invite is not ready')
   }
+
+  registerDeviceInBackground('creating invite')
 
   const invite = Invite.deserialize(delegateInvite.serialize())
   invite.ownerPubkey = pubkey
@@ -1177,9 +1178,9 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     throw new Error('NIP-07 extension does not support NIP-44')
   }
 
-  // Legacy invite responses need a stable owner claim so the inviter can route
-  // the new session under the responder account rather than a transient device key.
-  await ensureDeviceRegistered()
+  // Legacy invite responses carry the owner claim; AppKeys relay verification
+  // can catch up after the chat opens instead of blocking invite acceptance.
+  registerDeviceInBackground('joining invite')
   const runtime = await waitForNdrRuntime()
   const accepted = await runtime.acceptInvite(invite.invite, { ownerPublicKey })
   const chatTarget = accepted.ownerPublicKey || ownerPublicKey
@@ -1465,22 +1466,36 @@ function buildManagerRumorOptions(recipientPubkey: string, tags: string[][] = []
   }
 }
 
+function registerDeviceInBackground(context: string): void {
+  void ensureDeviceRegistered().catch((e) =>
+    console.warn(`[chat] Device registration failed while ${context}:`, e)
+  )
+}
+
+function sendRuntimeEvent(
+  recipientPubkey: string,
+  event: Partial<Rumor>,
+  context: string
+): void {
+  registerDeviceInBackground(context)
+  void waitForNdrRuntime()
+    .then((runtime) => runtime.sendEvent(recipientPubkey, event))
+    .catch((e) => console.error(`[chat] Failed to ${context} via NdrRuntime:`, e))
+}
+
 // Send a receipt via the double ratchet session
 function sendReceipt(chatSession: ChatSession, type: 'delivered' | 'seen', messageIds: string[]): void {
   if (messageIds.length === 0) return
 
-  void ensureDeviceRegistered()
-    .then(() =>
-      getNdrRuntime().sendEvent(
-        chatSession.recipientPubkey,
-        buildReceiptRumor(
-          type,
-          messageIds,
-          buildManagerRumorOptions(chatSession.recipientPubkey)
-        )
-      )
-    )
-    .catch((e) => console.error('[chat] NdrRuntime not ready for receipt:', e))
+  sendRuntimeEvent(
+    chatSession.recipientPubkey,
+    buildReceiptRumor(
+      type,
+      messageIds,
+      buildManagerRumorOptions(chatSession.recipientPubkey)
+    ),
+    'send receipt'
+  )
 }
 
 // Send seen receipts for incoming messages - called from ChatView
@@ -1530,12 +1545,7 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     buildManagerRumorOptions(chatSession.recipientPubkey, tags)
   )
   const messageId = rumor.id
-  // Always await device registration + runtime init. It is possible to have a
-  // non-null manager while init is still in progress, and an unregistered owner-side
-  // device cannot be trusted by linked recipients for multidevice fanout.
-  void ensureDeviceRegistered()
-    .then(() => getNdrRuntime().sendEvent(chatSession.recipientPubkey, rumor))
-    .catch((e) => console.error('[chat] Failed to send via NdrRuntime:', e))
+  sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send message')
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1578,9 +1588,7 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
     emoji,
     buildManagerRumorOptions(chatSession.recipientPubkey)
   )
-  void ensureDeviceRegistered()
-    .then(() => getNdrRuntime().sendEvent(chatSession.recipientPubkey, rumor))
-    .catch((e) => console.error('[chat] Failed to send reaction via NdrRuntime:', e))
+  sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send reaction')
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1797,14 +1805,11 @@ export function sendTypingEvent(chatSession: ChatSession): void {
   const policyCtx = getMessageRequestPolicyContext()
   if (!isChatAccepted(chatSession, policyCtx)) return
 
-  void ensureDeviceRegistered()
-    .then(() =>
-      getNdrRuntime().sendEvent(
-        chatSession.recipientPubkey,
-        buildTypingRumor(buildManagerRumorOptions(chatSession.recipientPubkey))
-      )
-    )
-    .catch((e) => console.error('[chat] NdrRuntime not ready for typing:', e))
+  sendRuntimeEvent(
+    chatSession.recipientPubkey,
+    buildTypingRumor(buildManagerRumorOptions(chatSession.recipientPubkey)),
+    'send typing'
+  )
 }
 
 // Clear all chat data (for logout)

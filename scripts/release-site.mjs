@@ -200,6 +200,8 @@ export function createReleasePlan(options) {
         'src/portableBuildConfig.test.ts',
         'src/releaseSiteConfig.test.ts',
         'src/staticAssetsWorker.test.ts',
+        'src/lib/chat.invite.test.ts',
+        'src/lib/chat.self-message.test.ts',
       ],
       cwd: appDir,
     },
@@ -207,6 +209,12 @@ export function createReleasePlan(options) {
       id: 'test-smoke',
       label: `Smoke-test ${profile.appName} portable build`,
       command: ['pnpm', 'run', 'smoke:portable'],
+      cwd: appDir,
+    },
+    {
+      id: 'test-e2e-nip07',
+      label: `E2E-test ${profile.appName} NIP-07 invite flow`,
+      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/nip07.spec.ts'],
       cwd: appDir,
     },
     {

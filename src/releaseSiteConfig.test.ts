@@ -28,11 +28,21 @@ describe('release site config', () => {
     })
 
     const publishStep = plan.steps.find((step) => step.id === 'publish')
+    const portableTestStep = plan.steps.find((step) => step.id === 'test-portable')
 
     expect(publishStep?.command).toContain(defaultSiteTreeName)
     expect(publishStep?.command[0]).toBe('htree')
     expect(publishStep?.command).not.toContain('--manifest-path')
     expect(publishStep?.command).not.toContain('iris-chat')
+    expect(portableTestStep?.command).toContain('src/lib/chat.invite.test.ts')
+    expect(portableTestStep?.command).toContain('src/lib/chat.self-message.test.ts')
+    expect(plan.steps.find((step) => step.id === 'test-e2e-nip07')?.command).toEqual([
+      'pnpm',
+      'exec',
+      'playwright',
+      'test',
+      'e2e/nip07.spec.ts',
+    ])
   })
 
   it('runs hashtree publish and Cloudflare deploy in parallel after tests', async () => {
@@ -75,7 +85,14 @@ describe('release site config', () => {
       },
     )
 
-    expect(calls).toEqual(['build', 'test-portable', 'test-smoke', 'publish', 'deploy'])
+    expect(calls).toEqual([
+      'build',
+      'test-portable',
+      'test-smoke',
+      'test-e2e-nip07',
+      'publish',
+      'deploy',
+    ])
     expect(maxActiveReleaseSteps).toBe(2)
   })
 })
