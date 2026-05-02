@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
 import {
+  describeDeviceRosterDevice,
   describeRegisteredDevice,
   getLinkedDeviceRegistrationLabels,
   inferBrowserDeviceLabel,
@@ -54,5 +55,33 @@ describe('deviceLabels', () => {
       deviceLabel: 'Linked device',
       clientLabel: 'Iris Chat',
     })
+  })
+
+  it('shows the current device role with its label as supporting text', () => {
+    const pubkey = '3f1e1d1c1b1a19181716151413121110ffeeddccbbaa99887766554433221100'
+
+    const display = describeDeviceRosterDevice(
+      pubkey,
+      {
+        deviceLabel: 'Safari on Mac',
+        clientLabel: 'Iris Chat Web',
+      },
+      true
+    )
+
+    expect(display).toEqual({
+      title: 'This device',
+      subtitle: 'Safari on Mac · Iris Chat Web',
+    })
+  })
+
+  it('uses a linked-device role with an npub fallback when labels are absent', () => {
+    const pubkey = '4f1e1d1c1b1a19181716151413121110ffeeddccbbaa99887766554433221100'
+
+    const display = describeDeviceRosterDevice(pubkey, undefined, false)
+
+    expect(display.title).toBe('Linked device')
+    expect(display.subtitle).toMatch(/^npub1/)
+    expect(display.subtitle).not.toContain(pubkey.slice(0, 8))
   })
 })

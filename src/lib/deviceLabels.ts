@@ -3,9 +3,10 @@ import { nip19 } from 'nostr-tools'
 export interface DeviceLabels {
   deviceLabel?: string
   clientLabel?: string
+  updatedAt?: number
 }
 
-interface RegisteredDeviceDisplay {
+export interface RegisteredDeviceDisplay {
   title: string
   subtitle?: string
 }
@@ -106,4 +107,40 @@ export const describeRegisteredDevice = (
   }
 
   return { title: fallback }
+}
+
+export const describeDeviceRosterDevice = (
+  identityPubkey: string,
+  labels: DeviceLabels | undefined,
+  isCurrentDevice: boolean
+): RegisteredDeviceDisplay => {
+  const fallback = formatDeviceIdentifier(identityPubkey)
+  const deviceLabel = normalizeLabel(labels?.deviceLabel)
+  const clientLabel = normalizeLabel(labels?.clientLabel)
+
+  if (isCurrentDevice) {
+    return {
+      title: 'This device',
+      subtitle: [deviceLabel, clientLabel].filter(Boolean).join(' · ') || undefined,
+    }
+  }
+
+  if (deviceLabel) {
+    return {
+      title: deviceLabel,
+      subtitle: clientLabel,
+    }
+  }
+
+  if (clientLabel) {
+    return {
+      title: 'Linked device',
+      subtitle: clientLabel,
+    }
+  }
+
+  return {
+    title: 'Linked device',
+    subtitle: fallback,
+  }
 }

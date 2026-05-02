@@ -2,7 +2,7 @@ import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { NostrSubscribe } from 'nostr-double-ratchet'
 import { get } from 'svelte/store'
 import { devices } from './devices'
-import { identity, ndk } from './identity'
+import { getPrivkeyBytes, identity, ndk } from './identity'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { createProfileAppKeysStore } from './profileAppKeys'
 
@@ -26,10 +26,12 @@ const createNostrSubscribe = (): NostrSubscribe => {
 
 export const createRuntimeProfileAppKeysStore = (pubkey: string | undefined) => {
   const myPubkey = get(identity)?.pubkey
-  const initialDevices = pubkey && myPubkey === pubkey ? get(devices).registeredDevices : []
+  const isOwnProfile = !!pubkey && myPubkey === pubkey
+  const initialDevices = isOwnProfile ? get(devices).registeredDevices : []
 
   return createProfileAppKeysStore(pubkey, {
     subscribe: createNostrSubscribe(),
     initialDevices,
+    ownerPrivateKey: isOwnProfile ? getPrivkeyBytes() : undefined,
   })
 }

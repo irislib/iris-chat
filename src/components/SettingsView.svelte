@@ -17,7 +17,7 @@
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
   import { messageRequestSettings, setReceiveMessageRequests } from '../lib/messageRequestSettings'
   import { devices } from '../lib/devices'
-  import { describeRegisteredDevice } from '../lib/deviceLabels'
+  import { describeDeviceRosterDevice } from '../lib/deviceLabels'
   import { parseLinkInviteInput } from '../lib/linkInvites'
   import {
     acceptLinkInvite,
@@ -503,13 +503,15 @@
   }
 
   function getDeviceDisplay(identityPubkey: string) {
+    const isCurrentDevice = identityPubkey === deviceState.identityPubkey
     try {
-      return describeRegisteredDevice(
+      return describeDeviceRosterDevice(
         identityPubkey,
-        getAppKeysManager().getDeviceLabels(identityPubkey)
+        getAppKeysManager().getDeviceLabels(identityPubkey),
+        isCurrentDevice
       )
     } catch {
-      return describeRegisteredDevice(identityPubkey)
+      return describeDeviceRosterDevice(identityPubkey, undefined, isCurrentDevice)
     }
   }
 
@@ -787,6 +789,7 @@
                 </div>
               {/if}
               {#each deviceState.registeredDevices as device}
+                {@const deviceDisplay = getDeviceDisplay(device.identityPubkey)}
                 <div class="flex items-center justify-between gap-2 p-2 bg-surface-light rounded">
                   {#if device.identityPubkey !== deviceState.identityPubkey}
                     <input
@@ -796,14 +799,14 @@
                       onchange={(event) =>
                         setDeviceSelected(device.identityPubkey, (event.currentTarget as HTMLInputElement).checked)}
                       disabled={registeringDevice}
-                      aria-label={`Select ${getDeviceDisplay(device.identityPubkey).title}`}
+                      aria-label={`Select ${deviceDisplay.title}`}
                     />
                   {/if}
                   <div class="min-w-0 flex-1">
-                    <div class="text-sm text-gray-200 truncate">{getDeviceDisplay(device.identityPubkey).title}</div>
-                    {#if getDeviceDisplay(device.identityPubkey).subtitle}
+                    <div class="text-sm text-gray-200 truncate">{deviceDisplay.title}</div>
+                    {#if deviceDisplay.subtitle}
                       <div class="text-xs text-gray-400 truncate">
-                        {getDeviceDisplay(device.identityPubkey).subtitle}
+                        {deviceDisplay.subtitle}
                       </div>
                     {/if}
                   </div>

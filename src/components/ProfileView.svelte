@@ -8,7 +8,8 @@
   import { chats } from '../lib/chat'
   import { generateProxyUrl } from '../lib/imgproxy'
   import { createRuntimeProfileAppKeysStore } from '../lib/profileAppKeysRuntime'
-  import type { ProfileAppKeysState } from '../lib/profileAppKeys'
+  import type { ProfileAppKeyDevice, ProfileAppKeysState } from '../lib/profileAppKeys'
+  import { describeRegisteredDevice } from '../lib/deviceLabels'
 
   interface Props {
     pubkey: string
@@ -79,6 +80,10 @@
     } catch {
       return identityPubkey
     }
+  }
+
+  function getDeviceDisplay(device: ProfileAppKeyDevice) {
+    return describeRegisteredDevice(device.identityPubkey, device.labels)
   }
 </script>
 
@@ -169,9 +174,17 @@
                 {/if}
 
                 {#each profileAppKeys.devices as device}
+                  {@const deviceDisplay = getDeviceDisplay(device)}
                   <div class="space-y-2">
+                    <div class="min-w-0">
+                      <div class="text-sm text-gray-200 truncate">{deviceDisplay.title}</div>
+                      {#if deviceDisplay.subtitle}
+                        <div class="text-xs text-gray-400 truncate">{deviceDisplay.subtitle}</div>
+                      {/if}
+                    </div>
                     <CopyButton
                       text={formatDeviceIdentity(device.identityPubkey)}
+                      label="Copy device code"
                       maxLength={48}
                       className="text-xs"
                     />
