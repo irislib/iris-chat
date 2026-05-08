@@ -18,7 +18,7 @@ const ADB = process.env.IRIS_CHAT_RS_ADB ?? 'adb'
 const SERIAL = process.env.IRIS_CHAT_RS_ANDROID_SERIAL ?? ''
 const HARNESS = '/Users/sirius/src/iris-chat-rs/scripts/run_harness.py'
 const RUNNER = 'to.iris.chat.test/androidx.test.runner.AndroidJUnitRunner'
-const CLASS_NAME = 'social.innode.ndr.demo.RealRelayHarnessTest'
+const CLASS_NAME = 'to.iris.chat.RealRelayHarnessTest'
 
 test.describe.configure({ mode: 'serial' })
 
