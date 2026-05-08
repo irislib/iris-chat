@@ -1502,6 +1502,11 @@ function handleIncomingReceipt(
 }
 
 function getManagerRumorAuthorPubkey(): string {
+  const ownerPubkey = getPubkey()?.trim()
+  if (ownerPubkey) {
+    return ownerPubkey
+  }
+
   const runtimeDeviceId = getNdrRuntime().getState().currentDevicePubkey?.trim()
   if (runtimeDeviceId) {
     return runtimeDeviceId
@@ -1510,11 +1515,6 @@ function getManagerRumorAuthorPubkey(): string {
   const deviceIdentityPubkey = get(devices).identityPubkey?.trim()
   if (deviceIdentityPubkey) {
     return deviceIdentityPubkey
-  }
-
-  const ownerPubkey = getPubkey()?.trim()
-  if (ownerPubkey) {
-    return ownerPubkey
   }
 
   throw new Error('Not logged in')

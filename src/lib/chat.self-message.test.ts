@@ -785,7 +785,7 @@ describe('handleManagerEvent', () => {
     })
   })
 
-  it('uses the current device pubkey when sending manager rumors from a linked device', async () => {
+  it('uses the owner pubkey when sending manager rumors from a linked device', async () => {
     const LINKED_DEVICE_PUBKEY = 'b'.repeat(64)
     const PEER_PUBKEY = 'c'.repeat(64)
 
@@ -812,7 +812,7 @@ describe('handleManagerEvent', () => {
     expect(runtimeMocks.sendEvent).toHaveBeenCalledTimes(1)
     expect(runtimeMocks.sendEvent.mock.calls[0]?.[0]).toBe(PEER_PUBKEY)
     expect(runtimeMocks.sendEvent.mock.calls[0]?.[1]).toMatchObject({
-      pubkey: LINKED_DEVICE_PUBKEY,
+      pubkey: MY_PUBKEY,
       content: 'send from linked device',
     })
   })
