@@ -12,26 +12,26 @@
   </style>
 </head>
 <body>
-  <h1>Iris Chat — Privacy</h1>
-  <p>Last updated: 28 April 2026</p>
+  <h1>Privacy Policy</h1>
+  <p>Last updated: 15 May 2026</p>
 
   <h2>What we collect</h2>
   <p>Iris Chat does not ask for your name, email, or phone number. Your identity is a keypair generated on your device. We do not maintain user accounts.</p>
 
   <h2>What stays on your device</h2>
-  <p>Your private key, contacts, group memberships, and message history are stored locally on the devices you use Iris Chat on. They are not uploaded to us.</p>
+  <p>Your secret key, contacts, group memberships, and message history are stored locally on the devices you use Iris Chat on. They are not uploaded to a central Iris Chat server.</p>
 
   <h2>What goes to the Nostr network</h2>
-  <p>To deliver messages, Iris Chat publishes encrypted events to public Nostr relays you choose (for example relay.damus.io, nos.lol). Direct messages are wrapped with rotating keys that change per message, so relay operators do not see who is sending or receiving them — only encrypted payloads and timing metadata. If you choose to publish a public profile (display name, picture, bio), that event is visible to relays under your public key.</p>
+  <p>To deliver messages, Iris Chat publishes encrypted events to message servers you choose. Direct messages are wrapped with rotating keys that change per message, so server operators do not see message contents. They may still see encrypted payloads, connection details, and timing metadata. If you publish a public profile such as a display name or picture, that profile is visible under your public key.</p>
 
   <h2>Push notifications</h2>
-  <p>If you enable notifications, your device's Apple Push Notification token is sent to a notification relay so messages addressed to you can wake the app. The relay sees only encrypted payloads, never message contents.</p>
+  <p>If you enable notifications, your device's push notification token is sent to a notification service so messages addressed to you can wake the app. The service sees only encrypted payloads, never message contents.</p>
 
   <h2>No tracking, no analytics</h2>
   <p>Iris Chat does not include third-party analytics, advertising SDKs, or behavioural tracking.</p>
 
   <h2>Your data, your control</h2>
-  <p>You can erase all local data by uninstalling the app. To remove published events from a Nostr relay, send a deletion event from the same key, or contact the relay operator. We do not control or operate any specific relay.</p>
+  <p>You can erase local data in the app or by uninstalling it. Where supported, Delete profile clears your public profile before removing local data. Independent message servers may keep previously delivered events according to their own policies.</p>
 
   <h2>Contact</h2>
   <p>Questions: <a href="mailto:irismessenger@pm.me">irismessenger@pm.me</a></p>

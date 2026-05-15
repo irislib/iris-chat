@@ -34,6 +34,30 @@ function isAssociationFile(pathname) {
 }
 
 /**
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+function isPolicyDocumentPath(pathname) {
+  return pathname === '/privacy' ||
+    pathname === '/privacy/' ||
+    pathname === '/terms' ||
+    pathname === '/terms/' ||
+    pathname === '/csae' ||
+    pathname === '/csae/'
+}
+
+/**
+ * @param {Request} request
+ * @param {URL} url
+ * @returns {Request}
+ */
+function buildPolicyDocumentRequest(request, url) {
+  const policyUrl = new URL(url)
+  policyUrl.pathname = `${url.pathname.replace(/\/$/, '')}/index.html`
+  return new Request(policyUrl, request)
+}
+
+/**
  * @param {Response} response
  * @returns {Response}
  */
@@ -76,6 +100,10 @@ export default {
     if (url.pathname === '/' || url.pathname === '/index.html') {
       const indexResponse = await env.ASSETS.fetch(buildSpaDocumentRequest(request, url))
       return injectBaseTag(indexResponse)
+    }
+
+    if (isPolicyDocumentPath(url.pathname)) {
+      return env.ASSETS.fetch(buildPolicyDocumentRequest(request, url))
     }
 
     const assetResponse = await env.ASSETS.fetch(request)
