@@ -53,15 +53,10 @@ describe('static assets worker', () => {
 
   it('serves policy routes from static documents instead of the app shell', async () => {
     const assetFetch = vi.fn(async (request: Request | URL | string) => {
-      const requestUrl = typeof request === 'string' ? request : request instanceof URL ? request.toString() : request.url
-      expect(new URL(requestUrl).pathname).toBe('/csae.html')
-      return new Response('<html><body><h1>Child Safety Standards</h1></body></html>', {
-        status: 200,
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-      })
+      throw new Error(`policy routes should not hit assets: ${String(request)}`)
     })
 
-    const response = await worker.fetch(new Request('https://chat.iris.to/csae', {
+    const response = await worker.fetch(new Request('https://chat.iris.to/csae/', {
       headers: { accept: 'text/html' },
     }), {
       ASSETS: { fetch: assetFetch },
@@ -69,7 +64,26 @@ describe('static assets worker', () => {
 
     expect(response.status).toBe(200)
     expect(await response.text()).toContain('Child Safety Standards')
-    expect(assetFetch).toHaveBeenCalledOnce()
+    expect(assetFetch).not.toHaveBeenCalled()
+  })
+
+  it('serves policy routes without redirecting', async () => {
+    const assetFetch = vi.fn(async () => {
+      return new Response('<html><body><h1>Child Safety Standards</h1></body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      })
+    })
+
+    const response = await worker.fetch(new Request('https://chat.iris.to/privacy', {
+      headers: { accept: 'text/html' },
+    }), {
+      ASSETS: { fetch: assetFetch },
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('location')).toBeNull()
+    expect(await response.text()).toContain('Privacy Policy')
   })
 
   it('ships legal policy pages as static documents', async () => {
