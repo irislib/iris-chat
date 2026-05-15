@@ -53,7 +53,7 @@ function isPolicyDocumentPath(pathname) {
  */
 function buildPolicyDocumentRequest(request, url) {
   const policyUrl = new URL(url)
-  policyUrl.pathname = `${url.pathname.replace(/\/$/, '')}/index.html`
+  policyUrl.pathname = `${url.pathname.replace(/\/$/, '')}.html`
   return new Request(policyUrl, request)
 }
 

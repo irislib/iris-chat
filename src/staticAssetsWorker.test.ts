@@ -54,7 +54,7 @@ describe('static assets worker', () => {
   it('serves policy routes from static documents instead of the app shell', async () => {
     const assetFetch = vi.fn(async (request: Request | URL | string) => {
       const requestUrl = typeof request === 'string' ? request : request instanceof URL ? request.toString() : request.url
-      expect(new URL(requestUrl).pathname).toBe('/csae/index.html')
+      expect(new URL(requestUrl).pathname).toBe('/csae.html')
       return new Response('<html><body><h1>Child Safety Standards</h1></body></html>', {
         status: 200,
         headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -80,7 +80,7 @@ describe('static assets worker', () => {
     ]
 
     for (const [slug, heading] of pages) {
-      const html = await readFile(new URL(`../public/${slug}/index.html`, import.meta.url), 'utf8')
+      const html = await readFile(new URL(`../public/${slug}.html`, import.meta.url), 'utf8')
       expect(html).toContain(`<h1>${heading}</h1>`)
       expect(html).not.toContain('<div id="app"></div>')
     }
