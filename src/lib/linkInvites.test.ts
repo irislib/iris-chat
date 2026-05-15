@@ -22,6 +22,22 @@ describe('parseLinkInviteInput', () => {
     expect(invite?.inviterEphemeralPublicKey).toBe(EPHEMERAL)
   })
 
+  it('parses a hash-route link URL', () => {
+    const payload = {
+      inviter: INVITER,
+      ephemeralKey: EPHEMERAL,
+      sharedSecret: SECRET,
+      purpose: 'link',
+      owner: OWNER,
+    }
+    const url = `https://chat.iris.to/#/invite/${encodeURIComponent(JSON.stringify(payload))}`
+    const invite = parseLinkInviteInput(url, OWNER)
+
+    expect(invite).toBeTruthy()
+    expect(invite?.inviter).toBe(INVITER)
+    expect(invite?.inviterEphemeralPublicKey).toBe(EPHEMERAL)
+  })
+
   it('parses raw JSON with inviterEphemeralPublicKey', () => {
     const payload = {
       inviter: INVITER,

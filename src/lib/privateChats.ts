@@ -486,7 +486,7 @@ export const buildLinkInviteUrl = (
     data.owner = ownerPubkey
   }
   const url = new URL(root)
-  url.hash = encodeURIComponent(JSON.stringify(data))
+  url.hash = `/invite/${encodeURIComponent(JSON.stringify(data))}`
   return url.toString()
 }
 

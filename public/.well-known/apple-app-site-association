@@ -7,6 +7,12 @@
         "paths": [
           "/*"
         ]
+      },
+      {
+        "appID": "J8PPJKD7TA.to.iris.chat.macos",
+        "paths": [
+          "/*"
+        ]
       }
     ]
   }

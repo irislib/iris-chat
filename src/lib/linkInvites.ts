@@ -1,6 +1,6 @@
 import { Invite } from 'nostr-double-ratchet'
 
-const DEFAULT_LINK_INVITE_ROOTS = ['https://iris.to', 'https://chat.iris.to']
+const DEFAULT_LINK_INVITE_ROOTS = ['https://chat.iris.to', 'https://iris.to']
 
 type LinkInvitePayload = {
   inviter?: string
@@ -15,7 +15,7 @@ type LinkInvitePayload = {
 function parseInvitePayload(url: string): { purpose?: string; owner?: string } | null {
   try {
     const parsed = new URL(url)
-    const rawHash = parsed.hash.slice(1)
+    const rawHash = invitePayloadFromHash(parsed.hash)
     if (!rawHash) return null
     const decoded = decodeURIComponent(rawHash)
     const data = JSON.parse(decoded) as Record<string, unknown>
@@ -85,13 +85,22 @@ function normalizeInvitePayload(raw: string): string | null {
 function normalizeInvitePayloadFromUrl(rawUrl: string): string | null {
   try {
     const parsed = new URL(rawUrl)
-    const rawHash = parsed.hash.slice(1)
+    const rawHash = invitePayloadFromHash(parsed.hash)
     if (!rawHash) return null
     const decoded = decodeURIComponent(rawHash)
     return normalizeInvitePayload(decoded)
   } catch {
     return null
   }
+}
+
+function invitePayloadFromHash(hash: string): string | null {
+  let raw = hash.startsWith('#') ? hash.slice(1) : hash
+  raw = raw.replace(/^\/+/, '')
+  if (raw.toLowerCase().startsWith('invite/')) {
+    raw = raw.slice('invite/'.length).replace(/^\/+/, '')
+  }
+  return raw || null
 }
 
 export function parseLinkInviteInput(

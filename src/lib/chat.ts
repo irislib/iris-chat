@@ -556,16 +556,30 @@ function getInviteBaseUrl(): string {
 export function getInviteUrl(invite: ChatInvite): string {
   if (invite.type === 'pubkey') {
     const url = new URL(getInviteBaseUrl())
-    url.hash = nip19.npubEncode(invite.pubkey)
+    url.hash = `/${nip19.npubEncode(invite.pubkey)}`
     return url.toString()
   }
-  return invite.invite.getUrl(getInviteBaseUrl())
+  return routeInviteUrl(invite.invite.getUrl(getInviteBaseUrl()))
+}
+
+function routeInviteUrl(inviteUrl: string): string {
+  const url = new URL(inviteUrl)
+  let payload = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
+  payload = payload.replace(/^\/+/, '')
+  if (!payload || payload.toLowerCase().startsWith('invite/')) {
+    return url.toString()
+  }
+  url.hash = `/invite/${payload}`
+  return url.toString()
 }
 
 function parseInviteHash(hash: string): ChatInvite | null {
   let raw = hash.startsWith('#') ? hash.slice(1) : hash
   // Some environments/libraries produce hashes like "#/npub..." (hash-routing style).
   raw = raw.replace(/^\/+/, '')
+  if (raw.toLowerCase().startsWith('invite/')) {
+    raw = raw.slice('invite/'.length).replace(/^\/+/, '')
+  }
   if (!raw) return null
 
   type InvitePurpose = 'link' | 'chat'

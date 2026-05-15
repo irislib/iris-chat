@@ -129,7 +129,7 @@ vi.mock('./receipts', () => ({
   parseReceipt: vi.fn(() => null),
 }))
 
-import { acceptInvite, createAndSaveInvite, parseInviteFromUrl, chats, type ChatSession } from './chat'
+import { acceptInvite, createAndSaveInvite, getInviteUrl, parseInviteFromUrl, chats, type ChatSession } from './chat'
 import { saveInvite } from './storage'
 
 beforeEach(() => {
@@ -194,6 +194,31 @@ describe('Invite Parsing / Acceptance', () => {
     const invite = parseInviteFromUrl(url)
 
     expect(invite).toEqual({ type: 'pubkey', pubkey })
+  })
+
+  it('generates #/npub... style profile links', () => {
+    const pubkey = 'b'.repeat(64)
+    const npub = nip19.npubEncode(pubkey)
+
+    const url = getInviteUrl({ type: 'pubkey', pubkey })
+
+    expect(url).toBe(`https://chat.iris.to/#/${npub}`)
+  })
+
+  it('generates and parses #/invite... style legacy links', () => {
+    const ownerPubkey = 'd'.repeat(64)
+    const devicePubkey = 'e'.repeat(64)
+    const legacyInvite = Invite.createNew(devicePubkey)
+    legacyInvite.ownerPubkey = ownerPubkey
+
+    const url = getInviteUrl({ type: 'legacy', invite: legacyInvite })
+    const parsed = parseInviteFromUrl(url)
+
+    expect(url).toMatch(/^https:\/\/chat\.iris\.to\/#\/invite\//)
+    expect(parsed?.type).toBe('legacy')
+    if (parsed?.type === 'legacy') {
+      expect(parsed.invite.ownerPubkey).toBe(ownerPubkey)
+    }
   })
 
   it('acceptInvite(pubkey) should open immediately while bootstrapping device registration in the background', async () => {
