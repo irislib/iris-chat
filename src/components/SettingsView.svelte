@@ -502,6 +502,17 @@
     return pubkey.slice(0, 8) + '...' + pubkey.slice(-4)
   }
 
+  function formatAddedAgo(createdAtSecs: number): string | null {
+    if (!createdAtSecs) return null
+    const elapsed = Math.abs(Date.now() / 1000 - createdAtSecs)
+    if (elapsed < 60) return 'just now'
+    if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`
+    if (elapsed < 86_400) return `${Math.floor(elapsed / 3600)}h ago`
+    if (elapsed < 86_400 * 30) return `${Math.floor(elapsed / 86_400)}d ago`
+    if (elapsed < 86_400 * 365) return `${Math.floor(elapsed / (86_400 * 30))}mo ago`
+    return `${Math.floor(elapsed / (86_400 * 365))}y ago`
+  }
+
   function getDeviceDisplay(identityPubkey: string) {
     const isCurrentDevice = identityPubkey === deviceState.identityPubkey
     try {
@@ -790,6 +801,7 @@
               {/if}
               {#each deviceState.registeredDevices as device}
                 {@const deviceDisplay = getDeviceDisplay(device.identityPubkey)}
+                {@const addedAgo = formatAddedAgo(device.createdAt)}
                 <div class="flex items-center justify-between gap-2 p-2 bg-surface-light rounded">
                   {#if device.identityPubkey !== deviceState.identityPubkey}
                     <input
@@ -808,6 +820,9 @@
                       <div class="text-xs text-gray-400 truncate">
                         {deviceDisplay.subtitle}
                       </div>
+                    {/if}
+                    {#if addedAgo}
+                      <div class="text-xs text-gray-500 truncate">Added {addedAgo}</div>
                     {/if}
                   </div>
                   {#if device.identityPubkey === deviceState.identityPubkey}

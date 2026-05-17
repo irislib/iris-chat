@@ -47,7 +47,24 @@ describe('deviceLabels', () => {
       inferBrowserDeviceLabel(
         'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1'
       )
-    ).toBe('Safari on iPhone')
+    ).toBe('Safari 18.3 - iPhone - iOS 18.3')
+  })
+
+  it('prefers high-entropy browser and OS hints when available', () => {
+    expect(
+      inferBrowserDeviceLabel(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36',
+        {
+          fullVersionList: [
+            { brand: 'Not/A)Brand', version: '8.0.0.0' },
+            { brand: 'Chromium', version: '126.0.6478.127' },
+            { brand: 'Google Chrome', version: '126.0.6478.127' },
+          ],
+          platform: 'Windows',
+          platformVersion: '15.0.0',
+        }
+      )
+    ).toBe('Chrome 126 - Windows 11')
   })
 
   it('uses a generic label for linked devices', async () => {
