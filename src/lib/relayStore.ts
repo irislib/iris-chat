@@ -51,9 +51,9 @@ function saveRelays(relays: Set<string>): void {
 function loadShowConnectivity(): boolean {
   try {
     const stored = localStorage.getItem(SHOW_CONNECTIVITY_KEY)
-    return stored !== 'false' // default to true
+    return stored === 'true'
   } catch {
-    return true
+    return false
   }
 }
 

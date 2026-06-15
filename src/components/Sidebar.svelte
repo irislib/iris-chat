@@ -24,6 +24,7 @@
   let { selectedChatId, selectedGroupId, onSelectChat, onSelectGroup, onNewChat, onSettings }: Props = $props()
 
   let showConnectivity = $derived($relayStore.showConnectivity)
+  let showConnectivityWarning = $derived($relayStore.connectedCount === 0)
   let activeTab = $state<'all' | 'requests'>('all')
 
   let policyCtx = $derived.by((): MessageRequestPolicyContext => ({
@@ -85,7 +86,7 @@
       </h1>
     </button>
     <div class="flex items-center gap-1">
-      {#if showConnectivity}
+      {#if showConnectivity || showConnectivityWarning}
         <ConnectivityIndicator onclick={onSettings} />
       {/if}
       <button
