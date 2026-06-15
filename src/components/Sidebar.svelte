@@ -19,9 +19,10 @@
     onSelectGroup: (groupId: string) => void
     onNewChat: () => void
     onSettings: () => void
+    onNavigateHome: () => void
   }
 
-  let { selectedChatId, selectedGroupId, onSelectChat, onSelectGroup, onNewChat, onSettings }: Props = $props()
+  let { selectedChatId, selectedGroupId, onSelectChat, onSelectGroup, onNewChat, onSettings, onNavigateHome }: Props = $props()
 
   let showConnectivity = $derived($relayStore.showConnectivity)
   let showConnectivityWarning = $derived($relayStore.connectedCount === 0)
@@ -78,7 +79,8 @@
   <header class="h-16 px-4 flex items-center justify-between border-b border-surface-lighter flex-shrink-0">
     <button
       class="flex items-center gap-2 select-none bg-transparent border-none p-0 cursor-pointer hover:opacity-80 transition-opacity"
-      onclick={onNewChat}
+      onclick={onNavigateHome}
+      aria-label="Go to home"
     >
       <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-8 h-8" draggable="false" />
       <h1 class="text-xl font-bold">

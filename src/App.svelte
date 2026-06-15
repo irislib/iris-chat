@@ -532,6 +532,7 @@
             onSelectGroup={handleSelectGroup}
             onNewChat={handleNewChat}
             onSettings={handleSettings}
+            onNavigateHome={handleBack}
           />
         </div>
 
