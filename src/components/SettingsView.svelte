@@ -993,7 +993,7 @@
 
         <!-- Show connectivity indicator toggle -->
         <div class="mt-4 pt-4 border-t border-surface-lighter flex items-center justify-between">
-          <span class="text-sm">Show connectivity indicator</span>
+          <span class="text-sm">Show connectivity in header</span>
           <button
             class="w-10 h-5 rounded-full transition-colors relative {showConnectivity ? 'bg-primary' : 'bg-gray-600'}"
             onclick={() => relayStore.setShowConnectivity(!showConnectivity)}
