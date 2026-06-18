@@ -197,7 +197,7 @@
 
     <div class="space-y-3 mb-4 max-h-96 overflow-y-auto overflow-x-hidden">
       {#each inviteList as invite (invite.id)}
-        <div class="bg-[#1a1a1a] rounded-lg p-3 space-y-2 overflow-hidden">
+        <div class="bg-surface-light border border-surface-lighter rounded-lg p-3 space-y-2 overflow-hidden">
           <!-- Label row -->
           <div class="flex items-center justify-between">
             {#if editingLabel === invite.id}
@@ -230,7 +230,7 @@
                 onclick={() => startEditLabel(invite)}
               >
                 {#if invite.label}
-                  <span class="text-white font-medium truncate">{invite.label}</span>
+                  <span class="text-apptext font-medium truncate">{invite.label}</span>
                 {:else}
                   <span class="text-gray-500 italic">Add label...</span>
                 {/if}

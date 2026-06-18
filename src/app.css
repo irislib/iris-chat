@@ -28,17 +28,31 @@ html[data-theme='dark'] {
 }
 
 html[data-theme='light'] {
-  --color-bg: 247 247 248;
-  --color-panel: 247 247 248;
+  --color-bg: 241 243 247;
+  --color-panel: 250 250 252;
   --color-surface: 255 255 255;
-  --color-surface-light: 243 244 246;
-  --color-surface-lighter: 229 231 235;
+  --color-surface-light: 237 239 244;
+  --color-surface-lighter: 221 225 232;
   --color-text: 17 24 39;
-  --color-muted: 75 85 99;
-  --color-primary: 79 70 229;
-  --color-primary-dark: 67 56 202;
+  --color-muted: 86 99 117;
+  --color-primary: 87 73 232;
+  --color-primary-dark: 74 60 210;
 
   color-scheme: light;
+}
+
+html[data-theme='light'] .text-gray-200,
+html[data-theme='light'] .text-gray-300 {
+  color: rgb(55 65 81);
+}
+
+html[data-theme='light'] .text-gray-400,
+html[data-theme='light'] .hover\:text-gray-400:hover {
+  color: rgb(100 116 139);
+}
+
+html[data-theme='light'] .text-gray-500 {
+  color: rgb(107 114 128);
 }
 
 html[data-theme='light'] .text-white,
