@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity, loginLinkedDevice } from '../lib/identity'
   import { isLinkInvite, parseInviteFromHash } from '../lib/chat'
-  import { buildLinkInviteUrl, createLinkInvite, listenForLinkInviteAcceptance } from '../lib/privateChats'
+  import { startNip46LinkDevice } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
   import QRCode from './QRCode.svelte'
   import CopyButton from './CopyButton.svelte'
@@ -27,7 +27,7 @@
   let linkInviteUrl = $state('')
   let linkInviteStatus = $state<'idle' | 'waiting' | 'linked' | 'error'>('idle')
   let linkInviteError = $state('')
-  let linkInviteUnsub: (() => void) | null = null
+  let linkDeviceStop: (() => void) | null = null
 
   onMount(() => {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0
@@ -63,26 +63,12 @@
     }
   }
 
-  function getLinkInviteBaseUrl(): string {
-    const origin = window.location.origin
-    if (
-      origin.startsWith('http://localhost') ||
-      origin.startsWith('http://127.0.0.1')
-    ) {
-      return 'https://chat.iris.to'
-    }
-    return origin
-  }
-
   async function startLinkInvite() {
     linkInviteStatus = 'waiting'
     linkInviteError = ''
     try {
-      const invite = await createLinkInvite()
-      linkInviteUrl = buildLinkInviteUrl(invite, getLinkInviteBaseUrl())
-
-      linkInviteUnsub?.()
-      linkInviteUnsub = listenForLinkInviteAcceptance(invite, async (ownerPubkey) => {
+      linkDeviceStop?.()
+      const session = await startNip46LinkDevice(async (ownerPubkey) => {
         try {
           await loginLinkedDevice(ownerPubkey, displayName || null)
           if (window.location.hash) {
@@ -94,20 +80,22 @@
           linkInviteStatus = 'error'
           linkInviteError = getErrorMessage(e, 'Failed to link device')
         } finally {
-          linkInviteUnsub?.()
-          linkInviteUnsub = null
+          linkDeviceStop?.()
+          linkDeviceStop = null
         }
       })
+      linkInviteUrl = session.url
+      linkDeviceStop = session.stop
     } catch (e) {
       linkInviteStatus = 'error'
-      linkInviteError = getErrorMessage(e, 'Failed to create link invite')
+      linkInviteError = getErrorMessage(e, 'Failed to create link code')
     }
   }
 
   $effect(() => {
     if (mode !== 'link') {
-      linkInviteUnsub?.()
-      linkInviteUnsub = null
+      linkDeviceStop?.()
+      linkDeviceStop = null
       linkInviteUrl = ''
       linkInviteStatus = 'idle'
       linkInviteError = ''
@@ -117,8 +105,8 @@
       void startLinkInvite()
     }
     return () => {
-      linkInviteUnsub?.()
-      linkInviteUnsub = null
+      linkDeviceStop?.()
+      linkDeviceStop = null
     }
   })
 </script>
@@ -148,7 +136,7 @@
       {/if}
 
       {#if linkInviteStatus === 'waiting'}
-        <p class="text-sm text-gray-400 text-center">Waiting for approval…</p>
+        <p class="text-sm text-gray-400 text-center">Waiting for your signed-in device…</p>
       {:else if linkInviteStatus === 'linked'}
         <p class="text-sm text-green-400 text-center">Device linked</p>
       {:else if linkInviteStatus === 'error'}

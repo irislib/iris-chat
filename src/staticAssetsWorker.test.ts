@@ -26,6 +26,18 @@ describe('static assets worker', () => {
     vi.unstubAllGlobals()
   })
 
+  it('redirects plain HTTP requests to HTTPS before assets', async () => {
+    const assetFetch = vi.fn(async () => new Response('unexpected', { status: 500 }))
+
+    const response = await worker.fetch(new Request('http://chat.iris.to/#/invite'), {
+      ASSETS: { fetch: assetFetch },
+    })
+
+    expect(response.status).toBe(308)
+    expect(response.headers.get('location')).toBe('https://chat.iris.to/#/invite')
+    expect(assetFetch).not.toHaveBeenCalled()
+  })
+
   it('rewrites the SPA document request to a synthetic path', () => {
     const request = new Request('https://chat.iris.to/')
     const rewritten = buildSpaDocumentRequest(request, new URL(request.url))

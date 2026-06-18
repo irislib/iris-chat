@@ -21,8 +21,10 @@
   import { parseLinkInviteInput } from '../lib/linkInvites'
   import {
     acceptLinkInvite,
+    acceptNip46LinkDevice,
     ensureDeviceRegistered,
     getAppKeysManager,
+    parseNip46LinkDeviceRequest,
     registerLinkedDevice,
     revokeDevice,
     revokeDevices,
@@ -261,9 +263,30 @@
 
   async function handleAcceptLinkInvite(raw: string) {
     if (!$identity?.pubkey) return
+    const nip46Request = parseNip46LinkDeviceRequest(raw)
+    if (nip46Request || raw.trim().startsWith('nostrconnect:')) {
+      if (!nip46Request) {
+        linkInviteError = 'Invalid link code'
+        linkInviteStatus = 'error'
+        return
+      }
+
+      linkInviteStatus = 'accepting'
+      linkInviteError = ''
+
+      try {
+        await acceptNip46LinkDevice(raw)
+        linkInviteStatus = 'linked'
+      } catch (e) {
+        linkInviteStatus = 'error'
+        linkInviteError = getErrorMessage(e, 'Failed to link device')
+      }
+      return
+    }
+
     const invite = parseLinkInviteInput(raw, $identity.pubkey)
     if (!invite) {
-      linkInviteError = 'Invalid link invite'
+      linkInviteError = 'Invalid link code'
       linkInviteStatus = 'error'
       return
     }
@@ -302,7 +325,8 @@
     if (linkInviteInput === linkInviteLastAutoAttempt) return
 
     const invite = parseLinkInviteInput(linkInviteInput, $identity.pubkey)
-    if (!invite) return
+    const nip46Request = parseNip46LinkDeviceRequest(linkInviteInput)
+    if (!invite && !nip46Request) return
 
     linkInviteLastAutoAttempt = linkInviteInput
     void handleAcceptLinkInvite(linkInviteInput)
@@ -902,7 +926,7 @@
               <input
                 type="text"
                 bind:value={linkInviteInput}
-                placeholder="Paste link invite"
+                placeholder="Paste link code"
                 class="input-field"
                 oninput={() => {
                   if (linkInviteStatus === 'error') {

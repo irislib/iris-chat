@@ -1,6 +1,38 @@
 import { buildSpaDocumentRequest } from './static-assets-worker-lib.mjs'
 
 /**
+ * @param {Request} request
+ * @returns {string}
+ */
+function forwardedScheme(request) {
+  const forwardedProto = request.headers.get('x-forwarded-proto')
+  if (forwardedProto) return forwardedProto.toLowerCase()
+
+  const visitor = request.headers.get('cf-visitor')
+  if (!visitor) return ''
+  try {
+    const parsed = JSON.parse(visitor)
+    return typeof parsed.scheme === 'string' ? parsed.scheme.toLowerCase() : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * @param {Request} request
+ * @param {URL} url
+ * @returns {boolean}
+ */
+function shouldRedirectToHttps(request, url) {
+  const scheme = forwardedScheme(request)
+  const cf = /** @type {{ cf?: { tlsVersion?: string } }} */ (
+    /** @type {unknown} */ (request)
+  ).cf
+  if (cf && !cf.tlsVersion) return true
+  return scheme === 'http' || (!scheme && url.protocol === 'http:')
+}
+
+/**
  * @typedef {{
  *   ASSETS: {
  *     fetch: (request: Request) => Promise<Response>
@@ -174,6 +206,12 @@ export default {
    */
   async fetch(request, env) {
     const url = new URL(request.url)
+    if (shouldRedirectToHttps(request, url)) {
+      url.protocol = 'https:'
+      url.port = ''
+      return Response.redirect(url.toString(), 308)
+    }
+
     const navigationRequest = wantsHtml(request) && !hasFileExtension(url.pathname)
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
