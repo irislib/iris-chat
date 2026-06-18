@@ -19,6 +19,7 @@
   import { devices } from '../lib/devices'
   import { describeDeviceRosterDevice } from '../lib/deviceLabels'
   import { parseLinkInviteInput } from '../lib/linkInvites'
+  import { setThemePreference, themePreference, type ThemePreference } from '../lib/theme'
   import {
     acceptLinkInvite,
     acceptNip46LinkDevice,
@@ -367,6 +368,11 @@
     return nip19.nsecEncode(bytes)
   })
 
+  function handleThemeChange(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value as ThemePreference
+    setThemePreference(value)
+  }
+
   // Check status on mount
   $effect(() => {
     checkStatus()
@@ -627,7 +633,7 @@
   }
 </script>
 
-<div class="h-full flex flex-col bg-[#0a0a0a]">
+<div class="h-full flex flex-col bg-panel">
   <!-- Header -->
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-surface">
     <button
@@ -764,6 +770,22 @@
           </div>
         </div>
       {/if}
+
+      <!-- Appearance Section -->
+      <div class="bg-surface rounded-lg p-4">
+        <h2 class="font-medium mb-3">Appearance</h2>
+        <label for="theme-preference" class="text-sm text-gray-400 block mb-2">Theme</label>
+        <select
+          id="theme-preference"
+          class="input-field"
+          value={$themePreference}
+          onchange={handleThemeChange}
+        >
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
 
       <!-- Devices Section -->
       {#if $identity}

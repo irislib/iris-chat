@@ -11,6 +11,19 @@
     </script>
 
     <meta charset="UTF-8" />
+    <script>
+      ;(() => {
+        let stored = null
+        try {
+          stored = localStorage.getItem('iris-chat-theme')
+        } catch {}
+        const preference = stored === 'light' || stored === 'dark' ? stored : 'system'
+        const systemLight = window.matchMedia('(prefers-color-scheme: light)').matches
+        const resolved = preference === 'system' ? (systemLight ? 'light' : 'dark') : preference
+        document.documentElement.dataset.themePreference = preference
+        document.documentElement.dataset.theme = resolved
+      })()
+    </script>
     <link rel="icon" type="image/png" href="./img/android-chrome-192x192.png" />
     <link rel="apple-touch-icon" href="./img/apple-touch-icon.png" />
     <link rel="manifest" href="./manifest.json" />

@@ -87,7 +87,7 @@
   }
 </script>
 
-<div class="h-full flex flex-col bg-[#0a0a0a]">
+<div class="h-full flex flex-col bg-panel">
   <!-- Header -->
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-surface">
     <button

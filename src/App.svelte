@@ -484,7 +484,7 @@
   }
 </script>
 
-<main class="min-h-[100dvh] h-[100dvh] bg-[#121212] text-white overflow-hidden">
+<main class="min-h-[100dvh] h-[100dvh] bg-app text-apptext overflow-hidden">
   {#if initializing}
     <div class="h-full flex items-center justify-center">
       <div class="text-center">
@@ -538,7 +538,7 @@
 
         <!-- Main content - always visible on desktop, conditionally on mobile -->
         <div class="
-          flex-1 flex flex-col bg-[#0a0a0a] h-full min-h-0 min-w-0
+          flex-1 flex flex-col bg-panel h-full min-h-0 min-w-0
           {mobileView === 'main' ? 'flex w-full' : 'hidden'} md:flex md:w-auto
         ">
           {#if currentView === 'settings'}

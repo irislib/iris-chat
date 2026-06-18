@@ -96,7 +96,7 @@
 </script>
 
 {#if showPrompt}
-  <div class="fixed inset-0 z-[100] bg-[#121212] flex flex-col overflow-y-auto">
+  <div class="fixed inset-0 z-[100] bg-app text-apptext flex flex-col overflow-y-auto">
     <!-- Content -->
     <div class="flex-1 flex flex-col items-center justify-center px-6 text-center">
       <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-20 h-20 mb-6" draggable="false" />

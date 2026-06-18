@@ -427,7 +427,7 @@
 
 <div class="flex-1 flex flex-col min-h-0">
   <!-- Header -->
-  <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
+  <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-panel">
     {#if showBackButton}
       <button
         class="btn-ghost p-2 rounded-full"
@@ -552,7 +552,7 @@
         {@const replyToMessage = message.replyTo ? messageMap.get(message.replyTo) ?? null : null}
         {#if newDay}
           <div class="day-separator sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
-            <span class="px-3 py-1 rounded-full text-xs text-gray-400 bg-[#0a0a0a]/60 backdrop-blur-md shadow-sm pointer-events-auto">
+            <span class="px-3 py-1 rounded-full text-xs text-gray-400 bg-panel/60 backdrop-blur-md shadow-sm pointer-events-auto">
               {formatDayLabel(message.timestamp)}
             </span>
           </div>
@@ -598,7 +598,7 @@
   {/if}
 
   <!-- Input - flex-shrink-0 keeps it at bottom -->
-  <div class="border-t border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
+  <div class="border-t border-surface-lighter flex-shrink-0 bg-panel">
     <!-- Reply preview -->
     {#if replyingTo}
       <div class="px-4 pt-3 pb-1 flex items-center gap-2">

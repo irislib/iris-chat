@@ -1,16 +1,56 @@
 :root {
+  --color-bg: 18 18 18;
+  --color-panel: 10 10 10;
+  --color-surface: 30 30 30;
+  --color-surface-light: 45 45 45;
+  --color-surface-lighter: 61 61 61;
+  --color-text: 255 255 255;
+  --color-muted: 156 163 175;
+  --color-primary: 99 102 241;
+  --color-primary-dark: 79 70 229;
+
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #121212;
+  color-scheme: light dark;
+  color: rgb(var(--color-text));
+  background-color: rgb(var(--color-bg));
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  --color-bg: 247 247 248;
+  --color-panel: 247 247 248;
+  --color-surface: 255 255 255;
+  --color-surface-light: 243 244 246;
+  --color-surface-lighter: 229 231 235;
+  --color-text: 17 24 39;
+  --color-muted: 75 85 99;
+  --color-primary: 79 70 229;
+  --color-primary-dark: 67 56 202;
+
+  color-scheme: light;
+}
+
+html[data-theme='light'] .text-white,
+html[data-theme='light'] .hover\:text-white:hover {
+  color: rgb(var(--color-text));
+}
+
+html[data-theme='light'] .bg-primary.text-white,
+html[data-theme='light'] .bg-primary .text-white,
+html[data-theme='light'] .bg-red-600.text-white,
+html[data-theme='light'] .bg-green-600.text-white {
+  color: #ffffff;
 }
 
 * {

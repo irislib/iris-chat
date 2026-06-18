@@ -113,7 +113,7 @@
 
 <div class="flex-1 flex flex-col min-h-0">
   <!-- Header -->
-  <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-[#0a0a0a]">
+  <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-panel">
     <button
       class="btn-ghost p-2 rounded-full"
       onclick={onBack}
