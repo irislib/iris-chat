@@ -9,6 +9,12 @@
         ]
       },
       {
+        "appID": "8G9P8AN75D.fi.siriusbusiness.irischat",
+        "paths": [
+          "/*"
+        ]
+      },
+      {
         "appID": "J8PPJKD7TA.to.iris.chat.macos",
         "paths": [
           "/*"
