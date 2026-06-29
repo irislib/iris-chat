@@ -16,7 +16,7 @@ const RELAY_URLS = (process.env.IRIS_CHAT_RS_INTEROP_RELAY_URLS ?? process.env.I
   .filter(Boolean)
 const ADB = process.env.IRIS_CHAT_RS_ADB ?? 'adb'
 const SERIAL = process.env.IRIS_CHAT_RS_ANDROID_SERIAL ?? ''
-const HARNESS = '/Users/sirius/src/iris-chat-rs/scripts/run_harness.py'
+const HARNESS = process.env.IRIS_CHAT_RS_HARNESS ?? '../iris-chat-rs/scripts/run_harness.py'
 const RUNNER = 'to.iris.chat.test/androidx.test.runner.AndroidJUnitRunner'
 const CLASS_NAME = 'to.iris.chat.RealRelayHarnessTest'
 
