@@ -7,12 +7,10 @@ import {
 } from '@nostr-dev-kit/ndk'
 import {
   AppKeys,
-  APP_KEYS_EVENT_KIND,
   Invite,
   INVITE_RESPONSE_KIND,
   NdrRuntime,
   decryptInviteResponse,
-  isAppKeysEvent,
   type AppKeysManager,
   type DelegateManager,
   type DeviceEntry,
@@ -22,7 +20,6 @@ import {
   type NostrSubscribe,
 } from 'nostr-double-ratchet'
 import {
-  bytesToHex,
   ndk,
   identity,
   getPrivkeyHex,
@@ -32,22 +29,34 @@ import {
 import { devices } from './devices'
 import { relayStore } from './relayStore'
 import { DexieStorageAdapter } from './sessionManagerStorage'
+import type { VerifiedEvent } from 'nostr-tools'
 import {
-  finalizeEvent,
-  generateSecretKey,
-  getPublicKey,
-  verifyEvent,
-  type UnsignedEvent,
-  type VerifiedEvent,
-} from 'nostr-tools'
-import * as nip44 from 'nostr-tools/nip44'
+  FACT_OP_KIND,
+  IDENTITY_GRAPH_ROSTER_TYPE,
+  NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_TYPE,
+  parseNostrIdentityDeviceApprovalReceiptEvent,
+  parseNostrIdentityDeviceApprovalReceiptRosterOp,
+  parseNostrIdentityRosterOpEvent,
+  type SignedNostrIdentityRosterOp,
+} from 'nostr-social-graph'
+import type { NostrIdentitySession } from '@iris/identity/session'
 import {
   getCurrentDeviceRegistrationLabels,
   getLinkedDeviceRegistrationLabels,
+  type DeviceLabels,
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
+import {
+  NOSTR_IDENTITY_CHAT_DEVICE_LINK_TIMEOUT_MS,
+  buildLinkedNostrIdentitySessionFromApproval,
+  buildNostrIdentityChatDeviceApprovalEvents,
+  createNostrIdentityChatDeviceApprovalRequest,
+  mergeNostrIdentityRosterOps,
+  parseNostrIdentityChatDeviceApprovalRequest,
+} from './nostrIdentityDeviceLink'
+import { saveNostrIdentityBrowserSession } from './nostrIdentitySession'
 
 let runtime: NdrRuntime | null = null
 let runtimeCleanup: (() => void) | null = null
@@ -63,33 +72,9 @@ let activeDeviceRegistration:
 const APP_KEYS_FETCH_TIMEOUT_MS = 8000
 const APP_KEYS_FAST_TIMEOUT_MS = 2000
 const LINKED_INVITE_REPUBLISH_RETRY_MS = 1500
-const NIP46_KIND = 24133
-const NIP46_LINK_TIMEOUT_MS = 120_000
+const NOSTR_IDENTITY_ROSTER_FETCH_TIMEOUT_MS = 4000
 
-type Nip46RequestMethod = 'connect' | 'get_public_key' | 'sign_event' | 'ping'
-
-type Nip46RequestMessage = {
-  id: string
-  method: Nip46RequestMethod
-  params: string[]
-}
-
-type Nip46ResponseMessage = {
-  id: string
-  result?: string
-  error?: string
-}
-
-type Nip46Message = Nip46RequestMessage | Nip46ResponseMessage
-
-export type Nip46LinkDeviceRequest = {
-  clientPubkey: string
-  secret: string
-  relays: string[]
-  devicePubkey: string
-}
-
-export type Nip46LinkDeviceSession = {
+export type NostrIdentityLinkDeviceSession = {
   url: string
   stop: () => void
 }
@@ -98,149 +83,6 @@ const registrationKey = (ownerPubkey: string, devicePubkey: string): string =>
   `${ownerPubkey}:${devicePubkey}`
 
 const now = (): number => Math.round(Date.now() / 1000)
-
-const nip46RequestId = (): string =>
-  String(crypto.getRandomValues(new Uint32Array(1))[0])
-
-const isNip46RequestMessage = (message: Nip46Message): message is Nip46RequestMessage =>
-  'method' in message && typeof message.method === 'string'
-
-const encodeNip46Message = (message: Nip46Message): string => JSON.stringify(message)
-
-const decodeNip46Message = (plaintext: string): Nip46Message | null => {
-  try {
-    const message = JSON.parse(plaintext) as Record<string, unknown>
-    if (!message || typeof message !== 'object' || typeof message.id !== 'string') {
-      return null
-    }
-    if ('method' in message) {
-      if (typeof message.method !== 'string' || !Array.isArray(message.params)) {
-        return null
-      }
-      return {
-        id: message.id,
-        method: message.method as Nip46RequestMethod,
-        params: message.params.filter((param): param is string => typeof param === 'string'),
-      }
-    }
-    return {
-      id: message.id,
-      ...(typeof message.result === 'string' ? { result: message.result } : {}),
-      ...(typeof message.error === 'string' ? { error: message.error } : {}),
-    }
-  } catch {
-    return null
-  }
-}
-
-const encryptNip46WithKey = (
-  senderPrivateKey: Uint8Array,
-  receiverPubkey: string,
-  message: Nip46Message
-): string => {
-  const conversationKey = nip44.v2.utils.getConversationKey(senderPrivateKey, receiverPubkey)
-  return nip44.v2.encrypt(encodeNip46Message(message), conversationKey)
-}
-
-const decryptNip46WithKey = (
-  receiverPrivateKey: Uint8Array,
-  senderPubkey: string,
-  content: string
-): Nip46Message | null => {
-  try {
-    const conversationKey = nip44.v2.utils.getConversationKey(receiverPrivateKey, senderPubkey)
-    return decodeNip46Message(nip44.v2.decrypt(content, conversationKey))
-  } catch {
-    return null
-  }
-}
-
-const decryptNip46AsOwner = async (event: VerifiedEvent): Promise<Nip46Message | null> => {
-  const ownerPrivateKey = getPrivkeyBytes()
-  if (ownerPrivateKey) {
-    return decryptNip46WithKey(ownerPrivateKey, event.pubkey, event.content)
-  }
-  if (typeof window !== 'undefined' && window.nostr?.nip44?.decrypt) {
-    try {
-      return decodeNip46Message(await window.nostr.nip44.decrypt(event.pubkey, event.content))
-    } catch {
-      return null
-    }
-  }
-  return null
-}
-
-const signNip46EventWithKey = (
-  senderPrivateKey: Uint8Array,
-  receiverPubkey: string,
-  message: Nip46Message
-): VerifiedEvent => {
-  return finalizeEvent(
-    {
-      kind: NIP46_KIND,
-      created_at: now(),
-      tags: [['p', receiverPubkey]],
-      content: encryptNip46WithKey(senderPrivateKey, receiverPubkey, message),
-    },
-    senderPrivateKey
-  ) as VerifiedEvent
-}
-
-const signEventAsOwner = async (unsigned: UnsignedEvent): Promise<VerifiedEvent> => {
-  const currentIdentity = get(identity)
-  if (!currentIdentity?.pubkey) {
-    throw new Error('Sign in first.')
-  }
-
-  const ownerPrivateKey = getPrivkeyBytes()
-  const ownerUnsigned = { ...unsigned, pubkey: currentIdentity.pubkey }
-  if (ownerPrivateKey) {
-    const { pubkey: _pubkey, ...template } = ownerUnsigned
-    return finalizeEvent(template, ownerPrivateKey) as VerifiedEvent
-  }
-  if (typeof window !== 'undefined' && window.nostr?.signEvent) {
-    return window.nostr.signEvent(ownerUnsigned) as Promise<VerifiedEvent>
-  }
-  throw new Error('This sign-in method cannot link a device here.')
-}
-
-const signNip46EventAsOwner = async (
-  receiverPubkey: string,
-  message: Nip46Message
-): Promise<VerifiedEvent> => {
-  const currentIdentity = get(identity)
-  if (!currentIdentity?.pubkey) {
-    throw new Error('Sign in first.')
-  }
-
-  const ownerPrivateKey = getPrivkeyBytes()
-  let content: string
-  if (ownerPrivateKey) {
-    content = encryptNip46WithKey(ownerPrivateKey, receiverPubkey, message)
-  } else if (typeof window !== 'undefined' && window.nostr?.nip44?.encrypt) {
-    content = await window.nostr.nip44.encrypt(receiverPubkey, encodeNip46Message(message))
-  } else {
-    throw new Error('This sign-in method cannot link a device here.')
-  }
-
-  return signEventAsOwner({
-    kind: NIP46_KIND,
-    pubkey: currentIdentity.pubkey,
-    created_at: now(),
-    tags: [['p', receiverPubkey]],
-    content,
-  })
-}
-
-const canSignAndEncryptNip46AsOwner = (): boolean => {
-  if (getPrivkeyBytes()) return true
-  return !!(
-    typeof window !== 'undefined' &&
-    window.nostr?.signEvent &&
-    window.nostr?.nip44?.encrypt &&
-    window.nostr?.nip44?.decrypt
-  )
-}
 
 const publishSignedEventToRelays = async (
   event: VerifiedEvent,
@@ -253,30 +95,67 @@ const publishSignedEventToRelays = async (
   await e.publish(relaySet, 10000, 1)
 }
 
-const signedAppKeysContainsDevice = (
-  event: VerifiedEvent,
-  ownerPubkey: string,
-  devicePubkey: string
-): boolean => {
-  if (event.pubkey !== ownerPubkey || !verifyEvent(event) || !isAppKeysEvent(event)) {
-    return false
+const isNostrIdentityRosterOpEvent = (event: Pick<VerifiedEvent, 'kind' | 'tags'>): boolean =>
+  event.kind === FACT_OP_KIND &&
+  event.tags.some((tag) => tag[0] === 'type' && tag[1] === IDENTITY_GRAPH_ROSTER_TYPE)
+
+const isNostrIdentityApprovalReceiptEvent = (
+  event: Pick<VerifiedEvent, 'kind' | 'tags'>
+): boolean =>
+  event.kind === FACT_OP_KIND &&
+  event.tags.some(
+    (tag) => tag[0] === 'type' && tag[1] === NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_TYPE
+  )
+
+const parseNostrIdentityRosterOps = (
+  events: VerifiedEvent[],
+  profileId: string
+): SignedNostrIdentityRosterOp[] => {
+  const rosterOps: SignedNostrIdentityRosterOp[] = []
+  for (const event of events) {
+    if (!isNostrIdentityRosterOpEvent(event)) continue
+    try {
+      const rosterOp = parseNostrIdentityRosterOpEvent(event)
+      if (rosterOp.content.profile_id === profileId) {
+        rosterOps.push(rosterOp)
+      }
+    } catch {
+      // Ignore unrelated or invalid fact events.
+    }
   }
-  try {
-    return AppKeys.fromEvent(event)
-      .getAllDevices()
-      .some((device) => device.identityPubkey === devicePubkey)
-  } catch {
-    return false
-  }
+  return rosterOps
 }
 
-const appKeysRequestForDevice = (ownerPubkey: string, devicePubkey: string): UnsignedEvent => {
-  const appKeys = new AppKeys([{ identityPubkey: devicePubkey, createdAt: now() }])
-  return {
-    ...appKeys.getEvent(),
-    pubkey: ownerPubkey,
-    created_at: now(),
-  }
+const fetchNostrIdentityRosterOps = async (
+  profileId: string,
+  timeoutMs: number = NOSTR_IDENTITY_ROSTER_FETCH_TIMEOUT_MS
+): Promise<SignedNostrIdentityRosterOp[]> => {
+  const ndkInstance = getNDK()
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const fetched = await Promise.race([
+    ndkInstance
+      .fetchEvents(
+        {
+          kinds: [FACT_OP_KIND],
+          '#i': [profileId],
+        } as unknown as NDKFilter,
+        { cacheUsage: NDKSubscriptionCacheUsage.PARALLEL }
+      )
+      .finally(() => {
+        if (timeout) clearTimeout(timeout)
+      }),
+    new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), timeoutMs)
+    }),
+  ])
+
+  if (!fetched) return []
+  return parseNostrIdentityRosterOps(
+    Array.from(fetched)
+      .map((event) => event.rawEvent() as VerifiedEvent | undefined)
+      .filter((event): event is VerifiedEvent => !!event),
+    profileId
+  )
 }
 
 const stateIncludesDevice = (
@@ -624,9 +503,16 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
 
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
+  const currentIdentity = get(identity)
+  const isNostrIdentityLinkedDevice =
+    currentIdentity?.isLinkedDevice === true && !!currentIdentity.nostrIdentitySession
 
   let linkedDeviceAuthorized = currentRuntime.getState().isCurrentDeviceRegistered
-  if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {
+  if (isNostrIdentityLinkedDevice && !linkedDeviceAuthorized) {
+    console.warn(
+      '[privateChats] NostrIdentity-linked device is approved, but NDR messaging still requires legacy AppKeys/session bridging; not publishing AppKeys from the new device-link flow.'
+    )
+  } else if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {
     try {
       await currentRuntime.refreshOwnAppKeysFromRelay(
         ownerPubkey,
@@ -695,152 +581,90 @@ export const registerLinkedDevice = async (identityPubkey: string): Promise<void
   })
 }
 
-export const parseNip46LinkDeviceRequest = (
-  input: string
-): Nip46LinkDeviceRequest | null => {
-  const trimmed = input.trim()
-  if (!trimmed) return null
-  const cleaned = trimmed.startsWith('nostr:') ? trimmed.slice('nostr:'.length) : trimmed
-
-  try {
-    const url = new URL(cleaned)
-    if (url.protocol !== 'nostrconnect:') return null
-    const clientPubkey = url.hostname
-    const secret = url.searchParams.get('secret')?.trim() || ''
-    const devicePubkey =
-      url.searchParams.get('device')?.trim() ||
-      url.searchParams.get('device_pubkey')?.trim() ||
-      ''
-    const perms = url.searchParams.get('perms') || ''
-    if (!clientPubkey || !secret || !devicePubkey) return null
-    if (!perms.split(',').includes(`sign_event:${APP_KEYS_EVENT_KIND}`)) return null
-
-    return {
-      clientPubkey,
-      secret,
-      devicePubkey,
-      relays: url.searchParams.getAll('relay').filter(Boolean),
-    }
-  } catch {
-    return null
-  }
-}
-
-const buildNip46LinkDeviceUrl = (
-  clientPubkey: string,
-  secret: string,
-  devicePubkey: string,
-  relays: string[]
-): string => {
-  const params = new URLSearchParams()
-  relays.forEach((relay) => params.append('relay', relay))
-  params.set('secret', secret)
-  params.set('perms', `get_public_key,sign_event:${APP_KEYS_EVENT_KIND}`)
-  params.set('name', 'Iris Chat')
-  params.set('url', 'https://chat.iris.to')
-  params.set('image', 'https://chat.iris.to/favicon.png')
-  params.set('device', devicePubkey)
-  return `nostrconnect://${clientPubkey}?${params.toString()}`
-}
-
-export const startNip46LinkDevice = async (
-  onAccepted: (ownerPubkey: string) => void | Promise<void>
-): Promise<Nip46LinkDeviceSession> => {
+export const startNostrIdentityLinkDevice = async (
+  onAccepted: (
+    ownerPubkey: string,
+    nostrIdentitySession: NostrIdentitySession | null
+  ) => void | Promise<void>
+): Promise<NostrIdentityLinkDeviceSession> => {
   await ensureConnected()
-  await initDelegateManager()
 
-  const delegateManager = getDelegateManager()
-  const devicePubkey = delegateManager.getIdentityPublicKey()
-  const clientPrivateKey = generateSecretKey()
-  const clientPubkey = getPublicKey(clientPrivateKey)
-  const secret = bytesToHex(generateSecretKey()).slice(0, 16)
+  const labels = await getCurrentDeviceRegistrationLabels().catch((): DeviceLabels => ({}))
   const relays = [...relayStore.getState().relays]
-  const url = buildNip46LinkDeviceUrl(clientPubkey, secret, devicePubkey, relays)
+  const localRequest = createNostrIdentityChatDeviceApprovalRequest({
+    requestedAt: now(),
+    label: labels.deviceLabel || labels.clientLabel || 'Iris Chat Web',
+    relays,
+  })
   const subscribe = createRelayOnlySubscribe(getNDK())
 
   let stopped = false
   let completed = false
-  let remoteSignerPubkey: string | null = null
-  let getPublicKeyRequestId: string | null = null
-  let signEventRequestId: string | null = null
-  let ownerPubkey: string | null = null
-
-  const publishClientRequest = async (
-    receiverPubkey: string,
-    method: Exclude<Nip46RequestMethod, 'connect'>,
-    params: string[] = []
-  ): Promise<string> => {
-    const message: Nip46RequestMessage = {
-      id: nip46RequestId(),
-      method,
-      params,
-    }
-    const event = signNip46EventWithKey(clientPrivateKey, receiverPubkey, message)
-    await publishSignedEventToRelays(event, relays)
-    return message.id
-  }
-
+  let timeout: ReturnType<typeof setTimeout>
   const unsubscribe = subscribe(
     {
-      kinds: [NIP46_KIND],
-      '#p': [clientPubkey],
-      since: now() - 30,
-    } as NDKFilter,
+      kinds: [FACT_OP_KIND],
+      '#p': [localRequest.request.requestPubkey],
+      since: localRequest.request.requestedAt - 30,
+    } as unknown as NDKFilter,
     async (event) => {
-      if (stopped || completed || event.kind !== NIP46_KIND) return
-      const message = decryptNip46WithKey(clientPrivateKey, event.pubkey, event.content)
-      if (!message) return
+      if (stopped || completed || !isNostrIdentityApprovalReceiptEvent(event)) return
 
-      if (isNip46RequestMessage(message)) {
-        if (message.method !== 'connect') return
-        const [signerPubkey, receivedSecret] = message.params
-        if (signerPubkey !== event.pubkey || receivedSecret !== secret) return
-        remoteSignerPubkey = signerPubkey
-        getPublicKeyRequestId = await publishClientRequest(signerPubkey, 'get_public_key')
+      let receipt: ReturnType<typeof parseNostrIdentityDeviceApprovalReceiptEvent>
+      try {
+        receipt = parseNostrIdentityDeviceApprovalReceiptEvent(event, {
+          requestSecretKey: localRequest.request.requestSecretKey,
+          request: localRequest.request,
+        })
+      } catch {
         return
       }
 
-      if (message.result === secret && event.pubkey) {
-        remoteSignerPubkey = event.pubkey
-        getPublicKeyRequestId = await publishClientRequest(event.pubkey, 'get_public_key')
+      const ownerPubkey = receipt.subjectPubkey
+      if (!ownerPubkey) {
+        console.warn('[privateChats] NostrIdentity approval receipt missing chat subject pubkey')
         return
       }
 
-      if (message.id === getPublicKeyRequestId && message.result && !message.error) {
-        if (message.result !== event.pubkey || event.pubkey !== remoteSignerPubkey) return
-        ownerPubkey = message.result
-        const unsigned = appKeysRequestForDevice(ownerPubkey, devicePubkey)
-        signEventRequestId = await publishClientRequest(ownerPubkey, 'sign_event', [
-          JSON.stringify(unsigned),
-        ])
+      let receiptRosterOp: SignedNostrIdentityRosterOp
+      try {
+        receiptRosterOp = parseNostrIdentityDeviceApprovalReceiptRosterOp(receipt)
+      } catch (error) {
+        console.warn('[privateChats] Invalid NostrIdentity approval roster receipt:', error)
         return
       }
 
-      if (message.id === signEventRequestId && message.result && !message.error) {
-        if (!ownerPubkey) return
-        let signedEvent: VerifiedEvent
-        try {
-          signedEvent = JSON.parse(message.result) as VerifiedEvent
-        } catch {
-          return
-        }
-        if (!signedAppKeysContainsDevice(signedEvent, ownerPubkey, devicePubkey)) return
-        completed = true
-        await publishSignedEventToRelays(signedEvent, relays).catch(() => {})
-        clearTimeout(timeout)
-        unsubscribe()
-        await onAccepted(ownerPubkey)
+      const fetchedRosterOps = await fetchNostrIdentityRosterOps(receipt.profileId).catch((error) => {
+        console.warn('[privateChats] Failed to fetch NostrIdentity roster ops:', error)
+        return []
+      })
+      let linkedNostrIdentitySession: NostrIdentitySession | null = null
+      try {
+        linkedNostrIdentitySession = buildLinkedNostrIdentitySessionFromApproval({
+          request: localRequest.request,
+          receipt,
+          deviceAppKeySecretKey: localRequest.deviceAppKeySecretKey,
+          rosterOps: mergeNostrIdentityRosterOps(fetchedRosterOps, [receiptRosterOp]),
+        })
+        saveNostrIdentityBrowserSession(ownerPubkey, linkedNostrIdentitySession)
+      } catch (error) {
+        console.warn('[privateChats] Could not save approved NostrIdentity session:', error)
       }
+
+      completed = true
+      clearTimeout(timeout)
+      unsubscribe()
+      await onAccepted(ownerPubkey, linkedNostrIdentitySession)
     }
   )
 
-  const timeout = setTimeout(() => {
+  timeout = setTimeout(() => {
     stopped = true
     unsubscribe()
-  }, NIP46_LINK_TIMEOUT_MS)
+  }, NOSTR_IDENTITY_CHAT_DEVICE_LINK_TIMEOUT_MS)
 
   return {
-    url,
+    url: localRequest.url,
     stop: () => {
       stopped = true
       clearTimeout(timeout)
@@ -1046,6 +870,22 @@ export const resetManagers = (): void => {
   activeDeviceRegistration = null
 }
 
+const updateCurrentNostrIdentitySession = (
+  ownerPubkey: string,
+  session: NostrIdentitySession
+): void => {
+  saveNostrIdentityBrowserSession(ownerPubkey, session)
+  identity.update((currentIdentity) => {
+    if (!currentIdentity || currentIdentity.pubkey !== ownerPubkey) {
+      return currentIdentity
+    }
+    return {
+      ...currentIdentity,
+      nostrIdentitySession: session,
+    }
+  })
+}
+
 export const republishInvite = async (): Promise<void> => {
   await ensureConnected()
   await getRuntime().republishInvite()
@@ -1068,13 +908,13 @@ export const getRegisteredDevices = (): DeviceEntry[] => {
   return getRuntime().getState().registeredDevices
 }
 
-export const acceptNip46LinkDevice = async (input: string): Promise<void> => {
+export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void> => {
   if (isLinkedDeviceLogin()) {
     throw new Error('Linked devices cannot add devices')
   }
 
-  const request = parseNip46LinkDeviceRequest(input)
-  if (!request) {
+  const parsed = parseNostrIdentityChatDeviceApprovalRequest(input)
+  if (!parsed) {
     throw new Error('Invalid link code')
   }
 
@@ -1082,127 +922,23 @@ export const acceptNip46LinkDevice = async (input: string): Promise<void> => {
   if (!currentIdentity?.pubkey) {
     throw new Error('Owner pubkey not available')
   }
-  if (!canSignAndEncryptNip46AsOwner()) {
-    throw new Error('This sign-in method cannot link a device here.')
+
+  const adminSession = currentIdentity.nostrIdentitySession
+  if (!adminSession || adminSession.status !== 'active') {
+    throw new Error('NostrIdentity session is not available for this account')
   }
 
   await ensureConnected()
-  const currentRuntime = getRuntime()
-  await currentRuntime.initForOwner(currentIdentity.pubkey)
-  const labels = await getLinkedDeviceRegistrationLabels()
-  const prepared = await currentRuntime.prepareRegistrationForIdentity({
-    ownerPubkey: currentIdentity.pubkey,
-    identityPubkey: request.devicePubkey,
-    timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
-    ...labels,
+  const approval = buildNostrIdentityChatDeviceApprovalEvents({
+    request: parsed.request,
+    adminSession,
+    subjectPubkey: currentIdentity.pubkey,
+    approvedAt: now(),
   })
-
-  const unsigned = {
-    ...prepared.appKeys.getEvent(getPrivkeyBytes() ?? undefined),
-    pubkey: currentIdentity.pubkey,
-  }
-  const signedAppKeysEvent = await signEventAsOwner(unsigned)
-  if (
-    !signedAppKeysContainsDevice(
-      signedAppKeysEvent,
-      currentIdentity.pubkey,
-      request.devicePubkey
-    )
-  ) {
-    throw new Error('Invalid link code')
-  }
-
-  const relays = request.relays.length > 0 ? request.relays : [...relayStore.getState().relays]
-  await publishSignedEventToRelays(signedAppKeysEvent, relays)
-  startNip46AppKeysSigner(request, signedAppKeysEvent, relays)
-  await currentRuntime.publishPreparedRegistration(prepared).catch((error) => {
-    console.warn('[privateChats] Device roster refresh after NIP-46 link failed:', error)
-  })
-}
-
-function startNip46AppKeysSigner(
-  request: Nip46LinkDeviceRequest,
-  signedAppKeysEvent: VerifiedEvent,
-  relays: string[]
-): void {
-  const ownerPubkey = get(identity)?.pubkey
-  if (!ownerPubkey) return
-
-  let stopped = false
-  let timeout: ReturnType<typeof setTimeout> | null = null
-  const subscribe = createRelayOnlySubscribe(getNDK())
-  const unsubscribe = subscribe(
-    {
-      kinds: [NIP46_KIND],
-      authors: [request.clientPubkey],
-      '#p': [ownerPubkey],
-      since: now() - 30,
-    } as NDKFilter,
-    async (event) => {
-      if (stopped || event.kind !== NIP46_KIND || event.pubkey !== request.clientPubkey) {
-        return
-      }
-      const message = await decryptNip46AsOwner(event)
-      if (!message || !isNip46RequestMessage(message)) return
-
-      const respond = async (response: Nip46ResponseMessage) => {
-        const responseEvent = await signNip46EventAsOwner(request.clientPubkey, response)
-        await publishSignedEventToRelays(responseEvent, relays)
-      }
-
-      if (message.method === 'get_public_key') {
-        await respond({ id: message.id, result: ownerPubkey })
-        return
-      }
-
-      if (message.method === 'sign_event') {
-        let unsigned: UnsignedEvent
-        try {
-          unsigned = JSON.parse(message.params[0] || '{}') as UnsignedEvent
-        } catch {
-          return
-        }
-        const requestedDevice = unsigned.tags?.some(
-          (tag) =>
-            tag[0] === 'device' &&
-            tag[1] === request.devicePubkey &&
-            unsigned.kind === APP_KEYS_EVENT_KIND &&
-            unsigned.pubkey === ownerPubkey
-        )
-        await respond(
-          requestedDevice
-            ? { id: message.id, result: JSON.stringify(signedAppKeysEvent) }
-            : { id: message.id, error: 'Invalid device request.' }
-        )
-        stopped = true
-        if (timeout) clearTimeout(timeout)
-        unsubscribe()
-        return
-      }
-
-      if (message.method === 'ping') {
-        await respond({ id: message.id, result: 'pong' })
-      }
-    }
-  )
-
-  timeout = setTimeout(() => {
-    stopped = true
-    unsubscribe()
-  }, NIP46_LINK_TIMEOUT_MS)
-
-  void signNip46EventAsOwner(request.clientPubkey, {
-    id: nip46RequestId(),
-    method: 'connect',
-    params: [ownerPubkey, request.secret],
-  })
-    .then((event) => publishSignedEventToRelays(event, relays))
-    .catch((error) => {
-      console.warn('[privateChats] Failed to start NIP-46 signer:', error)
-      clearTimeout(timeout)
-      stopped = true
-      unsubscribe()
-    })
+  const relays = parsed.relays.length > 0 ? parsed.relays : [...relayStore.getState().relays]
+  await publishSignedEventToRelays(approval.rosterEvent as VerifiedEvent, relays)
+  await publishSignedEventToRelays(approval.receiptEvent as VerifiedEvent, relays)
+  updateCurrentNostrIdentitySession(currentIdentity.pubkey, approval.nextAdminSession)
 }
 
 export const acceptLinkInvite = async (invite: Invite): Promise<void> => {

@@ -18,18 +18,15 @@
   import { messageRequestSettings, setReceiveMessageRequests } from '../lib/messageRequestSettings'
   import { devices } from '../lib/devices'
   import { describeDeviceRosterDevice } from '../lib/deviceLabels'
-  import { parseLinkInviteInput } from '../lib/linkInvites'
   import { setThemePreference, themePreference, type ThemePreference } from '../lib/theme'
   import {
-    acceptLinkInvite,
-    acceptNip46LinkDevice,
+    acceptNostrIdentityLinkDevice,
     ensureDeviceRegistered,
     getAppKeysManager,
-    parseNip46LinkDeviceRequest,
-    registerLinkedDevice,
     revokeDevice,
     revokeDevices,
   } from '../lib/privateChats'
+  import { parseNostrIdentityChatDeviceApprovalRequest } from '../lib/nostrIdentityDeviceLink'
   import { getErrorMessage } from '../lib/utils'
 
   interface Props {
@@ -264,29 +261,8 @@
 
   async function handleAcceptLinkInvite(raw: string) {
     if (!$identity?.pubkey) return
-    const nip46Request = parseNip46LinkDeviceRequest(raw)
-    if (nip46Request || raw.trim().startsWith('nostrconnect:')) {
-      if (!nip46Request) {
-        linkInviteError = 'Invalid link code'
-        linkInviteStatus = 'error'
-        return
-      }
-
-      linkInviteStatus = 'accepting'
-      linkInviteError = ''
-
-      try {
-        await acceptNip46LinkDevice(raw)
-        linkInviteStatus = 'linked'
-      } catch (e) {
-        linkInviteStatus = 'error'
-        linkInviteError = getErrorMessage(e, 'Failed to link device')
-      }
-      return
-    }
-
-    const invite = parseLinkInviteInput(raw, $identity.pubkey)
-    if (!invite) {
+    const nostrIdentityRequest = parseNostrIdentityChatDeviceApprovalRequest(raw)
+    if (!nostrIdentityRequest) {
       linkInviteError = 'Invalid link code'
       linkInviteStatus = 'error'
       return
@@ -296,15 +272,7 @@
     linkInviteError = ''
 
     try {
-      await acceptLinkInvite(invite)
-
-      const identityPubkey = invite.inviter
-      const alreadyRegistered = deviceState.registeredDevices.some(
-        (d) => d.identityPubkey === identityPubkey
-      )
-      if (!alreadyRegistered) {
-        await registerLinkedDevice(identityPubkey)
-      }
+      await acceptNostrIdentityLinkDevice(raw)
       linkInviteStatus = 'linked'
     } catch (e) {
       linkInviteStatus = 'error'
@@ -325,9 +293,8 @@
     if (linkInviteStatus !== 'idle') return
     if (linkInviteInput === linkInviteLastAutoAttempt) return
 
-    const invite = parseLinkInviteInput(linkInviteInput, $identity.pubkey)
-    const nip46Request = parseNip46LinkDeviceRequest(linkInviteInput)
-    if (!invite && !nip46Request) return
+    const nostrIdentityRequest = parseNostrIdentityChatDeviceApprovalRequest(linkInviteInput)
+    if (!nostrIdentityRequest) return
 
     linkInviteLastAutoAttempt = linkInviteInput
     void handleAcceptLinkInvite(linkInviteInput)

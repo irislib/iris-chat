@@ -13,6 +13,7 @@ import { relayStore } from './relayStore'
 import {
   clearNostrIdentityBrowserSession,
   ensureNostrIdentityBrowserSession,
+  loadNostrIdentityBrowserSession,
   nostrIdentitySession,
   publishNostrIdentityBrowserSessionRoster,
 } from './nostrIdentitySession'
@@ -253,8 +254,16 @@ export async function loginWithNip07(displayName: string | null = null): Promise
   saveIdentity('nip07')
 }
 
-export async function loginLinkedDevice(ownerPubkey: string, displayName: string | null = null): Promise<void> {
+export async function loginLinkedDevice(
+  ownerPubkey: string,
+  displayName: string | null = null,
+  options: { nostrIdentitySession?: NostrIdentitySession | null } = {}
+): Promise<void> {
   ndkInstance.signer = undefined
+  const linkedNostrIdentitySession =
+    options.nostrIdentitySession !== undefined
+      ? options.nostrIdentitySession
+      : loadNostrIdentityBrowserSession(ownerPubkey)
 
   identity.set({
     pubkey: ownerPubkey,
@@ -262,9 +271,9 @@ export async function loginLinkedDevice(ownerPubkey: string, displayName: string
     displayName,
     isNip07: false,
     isLinkedDevice: true,
-    nostrIdentitySession: null,
+    nostrIdentitySession: linkedNostrIdentitySession,
   })
-  nostrIdentitySession.set(null)
+  nostrIdentitySession.set(linkedNostrIdentitySession)
 
   saveLinkedIdentity(ownerPubkey)
 }

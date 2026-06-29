@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity, loginLinkedDevice } from '../lib/identity'
   import { isLinkInvite, parseInviteFromHash } from '../lib/chat'
-  import { startNip46LinkDevice } from '../lib/privateChats'
+  import { startNostrIdentityLinkDevice } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
   import QRCode from './QRCode.svelte'
   import CopyButton from './CopyButton.svelte'
@@ -68,9 +68,9 @@
     linkInviteError = ''
     try {
       linkDeviceStop?.()
-      const session = await startNip46LinkDevice(async (ownerPubkey) => {
+      const session = await startNostrIdentityLinkDevice(async (ownerPubkey, nostrIdentitySession) => {
         try {
-          await loginLinkedDevice(ownerPubkey, displayName || null)
+          await loginLinkedDevice(ownerPubkey, displayName || null, { nostrIdentitySession })
           if (window.location.hash) {
             history.replaceState(null, '', window.location.pathname)
           }
