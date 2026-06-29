@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
 import type { Rumor } from 'nostr-double-ratchet'
+import type { VerifiedEvent } from 'nostr-tools'
 
 // --- Mocks ---
 
@@ -9,12 +10,55 @@ const MEMBER_B = 'bbbb'.repeat(16)
 const MEMBER_C = 'cccc'.repeat(16)
 const NON_MEMBER = 'dddd'.repeat(16)
 const OTHER_DEVICE = 'eeee'.repeat(16)
+const publishedGroupRosterFacts: Array<{ kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number }> = []
+
+vi.mock('@nostr-dev-kit/ndk', () => ({
+  NDKEvent: class {
+    private event: { kind: number; content: string; tags: string[][]; pubkey: string; id?: string; sig?: string; created_at?: number }
+
+    constructor(_ndk: unknown, event: { kind: number; content: string; tags?: string[][]; pubkey?: string; created_at?: number }) {
+      this.event = {
+        kind: event.kind,
+        content: event.content,
+        tags: event.tags || [],
+        pubkey: event.pubkey || MY_PUBKEY,
+        created_at: event.created_at || Math.floor(Date.now() / 1000),
+      }
+    }
+
+    async sign(signer: { pubkey?: string }): Promise<string> {
+      this.event.pubkey = signer.pubkey || this.event.pubkey
+      this.event.id = `fact-${publishedGroupRosterFacts.length + 1}`
+      this.event.sig = 'sig'
+      return this.event.sig
+    }
+
+    rawEvent() {
+      return this.event
+    }
+
+    async publish(): Promise<Set<{ url: string }>> {
+      publishedGroupRosterFacts.push(this.event as { kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number })
+      return new Set([{ url: 'wss://relay.test' }])
+    }
+  },
+}))
 
 vi.mock('./identity', () => {
   const { writable } = require('svelte/store')
+  const signer = { pubkey: MY_PUBKEY }
   return {
     getPubkey: () => MY_PUBKEY,
-    ndk: writable({}),
+    identity: writable({ pubkey: MY_PUBKEY, signer, displayName: null, isNip07: false }),
+    ndk: writable({
+      signer,
+      subscribe: vi.fn(() => ({
+        on: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      })),
+      fetchEvents: vi.fn(async () => []),
+    }),
     bytesToHex: (bytes: Uint8Array) => Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join(''),
   }
 })
@@ -199,13 +243,54 @@ vi.mock('nostr-double-ratchet', async () => {
     isGroupAdmin: (group: { admins?: string[] }, pubkey: string) => {
       return Array.isArray(group.admins) && group.admins.includes(pubkey)
     },
+    isGroupRosterFactEvent: actual.isGroupRosterFactEvent,
+    parseGroupRosterFactEvent: (event: {
+      id: string
+      kind: number
+      pubkey: string
+      created_at: number
+      content: string
+      tags: string[][]
+    }) => {
+      if (!actual.isGroupRosterFactEvent(event)) {
+        throw new Error('Event is not a GroupRoster fact')
+      }
+      const tagValues = (name: string) =>
+        event.tags.filter((tag) => tag[0] === name).map((tag) => tag[1]).filter(Boolean)
+      const tagValue = (name: string) => tagValues(name)[0]
+      const groupId = event.tags.find((tag) => tag[0] === 'i' && tag[2] === 'group')?.[1]
+      if (!groupId) throw new Error('GroupRoster fact missing group subject')
+      const members = Array.from(new Set(tagValues('member'))).sort()
+      const admins = Array.from(new Set(tagValues('admin'))).sort()
+      return {
+        eventId: event.id,
+        signerPubkey: event.pubkey,
+        groupId,
+        revision: Number(tagValue('revision') || 0),
+        createdBy: tagValue('created_by') || event.pubkey,
+        updatedAt: Number(tagValue('updated_at') || event.created_at),
+        eventCreatedAt: event.created_at,
+        group: {
+          id: groupId,
+          name: tagValue('name') || '',
+          members,
+          admins,
+          createdAt: Number(tagValue('created_at') || 0),
+        },
+      }
+    },
     parseReaction: (content: string) => ({ emoji: content, isRemoval: content === '-' }),
   }
 })
 
-vi.mock('nostr-tools', () => ({
-  getEventHash: () => Math.random().toString(36).slice(2),
-}))
+vi.mock('nostr-tools', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('nostr-tools')>()
+  return {
+    ...actual,
+    getEventHash: () => Math.random().toString(36).slice(2),
+    verifyEvent: () => true,
+  }
+})
 
 vi.mock('./storage', () => ({
   saveGroup: vi.fn().mockResolvedValue(undefined),
@@ -249,6 +334,7 @@ vi.mock('./groupChannels', () => ({
 describe('groups', () => {
   beforeEach(async () => {
     sendEventCalls.length = 0
+    publishedGroupRosterFacts.length = 0
     sessionManagerValues.clear()
     runtimeGroups.clear()
     // Reset group stores between tests
@@ -296,6 +382,25 @@ describe('groups', () => {
 
       const myCount = group.members.filter(m => m === MY_PUBKEY).length
       expect(myCount).toBe(1)
+    })
+
+    it('publishes a group_roster fact snapshot without the group secret', async () => {
+      const { createGroup, GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE } = await import('./groups')
+      const group = await createGroup('Roster Fact Test', [MEMBER_B])
+
+      await vi.waitFor(() => {
+        expect(publishedGroupRosterFacts.length).toBeGreaterThan(0)
+      })
+      const fact = publishedGroupRosterFacts.at(-1)!
+      expect(fact.kind).toBe(GROUP_ROSTER_FACT_KIND)
+      expect(fact.content).toBe('')
+      expect(fact.tags).toContainEqual(['type', GROUP_ROSTER_FACT_TYPE])
+      expect(fact.tags).toContainEqual(['i', group.id, 'group'])
+      expect(fact.tags).toContainEqual(['name', 'Roster Fact Test'])
+      expect(fact.tags).toContainEqual(['member', MY_PUBKEY])
+      expect(fact.tags).toContainEqual(['member', MEMBER_B])
+      expect(fact.tags).toContainEqual(['admin', MY_PUBKEY])
+      expect(fact.tags.some((tag) => tag[0] === 'secret')).toBe(false)
     })
   })
 
@@ -373,6 +478,26 @@ describe('groups', () => {
 
       // Should send to both MEMBER_B and MEMBER_C
       await waitForRecipients(MEMBER_B, MEMBER_C)
+    })
+
+    it('publishes an updated group_roster fact when membership changes', async () => {
+      const { createGroup, addGroupMember } = await import('./groups')
+      const group = await createGroup('Roster Member Test', [MEMBER_B])
+      await vi.waitFor(() => {
+        expect(publishedGroupRosterFacts.length).toBeGreaterThan(0)
+      })
+      publishedGroupRosterFacts.length = 0
+
+      addGroupMember(group.id, MEMBER_C)
+
+      await vi.waitFor(() => {
+        expect(publishedGroupRosterFacts.length).toBeGreaterThan(0)
+      })
+      const fact = publishedGroupRosterFacts.at(-1)!
+      expect(fact.tags).toContainEqual(['i', group.id, 'group'])
+      expect(fact.tags).toContainEqual(['member', MEMBER_B])
+      expect(fact.tags).toContainEqual(['member', MEMBER_C])
+      expect(fact.tags).toContainEqual(['admin', MY_PUBKEY])
     })
   })
 
@@ -622,6 +747,58 @@ describe('groups', () => {
       handleGroupEvent(addRumor, MEMBER_B)
 
       expect(get(groups).get(groupId)!.members).toContain(MEMBER_C)
+    })
+  })
+
+  describe('group_roster fact ingest', () => {
+    it('creates a pending local group from a valid roster fact', async () => {
+      const { handleGroupRosterFactEvent, groups } = await import('./groups')
+      const groupId = 'fact-created-group'
+
+      const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Fact Created',
+        members: [MEMBER_B, MY_PUBKEY],
+        admins: [MEMBER_B],
+        signerPubkey: MEMBER_B,
+      }))
+
+      expect(handled).toBe(true)
+      const group = get(groups).get(groupId)
+      expect(group).toBeDefined()
+      expect(group!.name).toBe('Fact Created')
+      expect(group!.members).toEqual([MY_PUBKEY, MEMBER_B].sort())
+      expect(group!.admins).toEqual([MEMBER_B])
+      expect(group!.accepted).toBe(false)
+      expect(group!.secret).toBeUndefined()
+    })
+
+    it('updates an existing group snapshot from an admin roster fact', async () => {
+      const { handleGroupRosterFactEvent, groups } = await import('./groups')
+      const groupId = 'fact-updated-group'
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Before',
+        members: [MEMBER_B, MY_PUBKEY],
+        admins: [MEMBER_B],
+        signerPubkey: MEMBER_B,
+        revision: 1,
+      }))
+
+      const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'After',
+        members: [MEMBER_B, MY_PUBKEY, MEMBER_C],
+        admins: [MEMBER_B],
+        signerPubkey: MEMBER_B,
+        revision: 2,
+      }))
+
+      expect(handled).toBe(true)
+      const group = get(groups).get(groupId)
+      expect(group!.name).toBe('After')
+      expect(group!.members).toContain(MEMBER_C)
+      expect(group!.secret).toBeUndefined()
     })
   })
 
@@ -1064,6 +1241,46 @@ function makeMetadataRumor(groupId: string, metadata: { id: string, name: string
     created_at: Math.floor(Date.now() / 1000),
     tags: [['l', groupId]],
   } as Rumor
+}
+
+function makeRosterFactEvent({
+  groupId,
+  name,
+  members,
+  admins,
+  signerPubkey,
+  revision = 1,
+}: {
+  groupId: string
+  name: string
+  members: string[]
+  admins: string[]
+  signerPubkey: string
+  revision?: number
+}): VerifiedEvent {
+  const createdAt = 1700000000000
+  const updatedAt = 1700000000 + revision
+  return {
+    id: `roster-fact-${groupId}-${revision}`,
+    kind: 7368,
+    content: '',
+    pubkey: signerPubkey,
+    created_at: updatedAt,
+    sig: 'sig',
+    tags: [
+      ['type', 'group_roster'],
+      ['schema', '1'],
+      ['i', groupId, 'group'],
+      ['group_id', groupId],
+      ['revision', String(revision)],
+      ['name', name],
+      ['created_at', String(createdAt)],
+      ['updated_at', String(updatedAt)],
+      ['created_by', admins[0] || signerPubkey],
+      ...members.map((member) => ['member', member]),
+      ...admins.map((admin) => ['admin', admin]),
+    ],
+  } as VerifiedEvent
 }
 
 function makeMessageRumor(groupId: string, content: string, pubkey: string): Rumor {

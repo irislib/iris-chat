@@ -47,6 +47,7 @@
   },
   "dependencies": {
     "@hashtree/core": "link:../hashtree/ts/packages/hashtree",
+    "@iris/identity": "link:../iris-kit/packages/identity",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@nostr-dev-kit/ndk": "^2.18.1",
@@ -55,8 +56,9 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "^0.0.138",
-    "nostr-tools": "^2.19.3",
+    "nostr-double-ratchet": "github:mmalmi/nostr-double-ratchet#ffffd64&path:/ts",
+    "nostr-social-graph": "link:../nostr-social-graph/ts",
+    "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
   },
   "pnpm": {

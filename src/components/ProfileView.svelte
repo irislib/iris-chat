@@ -154,15 +154,15 @@
             data-testid="profile-appkeys-disclosure"
           >
             <summary class="cursor-pointer px-4 py-3 select-none">
-              <span class="text-sm font-medium text-gray-200">Known App Keys</span>
+              <span class="text-sm font-medium text-gray-200">Connected devices</span>
               <span class="block text-xs text-gray-400 mt-1">
                 {#if profileAppKeys.devices.length > 0}
                   {profileAppKeys.devices.length}
-                  {profileAppKeys.devices.length === 1 ? ' device key published' : ' device keys published'}
+                  {profileAppKeys.devices.length === 1 ? ' device published' : ' devices published'}
                 {:else if profileAppKeys.loading}
                   Checking connected relays...
                 {:else}
-                  No published app keys seen yet
+                  No device roster seen yet
                 {/if}
               </span>
             </summary>
@@ -193,11 +193,11 @@
                 {/each}
               {:else if profileAppKeys.loading}
                 <p class="text-sm text-gray-400">
-                  Checking connected relays for device keys...
+                  Checking connected relays for devices...
                 </p>
               {:else}
                 <p class="text-sm text-gray-400">
-                  No app keys for this profile have been seen on your connected relays yet.
+                  No connected devices for this profile have been seen on your connected relays yet.
                 </p>
               {/if}
             </div>

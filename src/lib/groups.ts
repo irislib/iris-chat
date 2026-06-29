@@ -1,9 +1,17 @@
 import { writable, get } from 'svelte/store'
 import {
+  buildGroupRosterFactEvent,
+  buildGroupRosterFactFilter,
   CHAT_MESSAGE_KIND, REACTION_KIND, RECEIPT_KIND, TYPING_KIND, parseReaction,
   GROUP_METADATA_KIND,
+  GROUP_ROSTER_FACT_KIND,
+  GROUP_ROSTER_FACT_TYPE,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
+  isGroupRosterFactEvent,
+  parseGroupRosterFactEvent,
   type GroupData,
+  type GroupMetadata,
+  type GroupRosterFact,
   isGroupAdmin,
   createGroupData,
   buildGroupMetadataContent,
@@ -19,7 +27,8 @@ import {
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
 import type { Rumor } from 'nostr-double-ratchet'
-import { getPubkey } from './identity'
+import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { getPubkey, identity, ndk } from './identity'
 import { devices } from './devices'
 import { chats, type ChatMessage, type RecipientDeliveryStatus } from './chat'
 import {
@@ -43,6 +52,7 @@ import {
   type StoredGroup,
   type StoredMessage
 } from './storage'
+import { asNdkEventSubscription } from './ndkSubscription'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
 import { expirationStore } from './expirationStore'
@@ -50,11 +60,12 @@ import { onMessageRelayPublish } from './messageRelayStatus'
 import { parseReceipt, shouldAdvanceStatus, type MessageStatus, type ReceiptPayload } from './receipts'
 import { receiptSettings } from './receiptSettings'
 
-export { GROUP_METADATA_KIND }
+export { GROUP_METADATA_KIND, GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE }
 export type Group = GroupData
 
 type OuterEvent = { id?: string; outerEventId?: string } | unknown
 type NativeGroupSendResult = { outer: VerifiedEvent; inner: Rumor }
+type GroupRosterFactCursor = Pick<GroupRosterFact, 'revision' | 'updatedAt' | 'eventCreatedAt' | 'eventId'>
 
 export interface GroupMessage extends ChatMessage {
   senderPubkey?: string
@@ -70,6 +81,10 @@ const pendingGroupEvents = new Map<string, Array<{ rumor: Rumor, senderPubkey: s
 const MAX_PENDING_PER_GROUP = 50
 const PENDING_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
 const nativeGroupSendQueue = new Map<string, Promise<void>>()
+const groupRosterFactCursors = new Map<string, GroupRosterFactCursor>()
+const seenGroupRosterFactIds = new Set<string>()
+let groupRosterFactSyncCleanup: (() => void) | null = null
+let groupRosterFactSyncOwner: string | null = null
 
 function enqueueNativeGroupSend<T>(groupId: string, action: () => Promise<T>): Promise<T> {
   const previous = nativeGroupSendQueue.get(groupId) ?? Promise.resolve()
@@ -148,6 +163,187 @@ function isRuntimeSessionReady(): boolean {
 }
 
 export const isAdmin = isGroupAdmin
+
+function compareGroupRosterFactCursor(
+  left: GroupRosterFactCursor,
+  right: GroupRosterFactCursor,
+): number {
+  return left.revision - right.revision
+    || left.updatedAt - right.updatedAt
+    || left.eventCreatedAt - right.eventCreatedAt
+    || left.eventId.localeCompare(right.eventId)
+}
+
+function rememberGroupRosterFact(groupId: string, fact: GroupRosterFactCursor): void {
+  const existing = groupRosterFactCursors.get(groupId)
+  if (existing && compareGroupRosterFactCursor(existing, fact) >= 0) return
+  groupRosterFactCursors.set(groupId, fact)
+}
+
+function shouldApplyGroupRosterFact(fact: GroupRosterFact): boolean {
+  if (seenGroupRosterFactIds.has(fact.eventId)) return false
+  const existing = groupRosterFactCursors.get(fact.groupId)
+  return !existing || compareGroupRosterFactCursor(fact, existing) > 0
+}
+
+function nextGroupRosterRevision(groupId: string): number {
+  const previous = groupRosterFactCursors.get(groupId)?.revision ?? 0
+  return previous + 1
+}
+
+function getGroupRosterSignerPubkey(group: Group): string | null {
+  const currentIdentity = get(identity)
+  const signer = get(ndk).signer || currentIdentity?.signer
+  if (!signer) return null
+  const signerPubkey = currentIdentity?.pubkey || (() => {
+    try {
+      return signer.pubkey
+    } catch {
+      return null
+    }
+  })()
+  if (!signerPubkey || !group.admins.includes(signerPubkey)) return null
+  return signerPubkey
+}
+
+async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
+  const ndkInstance = get(ndk)
+  const signer = ndkInstance.signer || get(identity)?.signer
+  const signerPubkey = getGroupRosterSignerPubkey(group)
+  if (!signer || !signerPubkey) return
+
+  const eventCreatedAt = Math.floor(Date.now() / 1000)
+  const unsigned = buildGroupRosterFactEvent(group, {
+    signerPubkey,
+    revision: nextGroupRosterRevision(group.id),
+    createdBy: group.admins[0] || signerPubkey,
+    updatedAt: eventCreatedAt,
+    eventCreatedAt,
+    protocol: group.secret ? 'sender_key_v1' : 'pairwise_fanout_v1',
+  })
+
+  const event = new NDKEvent(ndkInstance, unsigned)
+  await event.sign(signer)
+  const signed = event.rawEvent() as VerifiedEvent
+  rememberGroupRosterFact(group.id, {
+    eventId: signed.id,
+    revision: Number(unsigned.tags.find((tag) => tag[0] === 'revision')?.[1] || 0),
+    updatedAt: Number(unsigned.tags.find((tag) => tag[0] === 'updated_at')?.[1] || eventCreatedAt),
+    eventCreatedAt: signed.created_at,
+  })
+  await event.publish(undefined, 10000, 1)
+}
+
+function publishGroupRosterFactSnapshotInBackground(group: Group): void {
+  void publishGroupRosterFactSnapshot(group).catch((error) => {
+    console.warn('[groups] Failed to publish group roster fact:', error)
+  })
+}
+
+function groupMetadataFromRosterFact(fact: GroupRosterFact): GroupMetadata {
+  return {
+    id: fact.group.id,
+    name: fact.group.name,
+    members: fact.group.members,
+    admins: fact.group.admins,
+    ...(fact.group.description && { description: fact.group.description }),
+    ...(fact.group.picture && { picture: fact.group.picture }),
+  }
+}
+
+export function handleGroupRosterFactEvent(event: VerifiedEvent): boolean {
+  if (!isGroupRosterFactEvent(event)) return false
+
+  let fact: GroupRosterFact
+  try {
+    fact = parseGroupRosterFactEvent(event)
+  } catch {
+    return false
+  }
+  if (!shouldApplyGroupRosterFact(fact)) return false
+
+  const myPubkey = getPubkey()
+  if (!myPubkey) return false
+
+  const metadata = groupMetadataFromRosterFact(fact)
+  const existing = get(groups).get(fact.groupId)
+  if (existing) {
+    const result = validateMetadataUpdate(existing, metadata, fact.signerPubkey, myPubkey)
+    if (result === 'reject') return false
+    if (result === 'removed') {
+      seenGroupRosterFactIds.add(fact.eventId)
+      rememberGroupRosterFact(fact.groupId, fact)
+      void deleteGroup(fact.groupId)
+      return true
+    }
+
+    const updated = applyMetadataUpdate(existing, metadata)
+    groups.update(g => { g.set(fact.groupId, updated); return g })
+    saveGroupState(updated)
+    syncNativeGroupTransport(fact.groupId)
+  } else {
+    if (!validateMetadataCreation(metadata, fact.signerPubkey, myPubkey)) return false
+
+    const group: Group = {
+      ...metadata,
+      createdAt: fact.group.createdAt,
+      accepted: false,
+    }
+    groups.update(g => { g.set(fact.groupId, group); return g })
+    groupMessages.update(gm => { if (!gm.has(fact.groupId)) gm.set(fact.groupId, []); return gm })
+    saveGroupState(group)
+    syncNativeGroupTransport(fact.groupId)
+    flushPendingEvents(fact.groupId)
+  }
+
+  seenGroupRosterFactIds.add(fact.eventId)
+  rememberGroupRosterFact(fact.groupId, fact)
+  return true
+}
+
+async function backfillGroupRosterFacts(): Promise<void> {
+  const ndkInstance = get(ndk)
+  if (typeof ndkInstance.fetchEvents !== 'function') return
+  const events = await ndkInstance.fetchEvents(buildGroupRosterFactFilter({ limit: 200 }))
+  for (const event of events) {
+    const raw = typeof event.rawEvent === 'function' ? event.rawEvent() : event
+    handleGroupRosterFactEvent(raw as VerifiedEvent)
+  }
+}
+
+export function initGroupRosterFactSync(): () => void {
+  const ownerPubkey = getPubkey()
+  const ndkInstance = get(ndk)
+  if (!ownerPubkey || typeof ndkInstance.subscribe !== 'function') {
+    return () => {}
+  }
+  if (groupRosterFactSyncCleanup && groupRosterFactSyncOwner === ownerPubkey) {
+    return groupRosterFactSyncCleanup
+  }
+
+  groupRosterFactSyncCleanup?.()
+  const subscription = asNdkEventSubscription(
+    ndkInstance.subscribe(buildGroupRosterFactFilter(), { closeOnEose: false })
+  )
+  subscription.on('event', (event: NDKEvent) => {
+    handleGroupRosterFactEvent(event.rawEvent() as VerifiedEvent)
+  })
+  subscription.start()
+  groupRosterFactSyncOwner = ownerPubkey
+  groupRosterFactSyncCleanup = () => {
+    subscription.stop()
+    if (groupRosterFactSyncOwner === ownerPubkey) {
+      groupRosterFactSyncCleanup = null
+      groupRosterFactSyncOwner = null
+    }
+  }
+
+  void backfillGroupRosterFacts().catch((error) => {
+    console.warn('[groups] Failed to backfill group roster facts:', error)
+  })
+
+  return groupRosterFactSyncCleanup
+}
 
 function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[] {
   return Array.from(
@@ -479,6 +675,7 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
   saveGroupState(group)
 
   const metadataContent = buildGroupMetadataContent(group)
+  publishGroupRosterFactSnapshotInBackground(group)
   fanOutGroupMetadataToMembers(group.id, metadataContent)
 
   setupGroupChannel(group)
@@ -506,6 +703,7 @@ export function addGroupMember(groupId: string, pubkey: string): void {
   teardownGroupChannel(groupId)
   setupGroupChannel(updated)
 
+  publishGroupRosterFactSnapshotInBackground(updated)
   fanOutGroupMetadataToMembers(
     groupId,
     buildGroupMetadataContent(updated),
@@ -529,6 +727,7 @@ export function removeGroupMember(groupId: string, pubkey: string): void {
   teardownGroupChannel(groupId)
   setupGroupChannel(updated)
 
+  publishGroupRosterFactSnapshotInBackground(updated)
   // Remaining members get new secret
   fanOutGroupMetadataToMembers(
     groupId,
@@ -557,6 +756,7 @@ export function updateGroupInfo(groupId: string, updates: { name?: string, descr
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
+  publishGroupRosterFactSnapshotInBackground(updated)
   fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
@@ -573,6 +773,7 @@ export function addGroupAdmin(groupId: string, pubkey: string): void {
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
+  publishGroupRosterFactSnapshotInBackground(updated)
   fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
@@ -589,6 +790,7 @@ export function removeGroupAdmin(groupId: string, pubkey: string): void {
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
+  publishGroupRosterFactSnapshotInBackground(updated)
   fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
@@ -1093,6 +1295,7 @@ export async function loadGroupsFromStorage(): Promise<void> {
       // Flush any events that arrived before this group was loaded
       flushPendingEvents(group.id)
     }
+    initGroupRosterFactSync()
   } catch (e) {
     console.error('[groups] Failed to load groups from storage:', e)
   }
@@ -1164,6 +1367,11 @@ export function clearGroupData(): void {
   }
 
   void getNdrRuntime().syncGroups([]).catch(() => {})
+  groupRosterFactSyncCleanup?.()
+  groupRosterFactSyncCleanup = null
+  groupRosterFactSyncOwner = null
+  groupRosterFactCursors.clear()
+  seenGroupRosterFactIds.clear()
   pendingGroupEvents.clear()
   groups.set(new Map())
   groupMessages.set(new Map())

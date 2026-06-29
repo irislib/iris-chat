@@ -1,6 +1,17 @@
 import { readable, type Readable } from 'svelte/store'
-import { AppKeys, type DeviceEntry, type NostrSubscribe } from 'nostr-double-ratchet'
+import {
+  IDENTITY_GRAPH_ROSTER_TYPE,
+  KIND_NOSTR_IDENTITY_ROSTER_OP,
+  type NostrIdentityFacet,
+  type SignedNostrIdentityRosterOp,
+} from '@iris/identity/profile'
+import { parseNostrIdentityRosterOpEvent } from '@iris/identity/profileEvents'
+import { projectNostrIdentityRoster } from '@iris/identity/profileProjection'
+import type { DeviceEntry, NostrSubscribe } from 'nostr-double-ratchet'
 import type { DeviceLabels } from './deviceLabels'
+
+export const NOSTR_IDENTITY_ROSTER_OP_KIND = KIND_NOSTR_IDENTITY_ROSTER_OP
+export const NOSTR_IDENTITY_ROSTER_TYPE = IDENTITY_GRAPH_ROSTER_TYPE
 
 export interface ProfileAppKeyDevice extends DeviceEntry {
   labels?: DeviceLabels
@@ -16,7 +27,8 @@ export interface CreateProfileAppKeysStoreOptions {
   timeoutMs?: number
   initialDevices?: DeviceEntry[]
   initialDeviceLabels?: (identityPubkey: string) => DeviceLabels | undefined
-  ownerPrivateKey?: Uint8Array | null
+  initialRosterOps?: SignedNostrIdentityRosterOp[]
+  nostrIdentityId?: string | null
 }
 
 export const DEFAULT_PROFILE_APP_KEYS_TIMEOUT_MS = 3000
@@ -33,6 +45,48 @@ const cloneDevices = (
     return labels ? { ...device, labels } : { ...device }
   })
 
+const isNostrIdentityRosterOpEvent = (event: {
+  kind: number
+  tags: string[][]
+}): boolean =>
+  event.kind === NOSTR_IDENTITY_ROSTER_OP_KIND &&
+  event.tags.some((tag) => tag[0] === 'type' && tag[1] === NOSTR_IDENTITY_ROSTER_TYPE)
+
+const buildNostrIdentityRosterFilter = (profileId: string) => ({
+  kinds: [NOSTR_IDENTITY_ROSTER_OP_KIND],
+  '#i': [profileId],
+})
+
+const isAppKeyFacet = (facet: NostrIdentityFacet): boolean =>
+  facet.purposes?.includes('app_key') ?? false
+
+const projectRosterDevices = (
+  profileId: string,
+  rosterOps: SignedNostrIdentityRosterOp[]
+): ProfileAppKeyDevice[] => {
+  const projection = projectNostrIdentityRoster(profileId, rosterOps)
+  return Object.values(projection.active_facets)
+    .filter(isAppKeyFacet)
+    .sort((a, b) => a.added_at - b.added_at || a.pubkey.localeCompare(b.pubkey))
+    .map((facet) => ({
+      identityPubkey: facet.pubkey,
+      createdAt: facet.added_at,
+    }))
+}
+
+const parseRosterOpEvent = (
+  profileId: string,
+  event: Parameters<NostrSubscribe>[1] extends (event: infer E) => void ? E : never
+): SignedNostrIdentityRosterOp | null => {
+  if (!isNostrIdentityRosterOpEvent(event)) return null
+  try {
+    const rosterOp = parseNostrIdentityRosterOpEvent(event)
+    return rosterOp.content.profile_id === profileId ? rosterOp : null
+  } catch {
+    return null
+  }
+}
+
 export const createProfileAppKeysStore = (
   pubkey: string | undefined,
   {
@@ -40,18 +94,21 @@ export const createProfileAppKeysStore = (
     timeoutMs = DEFAULT_PROFILE_APP_KEYS_TIMEOUT_MS,
     initialDevices = [],
     initialDeviceLabels,
-    ownerPrivateKey,
+    initialRosterOps = [],
+    nostrIdentityId,
   }: CreateProfileAppKeysStoreOptions
 ): Readable<ProfileAppKeysState> => {
-  const initial = cloneDevices(initialDevices, initialDeviceLabels)
+  const initial = nostrIdentityId
+    ? projectRosterDevices(nostrIdentityId, initialRosterOps)
+    : cloneDevices(initialDevices, initialDeviceLabels)
 
   return readable<ProfileAppKeysState>(
     {
       devices: initial,
-      loading: !!pubkey,
+      loading: !!nostrIdentityId,
     },
     (set) => {
-      if (!pubkey) {
+      if (!nostrIdentityId) {
         set({
           devices: initial,
           loading: false,
@@ -61,17 +118,20 @@ export const createProfileAppKeysStore = (
 
       let active = true
       let latestDevices = initial
-
-      const stop = AppKeys.fromUser(pubkey, subscribe, (appKeys) => {
-        latestDevices = cloneDevices(
-          appKeys.getAllDevices(),
-          (identityPubkey) => appKeys.getDeviceLabels(identityPubkey)
-        )
+      const rosterOps = initialRosterOps.slice()
+      const seenOpIds = new Set(rosterOps.map((op) => op.op_id))
+      const stop = subscribe(buildNostrIdentityRosterFilter(nostrIdentityId), (event) => {
+        if (!active) return
+        const rosterOp = parseRosterOpEvent(nostrIdentityId, event)
+        if (!rosterOp || seenOpIds.has(rosterOp.op_id)) return
+        seenOpIds.add(rosterOp.op_id)
+        rosterOps.push(rosterOp)
+        latestDevices = projectRosterDevices(nostrIdentityId, rosterOps)
         set({
           devices: latestDevices,
           loading: false,
         })
-      }, ownerPrivateKey ?? undefined)
+      })
 
       const timeout = setTimeout(() => {
         if (!active) return
