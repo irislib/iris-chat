@@ -51,11 +51,13 @@ import {
   NOSTR_IDENTITY_CHAT_DEVICE_LINK_TIMEOUT_MS,
   buildLinkedNostrIdentitySessionFromApproval,
   buildNostrIdentityChatDeviceApprovalEvents,
+  createNdrLinkInviteForDeviceApprovalRequest,
   createNostrIdentityChatDeviceApprovalRequest,
   mergeNostrIdentityRosterOps,
   parseNostrIdentityChatDeviceApprovalRequest,
 } from './nostrIdentityDeviceLink'
 import { saveNostrIdentityBrowserSession } from './nostrIdentitySession'
+import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 
 let runtime: NdrRuntime | null = null
 let runtimeCleanup: (() => void) | null = null
@@ -72,10 +74,29 @@ const APP_KEYS_FETCH_TIMEOUT_MS = 8000
 const APP_KEYS_FAST_TIMEOUT_MS = 2000
 const LINKED_INVITE_REPUBLISH_RETRY_MS = 1500
 const NOSTR_IDENTITY_ROSTER_FETCH_TIMEOUT_MS = 4000
+const DEVICE_MANAGER_STORAGE_PREFIX = 'v1/device-manager'
 
 export type NostrIdentityLinkDeviceSession = {
   url: string
   stop: () => void
+}
+
+const persistCompactLinkRuntimeDelegate = async (
+  localRequest: ReturnType<typeof createNostrIdentityChatDeviceApprovalRequest>
+): Promise<void> => {
+  const invite = createNdrLinkInviteForDeviceApprovalRequest(localRequest.request)
+  await Promise.all([
+    putSessionManagerValue(
+      `${DEVICE_MANAGER_STORAGE_PREFIX}/identity-public-key`,
+      localRequest.request.deviceAppKeyPubkey
+    ),
+    putSessionManagerValue(
+      `${DEVICE_MANAGER_STORAGE_PREFIX}/identity-private-key`,
+      Array.from(localRequest.deviceAppKeySecretKey)
+    ),
+    putSessionManagerValue(`${DEVICE_MANAGER_STORAGE_PREFIX}/invite`, invite.serialize()),
+    deleteSessionManagerValue(`${DEVICE_MANAGER_STORAGE_PREFIX}/owner-pubkey`),
+  ])
 }
 
 const registrationKey = (ownerPubkey: string, devicePubkey: string): string =>
@@ -529,11 +550,7 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
     currentIdentity?.isLinkedDevice === true && !!currentIdentity.nostrIdentitySession
 
   let linkedDeviceAuthorized = currentRuntime.getState().isCurrentDeviceRegistered
-  if (isNostrIdentityLinkedDevice && !linkedDeviceAuthorized) {
-    console.warn(
-      '[privateChats] NostrIdentity-linked device is approved, but NDR messaging still requires AppKeys/session bridging; not publishing AppKeys from this linking flow.'
-    )
-  } else if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {
+  if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {
     try {
       await currentRuntime.refreshOwnAppKeysFromRelay(
         ownerPubkey,
@@ -542,6 +559,11 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
       linkedDeviceAuthorized = currentRuntime.getState().isCurrentDeviceRegistered
     } catch (e) {
       console.warn('[privateChats] Linked-device AppKeys backfill failed:', e)
+    }
+    if (isNostrIdentityLinkedDevice && !linkedDeviceAuthorized) {
+      console.warn(
+        '[privateChats] NostrIdentity-linked device is approved, but NDR AppKeys authorization was not available yet.'
+      )
     }
   }
 
@@ -613,6 +635,7 @@ export const startNostrIdentityLinkDevice = async (
   const localRequest = createNostrIdentityChatDeviceApprovalRequest({
     requestedAt: now(),
   })
+  await persistCompactLinkRuntimeDelegate(localRequest)
   const subscribe = createRelayOnlySubscribe(getNDK())
   let stopped = false
   let completed = false
@@ -1012,10 +1035,24 @@ export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void
     subjectPubkey: currentIdentity.pubkey,
     approvedAt: now(),
   })
+  const ndrInvite = createNdrLinkInviteForDeviceApprovalRequest(parsed.request)
   const relays = [...relayStore.getState().relays]
   publishSignedEventToRelays(approval.rosterEvent as VerifiedEvent, relays)
   publishSignedEventToRelays(approval.receiptEvent as VerifiedEvent, relays)
   updateCurrentNostrIdentitySession(currentIdentity.pubkey, approval.nextAdminSession)
+
+  await ensureConnected()
+  const currentRuntime = getRuntime()
+  await currentRuntime.initForOwner(currentIdentity.pubkey)
+  const labels = await getLinkedDeviceRegistrationLabels()
+  const preparedRegistration = await currentRuntime.prepareRegistrationForIdentity({
+    ownerPubkey: currentIdentity.pubkey,
+    identityPubkey: parsed.request.deviceAppKeyPubkey,
+    timeoutMs: 0,
+    ...labels,
+  })
+  await currentRuntime.publishPreparedRegistration(preparedRegistration)
+  await currentRuntime.acceptLinkInvite(ndrInvite, currentIdentity.pubkey)
 }
 
 export const acceptLinkInvite = async (invite: Invite): Promise<void> => {

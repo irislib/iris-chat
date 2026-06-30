@@ -149,11 +149,17 @@ async function getInviteUrl(page: import('@playwright/test').Page): Promise<stri
 }
 
 async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<string> {
-  const copyButton = page.locator('button[title^="nostr-identity://device-approval/"]').first()
-  await expect(copyButton).toBeVisible({ timeout: 10000 })
-  const url = await copyButton.getAttribute('title')
-  if (!url) throw new Error('Could not get link invite URL')
-  return url
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const buttons = page.locator('button[title]')
+    const count = await buttons.count()
+    for (let index = 0; index < count; index += 1) {
+      const url = await buttons.nth(index).getAttribute('title')
+      if (url?.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) return url
+    }
+    await page.waitForTimeout(100)
+  }
+  throw new Error('Could not get compact link invite code')
 }
 
 async function openLinkThisDevice(page: import('@playwright/test').Page): Promise<void> {

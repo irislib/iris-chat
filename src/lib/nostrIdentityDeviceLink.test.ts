@@ -8,6 +8,7 @@ import {
   projectNostrIdentityRoster,
 } from 'nostr-social-graph'
 import {
+  createNdrLinkInviteForDeviceApprovalRequest,
   buildLinkedNostrIdentitySessionFromApproval,
   buildNostrIdentityChatDeviceApprovalEvents,
   createNostrIdentityChatDeviceApprovalRequest,
@@ -28,18 +29,18 @@ describe('nostrIdentityDeviceLink', () => {
       label: 'Iris Chat Web',
     })
 
-    expect(local.url.startsWith('nostr-identity://device-approval/')).toBe(true)
+    expect(local.url).toMatch(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)
     expect(local.url).not.toContain('https://chat.iris.to')
+    expect(local.url).not.toContain('nostr-identity://device-approval/')
     expect(local.url).not.toContain('nostrconnect:')
     expect(local.url).not.toContain('relay=')
-    expect(local.url.length).toBeLessThanOrEqual(170)
+    expect(local.url.length).toBe(129)
     expect(local.request.deviceAppKeyPubkey).toBe(getPublicKey(deviceAppKeySecretKey))
     expect(local.request.requestPubkey).toBe(getPublicKey(requestSecretKey))
     expect(local.request.requestSecret).toBe(toHex(requestSecretKey))
     expect(local.request.deviceAppKeyProof).toBe('')
 
-    const payload = local.url.replace('nostr-identity://device-approval/', '')
-    expect(payload.split('.')).toEqual([local.request.deviceAppKeyPubkey, toHex(requestSecretKey)])
+    expect(local.url.split('.')).toEqual([local.request.deviceAppKeyPubkey, toHex(requestSecretKey)])
 
     const parsed = parseNostrIdentityChatDeviceApprovalRequest(local.url)
     expect(parsed?.request.requestPubkey).toBe(local.request.requestPubkey)
@@ -54,6 +55,39 @@ describe('nostrIdentityDeviceLink', () => {
     expect(
       parseNostrIdentityChatDeviceApprovalRequest('nostr-identity://device-approval/abc')
     ).toBeNull()
+    expect(
+      parseNostrIdentityChatDeviceApprovalRequest(
+        `nostr-identity://device-approval/${'a'.repeat(64)}.${'b'.repeat(64)}`
+      )
+    ).toBeNull()
+  })
+
+  it('derives deterministic NDR link invites from the compact secret', () => {
+    const requestSecret =
+      '0100000017000000c8010000d21e000000000000000000000000000000000000'
+    const deviceAppKeyPubkey = 'e'.repeat(64)
+    const request = {
+      requestPubkey: getPublicKey(hexToBytes(requestSecret)),
+      deviceAppKeyPubkey,
+      requestSecret,
+      deviceAppKeyProof: '',
+      requestedAt: 77,
+    }
+
+    const invite = createNdrLinkInviteForDeviceApprovalRequest(request)
+    const repeated = createNdrLinkInviteForDeviceApprovalRequest({
+      ...request,
+      requestedAt: 88,
+    })
+
+    expect(toHex(invite.inviterEphemeralPrivateKey!)).toMatch(/^be3f1cca6354c294/)
+    expect(invite.inviterEphemeralPublicKey).toBe(repeated.inviterEphemeralPublicKey)
+    expect(invite.sharedSecret).toBe(repeated.sharedSecret)
+    expect(invite.inviter).toBe(deviceAppKeyPubkey)
+    expect(invite.deviceId).toBe(deviceAppKeyPubkey)
+    expect(invite.maxUses).toBe(1)
+    expect(invite.createdAt).toBe(0)
+    expect(invite.purpose).toBe('link')
   })
 
   it('approves requests with NostrIdentity roster ops and saves the linked AppKey session', () => {
@@ -110,4 +144,12 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('')
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
+  }
+  return bytes
 }

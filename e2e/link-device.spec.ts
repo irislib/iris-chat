@@ -38,11 +38,17 @@ async function openLinkThisDevice(page: Page): Promise<string> {
     timeout: 10_000,
   })
 
-  const copyButton = page.locator('button[title^="nostr-identity://device-approval/"]')
-  await expect(copyButton).toBeVisible({ timeout: 10_000 })
-  const url = await copyButton.getAttribute('title')
-  if (!url) throw new Error('Could not read link-device approval URL')
-  return url
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const buttons = page.locator('button[title]')
+    const count = await buttons.count()
+    for (let index = 0; index < count; index += 1) {
+      const url = await buttons.nth(index).getAttribute('title')
+      if (url?.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) return url
+    }
+    await page.waitForTimeout(100)
+  }
+  throw new Error('Could not read compact link-device approval code')
 }
 
 test('link another device closes on paste and logs the other browser in promptly', async ({
@@ -63,11 +69,12 @@ test('link another device closes on paste and logs the other browser in promptly
   try {
     await loginWithStoredKey(ownerPage)
     const approvalUrl = await openLinkThisDevice(linkedPage)
-    expect(approvalUrl).toMatch(/^nostr-identity:\/\/device-approval\//)
+    expect(approvalUrl).toMatch(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)
     expect(approvalUrl).not.toContain('https://chat.iris.to')
+    expect(approvalUrl).not.toContain('nostr-identity://device-approval/')
     expect(approvalUrl).not.toContain('relay=')
-    expect(approvalUrl.length).toBeLessThanOrEqual(170)
-    const approvalParts = approvalUrl.replace('nostr-identity://device-approval/', '').split('.')
+    expect(approvalUrl.length).toBe(129)
+    const approvalParts = approvalUrl.split('.')
     expect(approvalParts).toHaveLength(2)
     expect(approvalParts[0]).toMatch(/^[0-9a-f]{64}$/)
     expect(approvalParts[1]).toMatch(/^[0-9a-f]{64}$/)
