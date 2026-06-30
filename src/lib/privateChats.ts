@@ -84,15 +84,37 @@ const registrationKey = (ownerPubkey: string, devicePubkey: string): string =>
 
 const now = (): number => Math.round(Date.now() / 1000)
 
-const publishSignedEventToRelays = async (
+const publishSignedEventToRelays = (
   event: VerifiedEvent,
   relayUrls = [...relayStore.getState().relays]
-): Promise<void> => {
+): void => {
   const ndkInstance = getNDK()
   const e = new NDKEvent(ndkInstance, event)
   const relays = relayUrls.length > 0 ? relayUrls : [...relayStore.getState().relays]
   const relaySet = NDKRelaySet.fromRelayUrls(relays, ndkInstance, true)
-  await e.publish(relaySet, 10000, 1)
+  ndkInstance.subManager.dispatchEvent(e.rawEvent(), undefined, true)
+
+  const attempts = Array.from(relaySet.relays).map((relay) =>
+    relay.publish(e, 1500).then((accepted) => {
+      if (!accepted) {
+        throw new Error(`Relay ${relay.url} rejected event ${event.id}`)
+      }
+      return relay
+    })
+  )
+
+  if (attempts.length === 0) {
+    console.warn('[privateChats] No relays available for device approval publish')
+    return
+  }
+
+  void Promise.any(attempts).catch(() => {
+    console.warn('[privateChats] Device approval was not accepted by any relay')
+  })
+  void Promise.allSettled(attempts).then((results) => {
+    if (results.some((result) => result.status === 'fulfilled')) return
+    console.warn('[privateChats] Device approval publish failed on all relays')
+  })
 }
 
 const isNostrIdentityRosterOpEvent = (event: Pick<VerifiedEvent, 'kind' | 'tags'>): boolean =>
@@ -597,10 +619,35 @@ export const startNostrIdentityLinkDevice = async (
     relays,
   })
   const subscribe = createRelayOnlySubscribe(getNDK())
-
   let stopped = false
   let completed = false
   let timeout: ReturnType<typeof setTimeout>
+  const observedRosterOps: SignedNostrIdentityRosterOp[] = []
+  const observedRosterOpIds = new Set<string>()
+  const rememberRosterOp = (event: VerifiedEvent): void => {
+    if (!isNostrIdentityRosterOpEvent(event)) return
+    try {
+      const rosterOp = parseNostrIdentityRosterOpEvent(event)
+      if (observedRosterOpIds.has(rosterOp.op_id)) return
+      observedRosterOpIds.add(rosterOp.op_id)
+      observedRosterOps.push(rosterOp)
+    } catch {
+      // Ignore unrelated or malformed fact events.
+    }
+  }
+  const observedRosterOpsForProfile = (profileId: string): SignedNostrIdentityRosterOp[] =>
+    observedRosterOps.filter((op) => op.content.profile_id === profileId)
+
+  const unsubscribeRoster = subscribe(
+    {
+      kinds: [FACT_OP_KIND],
+    } as unknown as NDKFilter,
+    (event) => {
+      if (stopped || completed) return
+      rememberRosterOp(event as VerifiedEvent)
+    }
+  )
+
   const unsubscribe = subscribe(
     {
       kinds: [FACT_OP_KIND],
@@ -634,26 +681,60 @@ export const startNostrIdentityLinkDevice = async (
         return
       }
 
-      const fetchedRosterOps = await fetchNostrIdentityRosterOps(receipt.profileId).catch((error) => {
-        console.warn('[privateChats] Failed to fetch NostrIdentity roster ops:', error)
-        return []
-      })
       let linkedNostrIdentitySession: NostrIdentitySession | null = null
-      try {
-        linkedNostrIdentitySession = buildLinkedNostrIdentitySessionFromApproval({
-          request: localRequest.request,
-          receipt,
-          deviceAppKeySecretKey: localRequest.deviceAppKeySecretKey,
-          rosterOps: mergeNostrIdentityRosterOps(fetchedRosterOps, [receiptRosterOp]),
+      const buildAndSaveLinkedSession = (
+        rosterOps: SignedNostrIdentityRosterOp[]
+      ): NostrIdentitySession | null => {
+        try {
+          const session = buildLinkedNostrIdentitySessionFromApproval({
+            request: localRequest.request,
+            receipt,
+            deviceAppKeySecretKey: localRequest.deviceAppKeySecretKey,
+            rosterOps: mergeNostrIdentityRosterOps(rosterOps, [receiptRosterOp]),
+          })
+          saveNostrIdentityBrowserSession(ownerPubkey, session)
+          return session
+        } catch {
+          return null
+        }
+      }
+
+      linkedNostrIdentitySession = buildAndSaveLinkedSession(
+        observedRosterOpsForProfile(receipt.profileId)
+      )
+
+      if (!linkedNostrIdentitySession) {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        linkedNostrIdentitySession = buildAndSaveLinkedSession(
+          observedRosterOpsForProfile(receipt.profileId)
+        )
+      }
+
+      if (!linkedNostrIdentitySession) {
+        const fetchedRosterOps = await fetchNostrIdentityRosterOps(receipt.profileId).catch((error) => {
+          console.warn('[privateChats] Failed to fetch NostrIdentity roster ops:', error)
+          return []
         })
-        saveNostrIdentityBrowserSession(ownerPubkey, linkedNostrIdentitySession)
-      } catch (error) {
-        console.warn('[privateChats] Could not save approved NostrIdentity session:', error)
+        linkedNostrIdentitySession = buildAndSaveLinkedSession(fetchedRosterOps)
+      }
+
+      if (!linkedNostrIdentitySession) {
+        console.warn('[privateChats] Could not save approved NostrIdentity session')
+      } else {
+        void fetchNostrIdentityRosterOps(receipt.profileId)
+          .then((fetchedRosterOps) => {
+            if (stopped || fetchedRosterOps.length === 0) return
+            buildAndSaveLinkedSession(fetchedRosterOps)
+          })
+          .catch((error) => {
+            console.warn('[privateChats] Failed to refresh NostrIdentity roster ops:', error)
+          })
       }
 
       completed = true
       clearTimeout(timeout)
       unsubscribe()
+      unsubscribeRoster()
       await onAccepted(ownerPubkey, linkedNostrIdentitySession)
     }
   )
@@ -661,6 +742,7 @@ export const startNostrIdentityLinkDevice = async (
   timeout = setTimeout(() => {
     stopped = true
     unsubscribe()
+    unsubscribeRoster()
   }, NOSTR_IDENTITY_CHAT_DEVICE_LINK_TIMEOUT_MS)
 
   return {
@@ -669,6 +751,7 @@ export const startNostrIdentityLinkDevice = async (
       stopped = true
       clearTimeout(timeout)
       unsubscribe()
+      unsubscribeRoster()
     },
   }
 }
@@ -928,7 +1011,6 @@ export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void
     throw new Error('NostrIdentity session is not available for this account')
   }
 
-  await ensureConnected()
   const approval = buildNostrIdentityChatDeviceApprovalEvents({
     request: parsed.request,
     adminSession,
@@ -936,8 +1018,8 @@ export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void
     approvedAt: now(),
   })
   const relays = parsed.relays.length > 0 ? parsed.relays : [...relayStore.getState().relays]
-  await publishSignedEventToRelays(approval.rosterEvent as VerifiedEvent, relays)
-  await publishSignedEventToRelays(approval.receiptEvent as VerifiedEvent, relays)
+  publishSignedEventToRelays(approval.rosterEvent as VerifiedEvent, relays)
+  publishSignedEventToRelays(approval.receiptEvent as VerifiedEvent, relays)
   updateCurrentNostrIdentitySession(currentIdentity.pubkey, approval.nextAdminSession)
 }
 

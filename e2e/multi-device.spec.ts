@@ -149,7 +149,7 @@ async function getInviteUrl(page: import('@playwright/test').Page): Promise<stri
 }
 
 async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<string> {
-  const copyButton = page.locator('button[title*="#"]').first()
+  const copyButton = page.locator('button[title*="/approve-device/"]').first()
   await expect(copyButton).toBeVisible({ timeout: 10000 })
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get link invite URL')
@@ -177,9 +177,10 @@ async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl
   await page.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
-  await page.getByPlaceholder('Paste link invite').fill(inviteUrl)
-  await expect(page.getByText('Device linked', { exact: true })).toBeVisible({ timeout: 20000 })
-  await page.locator('button[aria-label="Close"]').click()
+  await page.getByPlaceholder('Paste link code').fill(inviteUrl)
+  await expect(page.getByRole('heading', { name: 'Link another device' })).toBeHidden({
+    timeout: 750,
+  })
   await page.getByRole('button', { name: 'Back' }).click()
 }
 

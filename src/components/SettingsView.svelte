@@ -274,6 +274,7 @@
     try {
       await acceptNostrIdentityLinkDevice(raw)
       linkInviteStatus = 'linked'
+      closeLinkInviteModal()
     } catch (e) {
       linkInviteStatus = 'error'
       linkInviteError = getErrorMessage(e, 'Failed to link device')

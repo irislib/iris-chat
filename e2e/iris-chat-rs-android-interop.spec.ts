@@ -100,7 +100,8 @@ function runAndroidHarness(inviteUrl: string, message: string) {
 }
 
 function inviteOwnerChatId(inviteUrl: string): string {
-  const rawHash = decodeURIComponent(new URL(inviteUrl).hash.slice(1)).replace(/^\/+/, '')
+  let rawHash = decodeURIComponent(new URL(inviteUrl).hash.slice(1)).replace(/^\/+/, '')
+  rawHash = rawHash.replace(/^invite\/+/, '')
   if (rawHash.startsWith('npub') || rawHash.startsWith('nprofile')) {
     const decoded = nip19.decode(rawHash)
     if (decoded.type === 'npub') {
