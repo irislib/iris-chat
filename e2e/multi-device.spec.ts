@@ -149,7 +149,7 @@ async function getInviteUrl(page: import('@playwright/test').Page): Promise<stri
 }
 
 async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<string> {
-  const copyButton = page.locator('button[title*="/approve-device/"]').first()
+  const copyButton = page.locator('button[title^="nostr-identity://device-approval/"]').first()
   await expect(copyButton).toBeVisible({ timeout: 10000 })
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get link invite URL')

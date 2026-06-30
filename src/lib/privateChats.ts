@@ -43,7 +43,6 @@ import type { NostrIdentitySession } from '@iris/identity/session'
 import {
   getCurrentDeviceRegistrationLabels,
   getLinkedDeviceRegistrationLabels,
-  type DeviceLabels,
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 import { asNdkEventSubscription } from './ndkSubscription'
@@ -532,7 +531,7 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
   let linkedDeviceAuthorized = currentRuntime.getState().isCurrentDeviceRegistered
   if (isNostrIdentityLinkedDevice && !linkedDeviceAuthorized) {
     console.warn(
-      '[privateChats] NostrIdentity-linked device is approved, but NDR messaging still requires legacy AppKeys/session bridging; not publishing AppKeys from the new device-link flow.'
+      '[privateChats] NostrIdentity-linked device is approved, but NDR messaging still requires AppKeys/session bridging; not publishing AppKeys from this linking flow.'
     )
   } else if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {
     try {
@@ -611,12 +610,8 @@ export const startNostrIdentityLinkDevice = async (
 ): Promise<NostrIdentityLinkDeviceSession> => {
   await ensureConnected()
 
-  const labels = await getCurrentDeviceRegistrationLabels().catch((): DeviceLabels => ({}))
-  const relays = [...relayStore.getState().relays]
   const localRequest = createNostrIdentityChatDeviceApprovalRequest({
     requestedAt: now(),
-    label: labels.deviceLabel || labels.clientLabel || 'Iris Chat Web',
-    relays,
   })
   const subscribe = createRelayOnlySubscribe(getNDK())
   let stopped = false
@@ -1017,7 +1012,7 @@ export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void
     subjectPubkey: currentIdentity.pubkey,
     approvedAt: now(),
   })
-  const relays = parsed.relays.length > 0 ? parsed.relays : [...relayStore.getState().relays]
+  const relays = [...relayStore.getState().relays]
   publishSignedEventToRelays(approval.rosterEvent as VerifiedEvent, relays)
   publishSignedEventToRelays(approval.receiptEvent as VerifiedEvent, relays)
   updateCurrentNostrIdentitySession(currentIdentity.pubkey, approval.nextAdminSession)

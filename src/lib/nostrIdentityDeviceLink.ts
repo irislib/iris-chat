@@ -1,13 +1,19 @@
-import { generateSecretKey, getPublicKey, nip19, type Event } from 'nostr-tools'
+import {
+  finalizeEvent,
+  generateSecretKey,
+  getPublicKey,
+  nip19,
+  nip44,
+  type Event,
+} from 'nostr-tools'
 import type { NostrIdentitySession } from '@iris/identity/session'
 import {
   approveNostrIdentityDeviceApprovalRequest,
-  buildNostrIdentityDeviceApprovalReceiptEvent,
   buildNostrIdentityRosterOpEvent,
-  createNostrIdentityDeviceApprovalRequest,
-  encodeNostrIdentityDeviceApprovalRequest,
+  FACT_OP_KIND,
+  NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_SCHEMA,
+  NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_TYPE,
   parseNostrIdentityDeviceApprovalReceiptRosterOp,
-  parseNostrIdentityDeviceApprovalRequest,
   parseNostrIdentityRosterOpEvent,
   projectNostrIdentityRoster,
   type LocalNostrIdentityDeviceApprovalRequest,
@@ -17,8 +23,7 @@ import {
 } from 'nostr-social-graph'
 
 export const NOSTR_IDENTITY_CHAT_DEVICE_APPROVAL_PREFIX =
-  'https://chat.iris.to/approve-device/'
-export const NOSTR_IDENTITY_CHAT_DEVICE_APPROVAL_PATH = '/approve-device/'
+  'nostr-identity://device-approval/'
 export const NOSTR_IDENTITY_CHAT_DEVICE_LINK_TIMEOUT_MS = 120_000
 
 export interface LocalNostrIdentityChatDeviceApprovalRequest {
@@ -29,7 +34,6 @@ export interface LocalNostrIdentityChatDeviceApprovalRequest {
 
 export interface ParsedNostrIdentityChatDeviceApprovalRequest {
   request: NostrIdentityDeviceApprovalRequest
-  relays: string[]
 }
 
 export interface NostrIdentityChatDeviceApprovalEvents {
@@ -39,52 +43,39 @@ export interface NostrIdentityChatDeviceApprovalEvents {
   nextAdminSession: NostrIdentitySession
 }
 
-export const nostrIdentityChatDeviceApprovalPrefixes = (origin?: string): string[] => {
-  const prefixes = [NOSTR_IDENTITY_CHAT_DEVICE_APPROVAL_PREFIX]
-  const currentOrigin = origin ?? browserOrigin()
-  if (currentOrigin) {
-    prefixes.push(new URL(NOSTR_IDENTITY_CHAT_DEVICE_APPROVAL_PATH, currentOrigin).toString())
-  }
-  return Array.from(new Set(prefixes))
-}
-
 export const createNostrIdentityChatDeviceApprovalRequest = (options: {
   deviceAppKeySecretKey?: Uint8Array
   requestSecretKey?: Uint8Array
-  requestSecret?: string
   requestedAt?: number
   label?: string
-  relays?: string[]
-  origin?: string
 } = {}): LocalNostrIdentityChatDeviceApprovalRequest => {
   const deviceAppKeySecretKey = options.deviceAppKeySecretKey ?? generateSecretKey()
-  const request = createNostrIdentityDeviceApprovalRequest({
-    deviceAppKeySecretKey,
-    ...(options.requestSecretKey ? { requestSecretKey: options.requestSecretKey } : {}),
-    ...(options.requestSecret ? { requestSecret: options.requestSecret } : {}),
+  const requestSecretKey = options.requestSecretKey ?? generateSecretKey()
+  const requestSecret = hexFromBytes(requestSecretKey)
+  const request: LocalNostrIdentityDeviceApprovalRequest = {
+    requestPubkey: getPublicKey(requestSecretKey),
+    requestSecretKey,
+    deviceAppKeyPubkey: getPublicKey(deviceAppKeySecretKey),
+    requestSecret,
+    deviceAppKeyProof: '',
     requestedAt: options.requestedAt ?? currentUnixSeconds(),
-    label: options.label ?? 'Iris Chat Web',
-  })
-  const [prefix] = nostrIdentityChatDeviceApprovalPrefixes(options.origin)
-  const encoded = encodeNostrIdentityDeviceApprovalRequest(request, { prefix })
+    ...(options.label?.trim() ? { label: options.label.trim() } : {}),
+  }
+  const encoded = encodeCompactNostrIdentityChatDeviceApprovalRequest(request)
   return {
     request,
     deviceAppKeySecretKey,
-    url: appendRelayParams(encoded, options.relays ?? []),
+    url: encoded,
   }
 }
 
 export const parseNostrIdentityChatDeviceApprovalRequest = (
-  input: string,
-  options: { origin?: string } = {}
+  input: string
 ): ParsedNostrIdentityChatDeviceApprovalRequest | null => {
-  const request = parseNostrIdentityDeviceApprovalRequest(input, {
-    prefixes: nostrIdentityChatDeviceApprovalPrefixes(options.origin),
-  })
+  const request = parseCompactNostrIdentityChatDeviceApprovalRequest(input)
   if (!request) return null
   return {
     request,
-    relays: relayParamsFromInput(input),
   }
 }
 
@@ -123,7 +114,7 @@ export const buildNostrIdentityChatDeviceApprovalEvents = (options: {
     op: rosterOpContent.op,
   })
   const signedRosterOp = parseNostrIdentityRosterOpEvent(rosterEvent)
-  const receiptEvent = buildNostrIdentityDeviceApprovalReceiptEvent({
+  const receiptEvent = buildCompactNostrIdentityDeviceApprovalReceiptEvent({
     signerSecretKey,
     request: options.request,
     profileId: adminSession.profileId,
@@ -202,34 +193,103 @@ export const secretKeyFromNsec = (nsec: string): Uint8Array => {
   return decoded.data
 }
 
-const appendRelayParams = (input: string, relays: string[]): string => {
-  const relayUrls = normalizeRelayUrls(relays)
-  if (relayUrls.length === 0) return input
-  const url = new URL(input)
-  relayUrls.forEach((relay) => url.searchParams.append('relay', relay))
-  return url.toString()
-}
+const encodeCompactNostrIdentityChatDeviceApprovalRequest = (
+  request: LocalNostrIdentityDeviceApprovalRequest
+): string =>
+  `${NOSTR_IDENTITY_CHAT_DEVICE_APPROVAL_PREFIX}${request.deviceAppKeyPubkey}.${hexFromBytes(
+    request.requestSecretKey
+  )}`
 
-const relayParamsFromInput = (input: string): string[] => {
+const parseCompactNostrIdentityChatDeviceApprovalRequest = (
+  input: string
+): NostrIdentityDeviceApprovalRequest | null => {
   const cleaned = cleanNostrPrefix(input)
-  try {
-    return normalizeRelayUrls(new URL(cleaned).searchParams.getAll('relay'))
-  } catch {
-    return []
+  if (!cleaned.startsWith(NOSTR_IDENTITY_CHAT_DEVICE_APPROVAL_PREFIX)) return null
+  const payload = cleaned.slice(NOSTR_IDENTITY_CHAT_DEVICE_APPROVAL_PREFIX.length)
+  const parts = payload.split('.')
+  if (parts.length !== 2) return null
+  const [deviceAppKeyPubkey, requestSecretKeyHex] = parts
+  if (!isHexSecret(deviceAppKeyPubkey) || !isHexSecret(requestSecretKeyHex)) return null
+  const requestSecretKey = bytesFromHex(requestSecretKeyHex)
+  return {
+    requestPubkey: getPublicKey(requestSecretKey),
+    deviceAppKeyPubkey: deviceAppKeyPubkey.toLowerCase(),
+    requestSecret: requestSecretKeyHex.toLowerCase(),
+    deviceAppKeyProof: '',
+    requestedAt: currentUnixSeconds(),
   }
 }
 
-const normalizeRelayUrls = (relays: string[]): string[] =>
-  Array.from(new Set(relays.map((relay) => relay.trim()).filter(Boolean)))
+const buildCompactNostrIdentityDeviceApprovalReceiptEvent = (options: {
+  signerSecretKey: Uint8Array
+  request: NostrIdentityDeviceApprovalRequest
+  profileId: string
+  approvedAt: number
+  subjectPubkey?: string
+  rosterOpEvent?: Event | SignedNostrIdentityRosterOp
+}): Event => {
+  const approvedByPubkey = getPublicKey(options.signerSecretKey)
+  const signedRosterEvent =
+    options.rosterOpEvent !== undefined
+      ? signedRosterOpEventJson(options.rosterOpEvent)
+      : undefined
+  const rosterOpId =
+    signedRosterEvent !== undefined
+      ? parseNostrIdentityRosterOpEvent(JSON.parse(signedRosterEvent) as Event).op_id
+      : undefined
+  const receipt: NostrIdentityDeviceApprovalReceipt = {
+    schema: NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_SCHEMA,
+    profileId: options.profileId,
+    requestPubkey: options.request.requestPubkey,
+    deviceAppKeyPubkey: options.request.deviceAppKeyPubkey,
+    approvedByPubkey,
+    approvedAt: options.approvedAt,
+    requestSecret: options.request.requestSecret,
+    ...(options.subjectPubkey ? { subjectPubkey: options.subjectPubkey } : {}),
+    ...(rosterOpId ? { rosterOpId } : {}),
+    ...(signedRosterEvent ? { signedRosterEvent } : {}),
+  }
+  const conversationKey = nip44.v2.utils.getConversationKey(
+    options.signerSecretKey,
+    receipt.requestPubkey
+  )
+  return finalizeEvent(
+    {
+      kind: FACT_OP_KIND,
+      content: nip44.v2.encrypt(JSON.stringify(receipt), conversationKey),
+      created_at: receipt.approvedAt,
+      tags: [
+        ['type', NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_TYPE],
+        ['p', receipt.requestPubkey],
+        ['i', receipt.profileId, 'subject'],
+      ],
+    },
+    options.signerSecretKey
+  )
+}
+
+const signedRosterOpEventJson = (rosterOpEvent: Event | SignedNostrIdentityRosterOp): string =>
+  'event_json' in rosterOpEvent ? rosterOpEvent.event_json : JSON.stringify(rosterOpEvent)
 
 const cleanNostrPrefix = (input: string): string => {
   const trimmed = input.trim()
   return trimmed.toLowerCase().startsWith('nostr:') ? trimmed.slice('nostr:'.length) : trimmed
 }
 
-const browserOrigin = (): string | undefined => {
-  if (typeof window === 'undefined') return undefined
-  return window.location.origin
+const isHexSecret = (value: string): boolean => /^[0-9a-f]{64}$/i.test(value)
+
+const hexFromBytes = (bytes: Uint8Array): string =>
+  Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+
+const bytesFromHex = (hex: string): Uint8Array => {
+  if (!isHexSecret(hex)) throw new Error('Invalid hex secret')
+  const bytes = new Uint8Array(32)
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
+  }
+  return bytes
 }
 
 const currentUnixSeconds = (): number => Math.round(Date.now() / 1000)

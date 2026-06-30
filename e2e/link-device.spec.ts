@@ -38,7 +38,7 @@ async function openLinkThisDevice(page: Page): Promise<string> {
     timeout: 10_000,
   })
 
-  const copyButton = page.locator('button[title*="/approve-device/"]')
+  const copyButton = page.locator('button[title^="nostr-identity://device-approval/"]')
   await expect(copyButton).toBeVisible({ timeout: 10_000 })
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not read link-device approval URL')
@@ -63,6 +63,14 @@ test('link another device closes on paste and logs the other browser in promptly
   try {
     await loginWithStoredKey(ownerPage)
     const approvalUrl = await openLinkThisDevice(linkedPage)
+    expect(approvalUrl).toMatch(/^nostr-identity:\/\/device-approval\//)
+    expect(approvalUrl).not.toContain('https://chat.iris.to')
+    expect(approvalUrl).not.toContain('relay=')
+    expect(approvalUrl.length).toBeLessThanOrEqual(170)
+    const approvalParts = approvalUrl.replace('nostr-identity://device-approval/', '').split('.')
+    expect(approvalParts).toHaveLength(2)
+    expect(approvalParts[0]).toMatch(/^[0-9a-f]{64}$/)
+    expect(approvalParts[1]).toMatch(/^[0-9a-f]{64}$/)
 
     await ownerPage.getByRole('button', { name: 'Settings' }).click()
     await ownerPage.getByRole('button', { name: 'Link another device' }).click()
