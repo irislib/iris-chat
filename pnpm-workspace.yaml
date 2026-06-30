@@ -16,4 +16,4 @@ overrides:
 
 allowBuilds:
   esbuild: true
-  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/135708f32fb382057de409adf66723096ba0720a#path:/ts: true
+  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/d741b3df125d736664560fd57351894bf8456ece#path:/ts: true

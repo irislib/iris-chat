@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
 import type { Rumor } from 'nostr-double-ratchet'
-import type { VerifiedEvent } from 'nostr-tools'
+import { finalizeEvent, getPublicKey, type VerifiedEvent } from 'nostr-tools'
 
 // --- Mocks ---
 
@@ -10,6 +10,8 @@ const MEMBER_B = 'bbbb'.repeat(16)
 const MEMBER_C = 'cccc'.repeat(16)
 const NON_MEMBER = 'dddd'.repeat(16)
 const OTHER_DEVICE = 'eeee'.repeat(16)
+const ROSTER_ADMIN_SECRET = new Uint8Array(32).fill(7)
+const ROSTER_ADMIN = getPublicKey(ROSTER_ADMIN_SECRET)
 const publishedGroupRosterFacts: Array<{ kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number }> = []
 
 vi.mock('@nostr-dev-kit/ndk', () => ({
@@ -258,8 +260,13 @@ vi.mock('nostr-double-ratchet', async () => {
       const tagValues = (name: string) =>
         event.tags.filter((tag) => tag[0] === name).map((tag) => tag[1]).filter(Boolean)
       const tagValue = (name: string) => tagValues(name)[0]
-      const groupId = event.tags.find((tag) => tag[0] === 'i' && tag[2] === 'group')?.[1]
-      if (!groupId) throw new Error('GroupRoster fact missing group subject')
+      const subjects = event.tags
+        .filter((tag) => tag[0] === 'i' && tag[2] === 'subject')
+        .map((tag) => tag[1])
+        .filter(Boolean)
+      if (subjects.length !== 1) throw new Error('GroupRoster fact must have exactly one subject i tag')
+      const groupId = subjects[0]
+      if (tagValue('d') !== groupId) throw new Error('GroupRoster d/subject tag mismatch')
       const members = Array.from(new Set(tagValues('member'))).sort()
       const admins = Array.from(new Set(tagValues('admin'))).sort()
       return {
@@ -395,7 +402,8 @@ describe('groups', () => {
       expect(fact.kind).toBe(GROUP_ROSTER_FACT_KIND)
       expect(fact.content).toBe('')
       expect(fact.tags).toContainEqual(['type', GROUP_ROSTER_FACT_TYPE])
-      expect(fact.tags).toContainEqual(['i', group.id, 'group'])
+      expect(fact.tags).toContainEqual(['d', group.id])
+      expect(fact.tags).toContainEqual(['i', group.id, 'subject'])
       expect(fact.tags).toContainEqual(['name', 'Roster Fact Test'])
       expect(fact.tags).toContainEqual(['member', MY_PUBKEY])
       expect(fact.tags).toContainEqual(['member', MEMBER_B])
@@ -494,7 +502,8 @@ describe('groups', () => {
         expect(publishedGroupRosterFacts.length).toBeGreaterThan(0)
       })
       const fact = publishedGroupRosterFacts.at(-1)!
-      expect(fact.tags).toContainEqual(['i', group.id, 'group'])
+      expect(fact.tags).toContainEqual(['d', group.id])
+      expect(fact.tags).toContainEqual(['i', group.id, 'subject'])
       expect(fact.tags).toContainEqual(['member', MEMBER_B])
       expect(fact.tags).toContainEqual(['member', MEMBER_C])
       expect(fact.tags).toContainEqual(['admin', MY_PUBKEY])
@@ -758,17 +767,16 @@ describe('groups', () => {
       const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
         groupId,
         name: 'Fact Created',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-        signerPubkey: MEMBER_B,
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
       }))
 
       expect(handled).toBe(true)
       const group = get(groups).get(groupId)
       expect(group).toBeDefined()
       expect(group!.name).toBe('Fact Created')
-      expect(group!.members).toEqual([MY_PUBKEY, MEMBER_B].sort())
-      expect(group!.admins).toEqual([MEMBER_B])
+      expect(group!.members).toEqual([MY_PUBKEY, ROSTER_ADMIN].sort())
+      expect(group!.admins).toEqual([ROSTER_ADMIN])
       expect(group!.accepted).toBe(false)
       expect(group!.secret).toBeUndefined()
     })
@@ -779,18 +787,16 @@ describe('groups', () => {
       handleGroupRosterFactEvent(makeRosterFactEvent({
         groupId,
         name: 'Before',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-        signerPubkey: MEMBER_B,
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
         revision: 1,
       }))
 
       const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
         groupId,
         name: 'After',
-        members: [MEMBER_B, MY_PUBKEY, MEMBER_C],
-        admins: [MEMBER_B],
-        signerPubkey: MEMBER_B,
+        members: [ROSTER_ADMIN, MY_PUBKEY, MEMBER_C],
+        admins: [ROSTER_ADMIN],
         revision: 2,
       }))
 
@@ -1248,39 +1254,35 @@ function makeRosterFactEvent({
   name,
   members,
   admins,
-  signerPubkey,
   revision = 1,
 }: {
   groupId: string
   name: string
   members: string[]
   admins: string[]
-  signerPubkey: string
   revision?: number
 }): VerifiedEvent {
-  const createdAt = 1700000000000
+  const createdAt = 1700000000
   const updatedAt = 1700000000 + revision
-  return {
-    id: `roster-fact-${groupId}-${revision}`,
-    kind: 7368,
+  return finalizeEvent({
+    kind: 37368,
     content: '',
-    pubkey: signerPubkey,
     created_at: updatedAt,
-    sig: 'sig',
     tags: [
       ['type', 'group_roster'],
       ['schema', '1'],
-      ['i', groupId, 'group'],
+      ['d', groupId],
+      ['i', groupId, 'subject'],
       ['group_id', groupId],
       ['revision', String(revision)],
       ['name', name],
       ['created_at', String(createdAt)],
       ['updated_at', String(updatedAt)],
-      ['created_by', admins[0] || signerPubkey],
+      ['created_by', admins[0] || ROSTER_ADMIN],
       ...members.map((member) => ['member', member]),
       ...admins.map((admin) => ['admin', admin]),
     ],
-  } as VerifiedEvent
+  }, ROSTER_ADMIN_SECRET)
 }
 
 function makeMessageRumor(groupId: string, content: string, pubkey: string): Rumor {

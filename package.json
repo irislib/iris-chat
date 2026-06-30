@@ -56,7 +56,7 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "github:mmalmi/nostr-double-ratchet#135708f&path:/ts",
+    "nostr-double-ratchet": "github:mmalmi/nostr-double-ratchet#d741b3d&path:/ts",
     "nostr-social-graph": "link:../nostr-social-graph/ts",
     "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
