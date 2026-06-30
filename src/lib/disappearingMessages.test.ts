@@ -13,7 +13,7 @@ const mocked = vi.hoisted(() => ({
     setExpirationForGroup: vi.fn().mockResolvedValue(undefined),
     setChatSettingsForPeer: vi.fn().mockResolvedValue(undefined),
   },
-  fanOutGroupMetadata: vi.fn(),
+  sendGroupSettingsEvent: vi.fn(),
 }))
 
 vi.mock('./identity', () => ({
@@ -34,21 +34,7 @@ vi.mock('./groups', async () => {
   const {writable} = await import('svelte/store')
   return {
     groups: writable(new Map()),
-    fanOutGroupMetadata: mocked.fanOutGroupMetadata,
-  }
-})
-
-vi.mock('nostr-double-ratchet', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('nostr-double-ratchet')>()
-  return {
-    ...actual,
-    buildGroupMetadataContent: (group: Record<string, unknown>) =>
-      JSON.stringify({
-        id: group.id,
-        name: group.name,
-        members: group.members,
-        admins: group.admins,
-      }),
+    sendGroupSettingsEvent: mocked.sendGroupSettingsEvent,
   }
 })
 
@@ -58,7 +44,7 @@ import {groups} from './groups'
 describe('setGroupDisappearingMessages', () => {
   beforeEach(() => {
     mocked.currentPubkey = MY_PUBKEY
-    mocked.fanOutGroupMetadata.mockClear()
+    mocked.sendGroupSettingsEvent.mockClear()
     mocked.sessionManager.setExpirationForGroup.mockClear()
     expirationStore.clearExpiration(GROUP_ID)
     groups.set(
@@ -80,17 +66,14 @@ describe('setGroupDisappearingMessages', () => {
     )
   })
 
-  it('updates group expiration and publishes metadata for admins', async () => {
+  it('updates group expiration and sends group settings for admins', async () => {
     await setGroupDisappearingMessages(GROUP_ID, 3600.9)
 
     expect(expirationStore.getExpiration(GROUP_ID)).toBe(3600)
     expect(mocked.sessionManager.setExpirationForGroup).toHaveBeenCalledWith(GROUP_ID, {
       ttlSeconds: 3600,
     })
-    expect(mocked.fanOutGroupMetadata).toHaveBeenCalledWith(
-      GROUP_ID,
-      expect.stringContaining('"messageTtlSeconds":3600')
-    )
+    expect(mocked.sendGroupSettingsEvent).toHaveBeenCalledWith(GROUP_ID, 3600)
   })
 
   it('rejects group disappearing-message changes from non-admins', async () => {
@@ -117,6 +100,6 @@ describe('setGroupDisappearingMessages', () => {
 
     expect(expirationStore.getExpiration(GROUP_ID)).toBeUndefined()
     expect(mocked.sessionManager.setExpirationForGroup).not.toHaveBeenCalled()
-    expect(mocked.fanOutGroupMetadata).not.toHaveBeenCalled()
+    expect(mocked.sendGroupSettingsEvent).not.toHaveBeenCalled()
   })
 })

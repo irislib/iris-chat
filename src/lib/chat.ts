@@ -55,7 +55,7 @@ import {
   type StoredInvite
 } from './storage'
 import { updateDMSubscription } from './notifications'
-import { handleGroupEvent } from './groups'
+import { handleGroupEvent, handleGroupRosterFactRumor } from './groups'
 import { parseReceipt, shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
@@ -404,6 +404,9 @@ export function initNdrRuntimeEvents(): Promise<void> {
     const runtime = getNdrRuntime()
     groupRuntimeSubscribed = true
     groupRuntimeCleanup = runtime.onGroupEvent((event) => {
+      if (handleGroupRosterFactRumor(event.inner)) {
+        return
+      }
       const senderPubkey =
         event.senderOwnerPubkey || event.senderDevicePubkey || event.inner.pubkey
       handleGroupEvent(

@@ -3,7 +3,6 @@ import {
   CHAT_MESSAGE_KIND,
   CHAT_SETTINGS_KIND,
   GROUP_INVITE_RUMOR_KIND,
-  GROUP_METADATA_KIND,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   GROUP_SENDER_KEY_MESSAGE_KIND,
   REACTION_KIND,
@@ -37,9 +36,8 @@ describe('renderRumor', () => {
     expect(renderRumor(RECEIPT_KIND, undefined)).toEqual({ body: 'Status update', durable: false })
   })
 
-  it('renders settings sync and group metadata as ephemeral', () => {
+  it('renders settings sync as ephemeral', () => {
     expect(renderRumor(CHAT_SETTINGS_KIND, '{}')).toEqual({ body: 'Updated chat settings', durable: false })
-    expect(renderRumor(GROUP_METADATA_KIND, '{}')).toEqual({ body: 'Updated group', durable: false })
   })
 
   it('renders group invites as durable', () => {

@@ -52,8 +52,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: github:mmalmi/nostr-double-ratchet#d741b3d&path:/ts
-        version: https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/d741b3df125d736664560fd57351894bf8456ece#path:/ts(typescript@5.9.3)
+        specifier: github:mmalmi/nostr-double-ratchet#91d2da5&path:/ts
+        version: https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/91d2da5332d5cf6868f6c2378438f3019580e1c6#path:/ts(typescript@5.9.3)
       nostr-social-graph:
         specifier: link:../nostr-social-graph/ts
         version: link:../nostr-social-graph/ts
@@ -2160,9 +2160,9 @@ packages:
   node-releases@2.0.38:
     resolution: {integrity: sha512-3qT/88Y3FbH/Kx4szpQQ4HzUbVrHPKTLVpVocKiLfoYvw9XSGOX2FmD2d6DrXbVYyAQTF2HeF6My8jmzx7/CRw==}
 
-  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/d741b3df125d736664560fd57351894bf8456ece#path:/ts:
-    resolution: {gitHosted: true, integrity: sha512-mFjLO6IuCXvy8g3ea1vEkryvyERB1x0d67Ym5Qsz0JwIpW1CS07ufq7CYQClre2/yhidOs6Np/zh6rhF/TEjxA==, path: /ts, tarball: https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/d741b3df125d736664560fd57351894bf8456ece}
-    version: 0.0.151
+  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/91d2da5332d5cf6868f6c2378438f3019580e1c6#path:/ts:
+    resolution: {gitHosted: true, integrity: sha512-GEu8YAZA8/fIk1MqQNZD27o43R0IoEYUTOaHWs55dpBZO2fxpo4fz52wVu5IpKA0q7Aj4TCcKPtTq/yPNh2Xhg==, path: /ts, tarball: https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/91d2da5332d5cf6868f6c2378438f3019580e1c6}
+    version: 0.0.153
 
   nostr-tools@2.23.8:
     resolution: {integrity: sha512-XY0d/JCekfUeWNcqtbg6GT7aeqlBRjWAI7wzRP0dRvhBkgpOsGvGe6JysBevEzBdOyk11q6p6zuj/wUVkq1qAg==}
@@ -5235,7 +5235,7 @@ snapshots:
 
   node-releases@2.0.38: {}
 
-  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/d741b3df125d736664560fd57351894bf8456ece#path:/ts(typescript@5.9.3):
+  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/91d2da5332d5cf6868f6c2378438f3019580e1c6#path:/ts(typescript@5.9.3):
     dependencies:
       nostr-tools: 2.23.8(typescript@5.9.3)
     transitivePeerDependencies:

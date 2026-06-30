@@ -1,12 +1,8 @@
-import {
-  buildGroupMetadataContent,
-} from 'nostr-double-ratchet'
 import { get } from 'svelte/store'
 import { getNdrRuntime } from './privateChats'
 import { getPubkey } from './identity'
 import { expirationStore } from './expirationStore'
-import { groups } from './groups'
-import { fanOutGroupMetadata } from './groups'
+import { groups, sendGroupSettingsEvent } from './groups'
 
 const normalizeTtlSeconds = (ttlSeconds: number | null): number | null => {
   if (ttlSeconds === null) return null
@@ -56,11 +52,7 @@ export async function setGroupDisappearingMessages(
     )
     .catch(() => {})
 
-  // Publish group metadata update so all members converge on the same setting
-  const base = JSON.parse(buildGroupMetadataContent(group)) as Record<string, unknown>
-  base.messageTtlSeconds = normalizedTtl
-
-  fanOutGroupMetadata(groupId, JSON.stringify(base))
+  sendGroupSettingsEvent(groupId, normalizedTtl)
 }
 
 export async function syncDisappearingMessagesToNdrRuntime(): Promise<void> {

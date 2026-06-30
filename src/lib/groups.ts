@@ -2,20 +2,19 @@ import { writable, get } from 'svelte/store'
 import {
   buildGroupRosterFactEvent,
   buildGroupRosterFactFilter,
-  CHAT_MESSAGE_KIND, REACTION_KIND, RECEIPT_KIND, TYPING_KIND, parseReaction,
-  GROUP_METADATA_KIND,
+  CHAT_MESSAGE_KIND, CHAT_SETTINGS_KIND, REACTION_KIND, RECEIPT_KIND, TYPING_KIND, parseReaction,
   GROUP_ROSTER_FACT_KIND,
   GROUP_ROSTER_FACT_TYPE,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   isGroupRosterFactEvent,
   parseGroupRosterFactEvent,
+  parseGroupRosterFactRumor,
   type GroupData,
   type GroupMetadata,
   type GroupRosterFact,
+  type GroupRosterFactRumor,
   isGroupAdmin,
   createGroupData,
-  buildGroupMetadataContent,
-  parseGroupMetadata,
   validateMetadataUpdate,
   validateMetadataCreation,
   applyMetadataUpdate,
@@ -54,13 +53,13 @@ import {
 } from './storage'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
-import { setupGroupChannel, teardownGroupChannel } from './groupChannels'
 import { expirationStore } from './expirationStore'
 import { onMessageRelayPublish } from './messageRelayStatus'
 import { parseReceipt, shouldAdvanceStatus, type MessageStatus, type ReceiptPayload } from './receipts'
 import { receiptSettings } from './receiptSettings'
+import { parseChatSettingsContent } from './chatSettings'
 
-export { GROUP_METADATA_KIND, GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE }
+export { GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE }
 export type Group = GroupData
 
 type OuterEvent = { id?: string; outerEventId?: string } | unknown
@@ -75,7 +74,7 @@ export const groups = writable<Map<string, Group>>(new Map())
 export const groupMessages = writable<Map<string, GroupMessage[]>>(new Map())
 export const currentGroupId = writable<string | null>(null)
 
-// Queue for group events that arrive before the group's metadata
+// Queue for group events that arrive before the group's roster snapshot
 // (e.g., message arrives before creation event due to network reordering)
 const pendingGroupEvents = new Map<string, Array<{ rumor: Rumor, senderPubkey: string, senderDevicePubkey?: string, outerEventId?: string }>>()
 const MAX_PENDING_PER_GROUP = 50
@@ -231,7 +230,9 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
     updatedAt: Number(unsigned.tags.find((tag) => tag[0] === 'updated_at')?.[1] || eventCreatedAt),
     eventCreatedAt: signed.created_at,
   })
-  await event.publish(undefined, 10000, 1)
+  void event.publish(undefined, 10000, 1).catch((error) => {
+    console.warn('[groups] Failed to publish group roster fact:', error)
+  })
 }
 
 function publishGroupRosterFactSnapshotInBackground(group: Group): void {
@@ -251,15 +252,7 @@ function groupMetadataFromRosterFact(fact: GroupRosterFact): GroupMetadata {
   }
 }
 
-export function handleGroupRosterFactEvent(event: VerifiedEvent): boolean {
-  if (!isGroupRosterFactEvent(event)) return false
-
-  let fact: GroupRosterFact
-  try {
-    fact = parseGroupRosterFactEvent(event)
-  } catch {
-    return false
-  }
+function applyGroupRosterFact(fact: GroupRosterFact): boolean {
   if (!shouldApplyGroupRosterFact(fact)) return false
 
   const myPubkey = getPubkey()
@@ -287,7 +280,7 @@ export function handleGroupRosterFactEvent(event: VerifiedEvent): boolean {
     const group: Group = {
       ...metadata,
       createdAt: fact.group.createdAt,
-      accepted: false,
+      accepted: fact.signerPubkey === myPubkey,
     }
     groups.update(g => { g.set(fact.groupId, group); return g })
     groupMessages.update(gm => { if (!gm.has(fact.groupId)) gm.set(fact.groupId, []); return gm })
@@ -299,6 +292,26 @@ export function handleGroupRosterFactEvent(event: VerifiedEvent): boolean {
   seenGroupRosterFactIds.add(fact.eventId)
   rememberGroupRosterFact(fact.groupId, fact)
   return true
+}
+
+export function handleGroupRosterFactEvent(event: VerifiedEvent): boolean {
+  if (!isGroupRosterFactEvent(event)) return false
+
+  try {
+    return applyGroupRosterFact(parseGroupRosterFactEvent(event))
+  } catch {
+    return false
+  }
+}
+
+export function handleGroupRosterFactRumor(rumor: Rumor): boolean {
+  if (!isGroupRosterFactEvent(rumor)) return false
+
+  try {
+    return applyGroupRosterFact(parseGroupRosterFactRumor(rumor as GroupRosterFactRumor))
+  } catch {
+    return false
+  }
 }
 
 async function backfillGroupRosterFacts(): Promise<void> {
@@ -597,41 +610,6 @@ async function sendNativeGroupEvent(
   })
 }
 
-function senderCopyGroupMetadataToSelf(groupId: string, content: string): void {
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-  if (!isRuntimeSessionReady()) return
-
-  fanOutToMembers(
-    groupId,
-    {
-      content,
-      kind: GROUP_METADATA_KIND,
-      tags: [],
-    },
-    [myPubkey],
-    { includeSelf: true },
-  )
-}
-
-function fanOutGroupMetadataToMembers(
-  groupId: string,
-  content: string,
-  recipientOverride?: string[],
-): void {
-  fanOutToMembers(
-    groupId,
-    {
-      content,
-      kind: GROUP_METADATA_KIND,
-      tags: [],
-    },
-    recipientOverride,
-  )
-  senderCopyGroupMetadataToSelf(groupId, content)
-}
-
-
 function saveGroupState(group: Group): void {
   const storedGroup: StoredGroup = {
     id: group.id,
@@ -674,11 +652,7 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
 
   saveGroupState(group)
 
-  const metadataContent = buildGroupMetadataContent(group)
   publishGroupRosterFactSnapshotInBackground(group)
-  fanOutGroupMetadataToMembers(group.id, metadataContent)
-
-  setupGroupChannel(group)
   syncNativeGroupTransport(group.id)
 
   return group
@@ -700,15 +674,7 @@ export function addGroupMember(groupId: string, pubkey: string): void {
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
-  teardownGroupChannel(groupId)
-  setupGroupChannel(updated)
-
   publishGroupRosterFactSnapshotInBackground(updated)
-  fanOutGroupMetadataToMembers(
-    groupId,
-    buildGroupMetadataContent(updated),
-    updated.members,
-  )
 }
 
 export function removeGroupMember(groupId: string, pubkey: string): void {
@@ -724,23 +690,7 @@ export function removeGroupMember(groupId: string, pubkey: string): void {
   groups.update(g => { g.set(groupId, updated); return g })
   saveGroupState(updated)
 
-  teardownGroupChannel(groupId)
-  setupGroupChannel(updated)
-
   publishGroupRosterFactSnapshotInBackground(updated)
-  // Remaining members get new secret
-  fanOutGroupMetadataToMembers(
-    groupId,
-    buildGroupMetadataContent(updated),
-    updated.members,
-  )
-
-  // Removed member gets metadata WITHOUT secret
-  fanOutToMembers(groupId, {
-    content: buildGroupMetadataContent(updated, { excludeSecret: true }),
-    kind: GROUP_METADATA_KIND,
-    tags: []
-  }, [pubkey])
 }
 
 export function updateGroupInfo(groupId: string, updates: { name?: string, description?: string, picture?: string }): void {
@@ -757,7 +707,6 @@ export function updateGroupInfo(groupId: string, updates: { name?: string, descr
   saveGroupState(updated)
 
   publishGroupRosterFactSnapshotInBackground(updated)
-  fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
 export function addGroupAdmin(groupId: string, pubkey: string): void {
@@ -774,7 +723,6 @@ export function addGroupAdmin(groupId: string, pubkey: string): void {
   saveGroupState(updated)
 
   publishGroupRosterFactSnapshotInBackground(updated)
-  fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
 export function removeGroupAdmin(groupId: string, pubkey: string): void {
@@ -791,7 +739,6 @@ export function removeGroupAdmin(groupId: string, pubkey: string): void {
   saveGroupState(updated)
 
   publishGroupRosterFactSnapshotInBackground(updated)
-  fanOutGroupMetadataToMembers(groupId, buildGroupMetadataContent(updated))
 }
 
 export function sendGroupMessage(groupId: string, text: string, replyTo?: string): void {
@@ -907,6 +854,20 @@ export function sendGroupTypingEvent(groupId: string): void {
   })
 }
 
+export function sendGroupSettingsEvent(groupId: string, messageTtlSeconds: number | null): void {
+  void sendNativeGroupEvent(
+    groupId,
+    {
+      content: JSON.stringify({ type: 'chat-settings', v: 1, messageTtlSeconds }),
+      kind: CHAT_SETTINGS_KIND,
+      tags: [],
+    },
+    { includeSelfPairwiseCopy: true },
+  ).catch((error) => {
+    console.error('[groups] Failed to send group settings event:', error)
+  })
+}
+
 export function handleGroupEvent(
   rumor: Rumor,
   senderPubkey: string,
@@ -918,25 +879,35 @@ export function handleGroupEvent(
   const groupId = groupTag[1]
   const outerEventId = getOuterEventId(outerEvent)
 
-  if (rumor.kind === GROUP_METADATA_KIND) {
-    handleGroupMetadata(rumor, senderPubkey)
-    return
-  }
-
   const groupExists = get(groups).has(groupId)
 
   if (rumor.kind === GROUP_SENDER_KEY_DISTRIBUTION_KIND) {
     if (!groupExists) {
-      // Queue event — metadata may arrive later (network reordering)
+      // Queue event; the roster snapshot may arrive later due to network reordering.
       queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
     }
     return
   }
 
   if (!groupExists) {
-    // Queue event — metadata may arrive later (network reordering)
-    if (rumor.kind === CHAT_MESSAGE_KIND || rumor.kind === REACTION_KIND || rumor.kind === RECEIPT_KIND) {
+    // Queue event; the roster snapshot may arrive later due to network reordering.
+    if (
+      rumor.kind === CHAT_MESSAGE_KIND ||
+      rumor.kind === REACTION_KIND ||
+      rumor.kind === RECEIPT_KIND ||
+      rumor.kind === CHAT_SETTINGS_KIND
+    ) {
       queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
+    }
+    return
+  }
+
+  if (rumor.kind === CHAT_SETTINGS_KIND) {
+    const group = get(groups).get(groupId)
+    if (!group?.admins?.includes(senderPubkey)) return
+    const settings = parseChatSettingsContent(rumor.content)
+    if (settings) {
+      expirationStore.setExpiration(groupId, settings.messageTtlSeconds)
     }
     return
   }
@@ -972,82 +943,6 @@ export function handleGroupEvent(
     }
     handleGroupMessage(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
     return
-  }
-}
-
-export function fanOutGroupMetadata(groupId: string, content: string): void {
-  fanOutGroupMetadataToMembers(groupId, content)
-}
-
-function handleGroupMetadata(rumor: Rumor, senderPubkey: string): void {
-  const metadata = parseGroupMetadata(rumor.content)
-  if (!metadata) return
-
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-
-  const existing = get(groups).get(metadata.id)
-
-  if (existing) {
-    const result = validateMetadataUpdate(existing, metadata, senderPubkey, myPubkey)
-    if (result === 'reject') {
-      console.warn('[groups] Rejected metadata update from non-admin:', senderPubkey.slice(0, 8))
-      return
-    }
-    if (result === 'removed') {
-      deleteGroup(metadata.id)
-      return
-    }
-
-    const secretChanged = metadata.secret && metadata.secret !== existing.secret
-    const updated = applyMetadataUpdate(existing, metadata)
-
-    groups.update(g => { g.set(metadata.id, updated); return g })
-    saveGroupState(updated)
-
-    if (secretChanged && updated.accepted) {
-      teardownGroupChannel(metadata.id)
-      setupGroupChannel(updated)
-    }
-
-    // Sync messageTtlSeconds from group metadata
-    try {
-      const raw = JSON.parse(rumor.content) as Record<string, unknown>
-      if ('messageTtlSeconds' in raw) {
-        const ttl = raw.messageTtlSeconds
-        if (ttl === null || ttl === undefined) {
-          expirationStore.setExpiration(metadata.id, null)
-        } else if (typeof ttl === 'number' && Number.isFinite(ttl) && ttl > 0) {
-          expirationStore.setExpiration(metadata.id, Math.floor(ttl))
-        }
-      }
-    } catch {
-      // ignore parse errors
-    }
-  } else {
-    if (!validateMetadataCreation(metadata, senderPubkey, myPubkey)) return
-
-    const group: Group = {
-      id: metadata.id,
-      name: metadata.name,
-      members: metadata.members,
-      admins: metadata.admins,
-      description: metadata.description,
-      picture: metadata.picture,
-      createdAt: rumor.created_at * 1000,
-      secret: metadata.secret,
-      accepted: false
-    }
-
-    groups.update(g => { g.set(metadata.id, group); return g })
-    groupMessages.update(gm => { if (!gm.has(metadata.id)) gm.set(metadata.id, []); return gm })
-    saveGroupState(group)
-    syncNativeGroupTransport(metadata.id)
-
-    console.log('[groups] Received group invitation:', metadata.name, 'from', senderPubkey.slice(0, 8))
-
-    // Flush any messages that arrived before this metadata
-    flushPendingEvents(metadata.id)
   }
 }
 
@@ -1286,10 +1181,6 @@ export async function loadGroupsFromStorage(): Promise<void> {
         return gm
       })
 
-      // Only setup shared channel for accepted groups with a secret
-      if (group.accepted && group.secret) {
-        setupGroupChannel(group)
-      }
       syncNativeGroupTransport(group.id)
 
       // Flush any events that arrived before this group was loaded
@@ -1334,7 +1225,6 @@ export function markGroupMessagesSeen(groupId: string, messageIds: string[]): vo
 }
 
 export async function deleteGroup(groupId: string): Promise<void> {
-  teardownGroupChannel(groupId)
   try {
     getNdrRuntime().removeGroup(groupId)
   } catch {
@@ -1362,7 +1252,6 @@ export async function deleteGroup(groupId: string): Promise<void> {
 export function clearGroupData(): void {
   const groupIds = Array.from(get(groups).keys())
   for (const groupId of groupIds) {
-    teardownGroupChannel(groupId)
     clearRemoteTyping(`group:${groupId}`)
   }
 
@@ -1391,8 +1280,5 @@ export function acceptGroupInvitation(groupId: string): void {
   })
   saveGroupState(updated)
 
-  if (updated.secret) {
-    setupGroupChannel(updated)
-  }
   syncNativeGroupTransport(groupId)
 }

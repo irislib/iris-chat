@@ -12,6 +12,8 @@ const NON_MEMBER = 'dddd'.repeat(16)
 const OTHER_DEVICE = 'eeee'.repeat(16)
 const ROSTER_ADMIN_SECRET = new Uint8Array(32).fill(7)
 const ROSTER_ADMIN = getPublicKey(ROSTER_ADMIN_SECRET)
+const ROSTER_MEMBER_SECRET = new Uint8Array(32).fill(8)
+const ROSTER_MEMBER = getPublicKey(ROSTER_MEMBER_SECRET)
 const publishedGroupRosterFacts: Array<{ kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number }> = []
 
 vi.mock('@nostr-dev-kit/ndk', () => ({
@@ -331,11 +333,6 @@ vi.mock('./typingState', () => ({
   TYPING_EXPIRY_MS: 10000,
 }))
 
-vi.mock('./groupChannels', () => ({
-  setupGroupChannel: vi.fn(),
-  teardownGroupChannel: vi.fn(),
-}))
-
 // --- Tests ---
 
 describe('groups', () => {
@@ -368,19 +365,6 @@ describe('groups', () => {
       const stored = get(groups).get(group.id)
       expect(stored).toBeDefined()
       expect(stored!.admins).toEqual([MY_PUBKEY])
-    })
-
-    it('fans out metadata to members and sender-copies it to self', async () => {
-      const { createGroup } = await import('./groups')
-      await createGroup('Fan Out Test', [MEMBER_B])
-
-      // Should have sent to MEMBER_B and also sender-copied to self so
-      // linked clients can materialize the group.
-      expect(sendEventCalls.length).toBeGreaterThanOrEqual(1)
-      const sentToB = sendEventCalls.some(c => c.recipient === MEMBER_B)
-      expect(sentToB).toBe(true)
-      const sentToSelf = sendEventCalls.some(c => c.recipient === MY_PUBKEY)
-      expect(sentToSelf).toBe(true)
     })
 
     it('deduplicates creator from member list', async () => {
@@ -477,17 +461,6 @@ describe('groups', () => {
       expect(updated!.members).not.toContain(NO_SESSION)
     })
 
-    it('fans out metadata update to all members including new one', async () => {
-      const { createGroup, addGroupMember } = await import('./groups')
-      const group = await createGroup('Fan Add Test', [MEMBER_B])
-      sendEventCalls.length = 0
-
-      addGroupMember(group.id, MEMBER_C)
-
-      // Should send to both MEMBER_B and MEMBER_C
-      await waitForRecipients(MEMBER_B, MEMBER_C)
-    })
-
     it('publishes an updated group_roster fact when membership changes', async () => {
       const { createGroup, addGroupMember } = await import('./groups')
       const group = await createGroup('Roster Member Test', [MEMBER_B])
@@ -545,16 +518,6 @@ describe('groups', () => {
       expect(updated!.members).toContain(MY_PUBKEY)
     })
 
-    it('fans out to removed member so they learn of removal', async () => {
-      const { createGroup, removeGroupMember } = await import('./groups')
-      const group = await createGroup('Fan Remove Test', [MEMBER_B, MEMBER_C])
-      sendEventCalls.length = 0
-
-      removeGroupMember(group.id, MEMBER_C)
-
-      // Removed member should still receive the update
-      await waitForRecipients(MEMBER_C)
-    })
   })
 
   describe('admin management', () => {
@@ -601,164 +564,6 @@ describe('groups', () => {
     })
   })
 
-  describe('handleGroupEvent - metadata from admin vs non-admin', () => {
-    it('accepts initial group creation from sender in admins list', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      const groupId = 'test-group-1'
-      const rumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Admin Created',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-      })
-
-      handleGroupEvent(rumor, MEMBER_B)
-
-      const group = get(groups).get(groupId)
-      expect(group).toBeDefined()
-      expect(group!.name).toBe('Admin Created')
-      expect(group!.admins).toEqual([MEMBER_B])
-    })
-
-    it('rejects initial group creation from sender NOT in admins list', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      const groupId = 'test-group-reject'
-      const rumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Fake Group',
-        members: [MEMBER_C, MY_PUBKEY],
-        admins: [MEMBER_B], // Sender is MEMBER_C, not in admins
-      })
-
-      handleGroupEvent(rumor, MEMBER_C)
-
-      expect(get(groups).has(groupId)).toBe(false)
-    })
-
-    it('accepts metadata update from existing admin', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      // First, create the group
-      const groupId = 'test-group-update'
-      const createRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Original Name',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-      })
-      handleGroupEvent(createRumor, MEMBER_B)
-      expect(get(groups).get(groupId)!.name).toBe('Original Name')
-
-      // Update from admin
-      const updateRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Updated Name',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-      })
-      handleGroupEvent(updateRumor, MEMBER_B)
-
-      expect(get(groups).get(groupId)!.name).toBe('Updated Name')
-    })
-
-    it('rejects metadata update from non-admin member', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      // Create group with MEMBER_B as admin
-      const groupId = 'test-group-nonadmin'
-      const createRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Admin Group',
-        members: [MEMBER_B, MEMBER_C, MY_PUBKEY],
-        admins: [MEMBER_B],
-      })
-      handleGroupEvent(createRumor, MEMBER_B)
-
-      // MEMBER_C (not admin) tries to update
-      const updateRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Hacked Name',
-        members: [MEMBER_B, MEMBER_C, MY_PUBKEY],
-        admins: [MEMBER_C], // Trying to make themselves admin
-      })
-      handleGroupEvent(updateRumor, MEMBER_C)
-
-      // Name should not have changed
-      expect(get(groups).get(groupId)!.name).toBe('Admin Group')
-      // MEMBER_C should not be admin
-      expect(get(groups).get(groupId)!.admins).toEqual([MEMBER_B])
-    })
-
-    it('handles member removal via metadata update', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      // Create group where we're a member
-      const groupId = 'test-group-removal'
-      const createRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Removal Test',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-      })
-      handleGroupEvent(createRumor, MEMBER_B)
-      expect(get(groups).has(groupId)).toBe(true)
-
-      // Admin removes us from the group
-      const removeRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Removal Test',
-        members: [MEMBER_B], // We're not in members anymore
-        admins: [MEMBER_B],
-      })
-      handleGroupEvent(removeRumor, MEMBER_B)
-
-      // Group should be deleted locally
-      expect(get(groups).has(groupId)).toBe(false)
-    })
-
-    it('rejects metadata with empty admins list', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      const groupId = 'test-group-no-admins'
-      const rumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'No Admins',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [],
-      })
-
-      handleGroupEvent(rumor, MEMBER_B)
-
-      expect(get(groups).has(groupId)).toBe(false)
-    })
-
-    it('accepts admin adding a new member via metadata', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      const groupId = 'test-group-add-via-meta'
-      const createRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Expandable',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-      })
-      handleGroupEvent(createRumor, MEMBER_B)
-
-      // Admin adds MEMBER_C
-      const addRumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Expandable',
-        members: [MEMBER_B, MY_PUBKEY, MEMBER_C],
-        admins: [MEMBER_B],
-      })
-      handleGroupEvent(addRumor, MEMBER_B)
-
-      expect(get(groups).get(groupId)!.members).toContain(MEMBER_C)
-    })
-  })
-
   describe('group_roster fact ingest', () => {
     it('creates a pending local group from a valid roster fact', async () => {
       const { handleGroupRosterFactEvent, groups } = await import('./groups')
@@ -778,6 +583,24 @@ describe('groups', () => {
       expect(group!.members).toEqual([MY_PUBKEY, ROSTER_ADMIN].sort())
       expect(group!.admins).toEqual([ROSTER_ADMIN])
       expect(group!.accepted).toBe(false)
+      expect(group!.secret).toBeUndefined()
+    })
+
+    it('creates a local group from an authenticated pairwise roster fact rumor', async () => {
+      const { handleGroupRosterFactRumor, groups } = await import('./groups')
+      const groupId = 'fact-rumor-created-group'
+
+      const handled = handleGroupRosterFactRumor(makeRosterFactEvent({
+        groupId,
+        name: 'Fact Rumor Created',
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+      }) as unknown as Rumor)
+
+      expect(handled).toBe(true)
+      const group = get(groups).get(groupId)
+      expect(group).toBeDefined()
+      expect(group!.name).toBe('Fact Rumor Created')
       expect(group!.secret).toBeUndefined()
     })
 
@@ -805,6 +628,95 @@ describe('groups', () => {
       expect(group!.name).toBe('After')
       expect(group!.members).toContain(MEMBER_C)
       expect(group!.secret).toBeUndefined()
+    })
+
+    it('rejects initial roster facts not signed by an admin', async () => {
+      const { handleGroupRosterFactEvent, groups } = await import('./groups')
+      const groupId = 'fact-reject-initial-nonadmin'
+
+      const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Fake Group',
+        members: [ROSTER_MEMBER, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+        signerSecret: ROSTER_MEMBER_SECRET,
+      }))
+
+      expect(handled).toBe(false)
+      expect(get(groups).has(groupId)).toBe(false)
+    })
+
+    it('rejects updates not signed by an existing admin', async () => {
+      const { handleGroupRosterFactEvent, groups } = await import('./groups')
+      const groupId = 'fact-reject-update-nonadmin'
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Admin Group',
+        members: [ROSTER_ADMIN, ROSTER_MEMBER, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+        revision: 1,
+      }))
+
+      const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Hacked Group',
+        members: [ROSTER_ADMIN, ROSTER_MEMBER, MY_PUBKEY],
+        admins: [ROSTER_MEMBER],
+        revision: 2,
+        signerSecret: ROSTER_MEMBER_SECRET,
+      }))
+
+      expect(handled).toBe(false)
+      const group = get(groups).get(groupId)!
+      expect(group.name).toBe('Admin Group')
+      expect(group.admins).toEqual([ROSTER_ADMIN])
+    })
+
+    it('deletes the local group when an admin roster fact removes us', async () => {
+      const { handleGroupRosterFactEvent, groups } = await import('./groups')
+      const groupId = 'fact-removes-local-member'
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Removal Test',
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+        revision: 1,
+      }))
+      expect(get(groups).has(groupId)).toBe(true)
+
+      const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Removal Test',
+        members: [ROSTER_ADMIN],
+        admins: [ROSTER_ADMIN],
+        revision: 2,
+      }))
+
+      expect(handled).toBe(true)
+      expect(get(groups).has(groupId)).toBe(false)
+    })
+
+    it('accepts admin roster facts that add a new member', async () => {
+      const { handleGroupRosterFactEvent, groups } = await import('./groups')
+      const groupId = 'fact-adds-member'
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Expandable',
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+        revision: 1,
+      }))
+
+      const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Expandable',
+        members: [ROSTER_ADMIN, ROSTER_MEMBER, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+        revision: 2,
+      }))
+
+      expect(handled).toBe(true)
+      expect(get(groups).get(groupId)!.members).toContain(ROSTER_MEMBER)
     })
   })
 
@@ -899,26 +811,6 @@ describe('groups', () => {
         expect(expiresAt).toBeGreaterThanOrEqual(before + 60)
         expect(expiresAt).toBeLessThanOrEqual(after + 60)
       }
-    })
-  })
-
-  describe('fanOutGroupMetadata', () => {
-    it('sender-copies metadata updates to self', async () => {
-      const { createGroup, fanOutGroupMetadata } = await import('./groups')
-      const group = await createGroup('Metadata Update Test', [MEMBER_B])
-      sendEventCalls.length = 0
-
-      fanOutGroupMetadata(
-        group.id,
-        JSON.stringify({
-          id: group.id,
-          name: 'Metadata Update Test',
-          members: group.members,
-          admins: group.admins,
-        })
-      )
-
-      await waitForRecipients(MEMBER_B, MY_PUBKEY)
     })
   })
 
@@ -1056,9 +948,6 @@ describe('groups', () => {
       expect(get(groups).size).toBe(0)
       expect(get(groupMessages).size).toBe(0)
       expect(get(currentGroupId)).toBe(null)
-
-      const groupChannels = await import('./groupChannels')
-      expect(groupChannels.teardownGroupChannel).toHaveBeenCalledWith(group.id)
     })
   })
 
@@ -1118,136 +1007,72 @@ describe('groups', () => {
       expect(updated!.secret).not.toBe(originalSecret)
     })
 
-    it('removed member does not receive new secret', async () => {
-      const { createGroup, removeGroupMember, groups } = await import('./groups')
-      const group = await createGroup('No Secret For Removed', [MEMBER_B, MEMBER_C])
-      sendEventCalls.length = 0
-
-      removeGroupMember(group.id, MEMBER_C)
-
-      // Find what was sent to the removed member
-      await vi.waitFor(() => {
-        expect(sendEventCalls.filter(c => c.recipient === MEMBER_C).length).toBeGreaterThan(0)
-      })
-      const sentToC = sendEventCalls.filter(c => c.recipient === MEMBER_C)
-
-      // Parse the event sent to removed member - it should not contain the new secret
-      const removedEvent = sentToC[0].event as { content: string }
-      const removedMetadata = JSON.parse(removedEvent.content)
-      expect(removedMetadata.secret).toBeUndefined()
-
-      // But remaining members should get the new secret
-      await vi.waitFor(() => {
-        expect(sendEventCalls.filter(c => c.recipient === MEMBER_B).length).toBeGreaterThan(0)
-      })
-      const sentToB = sendEventCalls.filter(c => c.recipient === MEMBER_B)
-      const memberEvent = sentToB[0].event as { content: string }
-      const memberMetadata = JSON.parse(memberEvent.content)
-      expect(memberMetadata.secret).toBeDefined()
-    })
   })
 
   describe('group acceptance', () => {
-    it('handleGroupMetadata sets accepted to false for new groups', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
+    it('roster facts from another admin create pending groups without secrets', async () => {
+      const { handleGroupRosterFactEvent, groups } = await import('./groups')
       const groupId = 'test-group-pending'
-      const rumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Pending Group',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-        secret: 'a'.repeat(64),
-      })
 
-      handleGroupEvent(rumor, MEMBER_B)
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
+        name: 'Pending Group',
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+      }))
 
       const group = get(groups).get(groupId)
       expect(group).toBeDefined()
       expect(group!.accepted).toBe(false)
+      expect(group!.secret).toBeUndefined()
     })
 
     it('acceptGroupInvitation sets accepted to true', async () => {
-      const { handleGroupEvent, acceptGroupInvitation, groups } = await import('./groups')
+      const { handleGroupRosterFactEvent, acceptGroupInvitation, groups } = await import('./groups')
 
       const groupId = 'test-group-accept'
-      const rumor = makeMetadataRumor(groupId, {
-        id: groupId,
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
         name: 'Accept Test',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-        secret: 'b'.repeat(64),
-      })
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+      }))
 
-      handleGroupEvent(rumor, MEMBER_B)
       expect(get(groups).get(groupId)!.accepted).toBe(false)
 
       acceptGroupInvitation(groupId)
       expect(get(groups).get(groupId)!.accepted).toBe(true)
     })
 
-    it('handleGroupMetadata preserves accepted status on update', async () => {
-      const { handleGroupEvent, acceptGroupInvitation, groups } = await import('./groups')
+    it('roster fact updates preserve accepted status', async () => {
+      const { handleGroupRosterFactEvent, acceptGroupInvitation, groups } = await import('./groups')
 
       const groupId = 'test-group-preserve-accepted'
-      const createRumor = makeMetadataRumor(groupId, {
-        id: groupId,
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
         name: 'Preserve Test',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-        secret: 'c'.repeat(64),
-      })
-      handleGroupEvent(createRumor, MEMBER_B)
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+        revision: 1,
+      }))
       acceptGroupInvitation(groupId)
 
-      // Update from admin
-      const updateRumor = makeMetadataRumor(groupId, {
-        id: groupId,
+      handleGroupRosterFactEvent(makeRosterFactEvent({
+        groupId,
         name: 'Updated Name',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-        secret: 'd'.repeat(64),
-      })
-      handleGroupEvent(updateRumor, MEMBER_B)
+        members: [ROSTER_ADMIN, MY_PUBKEY],
+        admins: [ROSTER_ADMIN],
+        revision: 2,
+      }))
 
       const group = get(groups).get(groupId)
       expect(group!.name).toBe('Updated Name')
       expect(group!.accepted).toBe(true) // should stay accepted
     })
-
-    it('handleGroupMetadata stores secret from metadata', async () => {
-      const { handleGroupEvent, groups } = await import('./groups')
-
-      const secret = 'e'.repeat(64)
-      const groupId = 'test-group-secret-store'
-      const rumor = makeMetadataRumor(groupId, {
-        id: groupId,
-        name: 'Secret Store',
-        members: [MEMBER_B, MY_PUBKEY],
-        admins: [MEMBER_B],
-        secret,
-      })
-
-      handleGroupEvent(rumor, MEMBER_B)
-
-      const group = get(groups).get(groupId)
-      expect(group!.secret).toBe(secret)
-    })
   })
 })
 
 // --- Helpers ---
-
-function makeMetadataRumor(groupId: string, metadata: { id: string, name: string, members: string[], admins: string[], description?: string, picture?: string, secret?: string }): Rumor {
-  return {
-    id: Math.random().toString(36),
-    kind: 40,
-    content: JSON.stringify(metadata),
-    pubkey: '',
-    created_at: Math.floor(Date.now() / 1000),
-    tags: [['l', groupId]],
-  } as Rumor
-}
 
 function makeRosterFactEvent({
   groupId,
@@ -1255,15 +1080,18 @@ function makeRosterFactEvent({
   members,
   admins,
   revision = 1,
+  signerSecret = ROSTER_ADMIN_SECRET,
 }: {
   groupId: string
   name: string
   members: string[]
   admins: string[]
   revision?: number
+  signerSecret?: Uint8Array
 }): VerifiedEvent {
   const createdAt = 1700000000
   const updatedAt = 1700000000 + revision
+  const signerPubkey = getPublicKey(signerSecret)
   return finalizeEvent({
     kind: 37368,
     content: '',
@@ -1278,11 +1106,11 @@ function makeRosterFactEvent({
       ['name', name],
       ['created_at', String(createdAt)],
       ['updated_at', String(updatedAt)],
-      ['created_by', admins[0] || ROSTER_ADMIN],
+      ['created_by', admins[0] || signerPubkey],
       ...members.map((member) => ['member', member]),
       ...admins.map((admin) => ['admin', admin]),
     ],
-  }, ROSTER_ADMIN_SECRET)
+  }, signerSecret)
 }
 
 function makeMessageRumor(groupId: string, content: string, pubkey: string): Rumor {

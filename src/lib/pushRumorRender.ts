@@ -4,7 +4,6 @@ import {
   RECEIPT_KIND,
   TYPING_KIND,
   CHAT_SETTINGS_KIND,
-  GROUP_METADATA_KIND,
   GROUP_INVITE_RUMOR_KIND,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   GROUP_SENDER_KEY_MESSAGE_KIND,
@@ -14,7 +13,7 @@ export type RenderedRumor = {
   body: string
   // True for chat messages, reactions, group invites — durable activity that
   // warrants a sticky audible notification. False for ephemeral status
-  // (typing, receipts, settings sync, group metadata) which should reuse a
+  // (typing, receipts, settings sync) which should reuse a
   // shared tag so the latest replaces the previous one and the user isn't
   // pinged audibly.
   durable: boolean
@@ -40,8 +39,6 @@ export function renderRumor(kind: number | undefined, content: string | undefine
       return { body: 'Status update', durable: false }
     case CHAT_SETTINGS_KIND:
       return { body: 'Updated chat settings', durable: false }
-    case GROUP_METADATA_KIND:
-      return { body: 'Updated group', durable: false }
     case GROUP_INVITE_RUMOR_KIND:
       return { body: 'Invited you to a group', durable: true }
     case GROUP_SENDER_KEY_DISTRIBUTION_KIND:

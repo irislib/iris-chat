@@ -99,6 +99,32 @@ async function openChatFromList(page: import('@playwright/test').Page, message: 
   throw new Error(`Could not find chat list item for message preview: ${message}`)
 }
 
+async function openGroupFromSidebar(page: import('@playwright/test').Page, groupName: string): Promise<void> {
+  const chatList = page.getByTestId('sidebar-chat-list')
+  const groupPattern = new RegExp(escapeRegExp(groupName))
+  const allTab = page.getByTestId('sidebar-tab-all')
+  const requestsTab = page.getByTestId('sidebar-tab-requests')
+  const deadline = Date.now() + 30_000
+
+  while (Date.now() < deadline) {
+    for (const tabButton of [allTab, requestsTab]) {
+      await tabButton.click().catch(() => {})
+      const byRole = chatList.getByRole('button', { name: groupPattern }).first()
+      const byText = chatList.locator('button').filter({ hasText: groupName }).first()
+      for (const candidate of [byRole, byText]) {
+        if (await candidate.isVisible().catch(() => false)) {
+          await candidate.scrollIntoViewIfNeeded().catch(() => {})
+          await candidate.click()
+          return
+        }
+      }
+    }
+    await page.waitForTimeout(250)
+  }
+
+  throw new Error(`Could not find group list item: ${groupName}`)
+}
+
 async function waitForIncomingRequest(page: import('@playwright/test').Page, message: string): Promise<void> {
   const messageBubble = page.locator('.max-w-\\[85\\%\\]').filter({ hasText: message }).first()
   const requestHeader = page.getByRole('heading', { name: 'Message request' })
@@ -303,5 +329,89 @@ test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
   } finally {
     await contextOwner.close()
     await contextLinked.close()
+  }
+})
+
+test('linked device-created group syncs without approval and carries messages both ways', async ({
+  browser,
+  testRelayUrl,
+}) => {
+  test.slow()
+
+  const ownerPrivkey = generateSecretKey()
+  const ownerPrivkeyHex = toHex(ownerPrivkey)
+
+  const user2Privkey = generateSecretKey()
+  const user2PrivkeyHex = toHex(user2Privkey)
+
+  const ownerContext = await browser.newContext()
+  const linkedContext = await browser.newContext()
+  const user2Context = await browser.newContext()
+
+  await useTestRelay(ownerContext, testRelayUrl)
+  await useTestRelay(linkedContext, testRelayUrl)
+  await useTestRelay(user2Context, testRelayUrl)
+
+  await setIdentity(ownerContext, ownerPrivkeyHex)
+  await linkedContext.addInitScript(() => {
+    localStorage.removeItem('iris-chat-identity')
+  })
+  await setIdentity(user2Context, user2PrivkeyHex)
+
+  const ownerPage = await ownerContext.newPage()
+  const linkedPage = await linkedContext.newPage()
+  const user2Page = await user2Context.newPage()
+
+  try {
+    await loginWithStoredKey(ownerPage)
+    await loginWithStoredKey(user2Page)
+    await registerDevice(ownerPage)
+
+    await openLinkThisDevice(linkedPage)
+    const linkInviteUrl = await getLinkInviteUrl(linkedPage)
+    await acceptLinkInvite(ownerPage, linkInviteUrl)
+    await expect(linkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({
+      timeout: 20_000,
+    })
+
+    await user2Page.getByRole('button', { name: 'New Chat' }).click()
+    const inviteUrl = await getInviteUrl(user2Page)
+
+    await linkedPage.getByRole('button', { name: 'New Chat' }).click()
+    await linkedPage.getByPlaceholder('Paste invite link').fill(inviteUrl)
+    await expect(linkedPage.getByPlaceholder('Type a message...')).toBeVisible({
+      timeout: 15_000,
+    })
+
+    const groupName = `linked-group-${Date.now()}`
+    await linkedPage.getByRole('button', { name: 'New Chat' }).click()
+    await linkedPage.getByRole('button', { name: 'Create Group' }).click()
+    const createGroupView = linkedPage.getByTestId('create-group-view')
+    await createGroupView.getByTestId('create-group-member').first().click()
+    await createGroupView.getByTestId('create-group-next').click()
+    await linkedPage.getByPlaceholder('Enter group name...').fill(groupName)
+    await createGroupView.getByTestId('create-group-submit').click()
+    await expect(linkedPage.getByText(groupName).first()).toBeVisible({ timeout: 20_000 })
+
+    await openGroupFromSidebar(ownerPage, groupName)
+    await expect(ownerPage.getByRole('button', { name: /^Accept$/ })).toHaveCount(0)
+
+    const linkedMessage = `linked group hello ${Date.now()}`
+    await linkedPage.getByPlaceholder('Type a message...').fill(linkedMessage)
+    await linkedPage.getByRole('button', { name: 'Send' }).click()
+    await expect(
+      ownerPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: linkedMessage }).first()
+    ).toBeVisible({ timeout: 20_000 })
+
+    const ownerMessage = `owner group reply ${Date.now()}`
+    await ownerPage.getByPlaceholder('Type a message...').fill(ownerMessage)
+    await ownerPage.getByRole('button', { name: 'Send' }).click()
+    await expect(
+      linkedPage.locator('.max-w-\\[85\\%\\]').filter({ hasText: ownerMessage }).first()
+    ).toBeVisible({ timeout: 20_000 })
+  } finally {
+    await ownerContext.close()
+    await linkedContext.close()
+    await user2Context.close()
   }
 })
