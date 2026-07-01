@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { spawnSync } from 'child_process'
+import { existsSync } from 'fs'
 import { generateSecretKey, nip19 } from 'nostr-tools'
 
 const PUBLIC_INTEROP_RELAYS = [
@@ -19,8 +20,48 @@ const SERIAL = process.env.IRIS_CHAT_RS_ANDROID_SERIAL ?? ''
 const HARNESS = process.env.IRIS_CHAT_RS_HARNESS ?? '../iris-chat-rs/scripts/run_harness.py'
 const RUNNER = 'to.iris.chat.test/androidx.test.runner.AndroidJUnitRunner'
 const CLASS_NAME = 'to.iris.chat.RealRelayHarnessTest'
+const ANDROID_HARNESS_SKIP_REASON = androidHarnessSkipReason()
 
 test.describe.configure({ mode: 'serial' })
+
+function adbCommand(args: string[]) {
+  const command = SERIAL ? ['-s', SERIAL, ...args] : args
+  return spawnSync(ADB, command, { encoding: 'utf8', timeout: 30000 })
+}
+
+function androidHarnessSkipReason(): string | null {
+  if (!existsSync(HARNESS)) {
+    return `Android interop harness script not found at ${HARNESS}`
+  }
+
+  const devices = spawnSync(ADB, ['devices'], { encoding: 'utf8', timeout: 30000 })
+  if (devices.error) {
+    return `adb is unavailable: ${devices.error.message}`
+  }
+  if (devices.status !== 0) {
+    return `adb devices failed: ${(devices.stderr || devices.stdout).trim()}`
+  }
+
+  const hasDevice = devices.stdout
+    .split(/\r?\n/)
+    .some((line) => /\tdevice$/.test(line) && (!SERIAL || line.startsWith(`${SERIAL}\t`)))
+  if (!hasDevice) {
+    return SERIAL ? `Android device ${SERIAL} is not online` : 'No online Android device is available'
+  }
+
+  const instrumentation = adbCommand(['shell', 'pm', 'list', 'instrumentation'])
+  if (instrumentation.error) {
+    return `adb instrumentation check failed: ${instrumentation.error.message}`
+  }
+  if (instrumentation.status !== 0) {
+    return `adb instrumentation check failed: ${(instrumentation.stderr || instrumentation.stdout).trim()}`
+  }
+  if (!instrumentation.stdout.includes(RUNNER)) {
+    return `Android interop test runner ${RUNNER} is not installed`
+  }
+
+  return null
+}
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('')
@@ -224,37 +265,41 @@ async function expectIncomingWebMessage(page: import('@playwright/test').Page, m
   throw new Error(`Timed out waiting for web to receive Android message: ${message}`)
 }
 
-test('iris-chat-rs Android accepts iris-chat web invite and sends message', async ({ page }) => {
-  test.setTimeout(300000)
+test.describe('iris-chat-rs Android interop', () => {
+  test.skip(Boolean(ANDROID_HARNESS_SKIP_REASON), ANDROID_HARNESS_SKIP_REASON ?? '')
 
-  await configureWebIdentity(page.context())
-  await login(page)
-  await registerDevice(page)
-  await openNewChat(page)
+  test('iris-chat-rs Android accepts iris-chat web invite and sends message', async ({ page }) => {
+    test.setTimeout(300000)
 
-  const inviteUrl = await getInviteUrl(page)
-  const message = `android->web ${Date.now()}`
-  const output = runAndroidHarness(inviteUrl, message)
-  expect(output).toContain('INSTRUMENTATION_STATUS: delivery=')
+    await configureWebIdentity(page.context())
+    await login(page)
+    await registerDevice(page)
+    await openNewChat(page)
 
-  await expectIncomingWebMessage(page, message)
-})
+    const inviteUrl = await getInviteUrl(page)
+    const message = `android->web ${Date.now()}`
+    const output = runAndroidHarness(inviteUrl, message)
+    expect(output).toContain('INSTRUMENTATION_STATUS: delivery=')
 
-test('iris-chat web accepts iris-chat-rs Android invite and sends message', async ({ page }) => {
-  test.setTimeout(300000)
+    await expectIncomingWebMessage(page, message)
+  })
 
-  await configureWebIdentity(page.context())
-  await login(page)
-  await registerDevice(page)
+  test('iris-chat web accepts iris-chat-rs Android invite and sends message', async ({ page }) => {
+    test.setTimeout(300000)
 
-  const inviteUrl = createAndroidInvite()
-  await openNewChat(page)
-  await page.getByPlaceholder('Paste invite link').fill(inviteUrl)
-  await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 60000 })
+    await configureWebIdentity(page.context())
+    await login(page)
+    await registerDevice(page)
 
-  const message = `web->android ${Date.now()}`
-  await page.getByPlaceholder('Type a message...').fill(message)
-  await page.getByRole('button', { name: 'Send' }).click()
+    const inviteUrl = createAndroidInvite()
+    await openNewChat(page)
+    await page.getByPlaceholder('Paste invite link').fill(inviteUrl)
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 60000 })
 
-  waitForAndroidMessage(message)
+    const message = `web->android ${Date.now()}`
+    await page.getByPlaceholder('Type a message...').fill(message)
+    await page.getByRole('button', { name: 'Send' }).click()
+
+    waitForAndroidMessage(message)
+  })
 })
