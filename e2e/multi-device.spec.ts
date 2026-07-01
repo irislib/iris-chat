@@ -5,6 +5,8 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
+
 async function setIdentity(context: import('@playwright/test').BrowserContext, privkeyHex: string) {
   await context.addInitScript((key: string) => {
     try {
@@ -181,7 +183,7 @@ async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<
     const count = await buttons.count()
     for (let index = 0; index < count; index += 1) {
       const url = await buttons.nth(index).getAttribute('title')
-      if (url?.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) return url
+      if (url?.match(COMPACT_LINK_CODE_PATTERN)) return url
     }
     await page.waitForTimeout(100)
   }

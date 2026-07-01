@@ -295,10 +295,14 @@ export const getCurrentDeviceRegistrationLabels = async (): Promise<DeviceLabels
   }
 }
 
-export const getLinkedDeviceRegistrationLabels = async (): Promise<DeviceLabels> => {
+export const getLinkedDeviceRegistrationLabels = async (
+  requestedLabels?: DeviceLabels
+): Promise<DeviceLabels> => {
+  const deviceLabel = normalizeLabel(requestedLabels?.deviceLabel)
+  const clientLabel = normalizeLabel(requestedLabels?.clientLabel)
   return {
-    deviceLabel: 'Linked device',
-    clientLabel: 'Iris Chat',
+    deviceLabel: deviceLabel || 'Linked device',
+    clientLabel: clientLabel || 'Iris Chat',
   }
 }
 

@@ -72,6 +72,15 @@ describe('deviceLabels', () => {
       deviceLabel: 'Linked device',
       clientLabel: 'Iris Chat',
     })
+    await expect(
+      getLinkedDeviceRegistrationLabels({
+        deviceLabel: '  Safari on macOS  ',
+        clientLabel: 'Iris Chat Web',
+      })
+    ).resolves.toEqual({
+      deviceLabel: 'Safari on macOS',
+      clientLabel: 'Iris Chat Web',
+    })
   })
 
   it('shows the current device role with its label as supporting text', () => {

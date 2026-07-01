@@ -15,6 +15,7 @@
   import { loadGroupsFromStorage, clearGroupData, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
   import { initMultiDevice, resetManagers } from './lib/privateChats'
+  import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
   import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
   import { initFollowing } from './lib/following'
   import CreateGroup from './components/CreateGroup.svelte'
@@ -42,6 +43,8 @@
   // Mobile: which panel to show - 'sidebar' or 'main'
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
   let duplicateTab = $state(false)
+  let deviceRemovalLogoutRequested = false
+  let deviceRemovalLogoutInProgress = false
 
   // If a chat is deleted (e.g. rejected request), ensure we don't keep rendering it.
   $effect(() => {
@@ -114,6 +117,13 @@
   onMount(() => {
     let cleanup: (() => void) | undefined
     const stopFollowing = initFollowing()
+    const stopCurrentDeviceRemovalLogout = onCurrentDeviceRemovedFromRoster(() => {
+      requestDeviceRemovalLogout()
+    })
+    cleanup = () => {
+      stopFollowing()
+      stopCurrentDeviceRemovalLogout()
+    }
 
     // Run async initialization
     ;(async () => {
@@ -262,6 +272,7 @@
       void drainPendingPushNostrEvents()
 
       loggedIn = true
+      void flushDeviceRemovalLogout()
 
       // If there's an invite in URL, show main view to handle it
       if (hashInvite) {
@@ -309,6 +320,7 @@
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
       navigator.serviceWorker?.removeEventListener('message', handleGetOpenChat)
       stopFollowing()
+      stopCurrentDeviceRemovalLogout()
     }
     })()
 
@@ -326,6 +338,7 @@
     }
 
     loggedIn = true
+    void flushDeviceRemovalLogout()
 
     // Load groups FIRST (same reason as onMount — avoid race condition)
     await loadGroupsFromStorage()
@@ -481,6 +494,31 @@
     selectedGroupId = null
     navigateTo('chat', false)
     mobileView = 'sidebar'
+  }
+
+  function requestDeviceRemovalLogout() {
+    deviceRemovalLogoutRequested = true
+    void flushDeviceRemovalLogout()
+  }
+
+  async function flushDeviceRemovalLogout() {
+    if (
+      !deviceRemovalLogoutRequested ||
+      deviceRemovalLogoutInProgress ||
+      !loggedIn
+    ) {
+      return
+    }
+
+    deviceRemovalLogoutInProgress = true
+    try {
+      await handleLogout()
+    } catch (error) {
+      console.error('[app] failed to logout after current device removal:', error)
+    } finally {
+      deviceRemovalLogoutInProgress = false
+      deviceRemovalLogoutRequested = false
+    }
   }
 </script>
 

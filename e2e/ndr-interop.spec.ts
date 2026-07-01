@@ -17,6 +17,7 @@ const NDR_CWD =
   path.resolve(__dirname, '../../iris-chat-rs/core')
 const NDR_MANIFEST = path.join(NDR_CWD, 'Cargo.toml')
 const NDR_BIN = resolveNativeCliBin()
+const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
 
 function skipIfNdrWorkspaceMissing() {
   test.skip(!fs.existsSync(NDR_MANIFEST), `iris-chat-rs native CLI missing: ${NDR_MANIFEST}`)
@@ -301,7 +302,7 @@ async function getLinkInviteUrl(page: Page): Promise<string> {
     const count = await buttons.count()
     for (let index = 0; index < count; index += 1) {
       const url = await buttons.nth(index).getAttribute('title')
-      if (url?.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) return url
+      if (url?.match(COMPACT_LINK_CODE_PATTERN)) return url
     }
     await page.waitForTimeout(100)
   }
@@ -320,7 +321,7 @@ async function acceptLinkInvite(page: Page, inviteUrl: string): Promise<void> {
 }
 
 function extractInviteField(inviteUrl: string, field: string): string | null {
-  if (field === 'inviter' && inviteUrl.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) {
+  if (field === 'inviter' && inviteUrl.match(COMPACT_LINK_CODE_PATTERN)) {
     return inviteUrl.split('.')[0] ?? null
   }
 

@@ -515,8 +515,10 @@ export const startDeviceLink = async (
 ): Promise<DeviceLinkSession> => {
   await ensureConnected()
 
+  const labels = await getCurrentDeviceRegistrationLabels()
   const localRequest = createDeviceLinkRequest({
     requestedAt: now(),
+    ...labels,
   })
   await persistCompactLinkRuntimeDelegate(localRequest)
   const subscribe = createRelayOnlySubscribe(getNDK())
@@ -802,7 +804,11 @@ export const acceptDeviceLink = async (input: string): Promise<void> => {
   await ensureConnected()
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(currentIdentity.pubkey)
-  const labels = await getLinkedDeviceRegistrationLabels()
+  const parsedLabels = parsed as typeof parsed & { deviceLabel?: string; clientLabel?: string }
+  const labels = await getLinkedDeviceRegistrationLabels({
+    deviceLabel: parsedLabels.deviceLabel,
+    clientLabel: parsedLabels.clientLabel,
+  })
   const preparedRegistration = await currentRuntime.prepareRegistrationForIdentity({
     ownerPubkey: currentIdentity.pubkey,
     identityPubkey: parsed.deviceAppKeyPubkey,

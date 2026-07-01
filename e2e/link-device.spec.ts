@@ -6,6 +6,14 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
+
+function decodeCompactLinkMetadata(code: string): Record<string, unknown> {
+  const metadata = code.split('.')[2]
+  if (!metadata) throw new Error('Compact link code is missing metadata')
+  return JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown>
+}
+
 async function setIdentity(context: BrowserContext, privkeyHex: string) {
   await context.addInitScript((key: string) => {
     try {
@@ -44,7 +52,7 @@ async function openLinkThisDevice(page: Page): Promise<string> {
     const count = await buttons.count()
     for (let index = 0; index < count; index += 1) {
       const url = await buttons.nth(index).getAttribute('title')
-      if (url?.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) return url
+      if (url?.match(COMPACT_LINK_CODE_PATTERN)) return url
     }
     await page.waitForTimeout(100)
   }
@@ -69,14 +77,18 @@ test('link another device closes on paste and logs the other browser in promptly
   try {
     await loginWithStoredKey(ownerPage)
     const approvalUrl = await openLinkThisDevice(linkedPage)
-    expect(approvalUrl).toMatch(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)
+    expect(approvalUrl).toMatch(COMPACT_LINK_CODE_PATTERN)
     expect(approvalUrl).not.toContain('https://chat.iris.to')
     expect(approvalUrl).not.toContain('relay=')
-    expect(approvalUrl.length).toBe(129)
     const approvalParts = approvalUrl.split('.')
-    expect(approvalParts).toHaveLength(2)
+    expect(approvalParts).toHaveLength(3)
     expect(approvalParts[0]).toMatch(/^[0-9a-f]{64}$/)
     expect(approvalParts[1]).toMatch(/^[0-9a-f]{64}$/)
+    expect(approvalParts[2]).toMatch(/^[A-Za-z0-9_-]+$/)
+    const metadata = decodeCompactLinkMetadata(approvalUrl)
+    expect(metadata.v).toBe(1)
+    expect(metadata.deviceLabel).toEqual(expect.stringMatching(/\S/))
+    expect(metadata.clientLabel).toBe('Iris Chat Web')
 
     await ownerPage.getByRole('button', { name: 'Settings' }).click()
     await ownerPage.getByRole('button', { name: 'Link another device' }).click()
