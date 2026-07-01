@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "2.6.7",
+  "version": "2.6.8",
   "type": "module",
   "description": "Decentralized encrypted messaging over Nostr",
   "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
@@ -18,7 +18,6 @@
     "test": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run",
     "test:watch": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs",
     "test:e2e": "env -u NO_COLOR playwright test",
-    "test:e2e:flutter-interop": "IRIS_FLUTTER_INTEROP=1 env -u NO_COLOR playwright test e2e/flutter-interop-self-chat.spec.ts",
     "smoke:portable": "node ./scripts/smoke-iris-chat-portable.mjs",
     "publish:iris": "node ./scripts/publish-iris-build.mjs",
     "release:iris": "node ./scripts/release-site.mjs"
@@ -47,7 +46,6 @@
   },
   "dependencies": {
     "@hashtree/core": "link:../hashtree/ts/packages/hashtree",
-    "@iris/identity": "link:../iris-kit/packages/identity",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@nostr-dev-kit/ndk": "^2.18.1",
@@ -56,8 +54,7 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "github:mmalmi/nostr-double-ratchet#91d2da5&path:/ts",
-    "nostr-social-graph": "link:../nostr-social-graph/ts",
+    "nostr-double-ratchet": "github:mmalmi/nostr-double-ratchet#aab59e6&path:/ts",
     "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
   }

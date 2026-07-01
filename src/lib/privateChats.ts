@@ -10,8 +10,14 @@ import {
   Invite,
   INVITE_RESPONSE_KIND,
   NdrRuntime,
+  buildAppKeysDeviceAuthorizationFilter,
+  createDeviceLinkRequest,
   decryptInviteResponse,
+  deterministicLinkInviteForDeviceLinkRequest,
+  parseCompactDeviceLinkRequest,
+  resolveAppKeysOwnerForDevice,
   type AppKeysManager,
+  type CreatedDeviceLinkRequest,
   type DelegateManager,
   type DeviceEntry,
   type NdrRuntimeState,
@@ -31,32 +37,12 @@ import { relayStore } from './relayStore'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import type { VerifiedEvent } from 'nostr-tools'
 import {
-  FACT_OP_KIND,
-  IDENTITY_GRAPH_ROSTER_TYPE,
-  NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_TYPE,
-  parseNostrIdentityDeviceApprovalReceiptEvent,
-  parseNostrIdentityDeviceApprovalReceiptRosterOp,
-  parseNostrIdentityRosterOpEvent,
-  type SignedNostrIdentityRosterOp,
-} from 'nostr-social-graph'
-import type { NostrIdentitySession } from '@iris/identity/session'
-import {
   getCurrentDeviceRegistrationLabels,
   getLinkedDeviceRegistrationLabels,
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
-import {
-  NOSTR_IDENTITY_CHAT_DEVICE_LINK_TIMEOUT_MS,
-  buildLinkedNostrIdentitySessionFromApproval,
-  buildNostrIdentityChatDeviceApprovalEvents,
-  createNdrLinkInviteForDeviceApprovalRequest,
-  createNostrIdentityChatDeviceApprovalRequest,
-  mergeNostrIdentityRosterOps,
-  parseNostrIdentityChatDeviceApprovalRequest,
-} from './nostrIdentityDeviceLink'
-import { saveNostrIdentityBrowserSession } from './nostrIdentitySession'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 
 let runtime: NdrRuntime | null = null
@@ -73,18 +59,18 @@ let activeDeviceRegistration:
 const APP_KEYS_FETCH_TIMEOUT_MS = 8000
 const APP_KEYS_FAST_TIMEOUT_MS = 2000
 const LINKED_INVITE_REPUBLISH_RETRY_MS = 1500
-const NOSTR_IDENTITY_ROSTER_FETCH_TIMEOUT_MS = 4000
+const DEVICE_LINK_TIMEOUT_MS = 120_000
 const DEVICE_MANAGER_STORAGE_PREFIX = 'v1/device-manager'
 
-export type NostrIdentityLinkDeviceSession = {
+export type DeviceLinkSession = {
   url: string
   stop: () => void
 }
 
 const persistCompactLinkRuntimeDelegate = async (
-  localRequest: ReturnType<typeof createNostrIdentityChatDeviceApprovalRequest>
+  localRequest: CreatedDeviceLinkRequest
 ): Promise<void> => {
-  const invite = createNdrLinkInviteForDeviceApprovalRequest(localRequest.request)
+  const invite = deterministicLinkInviteForDeviceLinkRequest(localRequest.request)
   await Promise.all([
     putSessionManagerValue(
       `${DEVICE_MANAGER_STORAGE_PREFIX}/identity-public-key`,
@@ -103,102 +89,6 @@ const registrationKey = (ownerPubkey: string, devicePubkey: string): string =>
   `${ownerPubkey}:${devicePubkey}`
 
 const now = (): number => Math.round(Date.now() / 1000)
-
-const publishSignedEventToRelays = (
-  event: VerifiedEvent,
-  relayUrls = [...relayStore.getState().relays]
-): void => {
-  const ndkInstance = getNDK()
-  const e = new NDKEvent(ndkInstance, event)
-  const relays = relayUrls.length > 0 ? relayUrls : [...relayStore.getState().relays]
-  const relaySet = NDKRelaySet.fromRelayUrls(relays, ndkInstance, true)
-  ndkInstance.subManager.dispatchEvent(e.rawEvent(), undefined, true)
-
-  const attempts = Array.from(relaySet.relays).map((relay) =>
-    relay.publish(e, 1500).then((accepted) => {
-      if (!accepted) {
-        throw new Error(`Relay ${relay.url} rejected event ${event.id}`)
-      }
-      return relay
-    })
-  )
-
-  if (attempts.length === 0) {
-    console.warn('[privateChats] No relays available for device approval publish')
-    return
-  }
-
-  void Promise.any(attempts).catch(() => {
-    console.warn('[privateChats] Device approval was not accepted by any relay')
-  })
-  void Promise.allSettled(attempts).then((results) => {
-    if (results.some((result) => result.status === 'fulfilled')) return
-    console.warn('[privateChats] Device approval publish failed on all relays')
-  })
-}
-
-const isNostrIdentityRosterOpEvent = (event: Pick<VerifiedEvent, 'kind' | 'tags'>): boolean =>
-  event.kind === FACT_OP_KIND &&
-  event.tags.some((tag) => tag[0] === 'type' && tag[1] === IDENTITY_GRAPH_ROSTER_TYPE)
-
-const isNostrIdentityApprovalReceiptEvent = (
-  event: Pick<VerifiedEvent, 'kind' | 'tags'>
-): boolean =>
-  event.kind === FACT_OP_KIND &&
-  event.tags.some(
-    (tag) => tag[0] === 'type' && tag[1] === NOSTR_IDENTITY_DEVICE_APPROVAL_RECEIPT_TYPE
-  )
-
-const parseNostrIdentityRosterOps = (
-  events: VerifiedEvent[],
-  profileId: string
-): SignedNostrIdentityRosterOp[] => {
-  const rosterOps: SignedNostrIdentityRosterOp[] = []
-  for (const event of events) {
-    if (!isNostrIdentityRosterOpEvent(event)) continue
-    try {
-      const rosterOp = parseNostrIdentityRosterOpEvent(event)
-      if (rosterOp.content.profile_id === profileId) {
-        rosterOps.push(rosterOp)
-      }
-    } catch {
-      // Ignore unrelated or invalid fact events.
-    }
-  }
-  return rosterOps
-}
-
-const fetchNostrIdentityRosterOps = async (
-  profileId: string,
-  timeoutMs: number = NOSTR_IDENTITY_ROSTER_FETCH_TIMEOUT_MS
-): Promise<SignedNostrIdentityRosterOp[]> => {
-  const ndkInstance = getNDK()
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  const fetched = await Promise.race([
-    ndkInstance
-      .fetchEvents(
-        {
-          kinds: [FACT_OP_KIND],
-          '#i': [profileId],
-        } as unknown as NDKFilter,
-        { cacheUsage: NDKSubscriptionCacheUsage.PARALLEL }
-      )
-      .finally(() => {
-        if (timeout) clearTimeout(timeout)
-      }),
-    new Promise<null>((resolve) => {
-      timeout = setTimeout(() => resolve(null), timeoutMs)
-    }),
-  ])
-
-  if (!fetched) return []
-  return parseNostrIdentityRosterOps(
-    Array.from(fetched)
-      .map((event) => event.rawEvent() as VerifiedEvent | undefined)
-      .filter((event): event is VerifiedEvent => !!event),
-    profileId
-  )
-}
 
 const stateIncludesDevice = (
   state: NdrRuntimeState,
@@ -384,14 +274,14 @@ const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => 
 const createFetch = (
   ndkInstance: ReturnType<typeof getNDK>,
 ): NostrFetch => {
-  return async (filter) => {
+  return (async (filter: Parameters<NostrFetch>[0]) => {
     const events = await ndkInstance.fetchEvents(filter, {
       cacheUsage: NDKSubscriptionCacheUsage.PARALLEL,
     })
     return Array.from(events)
       .map((event) => event.rawEvent() as VerifiedEvent | undefined)
       .filter((event): event is VerifiedEvent => !!event)
-  }
+  }) as unknown as NostrFetch
 }
 
 function getNDK() {
@@ -468,7 +358,6 @@ const getRuntime = (): NdrRuntime => {
 
     previousRuntimeState = state
   })
-
   return runtime
 }
 
@@ -545,9 +434,6 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
 
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
-  const currentIdentity = get(identity)
-  const isNostrIdentityLinkedDevice =
-    currentIdentity?.isLinkedDevice === true && !!currentIdentity.nostrIdentitySession
 
   let linkedDeviceAuthorized = currentRuntime.getState().isCurrentDeviceRegistered
   if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {
@@ -560,9 +446,9 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
     } catch (e) {
       console.warn('[privateChats] Linked-device AppKeys backfill failed:', e)
     }
-    if (isNostrIdentityLinkedDevice && !linkedDeviceAuthorized) {
+    if (!linkedDeviceAuthorized) {
       console.warn(
-        '[privateChats] NostrIdentity-linked device is approved, but NDR AppKeys authorization was not available yet.'
+        '[privateChats] Linked device is waiting for owner AppKeys authorization.'
       )
     }
   }
@@ -624,15 +510,12 @@ export const registerLinkedDevice = async (identityPubkey: string): Promise<void
   })
 }
 
-export const startNostrIdentityLinkDevice = async (
-  onAccepted: (
-    ownerPubkey: string,
-    nostrIdentitySession: NostrIdentitySession | null
-  ) => void | Promise<void>
-): Promise<NostrIdentityLinkDeviceSession> => {
+export const startDeviceLink = async (
+  onAccepted: (ownerPubkey: string) => void | Promise<void>
+): Promise<DeviceLinkSession> => {
   await ensureConnected()
 
-  const localRequest = createNostrIdentityChatDeviceApprovalRequest({
+  const localRequest = createDeviceLinkRequest({
     requestedAt: now(),
   })
   await persistCompactLinkRuntimeDelegate(localRequest)
@@ -640,136 +523,41 @@ export const startNostrIdentityLinkDevice = async (
   let stopped = false
   let completed = false
   let timeout: ReturnType<typeof setTimeout>
-  const observedRosterOps: SignedNostrIdentityRosterOp[] = []
-  const observedRosterOpIds = new Set<string>()
-  const rememberRosterOp = (event: VerifiedEvent): void => {
-    if (!isNostrIdentityRosterOpEvent(event)) return
-    try {
-      const rosterOp = parseNostrIdentityRosterOpEvent(event)
-      if (observedRosterOpIds.has(rosterOp.op_id)) return
-      observedRosterOpIds.add(rosterOp.op_id)
-      observedRosterOps.push(rosterOp)
-    } catch {
-      // Ignore unrelated or malformed fact events.
-    }
-  }
-  const observedRosterOpsForProfile = (profileId: string): SignedNostrIdentityRosterOp[] =>
-    observedRosterOps.filter((op) => op.content.profile_id === profileId)
-
-  const unsubscribeRoster = subscribe(
-    {
-      kinds: [FACT_OP_KIND],
-    } as unknown as NDKFilter,
-    (event) => {
-      if (stopped || completed) return
-      rememberRosterOp(event as VerifiedEvent)
-    }
-  )
 
   const unsubscribe = subscribe(
-    {
-      kinds: [FACT_OP_KIND],
-      '#p': [localRequest.request.requestPubkey],
-      since: localRequest.request.requestedAt - 30,
-    } as unknown as NDKFilter,
+    buildAppKeysDeviceAuthorizationFilter(localRequest.request.deviceAppKeyPubkey) as NDKFilter,
     async (event) => {
-      if (stopped || completed || !isNostrIdentityApprovalReceiptEvent(event)) return
+      if (stopped || completed) return
 
-      let receipt: ReturnType<typeof parseNostrIdentityDeviceApprovalReceiptEvent>
+      let ownerPubkey: string | null = null
       try {
-        receipt = parseNostrIdentityDeviceApprovalReceiptEvent(event, {
-          requestSecretKey: localRequest.request.requestSecretKey,
-          request: localRequest.request,
-        })
+        ownerPubkey = resolveAppKeysOwnerForDevice(
+          event as unknown as Parameters<typeof resolveAppKeysOwnerForDevice>[0],
+          localRequest.request.deviceAppKeyPubkey
+        )
       } catch {
         return
       }
-
-      const ownerPubkey = receipt.subjectPubkey
-      if (!ownerPubkey) {
-        console.warn('[privateChats] NostrIdentity approval receipt missing chat subject pubkey')
-        return
-      }
-
-      let receiptRosterOp: SignedNostrIdentityRosterOp
-      try {
-        receiptRosterOp = parseNostrIdentityDeviceApprovalReceiptRosterOp(receipt)
-      } catch (error) {
-        console.warn('[privateChats] Invalid NostrIdentity approval roster receipt:', error)
-        return
-      }
-
-      let linkedNostrIdentitySession: NostrIdentitySession | null = null
-      const buildAndSaveLinkedSession = (
-        rosterOps: SignedNostrIdentityRosterOp[]
-      ): NostrIdentitySession | null => {
-        try {
-          const session = buildLinkedNostrIdentitySessionFromApproval({
-            request: localRequest.request,
-            receipt,
-            deviceAppKeySecretKey: localRequest.deviceAppKeySecretKey,
-            rosterOps: mergeNostrIdentityRosterOps(rosterOps, [receiptRosterOp]),
-          })
-          saveNostrIdentityBrowserSession(ownerPubkey, session)
-          return session
-        } catch {
-          return null
-        }
-      }
-
-      linkedNostrIdentitySession = buildAndSaveLinkedSession(
-        observedRosterOpsForProfile(receipt.profileId)
-      )
-
-      if (!linkedNostrIdentitySession) {
-        await new Promise((resolve) => setTimeout(resolve, 250))
-        linkedNostrIdentitySession = buildAndSaveLinkedSession(
-          observedRosterOpsForProfile(receipt.profileId)
-        )
-      }
-
-      if (!linkedNostrIdentitySession) {
-        const fetchedRosterOps = await fetchNostrIdentityRosterOps(receipt.profileId).catch((error) => {
-          console.warn('[privateChats] Failed to fetch NostrIdentity roster ops:', error)
-          return []
-        })
-        linkedNostrIdentitySession = buildAndSaveLinkedSession(fetchedRosterOps)
-      }
-
-      if (!linkedNostrIdentitySession) {
-        console.warn('[privateChats] Could not save approved NostrIdentity session')
-      } else {
-        void fetchNostrIdentityRosterOps(receipt.profileId)
-          .then((fetchedRosterOps) => {
-            if (stopped || fetchedRosterOps.length === 0) return
-            buildAndSaveLinkedSession(fetchedRosterOps)
-          })
-          .catch((error) => {
-            console.warn('[privateChats] Failed to refresh NostrIdentity roster ops:', error)
-          })
-      }
+      if (!ownerPubkey) return
 
       completed = true
       clearTimeout(timeout)
       unsubscribe()
-      unsubscribeRoster()
-      await onAccepted(ownerPubkey, linkedNostrIdentitySession)
+      await onAccepted(ownerPubkey)
     }
   )
 
   timeout = setTimeout(() => {
     stopped = true
     unsubscribe()
-    unsubscribeRoster()
-  }, NOSTR_IDENTITY_CHAT_DEVICE_LINK_TIMEOUT_MS)
+  }, DEVICE_LINK_TIMEOUT_MS)
 
   return {
-    url: localRequest.url,
+    url: localRequest.code,
     stop: () => {
       stopped = true
       clearTimeout(timeout)
       unsubscribe()
-      unsubscribeRoster()
     },
   }
 }
@@ -940,6 +728,7 @@ export const revokeDevices = async (identityPubkeys: string[]): Promise<void> =>
   }
 
   await currentRuntime.publishPreparedRevocation({
+    ownerPubkey,
     appKeys: nextAppKeys,
     devices: nextDevices,
     revokedIdentity: revocablePubkeys[0],
@@ -971,22 +760,6 @@ export const resetManagers = (): void => {
   activeDeviceRegistration = null
 }
 
-const updateCurrentNostrIdentitySession = (
-  ownerPubkey: string,
-  session: NostrIdentitySession
-): void => {
-  saveNostrIdentityBrowserSession(ownerPubkey, session)
-  identity.update((currentIdentity) => {
-    if (!currentIdentity || currentIdentity.pubkey !== ownerPubkey) {
-      return currentIdentity
-    }
-    return {
-      ...currentIdentity,
-      nostrIdentitySession: session,
-    }
-  })
-}
-
 export const republishInvite = async (): Promise<void> => {
   await ensureConnected()
   await getRuntime().republishInvite()
@@ -1009,12 +782,12 @@ export const getRegisteredDevices = (): DeviceEntry[] => {
   return getRuntime().getState().registeredDevices
 }
 
-export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void> => {
+export const acceptDeviceLink = async (input: string): Promise<void> => {
   if (isLinkedDeviceLogin()) {
     throw new Error('Linked devices cannot add devices')
   }
 
-  const parsed = parseNostrIdentityChatDeviceApprovalRequest(input)
+  const parsed = parseCompactDeviceLinkRequest(input)
   if (!parsed) {
     throw new Error('Invalid link code')
   }
@@ -1024,22 +797,7 @@ export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void
     throw new Error('Owner pubkey not available')
   }
 
-  const adminSession = currentIdentity.nostrIdentitySession
-  if (!adminSession || adminSession.status !== 'active') {
-    throw new Error('NostrIdentity session is not available for this account')
-  }
-
-  const approval = buildNostrIdentityChatDeviceApprovalEvents({
-    request: parsed.request,
-    adminSession,
-    subjectPubkey: currentIdentity.pubkey,
-    approvedAt: now(),
-  })
-  const ndrInvite = createNdrLinkInviteForDeviceApprovalRequest(parsed.request)
-  const relays = [...relayStore.getState().relays]
-  publishSignedEventToRelays(approval.rosterEvent as VerifiedEvent, relays)
-  publishSignedEventToRelays(approval.receiptEvent as VerifiedEvent, relays)
-  updateCurrentNostrIdentitySession(currentIdentity.pubkey, approval.nextAdminSession)
+  const ndrInvite = deterministicLinkInviteForDeviceLinkRequest(parsed)
 
   await ensureConnected()
   const currentRuntime = getRuntime()
@@ -1047,7 +805,7 @@ export const acceptNostrIdentityLinkDevice = async (input: string): Promise<void
   const labels = await getLinkedDeviceRegistrationLabels()
   const preparedRegistration = await currentRuntime.prepareRegistrationForIdentity({
     ownerPubkey: currentIdentity.pubkey,
-    identityPubkey: parsed.request.deviceAppKeyPubkey,
+    identityPubkey: parsed.deviceAppKeyPubkey,
     timeoutMs: 0,
     ...labels,
   })

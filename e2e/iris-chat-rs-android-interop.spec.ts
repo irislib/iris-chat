@@ -92,11 +92,21 @@ async function getInviteUrl(page: import('@playwright/test').Page): Promise<stri
 }
 
 function runAndroidHarness(inviteUrl: string, message: string) {
+  ensureAndroidAccount()
   return runAndroidHarnessTest('accept_invite_and_send_message_from_args', [
     `invite_url=${inviteUrl}`,
     `expected_chat_id=${inviteOwnerChatId(inviteUrl)}`,
     `message=${message}`,
   ])
+}
+
+function ensureAndroidAccount() {
+  const output = runAndroidHarnessTest('create_account_and_report_identity')
+  expect(output).toContain('INSTRUMENTATION_STATUS: public_key_hex=')
+  const relayOutput = runAndroidHarnessTest('set_relays_from_args', [
+    `relay_urls=${RELAY_URLS.join(',')}`,
+  ])
+  expect(relayOutput).toContain(`INSTRUMENTATION_STATUS: relay_count=${RELAY_URLS.length}`)
 }
 
 function inviteOwnerChatId(inviteUrl: string): string {
@@ -148,6 +158,9 @@ function runAndroidHarnessTest(testName: string, harnessArgs: string[] = []) {
     timeout: 240000,
   })
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
+  if (process.env.IRIS_CHAT_RS_LOG_HARNESS === '1') {
+    console.log(output)
+  }
   if (
     result.status !== 0 ||
     !output.includes('INSTRUMENTATION_CODE: -1') ||
@@ -170,6 +183,7 @@ function instrumentationStatus(output: string, key: string): string {
 }
 
 function createAndroidInvite(): string {
+  ensureAndroidAccount()
   const output = runAndroidHarnessTest('create_public_invite_and_report_url')
   return instrumentationStatus(output, 'invite_url')
 }

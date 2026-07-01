@@ -1,6 +1,5 @@
-import NDK, { NDKEvent, NDKPrivateKeySigner, NDKNip07Signer } from '@nostr-dev-kit/ndk'
-import { generateSecretKey, getPublicKey, nip19, type Event as NostrEvent } from 'nostr-tools'
-import type { NostrIdentitySession } from '@iris/identity/session'
+import NDK, { NDKPrivateKeySigner, NDKNip07Signer } from '@nostr-dev-kit/ndk'
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { writable, derived, get } from 'svelte/store'
 import {
   saveLocalProfile,
@@ -10,13 +9,6 @@ import {
   type Profile,
 } from './profile'
 import { relayStore } from './relayStore'
-import {
-  clearNostrIdentityBrowserSession,
-  ensureNostrIdentityBrowserSession,
-  loadNostrIdentityBrowserSession,
-  nostrIdentitySession,
-  publishNostrIdentityBrowserSessionRoster,
-} from './nostrIdentitySession'
 
 // Helper functions
 export function bytesToHex(bytes: Uint8Array): string {
@@ -37,7 +29,6 @@ export interface Identity {
   displayName: string | null
   isNip07: boolean
   isLinkedDevice?: boolean
-  nostrIdentitySession?: NostrIdentitySession | null
 }
 
 const IDENTITY_STORAGE_KEY = 'iris-chat-identity'
@@ -74,21 +65,6 @@ function initRelayTracking() {
 }
 
 initRelayTracking()
-
-const publishNostrIdentityEvent = async (event: NostrEvent): Promise<void> => {
-  const ndkEvent = new NDKEvent(ndkInstance, event)
-  await ndkEvent.publish(undefined, 10000, 1)
-}
-
-const ensureLoginNostrIdentitySession = (ownerPubkey: string): NostrIdentitySession => {
-  const session = ensureNostrIdentityBrowserSession(ownerPubkey, {
-    label: 'Iris Chat Web',
-  })
-  void publishNostrIdentityBrowserSessionRoster(session, publishNostrIdentityEvent).catch((err) => {
-    console.warn('[identity] failed to publish NostrIdentity roster:', err)
-  })
-  return session
-}
 
 // Reconnect NDK when relays change
 let previousRelays = new Set(initialRelays)
@@ -179,7 +155,6 @@ export function clearStoredIdentity(): void {
 export async function loginWithPrivkey(privkeyHex: string, displayName: string | null = null): Promise<void> {
   const signer = new NDKPrivateKeySigner(privkeyHex)
   const user = await signer.user()
-  const nostrIdentitySession = ensureLoginNostrIdentitySession(user.pubkey)
 
   // Set signer on existing NDK instance
   ndkInstance.signer = signer
@@ -190,7 +165,6 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     displayName,
     isNip07: false,
     isLinkedDevice: false,
-    nostrIdentitySession,
   })
 
   // Save local profile and publish to Nostr
@@ -226,7 +200,6 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     ;(signer as unknown as { _user?: typeof ndkUser })._user = ndkUser
     return ndkUser
   })
-  const nostrIdentitySession = ensureLoginNostrIdentitySession(user.pubkey)
 
   // Set signer on existing NDK instance
   ndkInstance.signer = signer
@@ -237,7 +210,6 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     displayName,
     isNip07: true,
     isLinkedDevice: false,
-    nostrIdentitySession,
   })
 
   // Save local profile and publish to Nostr if name provided
@@ -256,14 +228,9 @@ export async function loginWithNip07(displayName: string | null = null): Promise
 
 export async function loginLinkedDevice(
   ownerPubkey: string,
-  displayName: string | null = null,
-  options: { nostrIdentitySession?: NostrIdentitySession | null } = {}
+  displayName: string | null = null
 ): Promise<void> {
   ndkInstance.signer = undefined
-  const linkedNostrIdentitySession =
-    options.nostrIdentitySession !== undefined
-      ? options.nostrIdentitySession
-      : loadNostrIdentityBrowserSession(ownerPubkey)
 
   identity.set({
     pubkey: ownerPubkey,
@@ -271,9 +238,7 @@ export async function loginLinkedDevice(
     displayName,
     isNip07: false,
     isLinkedDevice: true,
-    nostrIdentitySession: linkedNostrIdentitySession,
   })
-  nostrIdentitySession.set(linkedNostrIdentitySession)
 
   saveLinkedIdentity(ownerPubkey)
 }
@@ -327,11 +292,6 @@ export function logout(): void {
   const currentIdentity = get(identity)
   ndkInstance.signer = undefined
   identity.set(null)
-  if (currentIdentity?.pubkey) {
-    clearNostrIdentityBrowserSession(currentIdentity.pubkey)
-  } else {
-    nostrIdentitySession.set(null)
-  }
   clearStoredIdentity()
   clearLocalProfile()
 }

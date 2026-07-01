@@ -201,8 +201,8 @@ async function forwardPushEventToClients(event: NostrEvent): Promise<void> {
 async function capturePushNostrEvent(payload: unknown): Promise<void> {
   const nostrEvent = extractPushNostrEvent(payload)
   if (!nostrEvent) return
-  await savePendingPushEvent(nostrEvent as NostrEvent)
-  await forwardPushEventToClients(nostrEvent as NostrEvent)
+  await savePendingPushEvent(nostrEvent as unknown as NostrEvent)
+  await forwardPushEventToClients(nostrEvent as unknown as NostrEvent)
 }
 
 async function getOwnerPubkeyFromSessionManager(): Promise<string | null> {

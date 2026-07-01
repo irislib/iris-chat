@@ -1,7 +1,7 @@
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import type { NostrSubscribe } from 'nostr-double-ratchet'
 import { get } from 'svelte/store'
-import { identity, ndk } from './identity'
+import { ndk } from './identity'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { createProfileAppKeysStore } from './profileAppKeys'
 
@@ -24,14 +24,7 @@ const createNostrSubscribe = (): NostrSubscribe => {
 }
 
 export const createRuntimeProfileAppKeysStore = (pubkey: string | undefined) => {
-  const currentIdentity = get(identity)
-  const myPubkey = currentIdentity?.pubkey
-  const isOwnProfile = !!pubkey && myPubkey === pubkey
-  const nostrIdentitySession = isOwnProfile ? currentIdentity?.nostrIdentitySession : null
-
   return createProfileAppKeysStore(pubkey, {
     subscribe: createNostrSubscribe(),
-    nostrIdentityId: nostrIdentitySession?.profileId,
-    initialRosterOps: nostrIdentitySession?.rosterOps ?? [],
   })
 }

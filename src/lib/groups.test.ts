@@ -296,7 +296,7 @@ vi.mock('nostr-tools', async (importOriginal) => {
   const actual = await importOriginal<typeof import('nostr-tools')>()
   return {
     ...actual,
-    getEventHash: () => Math.random().toString(36).slice(2),
+    getEventHash: actual.getEventHash,
     verifyEvent: () => true,
   }
 })
@@ -744,16 +744,16 @@ describe('groups', () => {
       await waitForRecipients(MY_PUBKEY, MEMBER_B, MEMBER_C)
     })
 
-    it('reconciles the local message id to the native group inner id', async () => {
+    it('reconciles the local message id to the serialized runtime rumor id', async () => {
       const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
       const group = await createGroup('Runtime ID Test', [MEMBER_B])
 
       sendGroupMessage(group.id, 'Runtime id hello')
       const initialMessage = get(groupMessages).get(group.id)![0]
-      expect(initialMessage.id).not.toMatch(/^inner-/)
+      expect(initialMessage.id).not.toMatch(/^[0-9a-f]{64}$/)
 
       await vi.waitFor(() => {
-        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^inner-/)
+        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^[0-9a-f]{64}$/)
       })
     })
 
@@ -764,7 +764,7 @@ describe('groups', () => {
 
       sendGroupMessage(group.id, 'Relay ack hello')
       await vi.waitFor(() => {
-        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^inner-/)
+        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^[0-9a-f]{64}$/)
       })
       const messageId = get(groupMessages).get(group.id)![0].id
 
@@ -800,7 +800,8 @@ describe('groups', () => {
       })
       const sentMessages = sendEventCalls
         .map((call) => call.event as { content?: string; tags?: string[][] })
-        .filter((event) => event.content === 'TTL hello')
+        .map(parseSentRuntimeRumor)
+        .filter((event): event is { content: string; tags: string[][] } => event?.content === 'TTL hello')
 
       expect(sentMessages.length).toBeGreaterThan(0)
       for (const event of sentMessages) {
@@ -829,6 +830,21 @@ describe('groups', () => {
       expect(incoming!.senderPubkey).toBe(MEMBER_B)
       expect(incoming!.deliveryChannels).toEqual(['message servers'])
       expect(incoming!.outerEventIds).toEqual(['outer-b'])
+    })
+
+    it('unwraps serialized runtime rumors from native group payloads', async () => {
+      const { createGroup, handleGroupEvent, groupMessages } = await import('./groups')
+      const group = await createGroup('Native Payload Test', [MEMBER_B])
+      const inner = { ...makeMessageRumor(group.id, 'Native runtime payload', MEMBER_B), id: '' }
+      const outer = makeMessageRumor(group.id, JSON.stringify(inner), MEMBER_B)
+
+      handleGroupEvent(outer, MEMBER_B, { id: 'outer-native' }, MEMBER_B)
+
+      const msgs = get(groupMessages).get(group.id)!
+      const incoming = msgs.find(m => m.content === 'Native runtime payload')
+      expect(incoming).toBeDefined()
+      expect(incoming!.id).toMatch(/^[0-9a-f]{64}$/)
+      expect(incoming!.outerEventIds).toEqual(['outer-native'])
     })
 
     it('deduplicates messages by id', async () => {
@@ -876,7 +892,7 @@ describe('groups', () => {
 
       sendGroupMessage(group.id, 'Needs receipt')
       await vi.waitFor(() => {
-        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^inner-/)
+        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^[0-9a-f]{64}$/)
       })
       const messageId = get(groupMessages).get(group.id)![0].id
 
@@ -1122,6 +1138,20 @@ function makeMessageRumor(groupId: string, content: string, pubkey: string): Rum
     created_at: Math.floor(Date.now() / 1000),
     tags: [['l', groupId]],
   } as Rumor
+}
+
+function parseSentRuntimeRumor(event: { content?: string; tags?: string[][] }): { content: string; tags: string[][] } | null {
+  if (!event.content) return null
+  try {
+    const parsed = JSON.parse(event.content) as { content?: unknown; tags?: unknown }
+    if (typeof parsed.content !== 'string' || !Array.isArray(parsed.tags)) return null
+    const tags = parsed.tags.filter((tag): tag is string[] =>
+      Array.isArray(tag) && tag.every((part) => typeof part === 'string')
+    )
+    return { content: parsed.content, tags }
+  } catch {
+    return null
+  }
 }
 
 function makeReceiptRumor(

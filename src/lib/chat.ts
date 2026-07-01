@@ -454,7 +454,9 @@ export async function ingestPushNostrEvent(event: unknown): Promise<boolean> {
   pushEventIngestInFlight.add(verifiedEvent.id)
   try {
     await initNdrRuntimeEvents()
-    const handled = getNdrRuntime().processReceivedEvent(verifiedEvent)
+    const handled = getNdrRuntime().processReceivedEvent(
+      verifiedEvent as unknown as Parameters<ReturnType<typeof getNdrRuntime>['processReceivedEvent']>[0]
+    )
     await deletePendingPushEvent(verifiedEvent.id)
     if (handled) {
       updateDMSubscription()

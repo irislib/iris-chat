@@ -271,11 +271,12 @@ test.describe('SW push handler', () => {
       await alice.getByPlaceholder('Type a message...').fill(messageBody)
       await alice.getByRole('button', { name: 'Send' }).click()
 
-      const chatEnvelope = await waitForNewKind1060(testRelay, beforeCount)
-
-      await dispatchPush(bobSW, { event: chatEnvelope })
-
-      let notifications = await readAllNotifications(bobSW)
+      let notifications = await dispatchNewKind1060Until(
+        testRelay,
+        bobSW,
+        beforeCount,
+        (items) => items.some((n) => n.body === messageBody),
+      )
       // Decryption succeeded ⇒ the SW must have produced a notification
       // whose body exactly matches Alice's plaintext. Anything else
       // (fallback "New message", "You have a new message", missing notif)
@@ -304,9 +305,12 @@ test.describe('SW push handler', () => {
       const beforeCount2 = testRelay.publishedEvents.filter((e) => e.kind === 1060).length
       await alice.getByPlaceholder('Type a message...').fill(messageBody2)
       await alice.getByRole('button', { name: 'Send' }).click()
-      const chatEnvelope2 = await waitForNewKind1060(testRelay, beforeCount2)
-
-      await dispatchPush(bobSW, { event: chatEnvelope2 })
+      await dispatchNewKind1060Until(
+        testRelay,
+        bobSW,
+        beforeCount2,
+        (items) => items.length === 0,
+      )
 
       notifications = await readAllNotifications(bobSW)
       expect(
@@ -394,4 +398,33 @@ async function waitForNewKind1060(
   throw new Error(`Timed out waiting for new kind-1060 envelope (had ${beforeCount}, still have ${
     testRelay.publishedEvents.filter((e) => e.kind === 1060).length
   })`)
+}
+
+async function dispatchNewKind1060Until(
+  testRelay: { publishedEvents: Array<{ kind: number; pubkey: string; id: string }> },
+  sw: Worker,
+  beforeCount: number,
+  predicate: (notifications: ObservedNotification[]) => boolean,
+  timeoutMs = 15_000,
+): Promise<ObservedNotification[]> {
+  const dispatched = new Set<string>()
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const events = testRelay.publishedEvents
+      .filter((e) => e.kind === 1060)
+      .slice(beforeCount)
+    for (const event of events) {
+      if (dispatched.has(event.id)) continue
+      dispatched.add(event.id)
+      await dispatchPush(sw, { event })
+      const notifications = await readAllNotifications(sw)
+      if (predicate(notifications)) return notifications
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  const notifications = await readAllNotifications(sw)
+  if (predicate(notifications)) return notifications
+  throw new Error(`Timed out dispatching new kind-1060 envelopes; notifications=${JSON.stringify(notifications)}`)
 }

@@ -1,5 +1,5 @@
 import { test, expect, useTestRelay } from './fixtures'
-import { spawn } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -12,19 +12,74 @@ import type { TestRelay } from './test-relay'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const NDR_CWD = path.resolve(__dirname, '../../nostr-double-ratchet/rust')
-const NDR_BIN = path.join(NDR_CWD, 'target', 'debug', 'ndr')
-const NDR_SECRET =
-  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+const NDR_CWD =
+  process.env.IRIS_CHAT_RS_CORE_DIR ??
+  path.resolve(__dirname, '../../iris-chat-rs/core')
+const NDR_MANIFEST = path.join(NDR_CWD, 'Cargo.toml')
+const NDR_BIN = resolveNativeCliBin()
 
 function skipIfNdrWorkspaceMissing() {
-  test.skip(!fs.existsSync(NDR_CWD), `NDR workspace missing: ${NDR_CWD}`)
+  test.skip(!fs.existsSync(NDR_MANIFEST), `iris-chat-rs native CLI missing: ${NDR_MANIFEST}`)
+}
+
+function resolveNativeCliBin(): string {
+  if (process.env.IRIS_CHAT_RS_BIN) {
+    return process.env.IRIS_CHAT_RS_BIN
+  }
+
+  if (fs.existsSync(NDR_MANIFEST)) {
+    const metadata = spawnSync(
+      'cargo',
+      ['metadata', '--format-version', '1', '--no-deps', '--manifest-path', NDR_MANIFEST],
+      {
+        cwd: NDR_CWD,
+        env: { ...process.env },
+        encoding: 'utf8',
+      }
+    )
+    if (metadata.status === 0 && metadata.stdout) {
+      try {
+        const parsed = JSON.parse(metadata.stdout) as { target_directory?: string }
+        if (parsed.target_directory) {
+          return path.join(parsed.target_directory, 'debug', process.platform === 'win32' ? 'iris.exe' : 'iris')
+        }
+      } catch {
+        // Fall through to the workspace-local default below.
+      }
+    }
+  }
+
+  return path.join(NDR_CWD, '..', 'target', 'debug', process.platform === 'win32' ? 'iris.exe' : 'iris')
+}
+
+function nativeCliEnv(dataDir?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, NOSTR_PREFER_LOCAL: '0' }
+  if (dataDir) {
+    try {
+      const config = JSON.parse(
+        fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')
+      ) as { relays?: unknown }
+      if (Array.isArray(config.relays)) {
+        const relays = config.relays.filter((relay): relay is string => typeof relay === 'string')
+        if (relays.length) {
+          env.IRIS_DEMO_RELAYS = relays.join(',')
+        }
+      }
+    } catch {
+      // The native CLI also works with its compiled default relay set.
+    }
+  }
+  return env
 }
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('')
+}
+
+function randomNdrSecretHex(): string {
+  return toHex(generateSecretKey())
 }
 
 async function setIdentity(context: BrowserContext, privkeyHex: string) {
@@ -77,6 +132,22 @@ async function getStoredIdentityPrivkeyHex(page: Page): Promise<string> {
     throw new Error('No stored web identity found in localStorage')
   }
   return privkeyHex
+}
+
+async function waitForWebDeviceRoster(page: Page, testRelay: TestRelay): Promise<string> {
+  const webPrivkeyHex = await getStoredIdentityPrivkeyHex(page)
+  const webPubkeyHex = getPublicKey(Buffer.from(webPrivkeyHex, 'hex')).toLowerCase()
+  await waitForRelayEvent(
+    testRelay,
+    (event) =>
+      event.kind === 37368 &&
+      event.pubkey === webPubkeyHex &&
+      event.tags.some((tag) => tag[0] === 'type' && tag[1] === 'app_keys_roster_snapshot') &&
+      event.tags.some((tag) => tag[0] === 'device'),
+    30000,
+    'web device roster publication'
+  )
+  return webPubkeyHex
 }
 
 async function registerDevice(page: Page) {
@@ -192,7 +263,7 @@ async function waitForNdrGroupRefresh(): Promise<void> {
 
 async function expectChatBubbleVisible(page: Page, text: string): Promise<void> {
   const bubble = page
-    .locator('.max-w-\\[85\\%\\]')
+    .locator('[data-testid="message-bubble-body"]')
     .filter({ hasText: text })
     .first()
 
@@ -224,24 +295,35 @@ async function openLinkThisDevice(page: Page): Promise<void> {
 }
 
 async function getLinkInviteUrl(page: Page): Promise<string> {
-  const copyButton = page.locator('button[title*="#"]').first()
-  await expect(copyButton).toBeVisible({ timeout: 10000 })
-  const url = await copyButton.getAttribute('title')
-  if (!url) throw new Error('Could not get link invite URL')
-  return url
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const buttons = page.locator('button[title]')
+    const count = await buttons.count()
+    for (let index = 0; index < count; index += 1) {
+      const url = await buttons.nth(index).getAttribute('title')
+      if (url?.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) return url
+    }
+    await page.waitForTimeout(100)
+  }
+  throw new Error('Could not get compact link invite code')
 }
 
 async function acceptLinkInvite(page: Page, inviteUrl: string): Promise<void> {
   await page.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
-  await page.getByPlaceholder('Paste link invite').fill(inviteUrl)
-  await expect(page.getByText('Device linked', { exact: true })).toBeVisible({ timeout: 20000 })
-  await page.locator('button[aria-label="Close"]').click()
+  await page.getByPlaceholder('Paste link code').fill(inviteUrl)
+  await expect(page.getByRole('heading', { name: 'Link another device' })).toBeHidden({
+    timeout: 750,
+  })
   await page.getByRole('button', { name: 'Back' }).click()
 }
 
 function extractInviteField(inviteUrl: string, field: string): string | null {
+  if (field === 'inviter' && inviteUrl.match(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)) {
+    return inviteUrl.split('.')[0] ?? null
+  }
+
   try {
     const hash = new URL(inviteUrl).hash.replace(/^#/, '')
     const decoded = decodeURIComponent(hash)
@@ -287,39 +369,81 @@ async function waitForNewRelayEvent(
   throw new Error(`Timed out waiting for new relay event: ${description}`)
 }
 
-async function waitForNdrReceiveContent(
-  testRelay: TestRelay,
-  startIndex: number,
-  expectedContent: string,
+async function waitForNativeMessage(
   dataDir: string,
+  chatId: string,
+  expectedContent: string,
   timeoutMs: number
 ): Promise<any> {
   const deadline = Date.now() + timeoutMs
-  let nextIndex = startIndex
 
   while (Date.now() < deadline) {
-    const newEvents = testRelay.publishedEvents.slice(nextIndex)
-    for (const event of newEvents) {
-      nextIndex += 1
-      if (event.kind !== 1060) {
-        continue
-      }
-
-      const received = await runNdrRetry(
-        ['receive', JSON.stringify(event)],
-        dataDir,
-        30000,
-        500
-      )
-      if (received.status === 'ok' && received.command === 'receive' && received.data?.content === expectedContent) {
-        return received
+    await runNdr(['sync', '--wait-ms', '2500'], dataDir).catch(() => null)
+    const read = await runNdr(['read', chatId], dataDir).catch(() => null)
+    const messages = Array.isArray(read?.data?.messages) ? read.data.messages : []
+    const message = messages.find((item: any) => item?.body === expectedContent)
+    if (message) {
+      return {
+        status: 'ok',
+        command: 'read',
+        data: message,
       }
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await new Promise((resolve) => setTimeout(resolve, 500))
   }
 
-  throw new Error(`Timed out waiting for ndr receive content: ${expectedContent}`)
+  throw new Error(`Timed out waiting for native CLI message: ${expectedContent}`)
+}
+
+async function waitForNativeDirectChat(
+  dataDir: string,
+  timeoutMs: number,
+  description: string
+): Promise<{ event: 'session_created'; chat_id: string }> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    await runNdr(['sync', '--wait-ms', '2500'], dataDir).catch(() => null)
+    const list = await runNdr(['chat', 'list'], dataDir).catch(() => null)
+    const chats = Array.isArray(list?.data?.chats) ? list.data.chats : []
+    const chat = chats.find(
+      (item: any) => item?.kind === 'direct' && typeof item?.chat_id === 'string'
+    )
+    if (chat) {
+      return { event: 'session_created', chat_id: chat.chat_id }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+
+  throw new Error(`Timed out waiting for native direct chat: ${description}`)
+}
+
+async function waitForNativeGroupByName(
+  dataDir: string,
+  groupName: string,
+  timeoutMs: number,
+  description: string
+): Promise<{ event: 'group_metadata'; action: 'created'; name: string; group_id: string }> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    await runNdr(['sync', '--wait-ms', '2500'], dataDir).catch(() => null)
+    const list = await runNdr(['group', 'list'], dataDir).catch(() => null)
+    const groups = Array.isArray(list?.data?.groups) ? list.data.groups : []
+    const group = groups.find(
+      (item: any) => item?.kind === 'group' && item?.name === groupName && typeof item?.chat_id === 'string'
+    )
+    if (group) {
+      const groupId = group.chat_id.replace(/^group:/, '')
+      return { event: 'group_metadata', action: 'created', name: groupName, group_id: groupId }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+
+  throw new Error(`Timed out waiting for native group metadata: ${description}`)
 }
 
 async function waitForRelayConnectionCount(
@@ -353,11 +477,15 @@ let ndrBuildPromise: Promise<void> | null = null
 async function ensureNdrBinary(): Promise<void> {
   if (!ndrBuildPromise) {
     ndrBuildPromise = new Promise((resolve, reject) => {
-      const child = spawn('cargo', ['build', '-q', '-p', 'ndr'], {
-        cwd: NDR_CWD,
-        env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
+      const child = spawn(
+        'cargo',
+        ['build', '-q', '--manifest-path', NDR_MANIFEST, '--bin', 'iris'],
+        {
+          cwd: NDR_CWD,
+          env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      )
 
       let stdout = ''
       let stderr = ''
@@ -419,7 +547,7 @@ async function runNdr(args: string[], dataDir: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const child = spawn(NDR_BIN, ['--json', '--data-dir', dataDir, ...args], {
       cwd: NDR_CWD,
-      env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
+      env: nativeCliEnv(dataDir),
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -514,7 +642,7 @@ async function startNdrListen(dataDir: string): Promise<NdrListener> {
   await ensureNdrBinary()
   const child = spawn(NDR_BIN, ['--json', '--data-dir', dataDir, 'listen'], {
     cwd: NDR_CWD,
-    env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
+    env: nativeCliEnv(dataDir),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
@@ -620,11 +748,12 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
   test.setTimeout(240000)
 
   const dataDir = createNdrDataDir(testRelayUrls)
-  let listener: NdrListener | null = null
+  const ndrSecret = randomNdrSecretHex()
 
   try {
-    const login = await runNdr(['login', NDR_SECRET], dataDir)
+    const login = await runNdr(['login', ndrSecret], dataDir)
     expect(login.status).toBe('ok')
+    await runNdr(['relay', 'set', ...testRelayUrls], dataDir)
 
     const created = await runNdr(['invite', 'create'], dataDir)
     expect(created.status).toBe('ok')
@@ -634,23 +763,23 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
     await useTestRelay(page.context(), testRelayUrls)
     await page.goto('/')
     await page.getByRole('button', { name: 'Go' }).click()
+    await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({
+      timeout: 30000,
+    })
+    await registerDevice(page)
+    await waitForWebDeviceRoster(page, testRelay)
 
     await page.getByRole('button', { name: 'New Chat' }).click()
 
-    listener = await startNdrListen(dataDir)
-    await waitForNdrListenRunning(listener.child)
     const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
 
-    const createdSessionPromise = waitForNdrJson(
-      listener,
-      (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
+    const createdSessionPromise = waitForNativeDirectChat(
+      dataDir,
       60000,
       'session_created after invite acceptance'
     )
     await page.getByPlaceholder('Paste invite link').fill(inviteUrl!)
     const createdSession = await createdSessionPromise
-    await stopNdrListen(listener.child)
-    listener = null
 
     const irisMessage = 'hello from iris'
     const relayEventStart = testRelay.publishedEvents.length
@@ -664,16 +793,10 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
       'iris sending a 1060 message event'
     )
 
-    const received = await waitForNdrReceiveContent(
-      testRelay,
-      relayEventStart,
-      irisMessage,
-      dataDir,
-      30000
-    )
+    const received = await waitForNativeMessage(dataDir, createdSession.chat_id, irisMessage, 30000)
     expect(received.status).toBe('ok')
-    expect(received.command).toBe('receive')
-    expect(received.data?.content).toBe(irisMessage)
+    expect(received.command).toBe('read')
+    expect(received.data?.body).toBe(irisMessage)
 
     const ndrMessage = 'hello from ndr'
     await runNdrRetry(['send', createdSession.chat_id, ndrMessage], dataDir, 30000, 500)
@@ -683,9 +806,6 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
     ).toBeVisible({ timeout: 30000 })
     await silentRelayConnectionsReady
   } finally {
-    if (listener) {
-      await stopNdrListen(listener.child)
-    }
     fs.rmSync(dataDir, { recursive: true, force: true })
   }
 })
@@ -714,17 +834,16 @@ test('iris-chat linked devices <-> ndr interop', async ({
   const linkedPage = await linkedContext.newPage()
 
   const dataDir = createNdrDataDir(testRelayUrls)
-  let listener: NdrListener | null = null
+  const ndrSecret = randomNdrSecretHex()
 
   try {
-    const login = await runNdr(['login', NDR_SECRET], dataDir)
+    const login = await runNdr(['login', ndrSecret], dataDir)
     expect(login.status).toBe('ok')
+    await runNdr(['relay', 'set', ...testRelayUrls], dataDir)
 
     await loginWithStoredKey(ownerPage)
     await registerDevice(ownerPage)
 
-    listener = await startNdrListen(dataDir)
-    await waitForNdrListenRunning(listener.child)
     const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 3, 120000)
 
     const created = await runNdr(['invite', 'create'], dataDir)
@@ -732,9 +851,8 @@ test('iris-chat linked devices <-> ndr interop', async ({
     const inviteUrl: string | undefined = created.data?.url
     expect(inviteUrl).toBeTruthy()
 
-    const createdSessionPromise = waitForNdrJson(
-      listener,
-      (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
+    const createdSessionPromise = waitForNativeDirectChat(
+      dataDir,
       60000,
       'session_created after invite acceptance'
     )
@@ -756,8 +874,9 @@ test('iris-chat linked devices <-> ndr interop', async ({
     await waitForRelayEvent(
       testRelay,
       (event) =>
-        event.kind === 30078 &&
+        event.kind === 37368 &&
         event.pubkey === ownerPubkeyHex &&
+        event.tags.some((tag) => tag[0] === 'type' && tag[1] === 'app_keys_roster_snapshot') &&
         event.tags.some(
           (tag) => tag[0] === 'device' && tag[1] === linkedDevicePubkey
         ),
@@ -774,6 +893,7 @@ test('iris-chat linked devices <-> ndr interop', async ({
       30000,
       'linked device invite publication after registration'
     )
+    await runNdr(['sync', '--wait-ms', '5000'], dataDir).catch(() => null)
     await ownerPage
       .getByPlaceholder('Type a message...')
       .fill(`owner warmup draft ${Date.now()}`)
@@ -796,9 +916,6 @@ test('iris-chat linked devices <-> ndr interop', async ({
     await expectChatBubbleVisible(linkedPage, ndrToAll)
     await silentRelayConnectionsReady
   } finally {
-    if (listener) {
-      await stopNdrListen(listener.child)
-    }
     await ownerContext.close()
     await linkedContext.close()
     fs.rmSync(dataDir, { recursive: true, force: true })
@@ -808,31 +925,32 @@ test('iris-chat linked devices <-> ndr interop', async ({
 test('iris-chat group <-> ndr interop (web creates group)', async ({
   page,
   silentRelay,
+  testRelay,
   testRelayUrls,
 }) => {
   skipIfNdrWorkspaceMissing()
   test.setTimeout(240000)
 
   const dataDir = createNdrDataDir(testRelayUrls)
-  let listener: NdrListener | null = null
+  const ndrSecret = randomNdrSecretHex()
 
   try {
-    const login = await runNdr(['login', NDR_SECRET], dataDir)
+    const login = await runNdr(['login', ndrSecret], dataDir)
     expect(login.status).toBe('ok')
+    await runNdr(['relay', 'set', ...testRelayUrls], dataDir)
 
     const invite = await runNdr(['invite', 'create'], dataDir)
     expect(invite.status).toBe('ok')
 
     await useTestRelay(page.context(), testRelayUrls)
     await loginAnonymously(page)
+    await registerDevice(page)
+    await waitForWebDeviceRoster(page, testRelay)
 
-    listener = await startNdrListen(dataDir)
-    await waitForNdrListenRunning(listener.child)
     const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
 
-    const createdSessionPromise = waitForNdrJson(
-      listener,
-      (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
+    const createdSessionPromise = waitForNativeDirectChat(
+      dataDir,
       60000,
       'session_created after web accepts ndr invite for group bootstrap'
     )
@@ -851,13 +969,9 @@ test('iris-chat group <-> ndr interop (web creates group)', async ({
     })
 
     const groupName = `web-to-ndr-group-${Date.now()}`
-    const groupMetadataPromise = waitForNdrJson(
-      listener,
-      (json) =>
-        json.event === 'group_metadata' &&
-        json.action === 'created' &&
-        json.name === groupName &&
-        typeof json.group_id === 'string',
+    const groupMetadataPromise = waitForNativeGroupByName(
+      dataDir,
+      groupName,
       60000,
       'ndr receiving created group metadata from web'
     )
@@ -872,8 +986,6 @@ test('iris-chat group <-> ndr interop (web creates group)', async ({
     const createdGroup = await groupMetadataPromise
     const groupId = createdGroup.group_id as string
 
-    const accepted = await runNdrRetry(['group', 'accept', groupId], dataDir, 30000, 500)
-    expect(accepted.status).toBe('ok')
     await waitForNdrGroupRefresh()
 
     const ndrMessageOne = `ndr->web group 1 ${Date.now()}`
@@ -888,34 +1000,15 @@ test('iris-chat group <-> ndr interop (web creates group)', async ({
     await page.getByPlaceholder('Type a message...').fill(webMessageOne)
     await page.getByRole('button', { name: 'Send' }).click()
 
-    await waitForNdrJson(
-      listener,
-      (json) =>
-        json.event === 'group_message' &&
-        json.group_id === groupId &&
-        json.content === webMessageOne,
-      60000,
-      'ndr receiving first web group message'
-    )
+    await waitForNativeMessage(dataDir, `group:${groupId}`, webMessageOne, 60000)
 
     const webMessageTwo = `web->ndr group 2 ${Date.now()}`
     await page.getByPlaceholder('Type a message...').fill(webMessageTwo)
     await page.getByRole('button', { name: 'Send' }).click()
 
-    await waitForNdrJson(
-      listener,
-      (json) =>
-        json.event === 'group_message' &&
-        json.group_id === groupId &&
-        json.content === webMessageTwo,
-      60000,
-      'ndr receiving second web group message'
-    )
+    await waitForNativeMessage(dataDir, `group:${groupId}`, webMessageTwo, 60000)
     await silentRelayConnectionsReady
   } finally {
-    if (listener) {
-      await stopNdrListen(listener.child)
-    }
     fs.rmSync(dataDir, { recursive: true, force: true })
   }
 })
@@ -923,33 +1016,32 @@ test('iris-chat group <-> ndr interop (web creates group)', async ({
 test('iris-chat group <-> ndr interop (ndr creates group)', async ({
   page,
   silentRelay,
+  testRelay,
   testRelayUrls,
 }) => {
   skipIfNdrWorkspaceMissing()
   test.setTimeout(240000)
 
   const dataDir = createNdrDataDir(testRelayUrls)
-  let listener: NdrListener | null = null
+  const ndrSecret = randomNdrSecretHex()
 
   try {
-    const login = await runNdr(['login', NDR_SECRET], dataDir)
+    const login = await runNdr(['login', ndrSecret], dataDir)
     expect(login.status).toBe('ok')
+    await runNdr(['relay', 'set', ...testRelayUrls], dataDir)
 
     await useTestRelay(page.context(), testRelayUrls)
     await loginAnonymously(page)
-    const webPrivkeyHex = await getStoredIdentityPrivkeyHex(page)
-    const webPubkeyHex = getPublicKey(Buffer.from(webPrivkeyHex, 'hex')).toLowerCase()
+    await registerDevice(page)
+    const webPubkeyHex = await waitForWebDeviceRoster(page, testRelay)
 
-    listener = await startNdrListen(dataDir)
-    await waitForNdrListenRunning(listener.child)
     const silentRelayConnectionsReady = waitForRelayConnectionCount(silentRelay, 2, 120000)
 
     const invite = await runNdr(['invite', 'create'], dataDir)
     expect(invite.status).toBe('ok')
 
-    const createdSessionPromise = waitForNdrJson(
-      listener,
-      (json) => json.event === 'session_created' && typeof json.chat_id === 'string',
+    const createdSessionPromise = waitForNativeDirectChat(
+      dataDir,
       60000,
       'session_created after web accepts ndr invite for ndr-created group bootstrap'
     )
@@ -964,13 +1056,15 @@ test('iris-chat group <-> ndr interop (ndr creates group)', async ({
 
     const groupName = `ndr-to-web-group-${Date.now()}`
     const createdGroup = await runNdrRetry(
-      ['group', 'create', '--name', groupName, '--members', webPubkeyHex],
+      ['group', 'create', groupName, webPubkeyHex],
       dataDir,
       30000,
       500
     )
     expect(createdGroup.status).toBe('ok')
-    const groupId = createdGroup.data?.id as string
+    const groupId = (createdGroup.data?.current_chat?.group_id ??
+      createdGroup.data?.group_id ??
+      createdGroup.data?.current_chat?.chat_id?.replace(/^group:/, '')) as string
     expect(groupId).toBeTruthy()
     await waitForNdrGroupRefresh()
 
@@ -989,34 +1083,15 @@ test('iris-chat group <-> ndr interop (ndr creates group)', async ({
     await page.getByPlaceholder('Type a message...').fill(webMessageOne)
     await page.getByRole('button', { name: 'Send' }).click()
 
-    await waitForNdrJson(
-      listener,
-      (json) =>
-        json.event === 'group_message' &&
-        json.group_id === groupId &&
-        json.content === webMessageOne,
-      60000,
-      'ndr receiving first web message in ndr-created group'
-    )
+    await waitForNativeMessage(dataDir, `group:${groupId}`, webMessageOne, 60000)
 
     const webMessageTwo = `web->ndr created group 2 ${Date.now()}`
     await page.getByPlaceholder('Type a message...').fill(webMessageTwo)
     await page.getByRole('button', { name: 'Send' }).click()
 
-    await waitForNdrJson(
-      listener,
-      (json) =>
-        json.event === 'group_message' &&
-        json.group_id === groupId &&
-        json.content === webMessageTwo,
-      60000,
-      'ndr receiving second web message in ndr-created group'
-    )
+    await waitForNativeMessage(dataDir, `group:${groupId}`, webMessageTwo, 60000)
     await silentRelayConnectionsReady
   } finally {
-    if (listener) {
-      await stopNdrListen(listener.child)
-    }
     fs.rmSync(dataDir, { recursive: true, force: true })
   }
 })

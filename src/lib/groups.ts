@@ -298,7 +298,9 @@ export function handleGroupRosterFactEvent(event: VerifiedEvent): boolean {
   if (!isGroupRosterFactEvent(event)) return false
 
   try {
-    return applyGroupRosterFact(parseGroupRosterFactEvent(event))
+    return applyGroupRosterFact(
+      parseGroupRosterFactEvent(event as unknown as Parameters<typeof parseGroupRosterFactEvent>[0])
+    )
   } catch {
     return false
   }
@@ -518,6 +520,81 @@ function buildGroupRumor(
   return rumor
 }
 
+function buildGroupRuntimeRumor(
+  groupId: string,
+  partialEvent: { content: string; kind: number; tags: string[][] }
+): Rumor {
+  const myPubkey = getPubkey()
+  if (!myPubkey) {
+    throw new Error('Not logged in')
+  }
+
+  const now = Date.now()
+  const tags = [...partialEvent.tags]
+  if (!tags.some((t) => t[0] === 'l')) {
+    tags.unshift(['l', groupId])
+  }
+  if (!tags.some((t) => t[0] === 'ms')) {
+    tags.push(['ms', String(now)])
+  }
+
+  const rumor: Rumor = {
+    content: partialEvent.content,
+    kind: partialEvent.kind,
+    created_at: Math.floor(now / 1000),
+    tags,
+    pubkey: myPubkey,
+    id: '',
+  }
+  rumor.id = getEventHash(rumor)
+  return rumor
+}
+
+function parseSerializedGroupRuntimeRumor(content: string): Rumor | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return null
+  }
+
+  if (!parsed || typeof parsed !== 'object') return null
+  const value = parsed as Record<string, unknown>
+  if (
+    typeof value.pubkey !== 'string' ||
+    typeof value.kind !== 'number' ||
+    typeof value.content !== 'string' ||
+    typeof value.created_at !== 'number' ||
+    !Array.isArray(value.tags)
+  ) {
+    return null
+  }
+
+  const tags = value.tags
+    .filter((tag): tag is string[] =>
+      Array.isArray(tag) && tag.every((part) => typeof part === 'string')
+    )
+    .map((tag) => [...tag])
+  if (!tags.some((tag) => tag[0] === 'l' && typeof tag[1] === 'string')) {
+    return null
+  }
+
+  const rumor: Rumor = {
+    id: '',
+    pubkey: value.pubkey,
+    kind: value.kind,
+    content: value.content,
+    created_at: value.created_at,
+    tags,
+  }
+  const computedId = getEventHash(rumor)
+  if (typeof value.id === 'string' && value.id && value.id !== computedId) {
+    return null
+  }
+  rumor.id = typeof value.id === 'string' && value.id ? value.id : computedId
+  return rumor
+}
+
 function fanOutToMembers(
   groupId: string,
   partialEvent: { content: string, kind: number, tags: string[][] },
@@ -591,12 +668,17 @@ async function sendNativeGroupEvent(
     await waitForSendReadyRuntime()
     await runtime.upsertGroup(groupData)
     try {
-      const result = await runtime.sendGroupEvent(groupId, partialEvent)
+      const runtimeRumor = buildGroupRuntimeRumor(groupId, partialEvent)
+      const result = await runtime.sendGroupEvent(groupId, {
+        kind: runtimeRumor.kind,
+        content: JSON.stringify(runtimeRumor),
+        tags: runtimeRumor.tags,
+      })
 
       if (options?.includeSelfPairwiseCopy) {
         await fanOutToOwnDevices(groupId, partialEvent)
       }
-      return result
+      return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
     } catch (error) {
       console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
       fanOutToMembers(
@@ -874,6 +956,7 @@ export function handleGroupEvent(
   outerEvent?: OuterEvent,
   senderDevicePubkey?: string
 ): void {
+  rumor = parseSerializedGroupRuntimeRumor(rumor.content) ?? rumor
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (!groupTag) return
   const groupId = groupTag[1]

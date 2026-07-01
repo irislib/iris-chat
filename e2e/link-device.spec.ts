@@ -71,7 +71,6 @@ test('link another device closes on paste and logs the other browser in promptly
     const approvalUrl = await openLinkThisDevice(linkedPage)
     expect(approvalUrl).toMatch(/^[0-9a-f]{64}\.[0-9a-f]{64}$/)
     expect(approvalUrl).not.toContain('https://chat.iris.to')
-    expect(approvalUrl).not.toContain('nostr-identity://device-approval/')
     expect(approvalUrl).not.toContain('relay=')
     expect(approvalUrl.length).toBe(129)
     const approvalParts = approvalUrl.split('.')

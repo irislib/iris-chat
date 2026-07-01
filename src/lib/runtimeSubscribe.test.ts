@@ -72,7 +72,6 @@ describe('createRuntimeSubscribe', () => {
     expect(calls[1]?.filter).toEqual({
       kinds: [1060],
       authors: ['a'.repeat(64)],
-      since: 5,
       limit: 200,
     })
     expect(calls[1]?.opts).toMatchObject({
@@ -100,15 +99,87 @@ describe('createRuntimeSubscribe', () => {
     expect(calls[1]?.filter).toEqual({
       kinds: [1060],
       authors: ['a'.repeat(64), BOB],
-      since: expect.any(Number),
       limit: 200,
     })
     expect(calls[3]?.filter).toEqual({
       kinds: [1060],
       authors: [CAROL],
-      since: expect.any(Number),
       limit: 200,
     })
+  })
+
+  it('starts a relay-only backfill for newly added AppKeys authors', () => {
+    const { ndk, calls } = createNdk()
+    const subscribe = createRuntimeSubscribe(ndk as never)
+    const onEvent = vi.fn()
+
+    const unsubscribe = subscribe(
+      {
+        kinds: [37368],
+        authors: [ALICE],
+      },
+      onEvent
+    )
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.filter).toEqual({
+      kinds: [37368],
+      authors: [ALICE],
+    })
+    expect(calls[1]?.filter).toEqual({
+      kinds: [37368],
+      authors: ['a'.repeat(64)],
+      limit: 200,
+    })
+    expect(calls[1]?.opts).toMatchObject({
+      closeOnEose: true,
+      cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+      relayUrls: ['wss://relay.one', 'wss://relay.two'],
+    })
+
+    calls[1]?.subscription.emit({ id: 'appkeys-backfill' })
+    expect(onEvent).toHaveBeenCalledWith({ id: 'appkeys-backfill' })
+
+    unsubscribe()
+    expect(calls[0]?.subscription.stop).toHaveBeenCalledTimes(1)
+    expect(calls[1]?.subscription.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts a relay-only backfill for newly added invite response recipients', () => {
+    const { ndk, calls } = createNdk()
+    const subscribe = createRuntimeSubscribe(ndk as never)
+    const onEvent = vi.fn()
+
+    const unsubscribe = subscribe(
+      {
+        kinds: [1059],
+        '#p': [ALICE],
+      },
+      onEvent
+    )
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.filter).toEqual({
+      kinds: [1059],
+      '#p': [ALICE],
+    })
+    expect(calls[1]?.filter).toEqual({
+      kinds: [1059],
+      '#p': ['a'.repeat(64)],
+      limit: 200,
+    })
+    expect(calls[1]?.opts).toMatchObject({
+      closeOnEose: true,
+      cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+      relayUrls: ['wss://relay.one', 'wss://relay.two'],
+    })
+
+    calls[1]?.subscription.emit({ id: 'invite-response-backfill' })
+    expect(onEvent).toHaveBeenCalledWith({ id: 'invite-response-backfill' })
+
+    unsubscribe()
+    expect(calls[0]?.subscription.stop).toHaveBeenCalledTimes(1)
+    expect(calls[1]?.subscription.stop).toHaveBeenCalledTimes(1)
   })
 
   it('tracks author removal when a subscription is cleaned up', () => {
@@ -123,7 +194,6 @@ describe('createRuntimeSubscribe', () => {
     expect(calls[3]?.filter).toEqual({
       kinds: [1060],
       authors: ['a'.repeat(64)],
-      since: expect.any(Number),
       limit: 200,
     })
   })

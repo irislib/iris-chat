@@ -20,13 +20,13 @@
   import { describeDeviceRosterDevice } from '../lib/deviceLabels'
   import { setThemePreference, themePreference, type ThemePreference } from '../lib/theme'
   import {
-    acceptNostrIdentityLinkDevice,
+    acceptDeviceLink,
     ensureDeviceRegistered,
     getAppKeysManager,
     revokeDevice,
     revokeDevices,
   } from '../lib/privateChats'
-  import { parseNostrIdentityChatDeviceApprovalRequest } from '../lib/nostrIdentityDeviceLink'
+  import { parseCompactDeviceLinkRequest } from 'nostr-double-ratchet'
   import { getErrorMessage } from '../lib/utils'
 
   interface Props {
@@ -261,8 +261,8 @@
 
   async function handleAcceptLinkInvite(raw: string) {
     if (!$identity?.pubkey) return
-    const nostrIdentityRequest = parseNostrIdentityChatDeviceApprovalRequest(raw)
-    if (!nostrIdentityRequest) {
+    const deviceLinkRequest = parseCompactDeviceLinkRequest(raw)
+    if (!deviceLinkRequest) {
       linkInviteError = 'Invalid link code'
       linkInviteStatus = 'error'
       return
@@ -272,7 +272,7 @@
     linkInviteError = ''
 
     try {
-      await acceptNostrIdentityLinkDevice(raw)
+      await acceptDeviceLink(raw)
       linkInviteStatus = 'linked'
       closeLinkInviteModal()
     } catch (e) {
@@ -294,8 +294,8 @@
     if (linkInviteStatus !== 'idle') return
     if (linkInviteInput === linkInviteLastAutoAttempt) return
 
-    const nostrIdentityRequest = parseNostrIdentityChatDeviceApprovalRequest(linkInviteInput)
-    if (!nostrIdentityRequest) return
+    const deviceLinkRequest = parseCompactDeviceLinkRequest(linkInviteInput)
+    if (!deviceLinkRequest) return
 
     linkInviteLastAutoAttempt = linkInviteInput
     void handleAcceptLinkInvite(linkInviteInput)

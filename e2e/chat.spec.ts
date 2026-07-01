@@ -208,12 +208,29 @@ test.describe('iris chat', () => {
       await joiner.getByRole('button', { name: 'Send' }).click()
 
       // Verify unread indicator shows up on the list item.
-      await inviter.getByTestId('sidebar-tab-requests').click()
-      const listItem = inviter
-        .getByTestId('sidebar-chat-list')
-        .getByRole('button', { name: new RegExp(escapeRegExp(secondMessage)) })
-        .first()
-      await expect(listItem).toBeVisible({ timeout: 30000 })
+      const listItemName = new RegExp(escapeRegExp(secondMessage))
+      const chatList = inviter.getByTestId('sidebar-chat-list')
+      const tabButtons = [
+        inviter.getByTestId('sidebar-tab-all'),
+        inviter.getByTestId('sidebar-tab-requests'),
+      ]
+      let listItem = chatList.getByRole('button', { name: listItemName }).first()
+      const deadline = Date.now() + 30_000
+      while (Date.now() < deadline) {
+        let found = false
+        for (const tabButton of tabButtons) {
+          await tabButton.click().catch(() => {})
+          const candidate = chatList.getByRole('button', { name: listItemName }).first()
+          if (await candidate.isVisible().catch(() => false)) {
+            listItem = candidate
+            found = true
+            break
+          }
+        }
+        if (found) break
+        await inviter.waitForTimeout(250)
+      }
+      await expect(listItem).toBeVisible({ timeout: 1000 })
 
       const unreadIndicator = listItem.getByTestId('unread-indicator')
       await expect(unreadIndicator).toHaveCount(1)
@@ -1340,7 +1357,7 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should show known app keys on another user profile', async ({ browser, testRelayUrl }) => {
+    test('should show connected devices on another user profile', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)
       const context2 = await createContext(browser, testRelayUrl)
 
@@ -1364,10 +1381,10 @@ test.describe('iris chat', () => {
         await expect(profileButton).toBeEnabled()
         await profileButton.click()
 
-        const disclosure = page1.getByTestId('profile-appkeys-disclosure')
-        await expect(disclosure).toBeVisible()
-        await expect(disclosure).toContainText('Known App Keys')
-        await expect(disclosure).toContainText('device key published')
+      const disclosure = page1.getByTestId('profile-appkeys-disclosure')
+      await expect(disclosure).toBeVisible()
+      await expect(disclosure).toContainText('Connected devices')
+      await expect(disclosure).toContainText('device published')
 
         await disclosure.locator('summary').click()
 
