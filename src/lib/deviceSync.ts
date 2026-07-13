@@ -7,9 +7,11 @@ import {
   type ServiceContext,
 } from '@fips/core'
 import { WebRtcTransport } from '@fips/transport-webrtc'
+import { AppKeys } from 'nostr-double-ratchet'
 import { chats, currentChat, type ChatMessage, type ChatSession } from './chat'
 import { devices, type DeviceState } from './devices'
 import { getPubkey } from './identity'
+import { getNdrRuntime } from './privateChats'
 import {
   groups,
   groupMessages,
@@ -40,6 +42,12 @@ const STUN_SERVERS = [
 export interface DeviceSyncChat {
   id: string
   updatedAt: number
+}
+
+export interface DeviceSyncAppKeys {
+  ownerPubkey: string
+  createdAt: number
+  devices: Array<{ identityPubkey: string; createdAt: number }>
 }
 
 export interface DeviceSyncGroup {
@@ -76,6 +84,7 @@ export interface DeviceSyncSnapshot {
   v: 1
   type: 'snapshot'
   rosterAt: number
+  appKeys: DeviceSyncAppKeys[]
   chats: DeviceSyncChat[]
   groups: DeviceSyncGroup[]
   messages: DeviceSyncMessage[]
@@ -87,6 +96,7 @@ export interface DeviceSyncSnapshotSource {
   requestRosterAt: number
   localRosterAt: number
   ownerPubkey: string
+  appKeys: DeviceSyncAppKeys[]
   chats: ChatSession[]
   groups: Group[]
   groupMessages: Map<string, GroupMessage[]>
@@ -154,22 +164,22 @@ export function isAuthorizedDeviceSyncSource(
 }
 
 function emptySnapshot(rosterAt: number): DeviceSyncSnapshot {
-  return { v: 1, type: 'snapshot', rosterAt, chats: [], groups: [], messages: [] }
+  return { v: 1, type: 'snapshot', rosterAt, appKeys: [], chats: [], groups: [], messages: [] }
 }
 
 function hasSnapshotData(packet: DeviceSyncSnapshot): boolean {
-  return packet.chats.length + packet.groups.length + packet.messages.length > 0
+  return packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
 }
 
 function chunkSnapshot(
   rosterAt: number,
-  items: Pick<DeviceSyncSnapshot, 'chats' | 'groups' | 'messages'>,
+  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages'>,
   maxBytes: number,
 ): DeviceSyncSnapshot[] {
   const packets: DeviceSyncSnapshot[] = []
   let packet = emptySnapshot(rosterAt)
 
-  const append = <K extends 'chats' | 'groups' | 'messages'>(
+  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages'>(
     key: K,
     value: DeviceSyncSnapshot[K][number],
   ) => {
@@ -183,11 +193,50 @@ function chunkSnapshot(
     packet = encode(single).byteLength <= maxBytes ? single : emptySnapshot(rosterAt)
   }
 
+  for (const appKeys of items.appKeys) append('appKeys', appKeys)
   for (const chat of items.chats) append('chats', chat)
   for (const group of items.groups) append('groups', group)
   for (const message of items.messages) append('messages', message)
   if (hasSnapshotData(packet) || packets.length === 0) packets.push(packet)
   return packets
+}
+
+function rememberAppKeys(
+  snapshots: Map<string, DeviceSyncAppKeys>,
+  snapshot: DeviceSyncAppKeys,
+): void {
+  const ownerPubkey = snapshot.ownerPubkey.toLowerCase()
+  const current = snapshots.get(ownerPubkey)
+  if (current && current.createdAt > snapshot.createdAt) return
+  const devices = current?.createdAt === snapshot.createdAt
+    ? [...current.devices, ...snapshot.devices]
+    : snapshot.devices
+  const unique = new Map<string, { identityPubkey: string; createdAt: number }>()
+  for (const device of devices) {
+    const identityPubkey = device.identityPubkey.toLowerCase()
+    const known = unique.get(identityPubkey)
+    if (!known || device.createdAt < known.createdAt) {
+      unique.set(identityPubkey, { identityPubkey, createdAt: device.createdAt })
+    }
+  }
+  snapshots.set(ownerPubkey, {
+    ownerPubkey,
+    createdAt: snapshot.createdAt,
+    devices: [...unique.values()].sort((a, b) => a.identityPubkey.localeCompare(b.identityPubkey)),
+  })
+}
+
+function scopedAppKeys(source: DeviceSyncSnapshotSource): DeviceSyncAppKeys[] {
+  const owners = new Set([
+    source.ownerPubkey,
+    ...source.chats.map((chat) => chat.recipientPubkey),
+    ...source.groups.flatMap((group) => group.members),
+  ].map((owner) => owner.toLowerCase()))
+  const snapshots = new Map<string, DeviceSyncAppKeys>()
+  for (const snapshot of source.appKeys) {
+    if (owners.has(snapshot.ownerPubkey.toLowerCase())) rememberAppKeys(snapshots, snapshot)
+  }
+  return [...snapshots.values()].sort((a, b) => a.ownerPubkey.localeCompare(b.ownerPubkey))
 }
 
 export function buildDeviceSyncSnapshots(
@@ -196,6 +245,7 @@ export function buildDeviceSyncSnapshots(
   includeMessages = true,
 ): DeviceSyncSnapshot[] {
   const rosterAt = Math.max(source.requestRosterAt, source.localRosterAt)
+  const wireAppKeys = scopedAppKeys(source)
   const wireChats = source.chats.map((chat) => ({
     id: chat.id,
     updatedAt: chat.messages.reduce(
@@ -260,7 +310,7 @@ export function buildDeviceSyncSnapshots(
 
   return chunkSnapshot(
     rosterAt,
-    { chats: wireChats, groups: wireGroups, messages: wireMessages },
+    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages },
     maxBytes,
   )
 }
@@ -268,7 +318,7 @@ export function buildDeviceSyncSnapshots(
 export function selectDeviceSyncAdditions(
   packet: DeviceSyncSnapshot,
   state: DeviceSyncMergeState,
-): Pick<DeviceSyncSnapshot, 'chats' | 'groups' | 'messages'> {
+): Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages'> {
   const cutoff = Math.max(packet.rosterAt, state.rosterAt)
   const missing = <T extends { id: string }>(items: T[], ids: Set<string>): T[] => {
     const seen = new Set(ids)
@@ -276,7 +326,10 @@ export function selectDeviceSyncAdditions(
   }
   const seenMessages = new Set(state.messageIds)
   const seenGroups = new Set<string>()
+  const appKeys = new Map<string, DeviceSyncAppKeys>()
+  for (const snapshot of packet.appKeys || []) rememberAppKeys(appKeys, snapshot)
   return {
+    appKeys: [...appKeys.values()].sort((a, b) => a.ownerPubkey.localeCompare(b.ownerPubkey)),
     chats: missing(packet.chats, state.chatIds),
     groups: packet.groups.filter((group) => {
       if (seenGroups.has(group.id)) return false
@@ -332,6 +385,15 @@ export async function applyDeviceSyncSnapshot(
 ): Promise<void> {
   const additions = selectDeviceSyncAdditions(packet, currentMergeState())
   if (!hasSnapshotData({ ...packet, ...additions })) return
+
+  const runtime = getNdrRuntime()
+  for (const snapshot of additions.appKeys) {
+    await runtime.applyTrustedAppKeysSnapshot({
+      ownerPubkey: snapshot.ownerPubkey,
+      createdAt: snapshot.createdAt,
+      appKeys: new AppKeys(snapshot.devices),
+    })
+  }
 
   for (const chat of additions.chats) {
     const session: ChatSession = {
@@ -434,11 +496,25 @@ export function parseDeviceSyncPacket(
     const value = JSON.parse(new TextDecoder().decode(payload)) as Partial<DeviceSyncPacket>
     if (value.v !== 1 || !isTime(value.rosterAt)) return null
     if (value.type === 'request') return value as DeviceSyncRequest
+    const appKeys = value.type === 'snapshot' && value.appKeys !== undefined
+      ? value.appKeys
+      : []
     if (
       value.type === 'snapshot' &&
+      Array.isArray(appKeys) &&
       Array.isArray(value.chats) &&
       Array.isArray(value.groups) &&
       Array.isArray(value.messages) &&
+      appKeys.every((snapshot) =>
+        isPubkey(snapshot?.ownerPubkey) &&
+        isTime(snapshot?.createdAt) &&
+        Array.isArray(snapshot?.devices) &&
+        snapshot.devices.every((device) =>
+          isPubkey(device?.identityPubkey) && isTime(device?.createdAt)
+        ) &&
+        new Set(snapshot.devices.map((device) => device.identityPubkey.toLowerCase())).size ===
+          snapshot.devices.length
+      ) &&
       value.chats.every((chat) => isPubkey(chat?.id) && isTime(chat?.updatedAt)) &&
       value.groups.every((group) =>
         isId(group?.id) &&
@@ -469,7 +545,7 @@ export function parseDeviceSyncPacket(
         isTime(message.createdAt) &&
         (message.expiresAt === undefined || isTime(message.expiresAt))
       )
-    ) return value as DeviceSyncSnapshot
+    ) return { ...value, appKeys } as DeviceSyncSnapshot
   } catch {
     // Ignore malformed sync packets.
   }
@@ -482,6 +558,14 @@ function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyn
     requestRosterAt,
     localRosterAt: state.lastEventTimestamp,
     ownerPubkey,
+    appKeys: getNdrRuntime().getKnownAppKeysSnapshots().map((snapshot) => ({
+      ownerPubkey: snapshot.ownerPubkey,
+      createdAt: snapshot.createdAt,
+      devices: snapshot.appKeys.getAllDevices().map(({ identityPubkey, createdAt }) => ({
+        identityPubkey,
+        createdAt,
+      })),
+    })),
     chats: Array.from(get(chats).values()),
     groups: Array.from(get(groups).values()),
     groupMessages: get(groupMessages),

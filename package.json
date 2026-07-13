@@ -56,7 +56,7 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "github:mmalmi/nostr-double-ratchet#617b6f7&path:/ts",
+    "nostr-double-ratchet": "github:irislib/nostr-double-ratchet#83f6951&path:/ts",
     "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
   }

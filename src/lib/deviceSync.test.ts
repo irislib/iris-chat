@@ -1,6 +1,7 @@
 import { get, writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
-import { describe, expect, it, vi } from 'vitest'
+import { AppKeys } from 'nostr-double-ratchet'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatSession } from './chat'
 import type { DeviceState } from './devices'
 import type { Group } from './groups'
@@ -12,6 +13,14 @@ const fips = vi.hoisted(() => ({
 const groupRoster = vi.hoisted(() =>
   new Map<string, { revision: number; updatedAt: number }>()
 )
+const ndr = vi.hoisted(() => ({
+  knownSnapshots: [] as Array<{
+    ownerPubkey: string
+    createdAt: number
+    appKeys: { getAllDevices: () => Array<{ identityPubkey: string; createdAt: number }> }
+  }>,
+  applyTrustedAppKeysSnapshot: vi.fn(async () => 'advanced'),
+}))
 
 vi.mock('@fips/core', () => ({
   FipsNode: class {
@@ -56,6 +65,12 @@ vi.mock('./groups', () => ({
   syncNativeGroupTransport: vi.fn(),
 }))
 vi.mock('./identity', () => ({ getPubkey: vi.fn(() => 'a'.repeat(64)) }))
+vi.mock('./privateChats', () => ({
+  getNdrRuntime: () => ({
+    getKnownAppKeysSnapshots: () => ndr.knownSnapshots,
+    applyTrustedAppKeysSnapshot: ndr.applyTrustedAppKeysSnapshot,
+  }),
+}))
 vi.mock('./relayStore', () => ({
   relayStore: { getState: () => ({ relays: new Set(['wss://relay.example']) }) },
 }))
@@ -73,6 +88,7 @@ import {
   selectDeviceSyncAdditions,
   startDeviceSync,
   stopDeviceSync,
+  type DeviceSyncAppKeys,
   type DeviceSyncMessage,
   type DeviceSyncSnapshot,
 } from './deviceSync'
@@ -81,6 +97,9 @@ import { groups } from './groups'
 
 const owner = 'a'.repeat(64)
 const device = 'b'.repeat(64)
+const peerOwner = 'c'.repeat(64)
+const groupMember = 'd'.repeat(64)
+const unrelatedOwner = 'e'.repeat(64)
 
 function deviceState(overrides: Partial<DeviceState> = {}): DeviceState {
   return {
@@ -103,10 +122,27 @@ function message(id: string, createdAt: number, body = id): DeviceSyncMessage {
 }
 
 function snapshot(messages: DeviceSyncMessage[]): DeviceSyncSnapshot {
-  return { v: 1, type: 'snapshot', rosterAt: 100, chats: [], groups: [], messages }
+  return { v: 1, type: 'snapshot', rosterAt: 100, appKeys: [], chats: [], groups: [], messages }
+}
+
+function appKeys(
+  ownerPubkey: string,
+  createdAt: number,
+  devicePubkey = ownerPubkey,
+): DeviceSyncAppKeys {
+  return {
+    ownerPubkey,
+    createdAt,
+    devices: [{ identityPubkey: devicePubkey, createdAt: createdAt - 1 }],
+  }
 }
 
 describe('device sync', () => {
+  beforeEach(() => {
+    ndr.knownSnapshots = []
+    ndr.applyTrustedAppKeysSnapshot.mockClear()
+  })
+
   it('accepts only authenticated devices on the active roster', () => {
     expect(isAuthorizedDeviceSyncSource(`02${device}`, deviceState())).toBe(true)
     expect(isAuthorizedDeviceSyncSource(`02${owner}`, deviceState())).toBe(false)
@@ -130,6 +166,7 @@ describe('device sync', () => {
       requestRosterAt: 100,
       localRosterAt: 101,
       ownerPubkey: owner,
+      appKeys: [],
       chats: [chat],
       groups: [],
       groupMessages: new Map(),
@@ -181,7 +218,7 @@ describe('device sync', () => {
       chats: [],
       groups: [validGroup],
       messages: [],
-    }), owner)?.type).toBe('snapshot')
+    }), owner)).toMatchObject({ type: 'snapshot', appKeys: [] })
     expect(parseDeviceSyncPacket(encode({
       v: 1,
       type: 'snapshot',
@@ -190,6 +227,93 @@ describe('device sync', () => {
       groups: [{ ...validGroup, members: [device], admins: [device] }],
       messages: [],
     }), owner)).toBeNull()
+    expect(parseDeviceSyncPacket(encode({
+      v: 1,
+      type: 'snapshot',
+      rosterAt: 100,
+      appKeys: [{ ...appKeys(peerOwner, 100), ownerPubkey: 'invalid' }],
+      chats: [],
+      groups: [],
+      messages: [],
+    }), owner)).toBeNull()
+    expect(parseDeviceSyncPacket(encode({
+      v: 1,
+      type: 'snapshot',
+      rosterAt: 100,
+      appKeys: null,
+      chats: [],
+      groups: [],
+      messages: [],
+    }), owner)).toBeNull()
+    expect(parseDeviceSyncPacket(encode({
+      v: 1,
+      type: 'snapshot',
+      rosterAt: 100,
+      appKeys: [{
+        ...appKeys(peerOwner, 100, device),
+        devices: [
+          { identityPubkey: device, createdAt: 90 },
+          { identityPubkey: device.toUpperCase(), createdAt: 91 },
+        ],
+      }],
+      chats: [],
+      groups: [],
+      messages: [],
+    }), owner)).toBeNull()
+  })
+
+  it('syncs AppKeys only for the owner, direct peers, and group members', () => {
+    const packets = buildDeviceSyncSnapshots({
+      requestRosterAt: 100,
+      localRosterAt: 100,
+      ownerPubkey: owner,
+      appKeys: [
+        appKeys(unrelatedOwner, 50),
+        appKeys(groupMember, 40),
+        appKeys(peerOwner, 20, device),
+        appKeys(owner, 30),
+        appKeys(peerOwner, 10, owner),
+      ],
+      chats: [{
+        id: peerOwner,
+        recipientPubkey: peerOwner,
+        mode: 'manager',
+        messages: [],
+      }],
+      groups: [{
+        id: 'group-id',
+        name: 'Friends',
+        members: [owner, groupMember],
+        admins: [owner],
+        createdAt: 1_000,
+      }],
+      groupMessages: new Map(),
+    })
+
+    expect(packets.flatMap((packet) => packet.appKeys)).toEqual([
+      appKeys(owner, 30),
+      appKeys(peerOwner, 20, device),
+      appKeys(groupMember, 40),
+    ])
+  })
+
+  it('applies received AppKeys through the NDR runtime', async () => {
+    const incoming = appKeys(peerOwner, 101, device)
+
+    await applyDeviceSyncSnapshot({
+      ...snapshot([]),
+      appKeys: [incoming],
+    }, owner)
+
+    expect(ndr.applyTrustedAppKeysSnapshot).toHaveBeenCalledTimes(1)
+    expect(ndr.applyTrustedAppKeysSnapshot.mock.calls[0]?.[0]).toMatchObject({
+      ownerPubkey: peerOwner,
+      createdAt: 101,
+    })
+    expect(ndr.applyTrustedAppKeysSnapshot.mock.calls[0]?.[0].appKeys).toBeInstanceOf(AppKeys)
+    expect(ndr.applyTrustedAppKeysSnapshot.mock.calls[0]?.[0].appKeys.getAllDevices()).toEqual(
+      incoming.devices,
+    )
   })
 
   it('applies only a newer group roster version and preserves its local secret', async () => {
@@ -208,6 +332,7 @@ describe('device sync', () => {
       requestRosterAt: 100,
       localRosterAt: 100,
       ownerPubkey: owner,
+      appKeys: [],
       chats: [],
       groups: [get(groupStore).get(groupId)!],
       groupMessages: new Map(),
@@ -218,6 +343,7 @@ describe('device sync', () => {
       v: 1,
       type: 'snapshot',
       rosterAt: 100,
+      appKeys: [],
       chats: [],
       groups: [{
         id: groupId,
@@ -261,6 +387,7 @@ describe('device sync', () => {
       requestRosterAt: 100,
       localRosterAt: 100,
       ownerPubkey: owner,
+      appKeys: [appKeys(owner, 100)],
       chats: [chat],
       groups: [] as Group[],
       groupMessages: new Map(),
@@ -272,6 +399,7 @@ describe('device sync', () => {
       expect(new TextEncoder().encode(JSON.stringify(packet)).byteLength).toBeLessThanOrEqual(1024)
     }
     expect(packets.flatMap((packet) => packet.messages)).toHaveLength(12)
+    expect(packets.flatMap((packet) => packet.appKeys)).toEqual([appKeys(owner, 100)])
   })
 
   it('pushes new chat metadata without replaying history', async () => {
@@ -306,12 +434,18 @@ describe('device sync', () => {
           messages: [{ id: 'history', content: 'old', timestamp: 101_000, isMine: true }],
         }],
       ]))
+      ndr.knownSnapshots = [{
+        ownerPubkey: owner,
+        createdAt: 100,
+        appKeys: new AppKeys([{ identityPubkey: device, createdAt: 99 }]),
+      }]
       await vi.advanceTimersByTimeAsync(101)
 
       const packet = JSON.parse(new TextDecoder().decode(
         fips.sendDatagram.mock.calls[0]?.[0].payload,
       )) as DeviceSyncSnapshot
       expect(packet.chats).toContainEqual({ id: chatId, updatedAt: 0 })
+      expect(packet.appKeys).toEqual([appKeys(owner, 100, device)])
       expect(packet.messages).toEqual([])
     } finally {
       await stopDeviceSync()

@@ -7,6 +7,7 @@ function makeRecord(overrides: Partial<UserRecord> = {}): UserRecord {
     publicKey: 'owner',
     devices: new Map(),
     appKeys: undefined,
+    appKeysCreatedAt: 0,
     ...overrides,
   }
 }
