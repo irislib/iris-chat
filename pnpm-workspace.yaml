@@ -3,6 +3,7 @@ packages:
 
 overrides:
   '@isaacs/brace-expansion': 5.0.1
+  '@fips/core': 'github:mmalmi/fips-ts#46a6a0c&path:/packages/core'
 
 allowBuilds:
   esbuild: true

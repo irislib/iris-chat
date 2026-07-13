@@ -45,6 +45,8 @@
     "ws": "^8.19.0"
   },
   "dependencies": {
+    "@fips/core": "github:mmalmi/fips-ts#46a6a0c&path:/packages/core",
+    "@fips/transport-webrtc": "github:mmalmi/fips-ts#46a6a0c&path:/packages/transport-webrtc",
     "@hashtree/core": "0.1.7",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",

@@ -14,7 +14,8 @@
   import type { ChatSession } from './lib/chat'
   import { loadGroupsFromStorage, clearGroupData, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
-  import { initMultiDevice, resetManagers } from './lib/privateChats'
+  import { getDelegateManager, initMultiDevice, resetManagers } from './lib/privateChats'
+  import { startDeviceSync, stopDeviceSync } from './lib/deviceSync'
   import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
   import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
   import { initFollowing } from './lib/following'
@@ -236,12 +237,11 @@
 
     if (isLoggedIn) {
       const currentIdentity = get(identity)
+      let multiDeviceReady: Promise<void> | null = null
       if (currentIdentity?.pubkey) {
         // Subscribe ASAP so we don't miss early incoming manager events.
         initNdrRuntimeEvents()
-        void initMultiDevice(currentIdentity.pubkey).catch((e) =>
-          console.error('[app] initMultiDevice failed:', e)
-        )
+        multiDeviceReady = initMultiDevice(currentIdentity.pubkey)
       }
 
       // Load groups FIRST so group events have somewhere to land
@@ -251,6 +251,12 @@
 
       // Load saved chats from IndexedDB (creates relay subscriptions)
       await loadChatsFromStorage()
+
+      if (currentIdentity?.pubkey && multiDeviceReady) {
+        void multiDeviceReady
+          .then(() => startDeviceSync(currentIdentity.pubkey, getDelegateManager().getIdentityKey()))
+          .catch((e) => console.error('[app] initMultiDevice failed:', e))
+      }
 
       // Set callback for invite acceptance (works for both loaded and new invites)
       setInviteAcceptedCallback((chatSession) => {
@@ -315,6 +321,7 @@
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     cleanup = () => {
+      void stopDeviceSync()
       window.removeEventListener('popstate', handlePopState)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
@@ -329,12 +336,11 @@
 
   async function handleLogin() {
     const currentIdentity = get(identity)
+    let multiDeviceReady: Promise<void> | null = null
     if (currentIdentity?.pubkey) {
       // Subscribe ASAP so we don't miss early incoming manager events.
       initNdrRuntimeEvents()
-      void initMultiDevice(currentIdentity.pubkey).catch((e) =>
-        console.error('[app] initMultiDevice failed:', e)
-      )
+      multiDeviceReady = initMultiDevice(currentIdentity.pubkey)
     }
 
     loggedIn = true
@@ -345,6 +351,12 @@
 
     // Load saved chats from IndexedDB (creates relay subscriptions)
     await loadChatsFromStorage()
+
+    if (currentIdentity?.pubkey && multiDeviceReady) {
+      void multiDeviceReady
+        .then(() => startDeviceSync(currentIdentity.pubkey, getDelegateManager().getIdentityKey()))
+        .catch((e) => console.error('[app] initMultiDevice failed:', e))
+    }
 
     // Set callback for invite acceptance (works for both loaded and new invites)
     setInviteAcceptedCallback((chatSession) => {
@@ -484,6 +496,7 @@
 
   async function handleLogout() {
     stopMessageExpirationCleanup()
+    await stopDeviceSync()
     logout()
     leaveChat()
     await clearChatData()

@@ -147,7 +147,7 @@ function resolveOurDevicePubkey(): string | null {
   return ownerPubkey || null
 }
 
-function syncNativeGroupTransport(groupId: string): void {
+export function syncNativeGroupTransport(groupId: string): void {
   const runtime = getNdrRuntime()
   const currentGroups = Array.from(get(groups).values())
   const ownerPubkey = getPubkey()?.trim()
@@ -177,6 +177,15 @@ function rememberGroupRosterFact(groupId: string, fact: GroupRosterFactCursor): 
   const existing = groupRosterFactCursors.get(groupId)
   if (existing && compareGroupRosterFactCursor(existing, fact) >= 0) return
   groupRosterFactCursors.set(groupId, fact)
+}
+
+export function getGroupRosterVersion(groupId: string): { revision: number; updatedAt: number } | undefined {
+  const fact = groupRosterFactCursors.get(groupId)
+  return fact && { revision: fact.revision, updatedAt: fact.updatedAt }
+}
+
+export function rememberSyncedGroupRosterVersion(groupId: string, revision: number, updatedAt: number): void {
+  rememberGroupRosterFact(groupId, { eventId: '', revision, updatedAt, eventCreatedAt: updatedAt })
 }
 
 function shouldApplyGroupRosterFact(fact: GroupRosterFact): boolean {

@@ -2,9 +2,12 @@ import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import UnoCSS from 'unocss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
   base: './',
+  // The pinned Git package omits a generated module; bundle its complete source tree.
+  resolve: { alias: { '@fips/core': fileURLToPath(new URL('./node_modules/@fips/core/src/index.ts', import.meta.url)) } },
   plugins: [
     UnoCSS(),
     svelte(),
