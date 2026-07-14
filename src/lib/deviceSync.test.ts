@@ -26,12 +26,16 @@ vi.mock('@fips/core', () => ({
   FipsNode: class {
     private listeners = new Map<string, (value: unknown) => void>()
     constructor() { fips.nodes.push(this) }
-    registerService() {}
-    on(event: string, listener: (value: unknown) => void) { this.listeners.set(event, listener) }
+    registerService() { return () => undefined }
+    on(event: string, listener: (value: unknown) => void) {
+      this.listeners.set(event, listener)
+      return () => this.listeners.delete(event)
+    }
     emit(event: string, value: unknown) { this.listeners.get(event)?.(value) }
     start = vi.fn(async () => undefined)
     stop = vi.fn(async () => undefined)
     sendDatagram = fips.sendDatagram
+    sendEndpointData = vi.fn(async () => undefined)
   },
   identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32) })),
   toHex: vi.fn(() => 'a'.repeat(64)),

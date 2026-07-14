@@ -12,12 +12,15 @@ Decentralized encrypted messaging over Nostr using the double-ratchet protocol.
 - **PWA** installable on mobile and desktop
 - **Local-first** with IndexedDB persistence (Dexie)
 - **NIP-07** browser extension support for key management
+- **Bounded live pubsub** over authenticated FIPS links between machine-admitted
+  sibling devices; Nostr relays remain the initial-contact and durable-backfill path
 
 ## Tech Stack
 
 - Svelte 5, TypeScript, Vite
 - UnoCSS
 - NDK (Nostr Development Kit)
+- nostr-pubsub over FIPS
 - Workbox (service worker)
 
 ## Development

@@ -48,6 +48,7 @@
     "@fips/core": "github:mmalmi/fips-ts#46a6a0c&path:/packages/core",
     "@fips/transport-webrtc": "github:mmalmi/fips-ts#46a6a0c&path:/packages/transport-webrtc",
     "@hashtree/core": "0.1.7",
+    "@iris/nostr-pubsub": "github:mmalmi/iris-kit#20817bb&path:/packages/nostr-pubsub",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@nostr-dev-kit/ndk": "^2.18.1",
@@ -57,6 +58,7 @@
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "github:irislib/nostr-double-ratchet#83f6951&path:/ts",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz",
     "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
   }

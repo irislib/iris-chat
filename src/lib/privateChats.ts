@@ -43,6 +43,7 @@ import {
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
+import { publishNostrPubsub } from './nostrPubsubRuntime'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 
 let runtime: NdrRuntime | null = null
@@ -262,6 +263,11 @@ const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => 
   return (async (event, innerEventId) => {
     return publishRuntimeEventFireAndForget(event, async () => {
       const e = new NDKEvent(ndkInstance, event)
+      if (!e.sig) await e.sign()
+      const signed = e.rawEvent() as VerifiedEvent
+      void publishNostrPubsub(signed).catch((error) => {
+        console.warn('[privateChats] FIPS pubsub publish failed:', error)
+      })
       const relayUrls = [...relayStore.getState().relays]
       const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
       return e.publish(relaySet, 10000, 1)

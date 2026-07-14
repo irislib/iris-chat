@@ -1,5 +1,17 @@
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { NDKSubscriptionCacheUsage } from '@nostr-dev-kit/ndk'
+
+const pubsub = vi.hoisted(() => ({
+  subscriptions: new Set<{ filter: unknown; onEvent: (event: never) => void }>(),
+}))
+
+vi.mock('./nostrPubsubRuntime', () => ({
+  subscribeNostrPubsub: vi.fn((filter: unknown, onEvent: (event: never) => void) => {
+    const subscription = { filter, onEvent }
+    pubsub.subscriptions.add(subscription)
+    return () => pubsub.subscriptions.delete(subscription)
+  }),
+}))
 
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 
@@ -47,6 +59,8 @@ const createNdk = () => {
 afterEach(() => {
   vi.restoreAllMocks()
 })
+
+beforeEach(() => pubsub.subscriptions.clear())
 
 describe('createRuntimeSubscribe', () => {
   it('starts a relay-only backfill for newly added DM authors', () => {
@@ -196,5 +210,34 @@ describe('createRuntimeSubscribe', () => {
       authors: ['a'.repeat(64)],
       limit: 200,
     })
+  })
+
+  it('forwards the live FIPS path into the NDR callback once across relay duplicates', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(20_000)
+    const { ndk, calls } = createNdk()
+    const subscribe = createRuntimeSubscribe(ndk as never)
+    const onEvent = vi.fn()
+    const filter = { kinds: [1060], authors: [ALICE] }
+    const unsubscribe = subscribe(filter, onEvent)
+    const event = {
+      id: 'f'.repeat(64),
+      pubkey: ALICE.toLowerCase(),
+      kind: 1060,
+      created_at: 20,
+      tags: [],
+      content: 'ciphertext',
+      sig: 'e'.repeat(128),
+    }
+    const fipsSubscription = [...pubsub.subscriptions][0]
+
+    expect(fipsSubscription?.filter).toEqual(filter)
+    fipsSubscription?.onEvent(event as never)
+    calls[0]?.subscription.emit(event)
+    expect(onEvent).toHaveBeenCalledTimes(1)
+    expect(onEvent).toHaveBeenCalledWith(event)
+
+    unsubscribe()
+    expect(pubsub.subscriptions).toHaveLength(0)
+    expect(onEvent).toHaveBeenCalledTimes(1)
   })
 })

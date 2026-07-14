@@ -22,6 +22,7 @@ import {
   type GroupMessage,
 } from './groups'
 import { relayStore } from './relayStore'
+import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
 import {
   saveGroup,
   saveMessage,
@@ -641,6 +642,7 @@ async function stopActiveNode(): Promise<void> {
   activeKey = ''
   activeOwnerPubkey = ''
   activePeers = new Set()
+  deactivateNostrPubsub()
   await node?.stop().catch(() => undefined)
 }
 
@@ -715,6 +717,9 @@ async function reconcileRuntime(
   activeKey = key
   activeOwnerPubkey = ownerPubkey
   activePeers = peers
+  // This first production lane is intentionally limited to machine-admitted
+  // sibling devices discovered by the owner-scoped transport above.
+  activateNostrPubsub(node, () => Array.from(peers))
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {
