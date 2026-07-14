@@ -31,7 +31,7 @@ import {
   type StoredMessage,
 } from './storage'
 
-export const DEVICE_SYNC_PORT = 7370
+export const DEVICE_SYNC_PORT = 7369
 export const DEVICE_SYNC_MAX_PACKET_BYTES = 48 * 1024
 const DEVICE_SYNC_SCOPE = 'iris-chat-device-sync-v1'
 const STUN_SERVERS = [

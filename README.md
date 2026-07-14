@@ -14,7 +14,7 @@ Decentralized encrypted messaging over Nostr using the double-ratchet protocol.
 - **NIP-07** browser extension support for key management
 - **Bounded live pubsub** over authenticated FIPS links between machine-admitted
   sibling devices; Nostr relays remain the initial-contact and durable-backfill path
-- **Reliable linked-device sync** as bounded records over TCP/FIPS service 7370;
+- **Reliable linked-device sync** as bounded records over TCP/FIPS service 7369;
   chat delivery and seen receipts remain end-to-end application signals
 
 ## Tech Stack

@@ -12,6 +12,7 @@ const fips = vi.hoisted(() => ({
 }))
 const tcp = vi.hoisted(() => ({
   instances: [] as Array<{
+    port: number
     send: ReturnType<typeof vi.fn>
     setPeer: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
@@ -50,10 +51,14 @@ vi.mock('@fips/core', () => ({
 vi.mock('@fips/transport-webrtc', () => ({ WebRtcTransport: class {} }))
 vi.mock('./deviceSyncTcp', () => ({
   DeviceSyncTcp: class {
+    port: number
     send = vi.fn(async () => undefined)
     setPeer = vi.fn()
     dispose = vi.fn(async () => undefined)
-    constructor() { tcp.instances.push(this) }
+    constructor(options: { port: number }) {
+      this.port = options.port
+      tcp.instances.push(this)
+    }
   },
 }))
 vi.mock('./chat', () => ({
@@ -101,6 +106,7 @@ vi.mock('./storage', () => ({
 
 import {
   buildDeviceSyncSnapshots,
+  DEVICE_SYNC_PORT,
   applyDeviceSyncSnapshot,
   isAuthorizedDeviceSyncSource,
   parseDeviceSyncPacket,
@@ -438,6 +444,8 @@ describe('device sync', () => {
       })
       const transport = tcp.instances.at(-1)
       expect(transport).toBeDefined()
+      expect(DEVICE_SYNC_PORT).toBe(7369)
+      expect(transport?.port).toBe(DEVICE_SYNC_PORT)
       transport?.send.mockClear()
 
       const chatId = 'c'.repeat(64)

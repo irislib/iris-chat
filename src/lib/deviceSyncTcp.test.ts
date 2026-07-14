@@ -62,7 +62,7 @@ describe('DeviceSyncTcp', () => {
     const a = new DeviceSyncTcp({
       endpoint: aEndpoint,
       localPeer: aEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: () => undefined,
       onError: (error) => errors.push(error),
@@ -71,7 +71,7 @@ describe('DeviceSyncTcp', () => {
     const b = new DeviceSyncTcp({
       endpoint: bEndpoint,
       localPeer: bEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: (_peer, bytes) => {
         received.push(new TextDecoder().decode(bytes))
@@ -83,7 +83,7 @@ describe('DeviceSyncTcp', () => {
       await bEndpoint.sendDatagram({
         dst: aEndpoint.id,
         srcPort: 7369,
-        dstPort: 7370,
+        dstPort: 7369,
         payload: new TextEncoder().encode('{"type":"request","v":1}'),
       })
       await vi.advanceTimersByTimeAsync(0)
@@ -133,7 +133,7 @@ describe('DeviceSyncTcp', () => {
     a = new DeviceSyncTcp({
       endpoint: aEndpoint,
       localPeer: aEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: () => undefined,
       onConnected: () => {
@@ -147,7 +147,7 @@ describe('DeviceSyncTcp', () => {
     const b = new DeviceSyncTcp({
       endpoint: bEndpoint,
       localPeer: bEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: (_peer, bytes) => {
         received.push(new TextDecoder().decode(bytes))
@@ -183,7 +183,7 @@ describe('DeviceSyncTcp', () => {
     const a = new DeviceSyncTcp({
       endpoint: aEndpoint,
       localPeer: aEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: () => undefined,
       tcpConfig,
@@ -191,7 +191,7 @@ describe('DeviceSyncTcp', () => {
     const b = new DeviceSyncTcp({
       endpoint: bEndpoint,
       localPeer: bEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: (_peer, bytes) => {
         received.push(new TextDecoder().decode(bytes))
@@ -231,7 +231,7 @@ describe('DeviceSyncTcp', () => {
     const a = new DeviceSyncTcp({
       endpoint: aEndpoint,
       localPeer: aEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: (_peer, bytes) => {
         received.push(new TextDecoder().decode(bytes))
@@ -240,7 +240,7 @@ describe('DeviceSyncTcp', () => {
     b = new DeviceSyncTcp({
       endpoint: bEndpoint,
       localPeer: bEndpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: async (peer, bytes) => {
         if (new TextDecoder().decode(bytes) === 'request') {
@@ -268,7 +268,7 @@ describe('DeviceSyncTcp', () => {
     const tcp = new DeviceSyncTcp({
       endpoint,
       localPeer: endpoint.id,
-      port: 7370,
+      port: 7369,
       maxRecordBytes: 1024,
       onRecord: () => undefined,
     })
