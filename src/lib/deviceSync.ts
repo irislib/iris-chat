@@ -4,7 +4,6 @@ import {
   identityFromSecretKey,
   toHex,
   type PeerEvent,
-  type ServiceContext,
 } from '@fips/core'
 import { WebRtcTransport } from '@fips/transport-webrtc'
 import { AppKeys } from 'nostr-double-ratchet'
@@ -23,6 +22,7 @@ import {
 } from './groups'
 import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
+import { DeviceSyncTcp } from './deviceSyncTcp'
 import {
   saveGroup,
   saveMessage,
@@ -31,7 +31,7 @@ import {
   type StoredMessage,
 } from './storage'
 
-export const DEVICE_SYNC_PORT = 7369
+export const DEVICE_SYNC_PORT = 7370
 export const DEVICE_SYNC_MAX_PACKET_BYTES = 48 * 1024
 const DEVICE_SYNC_SCOPE = 'iris-chat-device-sync-v1'
 const STUN_SERVERS = [
@@ -111,6 +111,7 @@ export interface DeviceSyncMergeState {
 }
 
 let activeNode: FipsNode | null = null
+let activeTcp: DeviceSyncTcp | null = null
 let activeKey = ''
 let activeOwnerPubkey = ''
 let activePeers = new Set<string>()
@@ -574,8 +575,8 @@ function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyn
 }
 
 async function pushCurrentSnapshot(): Promise<void> {
-  const node = activeNode
-  if (!node || !activeOwnerPubkey) return
+  const tcp = activeTcp
+  if (!tcp || !activeOwnerPubkey) return
   const state = get(devices)
   const snapshots = buildDeviceSyncSnapshots(
     snapshotSource(state.lastEventTimestamp, activeOwnerPubkey),
@@ -585,12 +586,7 @@ async function pushCurrentSnapshot(): Promise<void> {
   await Promise.all(Array.from(activePeers).map(async (peer) => {
     if (!isAuthorizedDeviceSyncSource(peer, state)) return
     for (const snapshot of snapshots) {
-      await node.sendDatagram({
-        dst: peer,
-        srcPort: DEVICE_SYNC_PORT,
-        dstPort: DEVICE_SYNC_PORT,
-        payload: encode(snapshot),
-      })
+      await tcp.send(peer, encode(snapshot))
     }
   }))
 }
@@ -607,16 +603,18 @@ function scheduleSnapshotPush(): void {
 }
 
 async function handlePacket(
-  context: ServiceContext,
+  source: string,
+  payload: Uint8Array,
   ownerPubkey: string,
+  tcp: DeviceSyncTcp,
 ): Promise<void> {
-  if (!isAuthorizedDeviceSyncSource(context.src, get(devices))) return
-  const packet = parseDeviceSyncPacket(context.payload, ownerPubkey)
+  if (!isAuthorizedDeviceSyncSource(source, get(devices))) return
+  const packet = parseDeviceSyncPacket(payload, ownerPubkey)
   if (!packet) return
 
   if (packet.type === 'request') {
     for (const snapshot of buildDeviceSyncSnapshots(snapshotSource(packet.rosterAt, ownerPubkey))) {
-      await context.reply(encode(snapshot), DEVICE_SYNC_PORT)
+      await tcp.send(source, encode(snapshot))
     }
     return
   }
@@ -638,11 +636,14 @@ function runtimeKey(ownerPubkey: string, state: DeviceState): string {
 
 async function stopActiveNode(): Promise<void> {
   const node = activeNode
+  const tcp = activeTcp
   activeNode = null
+  activeTcp = null
   activeKey = ''
   activeOwnerPubkey = ''
   activePeers = new Set()
   deactivateNostrPubsub()
+  await tcp?.dispose().catch(() => undefined)
   await node?.stop().catch(() => undefined)
 }
 
@@ -684,36 +685,46 @@ async function reconcileRuntime(
   })
   const node = new FipsNode({ identity, transports: [transport] })
   const peers = new Set<string>()
-  node.registerService(DEVICE_SYNC_PORT, (context) => handlePacket(context, ownerPubkey))
+  let tcp: DeviceSyncTcp
+  tcp = new DeviceSyncTcp({
+    endpoint: node,
+    localPeer: state.identityPubkey,
+    port: DEVICE_SYNC_PORT,
+    maxRecordBytes: DEVICE_SYNC_MAX_PACKET_BYTES,
+    onRecord: (source, payload) => handlePacket(source, payload, ownerPubkey, tcp),
+    onConnected: (peer) => {
+      const request: DeviceSyncRequest = {
+        v: 1,
+        type: 'request',
+        rosterAt: get(devices).lastEventTimestamp,
+      }
+      void tcp.sendFirst(peer, encode(request))
+        .catch((error) => console.warn('[deviceSync] Request failed:', error))
+    },
+    onError: (error) => console.warn('[deviceSync] TCP error:', error),
+  })
   node.on('peer', (value) => {
     const peer = value as PeerEvent
     if (peer.state === 'disconnected') {
       peers.delete(peer.remotePubkey)
+      tcp.setPeer(peer.remotePubkey, false)
       return
     }
     if (
       !isAuthorizedDeviceSyncSource(peer.remotePubkey, get(devices))
     ) return
     peers.add(peer.remotePubkey)
-    const request: DeviceSyncRequest = {
-      v: 1,
-      type: 'request',
-      rosterAt: get(devices).lastEventTimestamp,
-    }
-    void node.sendDatagram({
-      dst: peer.remotePubkey,
-      srcPort: DEVICE_SYNC_PORT,
-      dstPort: DEVICE_SYNC_PORT,
-      payload: encode(request),
-    }).catch((error) => console.warn('[deviceSync] Request failed:', error))
+    tcp.setPeer(peer.remotePubkey, true)
   })
   node.on('error', (error) => console.warn('[deviceSync] FIPS error:', error))
   await node.start()
   if (run !== generation) {
+    await tcp.dispose()
     await node.stop()
     return
   }
   activeNode = node
+  activeTcp = tcp
   activeKey = key
   activeOwnerPubkey = ownerPubkey
   activePeers = peers

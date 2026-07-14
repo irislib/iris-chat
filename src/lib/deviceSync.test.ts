@@ -10,6 +10,13 @@ const fips = vi.hoisted(() => ({
   nodes: [] as Array<{ emit: (event: string, value: unknown) => void }>,
   sendDatagram: vi.fn(async () => undefined),
 }))
+const tcp = vi.hoisted(() => ({
+  instances: [] as Array<{
+    send: ReturnType<typeof vi.fn>
+    setPeer: ReturnType<typeof vi.fn>
+    dispose: ReturnType<typeof vi.fn>
+  }>,
+}))
 const groupRoster = vi.hoisted(() =>
   new Map<string, { revision: number; updatedAt: number }>()
 )
@@ -41,6 +48,14 @@ vi.mock('@fips/core', () => ({
   toHex: vi.fn(() => 'a'.repeat(64)),
 }))
 vi.mock('@fips/transport-webrtc', () => ({ WebRtcTransport: class {} }))
+vi.mock('./deviceSyncTcp', () => ({
+  DeviceSyncTcp: class {
+    send = vi.fn(async () => undefined)
+    setPeer = vi.fn()
+    dispose = vi.fn(async () => undefined)
+    constructor() { tcp.instances.push(this) }
+  },
+}))
 vi.mock('./chat', () => ({
   chats: writable(new Map()),
   currentChat: writable(null),
@@ -145,6 +160,7 @@ describe('device sync', () => {
   beforeEach(() => {
     ndr.knownSnapshots = []
     ndr.applyTrustedAppKeysSnapshot.mockClear()
+    tcp.instances.length = 0
   })
 
   it('accepts only authenticated devices on the active roster', () => {
@@ -420,7 +436,9 @@ describe('device sync', () => {
         remotePubkey: `02${device}`,
         remoteAddr: { transport: 'webrtc', addr: 'peer' },
       })
-      fips.sendDatagram.mockClear()
+      const transport = tcp.instances.at(-1)
+      expect(transport).toBeDefined()
+      transport?.send.mockClear()
 
       const chatId = 'c'.repeat(64)
       const historyChatId = 'd'.repeat(64)
@@ -446,7 +464,7 @@ describe('device sync', () => {
       await vi.advanceTimersByTimeAsync(101)
 
       const packet = JSON.parse(new TextDecoder().decode(
-        fips.sendDatagram.mock.calls[0]?.[0].payload,
+        transport?.send.mock.calls[0]?.[1],
       )) as DeviceSyncSnapshot
       expect(packet.chats).toContainEqual({ id: chatId, updatedAt: 0 })
       expect(packet.appKeys).toEqual([appKeys(owner, 100, device)])
