@@ -21,8 +21,9 @@ export class NostrPubsubRuntime {
 
   activate(endpoint: IrisFipsMessagingEndpoint, peers: PubsubPeerSource): void {
     this.deactivate()
+    const admittedEndpoint = machineAdmittedEndpoint(endpoint, peers)
     this.adapter = createIrisFipsPubsub({
-      endpoint,
+      endpoint: admittedEndpoint,
       peers,
       protocol: 'iris.chat.nostr',
       allowedKinds: ALLOWED_RUNTIME_KINDS,
@@ -84,3 +85,27 @@ export const subscribeNostrPubsub = (
 
 export const publishNostrPubsub = (event: VerifiedEvent): Promise<void> =>
   runtime.publish(event)
+
+function machineAdmittedEndpoint(
+  endpoint: IrisFipsMessagingEndpoint,
+  peers: PubsubPeerSource,
+): IrisFipsMessagingEndpoint {
+  const isAdmitted = (peerId: unknown) =>
+    typeof peerId === 'string'
+    && peers().some((peer) => peer.toLowerCase() === peerId.toLowerCase())
+
+  return {
+    async sendEndpointData(args) {
+      if (!isAdmitted(args.dst)) throw new Error('FIPS pubsub destination is not machine-admitted')
+      await endpoint.sendEndpointData(args)
+    },
+    on(event, listener) {
+      return endpoint.on(event, (value) => {
+        const source = value && typeof value === 'object'
+          ? (value as { src?: unknown }).src
+          : undefined
+        if (isAdmitted(source)) listener(value)
+      })
+    },
+  }
+}

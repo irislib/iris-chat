@@ -5,6 +5,7 @@ import { NostrPubsubRuntime } from './nostrPubsubRuntime'
 
 const PEER_A = `02${'11'.repeat(32)}`
 const PEER_B = `03${'22'.repeat(32)}`
+const PEER_C = `02${'33'.repeat(32)}`
 
 class MemoryFipsNetwork {
   private readonly endpoints = new Map<string, ReturnType<MemoryFipsNetwork['endpoint']>>()
@@ -93,5 +94,27 @@ describe('NostrPubsubRuntime', () => {
     await settle([alice], () => true)
     expect(received).not.toHaveBeenCalled()
     alice.deactivate()
+  })
+
+  it('drops signed traffic from connected but non-admitted FIPS identities', async () => {
+    const network = new MemoryFipsNetwork()
+    const bob = new NostrPubsubRuntime()
+    const charlie = new NostrPubsubRuntime()
+    bob.activate(network.endpoint(PEER_B), () => [PEER_A])
+    charlie.activate(network.endpoint(PEER_C), () => [PEER_B])
+    const received = vi.fn()
+    bob.subscribe({ kinds: [1060] }, received)
+    const event = finalizeEvent({
+      kind: 1060,
+      created_at: 1_700_000_003,
+      tags: [],
+      content: 'valid but not admitted',
+    }, generateSecretKey())
+
+    await charlie.publish(event)
+    await settle([bob, charlie], () => true)
+    expect(received).not.toHaveBeenCalled()
+    bob.deactivate()
+    charlie.deactivate()
   })
 })
