@@ -50,7 +50,7 @@
     "@fips/tcp": "github:mmalmi/fips-tcp#353cd0b9b723edd07b6cdc82c7e826d43b9a0d6e&path:/ts",
     "@fips/transport-webrtc": "github:mmalmi/fips-ts#46a6a0c&path:/packages/transport-webrtc",
     "@hashtree/core": "0.1.7",
-    "@iris/nostr-pubsub": "github:mmalmi/iris-kit#20817bb&path:/packages/nostr-pubsub",
+    "@iris/nostr-pubsub": "github:mmalmi/iris-kit#3c78a5adef9af1053f6563a1b25bee4510dccc53&path:/packages/nostr-pubsub",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@nostr-dev-kit/ndk": "^2.18.1",

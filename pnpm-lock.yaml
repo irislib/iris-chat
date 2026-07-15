@@ -25,8 +25,8 @@ importers:
         specifier: 0.1.7
         version: 0.1.7
       '@iris/nostr-pubsub':
-        specifier: github:mmalmi/iris-kit#20817bb&path:/packages/nostr-pubsub
-        version: https://codeload.github.com/mmalmi/iris-kit/tar.gz/20817bb#path:/packages/nostr-pubsub(nostr-tools@2.23.8(typescript@5.9.3))
+        specifier: github:mmalmi/iris-kit#3c78a5adef9af1053f6563a1b25bee4510dccc53&path:/packages/nostr-pubsub
+        version: https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53#path:/packages/nostr-pubsub(nostr-tools@2.23.8(typescript@5.9.3))
       '@noble/hashes':
         specifier: ^2.0.1
         version: 2.0.1
@@ -874,8 +874,8 @@ packages:
   '@iconify/utils@3.1.0':
     resolution: {integrity: sha512-Zlzem1ZXhI1iHeeERabLNzBHdOa4VhQbqAcOQaMKuTuyZCpwKbC2R4Dd0Zo3g9EAc+Y4fiarO8HIHRAth7+skw==}
 
-  '@iris/nostr-pubsub@https://codeload.github.com/mmalmi/iris-kit/tar.gz/20817bb#path:/packages/nostr-pubsub':
-    resolution: {path: /packages/nostr-pubsub, tarball: https://codeload.github.com/mmalmi/iris-kit/tar.gz/20817bb}
+  '@iris/nostr-pubsub@https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53#path:/packages/nostr-pubsub':
+    resolution: {path: /packages/nostr-pubsub, tarball: https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53}
     version: 0.1.0
     peerDependencies:
       nostr-tools: '>=2.17.0 <3'
@@ -2195,12 +2195,6 @@ packages:
   nostr-double-ratchet@https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951#path:/ts:
     resolution: {path: /ts, tarball: https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951}
     version: 0.0.163
-
-  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz:
-    resolution: {tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz, integrity: sha512-Rm0e+UC1YBnjPjgHED0t+S6+ytUjz9l1ld1AiFiilpC2OU1HDZxtUUrJTjupoe97v6NUUhywkoNNLrZ9LHB9HA==}
-    version: 0.1.4
-    peerDependencies:
-      nostr-tools: '>=2.17.0 <3'
 
   nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz:
     resolution: {tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz, integrity: sha512-zza+r1FWKMopO4XUxLD0GfnBvUOpNju9Pr4nKCZ8np8xqo0sKDaCcbM/VvZmjNd2/iHdtyducpkrmAXnqUt+9w==}
@@ -3912,9 +3906,9 @@ snapshots:
       '@iconify/types': 2.0.0
       mlly: 1.8.0
 
-  '@iris/nostr-pubsub@https://codeload.github.com/mmalmi/iris-kit/tar.gz/20817bb#path:/packages/nostr-pubsub(nostr-tools@2.23.8(typescript@5.9.3))':
+  '@iris/nostr-pubsub@https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53#path:/packages/nostr-pubsub(nostr-tools@2.23.8(typescript@5.9.3))':
     dependencies:
-      nostr-pubsub: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz(nostr-tools@2.23.8(typescript@5.9.3))
+      nostr-pubsub: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz(nostr-tools@2.23.8(typescript@5.9.3))
       nostr-tools: 2.23.8(typescript@5.9.3)
 
   '@isaacs/cliui@9.0.0': {}
@@ -5320,10 +5314,6 @@ snapshots:
       nostr-tools: 2.23.8(typescript@5.9.3)
     transitivePeerDependencies:
       - typescript
-
-  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz(nostr-tools@2.23.8(typescript@5.9.3)):
-    dependencies:
-      nostr-tools: 2.23.8(typescript@5.9.3)
 
   nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz(nostr-tools@2.23.8(typescript@5.9.3)):
     dependencies:
