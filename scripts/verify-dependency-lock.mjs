@@ -4,8 +4,8 @@ const root = new URL('../', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 const lockfile = await readFile(new URL('pnpm-lock.yaml', root), 'utf8')
 const packageName = 'nostr-pubsub'
-const url = 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz'
-const integrity = 'sha512-Rm0e+UC1YBnjPjgHED0t+S6+ytUjz9l1ld1AiFiilpC2OU1HDZxtUUrJTjupoe97v6NUUhywkoNNLrZ9LHB9HA=='
+const url = 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz'
+const integrity = 'sha512-zza+r1FWKMopO4XUxLD0GfnBvUOpNju9Pr4nKCZ8np8xqo0sKDaCcbM/VvZmjNd2/iHdtyducpkrmAXnqUt+9w=='
 const fipsTcp = 'github:mmalmi/fips-tcp#353cd0b9b723edd07b6cdc82c7e826d43b9a0d6e&path:/ts'
 
 if (manifest.dependencies?.[packageName] !== url) {

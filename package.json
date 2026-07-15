@@ -60,7 +60,7 @@
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "github:irislib/nostr-double-ratchet#83f6951&path:/ts",
-    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz",
     "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
   }

@@ -55,8 +55,8 @@ importers:
         specifier: github:irislib/nostr-double-ratchet#83f6951&path:/ts
         version: https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951#path:/ts(typescript@5.9.3)
       nostr-pubsub:
-        specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz
-        version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz(nostr-tools@2.23.8(typescript@5.9.3))
+        specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz
+        version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz(nostr-tools@2.23.8(typescript@5.9.3))
       nostr-tools:
         specifier: ^2.23.1
         version: 2.23.8(typescript@5.9.3)
@@ -2199,6 +2199,12 @@ packages:
   nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz:
     resolution: {tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz, integrity: sha512-Rm0e+UC1YBnjPjgHED0t+S6+ytUjz9l1ld1AiFiilpC2OU1HDZxtUUrJTjupoe97v6NUUhywkoNNLrZ9LHB9HA==}
     version: 0.1.4
+    peerDependencies:
+      nostr-tools: '>=2.17.0 <3'
+
+  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz:
+    resolution: {tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz, integrity: sha512-zza+r1FWKMopO4XUxLD0GfnBvUOpNju9Pr4nKCZ8np8xqo0sKDaCcbM/VvZmjNd2/iHdtyducpkrmAXnqUt+9w==}
+    version: 0.1.5
     peerDependencies:
       nostr-tools: '>=2.17.0 <3'
 
@@ -5316,6 +5322,10 @@ snapshots:
       - typescript
 
   nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.4/nostr-pubsub-0.1.4.tgz(nostr-tools@2.23.8(typescript@5.9.3)):
+    dependencies:
+      nostr-tools: 2.23.8(typescript@5.9.3)
+
+  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz(nostr-tools@2.23.8(typescript@5.9.3)):
     dependencies:
       nostr-tools: 2.23.8(typescript@5.9.3)
 
