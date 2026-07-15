@@ -14,8 +14,11 @@ const tcp = vi.hoisted(() => ({
   instances: [] as Array<{
     port: number
     send: ReturnType<typeof vi.fn>
+    sendFirst: ReturnType<typeof vi.fn>
     setPeer: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
+    onRecord: (source: string, payload: Uint8Array) => Promise<void>
+    onConnected?: (peer: string) => void
   }>,
 }))
 const groupRoster = vi.hoisted(() =>
@@ -53,10 +56,19 @@ vi.mock('./deviceSyncTcp', () => ({
   DeviceSyncTcp: class {
     port: number
     send = vi.fn(async () => undefined)
+    sendFirst = vi.fn(async () => undefined)
     setPeer = vi.fn()
     dispose = vi.fn(async () => undefined)
-    constructor(options: { port: number }) {
+    onRecord: (source: string, payload: Uint8Array) => Promise<void>
+    onConnected?: (peer: string) => void
+    constructor(options: {
+      port: number
+      onRecord: (source: string, payload: Uint8Array) => Promise<void>
+      onConnected?: (peer: string) => void
+    }) {
       this.port = options.port
+      this.onRecord = options.onRecord
+      this.onConnected = options.onConnected
       tcp.instances.push(this)
     }
   },
@@ -106,6 +118,10 @@ vi.mock('./storage', () => ({
 
 import {
   buildDeviceSyncSnapshots,
+  buildDeviceSyncReplyPackets,
+  DEVICE_SYNC_MAX_PACKET_BYTES,
+  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_PAGE_PACKETS,
   DEVICE_SYNC_PORT,
   applyDeviceSyncSnapshot,
   isAuthorizedDeviceSyncSource,
@@ -117,6 +133,7 @@ import {
   type DeviceSyncMessage,
   type DeviceSyncSnapshot,
 } from './deviceSync'
+import { encodeDeviceSyncPacket } from './deviceSyncProtocol'
 import { chats } from './chat'
 import { groups } from './groups'
 
@@ -164,6 +181,7 @@ function appKeys(
 
 describe('device sync', () => {
   beforeEach(() => {
+    fips.nodes.length = 0
     ndr.knownSnapshots = []
     ndr.applyTrustedAppKeysSnapshot.mockClear()
     tcp.instances.length = 0
@@ -176,7 +194,7 @@ describe('device sync', () => {
     expect(isAuthorizedDeviceSyncSource(`02${device}`, deviceState({ isCurrentDeviceRegistered: false }))).toBe(false)
   })
 
-  it('syncs only messages strictly newer than both roster cutoffs', () => {
+  it('syncs messages at or after both roster cutoffs', () => {
     const chat: ChatSession = {
       id: 'peer',
       recipientPubkey: 'peer',
@@ -198,8 +216,47 @@ describe('device sync', () => {
       groupMessages: new Map(),
     })
 
-    expect(packets.flatMap((packet) => packet.messages).map(({ id }) => id)).toEqual(['102'])
+    expect(packets.flatMap((packet) => packet.messages).map(({ id }) => id)).toEqual(['101', '102'])
     expect(packets[0].rosterAt).toBe(101)
+  })
+
+  it('does not send or apply expired messages', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(200_000)
+    try {
+      const chat: ChatSession = {
+        id: peerOwner,
+        recipientPubkey: peerOwner,
+        mode: 'manager',
+        messages: [
+          { id: 'expired', content: 'old', timestamp: 100_000, isMine: true, expiresAt: 200 },
+          { id: 'live', content: 'new', timestamp: 100_000, isMine: true, expiresAt: 201 },
+        ],
+      }
+      const sent = buildDeviceSyncSnapshots({
+        requestRosterAt: 100,
+        localRosterAt: 100,
+        ownerPubkey: owner,
+        appKeys: [],
+        chats: [chat],
+        groups: [],
+        groupMessages: new Map(),
+      }).flatMap((packet) => packet.messages)
+      expect(sent.map(({ id }) => id)).toEqual(['live'])
+
+      const additions = selectDeviceSyncAdditions(snapshot([
+        { ...message('expired', 100), expiresAt: 200 },
+        { ...message('live', 100), expiresAt: 201 },
+      ]), {
+        rosterAt: 100,
+        chatIds: new Set(),
+        groupVersions: new Map(),
+        messageIds: new Set(),
+      })
+      expect(additions.messages.map(({ id }) => id)).toEqual(['live'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('deduplicates received IDs and remains idempotent after merge', () => {
@@ -218,6 +275,7 @@ describe('device sync', () => {
     const first = selectDeviceSyncAdditions(packet, empty)
     expect(first.messages.map(({ chatId, id }) => [chatId, id])).toEqual([
       ['peer', 'one'],
+      ['peer', 'old'],
     ])
     expect(selectDeviceSyncAdditions(packet, {
       ...empty,
@@ -245,15 +303,15 @@ describe('device sync', () => {
       groups: [validGroup],
       messages: [],
     }), owner)).toMatchObject({ type: 'snapshot', appKeys: [] })
-    expect(parseDeviceSyncPacket(encode({
+    expect(() => parseDeviceSyncPacket(encode({
       v: 1,
       type: 'snapshot',
       rosterAt: 100,
       chats: [],
       groups: [{ ...validGroup, members: [device], admins: [device] }],
       messages: [],
-    }), owner)).toBeNull()
-    expect(parseDeviceSyncPacket(encode({
+    }), owner)).toThrow()
+    expect(() => parseDeviceSyncPacket(encode({
       v: 1,
       type: 'snapshot',
       rosterAt: 100,
@@ -261,8 +319,8 @@ describe('device sync', () => {
       chats: [],
       groups: [],
       messages: [],
-    }), owner)).toBeNull()
-    expect(parseDeviceSyncPacket(encode({
+    }), owner)).toThrow()
+    expect(() => parseDeviceSyncPacket(encode({
       v: 1,
       type: 'snapshot',
       rosterAt: 100,
@@ -270,8 +328,8 @@ describe('device sync', () => {
       chats: [],
       groups: [],
       messages: [],
-    }), owner)).toBeNull()
-    expect(parseDeviceSyncPacket(encode({
+    }), owner)).toThrow()
+    expect(() => parseDeviceSyncPacket(encode({
       v: 1,
       type: 'snapshot',
       rosterAt: 100,
@@ -285,7 +343,7 @@ describe('device sync', () => {
       chats: [],
       groups: [],
       messages: [],
-    }), owner)).toBeNull()
+    }), owner)).toThrow()
   })
 
   it('syncs AppKeys only for the owner, direct peers, and group members', () => {
@@ -422,10 +480,142 @@ describe('device sync', () => {
     expect(packets.length).toBeGreaterThan(1)
     for (const packet of packets) {
       expect(packet).toMatchObject({ v: 1, type: 'snapshot', rosterAt: 100 })
-      expect(new TextEncoder().encode(JSON.stringify(packet)).byteLength).toBeLessThanOrEqual(1024)
+      expect(encodeDeviceSyncPacket(packet).byteLength).toBeLessThanOrEqual(1024)
     }
     expect(packets.flatMap((packet) => packet.messages)).toHaveLength(12)
     expect(packets.flatMap((packet) => packet.appKeys)).toEqual([appKeys(owner, 100)])
+  })
+
+  it('fails an oversized snapshot item instead of reporting a truncated success', () => {
+    const chat: ChatSession = {
+      id: 'peer',
+      recipientPubkey: 'peer',
+      mode: 'manager',
+      messages: [{
+        id: 'oversized',
+        content: 'x'.repeat(2_048),
+        timestamp: 101_000,
+        isMine: true,
+      }],
+    }
+    expect(() => buildDeviceSyncSnapshots({
+      requestRosterAt: 100,
+      localRosterAt: 100,
+      ownerPubkey: owner,
+      appKeys: [],
+      chats: [chat],
+      groups: [] as Group[],
+      groupMessages: new Map(),
+    }, 512)).toThrow(/snapshot messages entry exceeds the packet limit/)
+  })
+
+  it('paginates metadata to 32 packets and messages to 32 cursor-sorted records', () => {
+    const chats = Array.from({ length: 96 }, (_, index) => {
+      const id = index.toString(16).padStart(64, '0')
+      return {
+        id,
+        recipientPubkey: id,
+        mode: 'manager' as const,
+        messages: index === 0
+          ? Array.from({ length: 70 }, (_, messageIndex) => ({
+              id: `message-${messageIndex.toString().padStart(3, '0')}`,
+              content: `body-${messageIndex}`,
+              timestamp: (100 + messageIndex) * 1000,
+              isMine: true,
+            }))
+          : [],
+      }
+    })
+    const source = {
+      requestRosterAt: 100,
+      localRosterAt: 100,
+      ownerPubkey: owner,
+      appKeys: [],
+      chats,
+      groups: [] as Group[],
+      groupMessages: new Map<string, never[]>(),
+    }
+
+    const metadata = buildDeviceSyncReplyPackets(source, undefined, 256)
+    expect(metadata.filter((packet) => packet.type === 'snapshot')).toHaveLength(
+      DEVICE_SYNC_PAGE_PACKETS,
+    )
+    expect(metadata.at(-1)).toEqual({
+      v: 1,
+      type: 'pageEnd',
+      rosterAt: 100,
+      next: { kind: 'metadata', offset: DEVICE_SYNC_PAGE_PACKETS },
+    })
+
+    const firstMessages = buildDeviceSyncReplyPackets(
+      source,
+      { kind: 'messages', after: null },
+      DEVICE_SYNC_MAX_PACKET_BYTES,
+    )
+    const firstPage = firstMessages
+      .filter((packet): packet is DeviceSyncSnapshot => packet.type === 'snapshot')
+      .flatMap((packet) => packet.messages)
+    expect(firstPage).toHaveLength(DEVICE_SYNC_PAGE_MESSAGES)
+    expect(firstPage[0].id).toBe('message-000')
+    expect(firstPage.at(-1)?.id).toBe('message-031')
+    expect(firstMessages.at(-1)).toEqual({
+      v: 1,
+      type: 'pageEnd',
+      rosterAt: 100,
+      next: {
+        kind: 'messages',
+        after: { createdAt: 131, chatId: '0'.repeat(64), id: 'message-031' },
+      },
+    })
+  })
+
+  it('continues PageEnd and ResyncRequired control packets without applying a snapshot', async () => {
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      for (let tick = 0; tick < 10 && fips.nodes.length === 0; tick += 1) await Promise.resolve()
+      const transport = tcp.instances.at(-1)!
+      const source = `02${device}`
+      transport.sendFirst.mockClear()
+
+      await transport.onRecord(source, encodeDeviceSyncPacket({
+        v: 1,
+        type: 'pageEnd',
+        rosterAt: 100,
+        next: { kind: 'messages', after: null },
+      }))
+      expect(transport.sendFirst).toHaveBeenLastCalledWith(source, encodeDeviceSyncPacket({
+        v: 1,
+        type: 'request',
+        rosterAt: 100,
+        page: { kind: 'messages', after: null },
+      }))
+
+      await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'resyncRequired' }))
+      expect(transport.sendFirst).toHaveBeenLastCalledWith(source, encodeDeviceSyncPacket({
+        v: 1,
+        type: 'request',
+        rosterAt: 100,
+      }))
+
+      transport.send.mockRejectedValueOnce(new Error('queue full'))
+      await expect(transport.onRecord(source, encodeDeviceSyncPacket({
+        v: 1,
+        type: 'request',
+        rosterAt: 100,
+      }))).rejects.toThrow('queue full')
+      expect(transport.sendFirst).toHaveBeenLastCalledWith(
+        source,
+        encodeDeviceSyncPacket({ v: 1, type: 'resyncRequired' }),
+      )
+
+      await expect(transport.onRecord(
+        source,
+        new TextEncoder().encode('{"v":1,"type":"snapshot"'),
+      )).rejects.toThrow(/valid UTF-8 JSON/)
+      expect(ndr.applyTrustedAppKeysSnapshot).not.toHaveBeenCalled()
+    } finally {
+      await stopDeviceSync()
+    }
   })
 
   it('pushes new chat metadata without replaying history', async () => {

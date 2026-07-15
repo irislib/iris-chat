@@ -16,6 +16,7 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "pnpm verify:dependency-lock && NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run",
+    "test:device-sync-interop": "env REQUIRE_DEVICE_SYNC_RUST_INTEROP=1 NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run src/lib/deviceSyncRustInterop.test.ts",
     "verify:dependency-lock": "node scripts/verify-dependency-lock.mjs",
     "test:watch": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs",
     "test:e2e": "env -u NO_COLOR playwright test",
@@ -46,9 +47,9 @@
     "ws": "^8.19.0"
   },
   "dependencies": {
-    "@fips/core": "github:mmalmi/fips-ts#46a6a0c&path:/packages/core",
-    "@fips/tcp": "github:mmalmi/fips-tcp#353cd0b9b723edd07b6cdc82c7e826d43b9a0d6e&path:/ts",
-    "@fips/transport-webrtc": "github:mmalmi/fips-ts#46a6a0c&path:/packages/transport-webrtc",
+    "@fips/core": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz",
+    "@fips/tcp": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
+    "@fips/transport-webrtc": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz",
     "@hashtree/core": "0.1.7",
     "@iris/nostr-pubsub": "github:mmalmi/iris-kit#3c78a5adef9af1053f6563a1b25bee4510dccc53&path:/packages/nostr-pubsub",
     "@noble/hashes": "^2.0.1",
@@ -60,7 +61,7 @@
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "github:irislib/nostr-double-ratchet#83f6951&path:/ts",
-    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz",
     "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
   }

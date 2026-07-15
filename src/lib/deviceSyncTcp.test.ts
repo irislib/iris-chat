@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { FipsDatagramEndpoint, FipsServiceContext } from '@fips/tcp'
-import { DeviceSyncTcp, RecordReader } from './deviceSyncTcp'
+import { DeviceSyncTcp, RecordReader, frameRecord } from './deviceSyncTcp'
 
 type Handler = (context: FipsServiceContext) => Promise<void> | void
 
@@ -51,6 +51,22 @@ describe('DeviceSyncTcp', () => {
     expect(() => reader.push(Uint8Array.from([0, 0, 0, 9]))).toThrow(/exceeds limit/)
   })
 
+  it('uses u32-BE framing and rejects truncated streams', () => {
+    expect(frameRecord(Uint8Array.of(1, 2, 3))).toEqual(
+      Uint8Array.of(0, 0, 0, 3, 1, 2, 3),
+    )
+    const reader = new RecordReader(64 * 1024)
+    expect(reader.push(Uint8Array.of(0, 0, 0, 3, 1))).toEqual([])
+    expect(() => reader.finish()).toThrow(/truncated/)
+  })
+
+  it('accepts an exact 64 KiB record and rejects a larger frame before delivery', () => {
+    const reader = new RecordReader(64 * 1024)
+    const exact = new Uint8Array(64 * 1024)
+    expect(reader.push(frameRecord(exact))).toEqual([exact])
+    expect(() => reader.push(Uint8Array.of(0, 1, 0, 1))).toThrow(/exceeds limit/)
+  })
+
   it('delivers ordered records after loss and a stream reconnect', async () => {
     vi.useFakeTimers()
     const aEndpoint = new MemoryFipsEndpoint('a'.repeat(64))
@@ -80,15 +96,6 @@ describe('DeviceSyncTcp', () => {
       isnSeed: 2n,
     })
     try {
-      await bEndpoint.sendDatagram({
-        dst: aEndpoint.id,
-        srcPort: 7369,
-        dstPort: 7369,
-        payload: new TextEncoder().encode('{"type":"request","v":1}'),
-      })
-      await vi.advanceTimersByTimeAsync(0)
-      expect(errors).toHaveLength(1)
-      errors.length = 0
       a.setPeer(bEndpoint.id, true)
       b.setPeer(aEndpoint.id, true)
       await vi.advanceTimersByTimeAsync(100)
@@ -214,6 +221,54 @@ describe('DeviceSyncTcp', () => {
       await vi.advanceTimersByTimeAsync(2_000)
       await send
       expect(received).toEqual(['long-enough-to-be-partial'])
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()])
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps priority control behind a partially written record', async () => {
+    vi.useFakeTimers()
+    const aEndpoint = new MemoryFipsEndpoint('a'.repeat(64))
+    const bEndpoint = new MemoryFipsEndpoint('b'.repeat(64))
+    aEndpoint.remote = bEndpoint
+    bEndpoint.remote = aEndpoint
+    const received: string[] = []
+    const errors: Error[] = []
+    const tcpConfig = { sendBuffer: 8, initialRtoMs: 25, minRtoMs: 25, maxRtoMs: 25 }
+    const a = new DeviceSyncTcp({
+      endpoint: aEndpoint,
+      localPeer: aEndpoint.id,
+      port: 7369,
+      maxRecordBytes: 1024,
+      onRecord: () => undefined,
+      onError: (error) => errors.push(error),
+      tcpConfig,
+    })
+    const b = new DeviceSyncTcp({
+      endpoint: bEndpoint,
+      localPeer: bEndpoint.id,
+      port: 7369,
+      maxRecordBytes: 1024,
+      onRecord: (_peer, bytes) => {
+        received.push(new TextDecoder().decode(bytes))
+      },
+      onError: (error) => errors.push(error),
+      tcpConfig,
+    })
+    try {
+      a.setPeer(bEndpoint.id, true)
+      b.setPeer(aEndpoint.id, true)
+      await vi.advanceTimersByTimeAsync(100)
+      aEndpoint.dropAll = true
+      const original = a.send(bEndpoint.id, new TextEncoder().encode('long-enough-to-be-partial'))
+      await vi.advanceTimersByTimeAsync(50)
+      const control = a.sendFirst(bEndpoint.id, new TextEncoder().encode('control'))
+      aEndpoint.dropAll = false
+      await vi.advanceTimersByTimeAsync(2_000)
+      await Promise.all([original, control])
+      expect(received).toEqual(['long-enough-to-be-partial', 'control'])
+      expect(errors).toEqual([])
     } finally {
       await Promise.all([a.dispose(), b.dispose()])
       vi.useRealTimers()

@@ -1,5 +1,5 @@
 import {
-  Stack,
+  FipsTcpEndpoint,
   State,
   type Config,
   type ConnectionId,
@@ -33,14 +33,13 @@ export interface DeviceSyncTcpOptions {
 
 /** Reliable, framed linked-device records over one TCP/FIPS stream per peer. */
 export class DeviceSyncTcp {
-  private readonly stack: Stack
+  private readonly tcp: FipsTcpEndpoint
   private readonly peers = new Set<string>()
   private readonly connections = new Map<string, ConnectionId>()
   private readonly established = new Set<ConnectionId>()
   private readonly readers = new Map<ConnectionId, RecordReader>()
   private readonly pending = new Map<string, PendingWrite[]>()
   private readonly pendingBytesByPeer = new Map<string, number>()
-  private readonly unregister: () => void
   private readonly timer: ReturnType<typeof setInterval>
   private operation: Promise<void> = Promise.resolve()
   private deliveries: Promise<void> = Promise.resolve()
@@ -48,21 +47,14 @@ export class DeviceSyncTcp {
   private stopped = false
 
   constructor(private readonly options: DeviceSyncTcpOptions) {
-    this.stack = new Stack({
+    this.tcp = new FipsTcpEndpoint(options.endpoint, options.port, {
       mss: 1024,
       receiveBuffer: 0xffff,
       sendBuffer: 1024 * 1024,
       maxConnections: 64,
       maxReassemblySegments: 128,
       ...options.tcpConfig,
-    }, options.isnSeed)
-    this.stack.listen(options.port)
-    this.unregister = options.endpoint.registerService(options.port, (context) => {
-      void this.enqueue(async () => {
-        this.stack.input(context.src, context.payload, Date.now())
-        await this.progress()
-      }).catch((error) => this.report(error))
-    })
+    }, options.isnSeed ?? 1n)
     this.timer = setInterval(() => {
       void this.enqueue(() => this.tick()).catch((error) => this.report(error))
     }, POLL_MS)
@@ -76,18 +68,14 @@ export class DeviceSyncTcp {
         const id = this.connections.get(peer)
         if (id !== undefined) {
           try {
-            this.stack.close(id, Date.now())
+            await this.tcp.close(id)
           } catch {
             // A half-open stream can already have disappeared from the stack.
           }
-          this.connections.delete(peer)
-          this.established.delete(id)
-          this.readers.delete(id)
-          this.rewindPending(peer)
+          this.removeConnection(peer, id)
         }
       }
       await this.ensureConnections()
-      await this.flush()
     }).catch((error) => this.report(error))
   }
 
@@ -106,14 +94,14 @@ export class DeviceSyncTcp {
     }
     return new Promise<void>((resolve, reject) => {
       const writes = this.pending.get(peer) ?? []
-      const bytes = frame(record)
+      const bytes = frameRecord(record)
       if (first) this.makeRoomForPriority(peer, writes, bytes.byteLength)
       if (this.exceedsPendingLimit(peer, writes.length, bytes.byteLength)) {
         reject(new Error('device sync TCP pending queue is full'))
         return
       }
       const write = { bytes, offset: 0, resolve, reject }
-      if (first) writes.unshift(write)
+      if (first) writes.splice(writes[0]?.offset ? 1 : 0, 0, write)
       else writes.push(write)
       this.pending.set(peer, writes)
       this.addPendingBytes(peer, bytes.byteLength)
@@ -128,7 +116,8 @@ export class DeviceSyncTcp {
     this.stopped = true
     clearInterval(this.timer)
     await this.operation
-    this.unregister()
+    for (const [peer, id] of this.connections) this.removeConnection(peer, id)
+    await this.tcp.dispose()
     await this.deliveries
     const error = new Error('device sync TCP stopped before queued data was sent')
     for (const writes of this.pending.values()) {
@@ -140,14 +129,10 @@ export class DeviceSyncTcp {
   }
 
   private async tick(): Promise<void> {
-    const now = Date.now()
-    this.stack.poll(now)
+    await this.tcp.poll()
     for (const [peer, id] of [...this.connections]) {
-      if (this.stack.state(id) !== undefined) continue
-      this.connections.delete(peer)
-      this.established.delete(id)
-      this.readers.delete(id)
-      this.rewindPending(peer)
+      if (await this.tcp.state(id) !== undefined) continue
+      this.removeConnection(peer, id)
     }
     await this.ensureConnections()
     await this.progress()
@@ -156,17 +141,16 @@ export class DeviceSyncTcp {
   private async ensureConnections(): Promise<void> {
     for (const peer of this.peers) {
       if (this.connections.has(peer) || !shouldInitiate(this.options.localPeer, peer)) continue
-      const id = this.stack.connect(peer, this.options.port, Date.now())
+      const id = await this.tcp.connect(peer)
       this.connections.set(peer, id)
       this.readers.set(id, new RecordReader(this.options.maxRecordBytes))
     }
-    await this.flush()
   }
 
   private async progress(): Promise<void> {
-    this.acceptConnections()
+    await this.acceptConnections()
     for (const [peer, id] of [...this.connections]) {
-      if (this.stack.state(id) !== State.Established) continue
+      if (await this.tcp.state(id) !== State.Established) continue
       if (!this.established.has(id)) {
         this.established.add(id)
         try {
@@ -175,38 +159,43 @@ export class DeviceSyncTcp {
           this.report(error)
         }
       }
-      this.drainWrites(peer, id)
+      await this.drainWrites(peer, id)
       await this.drainReads(peer, id)
+      if (await this.tcp.isReadClosed(id)) {
+        try {
+          await this.tcp.close(id)
+        } catch {
+          // The peer may have completed shutdown while its final bytes were read.
+        }
+        this.removeConnection(peer, id)
+      }
     }
-    await this.flush()
   }
 
-  private acceptConnections(): void {
+  private async acceptConnections(): Promise<void> {
     for (;;) {
-      const id = this.stack.accept(this.options.port)
+      const id = await this.tcp.accept()
       if (id === undefined) return
-      const peer = this.stack.peer(id)
+      const peer = await this.tcp.peer(id)
       if (peer === undefined || !this.peers.has(peer)) {
-        this.stack.close(id, Date.now())
+        await this.tcp.close(id)
         continue
       }
       const previous = this.connections.get(peer)
       if (previous !== undefined && previous !== id) {
-        this.stack.close(previous, Date.now())
-        this.established.delete(previous)
-        this.readers.delete(previous)
-        this.rewindPending(peer)
+        await this.tcp.close(previous)
+        this.removeConnection(peer, previous)
       }
       this.connections.set(peer, id)
       this.readers.set(id, new RecordReader(this.options.maxRecordBytes))
     }
   }
 
-  private drainWrites(peer: string, id: ConnectionId): void {
+  private async drainWrites(peer: string, id: ConnectionId): Promise<void> {
     const writes = this.pending.get(peer)
     while (writes?.[0]) {
       const write = writes[0]
-      const accepted = this.stack.write(id, write.bytes.subarray(write.offset), Date.now())
+      const accepted = await this.tcp.write(id, write.bytes.subarray(write.offset))
       if (accepted === 0) break
       write.offset += accepted
       if (write.offset < write.bytes.byteLength) break
@@ -221,34 +210,21 @@ export class DeviceSyncTcp {
     const reader = this.readers.get(id)
     if (!reader) return
     for (;;) {
-      const bytes = this.stack.read(id, 0xffff, Date.now())
+      const bytes = await this.tcp.read(id, 0xffff)
       if (bytes.byteLength === 0) return
       let records: Uint8Array[]
       try {
         records = reader.push(bytes)
       } catch (error) {
         try {
-          this.stack.close(id, Date.now())
+          await this.tcp.close(id)
         } catch {
           // The malformed stream may already have been reset.
         }
-        this.connections.delete(peer)
-        this.established.delete(id)
-        this.readers.delete(id)
+        this.removeConnection(peer, id, false)
         throw error
       }
       for (const record of records) this.deliver(peer, record)
-    }
-  }
-
-  private async flush(): Promise<void> {
-    for (const outbound of this.stack.drainOutbound()) {
-      await this.options.endpoint.sendDatagram({
-        dst: outbound.peer,
-        srcPort: this.options.port,
-        dstPort: this.options.port,
-        payload: outbound.bytes,
-      })
     }
   }
 
@@ -265,6 +241,21 @@ export class DeviceSyncTcp {
   private deliver(peer: string, record: Uint8Array): void {
     const delivery = this.deliveries.then(() => this.options.onRecord(peer, record))
     this.deliveries = delivery.catch((error) => this.report(error))
+  }
+
+  private removeConnection(peer: string, id: ConnectionId, checkReader = true): void {
+    if (this.connections.get(peer) === id) this.connections.delete(peer)
+    this.established.delete(id)
+    const reader = this.readers.get(id)
+    this.readers.delete(id)
+    if (checkReader && reader) {
+      try {
+        reader.finish()
+      } catch (error) {
+        this.report(error)
+      }
+    }
+    this.rewindPending(peer)
   }
 
   private rewindPending(peer: string): void {
@@ -323,9 +314,15 @@ export class RecordReader {
     this.bytes = joined.slice(offset)
     return records
   }
+
+  finish(): void {
+    if (this.bytes.byteLength !== 0) {
+      throw new Error('device sync TCP stream ended with a truncated record')
+    }
+  }
 }
 
-function frame(record: Uint8Array): Uint8Array {
+export function frameRecord(record: Uint8Array): Uint8Array {
   const bytes = new Uint8Array(FRAME_HEADER_BYTES + record.byteLength)
   new DataView(bytes.buffer).setUint32(0, record.byteLength)
   bytes.set(record, FRAME_HEADER_BYTES)

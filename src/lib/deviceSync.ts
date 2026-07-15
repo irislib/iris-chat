@@ -30,68 +30,49 @@ import {
   type StoredGroup,
   type StoredMessage,
 } from './storage'
+import {
+  DEVICE_SYNC_MAX_PACKET_BYTES,
+  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_PAGE_PACKETS,
+  DEVICE_SYNC_PORT,
+  DeviceSyncProtocolError,
+  deviceSyncPacketByteLength,
+  encodeDeviceSyncPacket,
+  parseDeviceSyncPacket,
+  type DeviceSyncAppKeys,
+  type DeviceSyncCursor,
+  type DeviceSyncGroup,
+  type DeviceSyncMessage,
+  type DeviceSyncPacket,
+  type DeviceSyncPage,
+  type DeviceSyncRequest,
+  type DeviceSyncSnapshot,
+} from './deviceSyncProtocol'
 
-export const DEVICE_SYNC_PORT = 7369
-export const DEVICE_SYNC_MAX_PACKET_BYTES = 48 * 1024
+export {
+  DEVICE_SYNC_MAX_PACKET_BYTES,
+  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_PAGE_PACKETS,
+  DEVICE_SYNC_PORT,
+  parseDeviceSyncPacket,
+} from './deviceSyncProtocol'
+export type {
+  DeviceSyncAppKeys,
+  DeviceSyncCursor,
+  DeviceSyncGroup,
+  DeviceSyncMessage,
+  DeviceSyncPacket,
+  DeviceSyncPage,
+  DeviceSyncRequest,
+  DeviceSyncSnapshot,
+} from './deviceSyncProtocol'
+
 const DEVICE_SYNC_SCOPE = 'iris-chat-device-sync-v1'
 const STUN_SERVERS = [
   'stun:stun.l.google.com:19302',
   'stun:stun.cloudflare.com:3478',
   'stun:global.stun.twilio.com:3478',
 ]
-
-export interface DeviceSyncChat {
-  id: string
-  updatedAt: number
-}
-
-export interface DeviceSyncAppKeys {
-  ownerPubkey: string
-  createdAt: number
-  devices: Array<{ identityPubkey: string; createdAt: number }>
-}
-
-export interface DeviceSyncGroup {
-  id: string
-  name: string
-  description?: string
-  picture?: string
-  createdBy: string
-  members: string[]
-  admins: string[]
-  revision: number
-  createdAt: number
-  updatedAt: number
-  accepted?: boolean
-  protocol?: 'sender_key_v1' | 'pairwise_fanout_v1'
-}
-
-export interface DeviceSyncMessage {
-  chatId: string
-  id: string
-  body: string
-  author: string
-  createdAt: number
-  expiresAt?: number
-}
-
-export interface DeviceSyncRequest {
-  v: 1
-  type: 'request'
-  rosterAt: number
-}
-
-export interface DeviceSyncSnapshot {
-  v: 1
-  type: 'snapshot'
-  rosterAt: number
-  appKeys: DeviceSyncAppKeys[]
-  chats: DeviceSyncChat[]
-  groups: DeviceSyncGroup[]
-  messages: DeviceSyncMessage[]
-}
-
-export type DeviceSyncPacket = DeviceSyncRequest | DeviceSyncSnapshot
 
 export interface DeviceSyncSnapshotSource {
   requestRosterAt: number
@@ -131,9 +112,6 @@ function applyStoreUpdate(update: () => void): void {
   }
 }
 
-const encode = (packet: DeviceSyncPacket): Uint8Array =>
-  new TextEncoder().encode(JSON.stringify(packet))
-
 const seconds = (timestampMs: number): number => Math.floor(timestampMs / 1000)
 
 function normalizedXOnly(source: string): string {
@@ -143,11 +121,6 @@ function normalizedXOnly(source: string): string {
 
 const isPubkey = (value: unknown): boolean =>
   typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)
-const isId = (value: unknown): boolean =>
-  typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
-const isTime = (value: unknown): value is number =>
-  Number.isSafeInteger(value) && (value as number) >= 0
-
 export function isAuthorizedDeviceSyncSource(
   source: string,
   state: DeviceState,
@@ -186,17 +159,20 @@ function chunkSnapshot(
     value: DeviceSyncSnapshot[K][number],
   ) => {
     const candidate = { ...packet, [key]: [...packet[key], value] } as DeviceSyncSnapshot
-    if (encode(candidate).byteLength <= maxBytes) {
+    if (deviceSyncPacketByteLength(candidate) <= maxBytes) {
       packet = candidate
       return
     }
     if (hasSnapshotData(packet)) packets.push(packet)
     const single = { ...emptySnapshot(rosterAt), [key]: [value] } as DeviceSyncSnapshot
-    packet = encode(single).byteLength <= maxBytes ? single : emptySnapshot(rosterAt)
+    if (deviceSyncPacketByteLength(single) > maxBytes) {
+      throw new DeviceSyncProtocolError(`snapshot ${key} entry exceeds the packet limit`)
+    }
+    packet = single
   }
 
-  for (const appKeys of items.appKeys) append('appKeys', appKeys)
   for (const chat of items.chats) append('chats', chat)
+  for (const appKeys of items.appKeys) append('appKeys', appKeys)
   for (const group of items.groups) append('groups', group)
   for (const message of items.messages) append('messages', message)
   if (hasSnapshotData(packet) || packets.length === 0) packets.push(packet)
@@ -277,13 +253,25 @@ export function buildDeviceSyncSnapshots(
       protocol: group.secret ? 'sender_key_v1' as const : 'pairwise_fanout_v1' as const,
     }
   })
-  const wireMessages: DeviceSyncMessage[] = []
+  const wireMessages = includeMessages ? collectDeviceSyncMessages(source, rosterAt) : []
 
-  for (const chat of includeMessages ? source.chats : []) {
+  return chunkSnapshot(
+    rosterAt,
+    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages },
+    maxBytes,
+  )
+}
+
+function collectDeviceSyncMessages(
+  source: DeviceSyncSnapshotSource,
+  rosterAt: number,
+): DeviceSyncMessage[] {
+  const messages: DeviceSyncMessage[] = []
+  for (const chat of source.chats) {
     for (const message of chat.messages) {
       const createdAt = seconds(message.timestamp)
-      if (createdAt <= rosterAt) continue
-      wireMessages.push({
+      if (createdAt < rosterAt || expired(message)) continue
+      messages.push({
         chatId: chat.id,
         id: message.id,
         body: message.content,
@@ -293,13 +281,13 @@ export function buildDeviceSyncSnapshots(
       })
     }
   }
-  for (const group of includeMessages ? source.groups : []) {
+  for (const group of source.groups) {
     for (const message of source.groupMessages.get(group.id) || []) {
       const createdAt = seconds(message.timestamp)
-      if (createdAt <= rosterAt) continue
+      if (createdAt < rosterAt || expired(message)) continue
       const author = message.isMine ? source.ownerPubkey : message.senderPubkey
       if (!author || !isPubkey(author)) continue
-      wireMessages.push({
+      messages.push({
         chatId: `group:${group.id}`,
         id: message.id,
         body: message.content,
@@ -310,11 +298,69 @@ export function buildDeviceSyncSnapshots(
     }
   }
 
-  return chunkSnapshot(
+  return messages.sort(compareDeviceSyncMessages)
+}
+
+function compareDeviceSyncMessages(
+  left: Pick<DeviceSyncMessage, 'createdAt' | 'chatId' | 'id'>,
+  right: Pick<DeviceSyncMessage, 'createdAt' | 'chatId' | 'id'>,
+): number {
+  return left.createdAt - right.createdAt ||
+    compareString(left.chatId, right.chatId) || compareString(left.id, right.id)
+}
+
+function messageAfterCursor(message: DeviceSyncMessage, cursor: DeviceSyncCursor): boolean {
+  return compareDeviceSyncMessages(message, cursor) > 0
+}
+
+function compareString(left: string, right: string): number {
+  return left < right ? -1 : Number(left > right)
+}
+
+function expired(message: { expiresAt?: number }): boolean {
+  return message.expiresAt !== undefined && message.expiresAt <= Math.floor(Date.now() / 1000)
+}
+
+export function buildDeviceSyncReplyPackets(
+  source: DeviceSyncSnapshotSource,
+  page?: DeviceSyncPage,
+  maxBytes = DEVICE_SYNC_MAX_PACKET_BYTES,
+): DeviceSyncPacket[] {
+  const rosterAt = Math.max(source.requestRosterAt, source.localRosterAt)
+  if (!page || page.kind === 'metadata') {
+    const metadata = buildDeviceSyncSnapshots(source, maxBytes, false)
+    const offset = page?.offset ?? 0
+    const end = Math.min(offset + DEVICE_SYNC_PAGE_PACKETS, metadata.length)
+    const next: DeviceSyncPage = end < metadata.length
+      ? { kind: 'metadata', offset: end }
+      : { kind: 'messages', after: null }
+    return [
+      ...metadata.slice(offset, end),
+      { v: 1, type: 'pageEnd', rosterAt, next },
+    ]
+  }
+
+  const remaining = collectDeviceSyncMessages(source, rosterAt)
+    .filter((message) => !page.after || messageAfterCursor(message, page.after))
+  const messages = remaining.slice(0, DEVICE_SYNC_PAGE_MESSAGES)
+  const packets: DeviceSyncPacket[] = chunkSnapshot(
     rosterAt,
-    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages },
+    { appKeys: [], chats: [], groups: [], messages },
     maxBytes,
   )
+  if (remaining.length > messages.length) {
+    const last = messages.at(-1)!
+    packets.push({
+      v: 1,
+      type: 'pageEnd',
+      rosterAt,
+      next: {
+        kind: 'messages',
+        after: { createdAt: last.createdAt, chatId: last.chatId, id: last.id },
+      },
+    })
+  }
+  return packets
 }
 
 export function selectDeviceSyncAdditions(
@@ -342,7 +388,8 @@ export function selectDeviceSyncAdditions(
         (group.revision === local.revision && group.updatedAt > local.updatedAt)
     }),
     messages: packet.messages.filter(
-      (message) => message.createdAt > cutoff &&
+      (message) => message.createdAt >= cutoff &&
+        !expired(message) &&
         !seenMessages.has(message.id) &&
         !!seenMessages.add(message.id),
     ),
@@ -489,71 +536,6 @@ export async function applyDeviceSyncSnapshot(
   }
 }
 
-export function parseDeviceSyncPacket(
-  payload: Uint8Array,
-  ownerPubkey: string,
-): DeviceSyncPacket | null {
-  try {
-    if (payload.byteLength > DEVICE_SYNC_MAX_PACKET_BYTES) return null
-    const value = JSON.parse(new TextDecoder().decode(payload)) as Partial<DeviceSyncPacket>
-    if (value.v !== 1 || !isTime(value.rosterAt)) return null
-    if (value.type === 'request') return value as DeviceSyncRequest
-    const appKeys = value.type === 'snapshot' && value.appKeys !== undefined
-      ? value.appKeys
-      : []
-    if (
-      value.type === 'snapshot' &&
-      Array.isArray(appKeys) &&
-      Array.isArray(value.chats) &&
-      Array.isArray(value.groups) &&
-      Array.isArray(value.messages) &&
-      appKeys.every((snapshot) =>
-        isPubkey(snapshot?.ownerPubkey) &&
-        isTime(snapshot?.createdAt) &&
-        Array.isArray(snapshot?.devices) &&
-        snapshot.devices.every((device) =>
-          isPubkey(device?.identityPubkey) && isTime(device?.createdAt)
-        ) &&
-        new Set(snapshot.devices.map((device) => device.identityPubkey.toLowerCase())).size ===
-          snapshot.devices.length
-      ) &&
-      value.chats.every((chat) => isPubkey(chat?.id) && isTime(chat?.updatedAt)) &&
-      value.groups.every((group) =>
-        isId(group?.id) &&
-        typeof group.name === 'string' && group.name.trim().length > 0 && group.name.length <= 256 &&
-        isPubkey(group.createdBy) &&
-        Array.isArray(group.members) &&
-        group.members.every(isPubkey) &&
-        group.members.some((member) => member.toLowerCase() === ownerPubkey.toLowerCase()) &&
-        Array.isArray(group.admins) &&
-        group.admins.length > 0 &&
-        group.admins.every((admin) => isPubkey(admin) &&
-          group.members.some((member) => member.toLowerCase() === admin.toLowerCase())) &&
-        isTime(group.revision) &&
-        isTime(group.createdAt) &&
-        isTime(group.updatedAt) &&
-        (group.description === undefined || typeof group.description === 'string') &&
-        (group.picture === undefined || typeof group.picture === 'string') &&
-        (group.accepted === undefined || typeof group.accepted === 'boolean') &&
-        (group.protocol === undefined ||
-          group.protocol === 'sender_key_v1' || group.protocol === 'pairwise_fanout_v1')
-      ) &&
-      value.messages.every((message) =>
-        isId(message?.id) &&
-        (isPubkey(message.chatId) ||
-          (message.chatId?.startsWith('group:') && isId(message.chatId.slice(6)))) &&
-        typeof message.body === 'string' &&
-        isPubkey(message.author) &&
-        isTime(message.createdAt) &&
-        (message.expiresAt === undefined || isTime(message.expiresAt))
-      )
-    ) return { ...value, appKeys } as DeviceSyncSnapshot
-  } catch {
-    // Ignore malformed sync packets.
-  }
-  return null
-}
-
 function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyncSnapshotSource {
   const state = get(devices)
   return {
@@ -574,20 +556,30 @@ function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyn
   }
 }
 
+async function sendPackets(
+  tcp: DeviceSyncTcp,
+  peer: string,
+  packets: DeviceSyncPacket[] | (() => DeviceSyncPacket[]),
+): Promise<void> {
+  try {
+    const reply = typeof packets === 'function' ? packets() : packets
+    for (const packet of reply) await tcp.send(peer, encodeDeviceSyncPacket(packet))
+  } catch (error) {
+    await tcp.sendFirst(peer, encodeDeviceSyncPacket({ v: 1, type: 'resyncRequired' }))
+    throw error
+  }
+}
+
 async function pushCurrentSnapshot(): Promise<void> {
   const tcp = activeTcp
   if (!tcp || !activeOwnerPubkey) return
   const state = get(devices)
-  const snapshots = buildDeviceSyncSnapshots(
+  const packets = buildDeviceSyncReplyPackets(
     snapshotSource(state.lastEventTimestamp, activeOwnerPubkey),
-    DEVICE_SYNC_MAX_PACKET_BYTES,
-    false,
   )
   await Promise.all(Array.from(activePeers).map(async (peer) => {
     if (!isAuthorizedDeviceSyncSource(peer, state)) return
-    for (const snapshot of snapshots) {
-      await tcp.send(peer, encode(snapshot))
-    }
+    await sendPackets(tcp, peer, packets)
   }))
 }
 
@@ -610,12 +602,23 @@ async function handlePacket(
 ): Promise<void> {
   if (!isAuthorizedDeviceSyncSource(source, get(devices))) return
   const packet = parseDeviceSyncPacket(payload, ownerPubkey)
-  if (!packet) return
 
   if (packet.type === 'request') {
-    for (const snapshot of buildDeviceSyncSnapshots(snapshotSource(packet.rosterAt, ownerPubkey))) {
-      await tcp.send(source, encode(snapshot))
+    await sendPackets(tcp, source, () => buildDeviceSyncReplyPackets(
+      snapshotSource(packet.rosterAt, ownerPubkey),
+      packet.page,
+    ))
+    return
+  }
+
+  if (packet.type === 'resyncRequired' || packet.type === 'pageEnd') {
+    const request: DeviceSyncRequest = {
+      v: 1,
+      type: 'request',
+      rosterAt: get(devices).lastEventTimestamp,
+      ...(packet.type === 'pageEnd' && { page: packet.next }),
     }
+    await tcp.sendFirst(source, encodeDeviceSyncPacket(request))
     return
   }
 
@@ -698,7 +701,7 @@ async function reconcileRuntime(
         type: 'request',
         rosterAt: get(devices).lastEventTimestamp,
       }
-      void tcp.sendFirst(peer, encode(request))
+      void tcp.sendFirst(peer, encodeDeviceSyncPacket(request))
         .catch((error) => console.warn('[deviceSync] Request failed:', error))
     },
     onError: (error) => console.warn('[deviceSync] TCP error:', error),

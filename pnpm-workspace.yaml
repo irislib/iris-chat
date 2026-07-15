@@ -3,7 +3,7 @@ packages:
 
 overrides:
   '@isaacs/brace-expansion': 5.0.1
-  '@fips/core': 'github:mmalmi/fips-ts#46a6a0c&path:/packages/core'
+  '@fips/core': 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz'
 
 allowBuilds:
   esbuild: true
