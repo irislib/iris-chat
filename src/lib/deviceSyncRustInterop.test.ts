@@ -17,7 +17,7 @@ const appRoot = process.cwd()
 const fixture = path.join(appRoot, 'test-fixtures/device-sync-rust')
 const nativeCore = process.env.IRIS_CHAT_RS_CORE_DIR
 const nativeRepo = nativeCore ? path.resolve(nativeCore, '..') : undefined
-const NATIVE_SOURCE_SHA = '1f39a67994e8768c462c09d313ea18b96274c072'
+const NATIVE_SOURCE_SHA = '6514f424fc16b0d435a22a98081fc4569c15ad2a'
 const nativeAvailable = !!nativeCore && existsSync(path.join(nativeCore, 'src/core/device_sync.rs')) &&
   existsSync(path.join(nativeCore, 'src/core/device_sync_tcp.rs'))
 const required = process.env.REQUIRE_DEVICE_SYNC_RUST_INTEROP === '1'
