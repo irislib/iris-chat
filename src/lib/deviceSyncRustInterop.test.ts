@@ -15,10 +15,10 @@ import { frameRecord, RecordReader } from './deviceSyncTcp'
 
 const appRoot = process.cwd()
 const fixture = path.join(appRoot, 'test-fixtures/device-sync-rust')
-const nativeCore = process.env.IRIS_CHAT_RS_CORE_DIR ?? path.resolve(appRoot, '../iris-chat-rs/core')
-const nativeRepo = path.resolve(nativeCore, '..')
-const NATIVE_SOURCE_SHA = '80cf8266ca2f8e2cb2a422f42405a25e9a33f80d'
-const nativeAvailable = existsSync(path.join(nativeCore, 'src/core/device_sync.rs')) &&
+const nativeCore = process.env.IRIS_CHAT_RS_CORE_DIR
+const nativeRepo = nativeCore ? path.resolve(nativeCore, '..') : undefined
+const NATIVE_SOURCE_SHA = '1f39a67994e8768c462c09d313ea18b96274c072'
+const nativeAvailable = !!nativeCore && existsSync(path.join(nativeCore, 'src/core/device_sync.rs')) &&
   existsSync(path.join(nativeCore, 'src/core/device_sync_tcp.rs'))
 const required = process.env.REQUIRE_DEVICE_SYNC_RUST_INTEROP === '1'
 const binary = path.join(
@@ -31,8 +31,9 @@ const peer = 'b'.repeat(64)
 
 const interop = required ? describe : describe.skip
 
-interop('iris-chat-rs 0.1.38 device-sync interop', () => {
+interop('iris-chat-rs 0.1.39 device-sync interop', () => {
   beforeAll(() => {
+    if (!nativeCore) throw new Error('IRIS_CHAT_RS_CORE_DIR must explicitly select the released native source')
     if (!nativeAvailable) throw new Error(`iris-chat-rs core is missing at ${nativeCore}`)
     requireReleasedNativeSource()
     const build = spawnSync(
@@ -119,10 +120,12 @@ interop('iris-chat-rs 0.1.38 device-sync interop', () => {
 })
 
 function nativeEnv(): NodeJS.ProcessEnv {
+  if (!nativeCore) throw new Error('IRIS_CHAT_RS_CORE_DIR is required')
   return { ...process.env, IRIS_CHAT_RS_CORE_DIR: nativeCore }
 }
 
 function requireReleasedNativeSource(): void {
+  if (!nativeRepo) throw new Error('IRIS_CHAT_RS_CORE_DIR is required')
   const revision = spawnSync('git', ['-C', nativeRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
   if (revision.status !== 0 || revision.stdout.trim() !== NATIVE_SOURCE_SHA) {
     throw new Error(`device-sync interop requires iris-chat-rs ${NATIVE_SOURCE_SHA}`)
