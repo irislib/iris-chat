@@ -95,4 +95,52 @@ describe('release site config', () => {
     ])
     expect(maxActiveReleaseSteps).toBe(2)
   })
+
+  it('retries a soft-failed hashtree file-server upload and rejects retry errors', async () => {
+    const calls: { id: string; command: string[] }[] = []
+    const options = {
+      dryRun: false,
+      skipCloudflare: true,
+      pagesOnly: false,
+      treeName: defaultSiteTreeName,
+      branch: undefined,
+      pagesProject: undefined,
+      workerName: undefined,
+      routes: [],
+      domains: [],
+      workerCompatibilityDate: '2026-03-26',
+    }
+    const runner = async (step: { id: string; command: string[] }) => {
+      calls.push(step)
+      if (step.id === 'publish') {
+        return {
+          status: 0,
+          stdout: 'published: npub1example/iris-chat-site\nnhash1ace',
+          stderr: 'file server push failed: temporary upload failure',
+        }
+      }
+      if (step.id === 'push') {
+        return { status: 0, stdout: 'Uploaded: 3, Skipped: 0, Errors: 0', stderr: '' }
+      }
+      return { status: 0, stdout: '', stderr: '' }
+    }
+
+    await runRelease(options, runner, { buildOutputExists: () => true })
+
+    expect(calls.at(-1)).toEqual({
+      id: 'push',
+      label: 'Retry Iris Chat file-server upload',
+      command: ['htree', 'push', 'nhash1ace', '--force'],
+      cwd: expect.any(String),
+    })
+
+    await expect(runRelease(options, async (step) => {
+      const result = await runner(step)
+      return step.id === 'push'
+        ? { status: 0, stdout: 'Uploaded: 2, Skipped: 0, Errors: 1', stderr: '' }
+        : result
+    }, { buildOutputExists: () => true })).rejects.toThrow(
+      'Retry Iris Chat file-server upload completed with file-server errors',
+    )
+  })
 })

@@ -16,6 +16,8 @@ import { frameRecord, RecordReader } from './deviceSyncTcp'
 const appRoot = process.cwd()
 const fixture = path.join(appRoot, 'test-fixtures/device-sync-rust')
 const nativeCore = process.env.IRIS_CHAT_RS_CORE_DIR ?? path.resolve(appRoot, '../iris-chat-rs/core')
+const nativeRepo = path.resolve(nativeCore, '..')
+const NATIVE_SOURCE_SHA = '80cf8266ca2f8e2cb2a422f42405a25e9a33f80d'
 const nativeAvailable = existsSync(path.join(nativeCore, 'src/core/device_sync.rs')) &&
   existsSync(path.join(nativeCore, 'src/core/device_sync_tcp.rs'))
 const required = process.env.REQUIRE_DEVICE_SYNC_RUST_INTEROP === '1'
@@ -27,11 +29,12 @@ const binary = path.join(
 const owner = 'a'.repeat(64)
 const peer = 'b'.repeat(64)
 
-const interop = nativeAvailable || required ? describe : describe.skip
+const interop = required ? describe : describe.skip
 
-interop('iris-chat-rs 0.1.37 device-sync interop', () => {
+interop('iris-chat-rs 0.1.38 device-sync interop', () => {
   beforeAll(() => {
     if (!nativeAvailable) throw new Error(`iris-chat-rs core is missing at ${nativeCore}`)
+    requireReleasedNativeSource()
     const build = spawnSync(
       'cargo',
       ['build', '--quiet', '--locked', '--manifest-path', path.join(fixture, 'Cargo.toml')],
@@ -117,6 +120,29 @@ interop('iris-chat-rs 0.1.37 device-sync interop', () => {
 
 function nativeEnv(): NodeJS.ProcessEnv {
   return { ...process.env, IRIS_CHAT_RS_CORE_DIR: nativeCore }
+}
+
+function requireReleasedNativeSource(): void {
+  const revision = spawnSync('git', ['-C', nativeRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
+  if (revision.status !== 0 || revision.stdout.trim() !== NATIVE_SOURCE_SHA) {
+    throw new Error(`device-sync interop requires iris-chat-rs ${NATIVE_SOURCE_SHA}`)
+  }
+  const sourceDiff = spawnSync('git', [
+    '-C',
+    nativeRepo,
+    'diff',
+    '--quiet',
+    NATIVE_SOURCE_SHA,
+    '--',
+    'core/Cargo.toml',
+    'core/src/core/device_sync.rs',
+    'core/src/core/device_sync_tcp.rs',
+    'core/src/core/device_sync',
+    'core/src/core/device_sync_tcp',
+  ])
+  if (sourceDiff.status !== 0) {
+    throw new Error(`device-sync interop requires clean native sources at ${NATIVE_SOURCE_SHA}`)
+  }
 }
 
 function invokeNative(operation: string, input?: Uint8Array, args: string[] = []) {

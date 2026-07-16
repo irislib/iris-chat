@@ -374,6 +374,17 @@ function assertStepSucceeded(step, result) {
 }
 
 /**
+ * @param {StepResult} result
+ * @returns {boolean}
+ */
+function fileServerPushFailed(result) {
+  const output = `${result.stdout}\n${result.stderr}`
+  const errorCount = output.match(/\bErrors:\s*(\d+)\b/i)
+  return /file server push failed/i.test(output)
+    || (errorCount !== null && Number(errorCount[1]) > 0)
+}
+
+/**
  * @param {ReleaseOptions} options
  * @param {(step: ReleaseStep) => StepResult | Promise<StepResult>} [runner]
  * @param {{ buildOutputExists?: (path: import('node:fs').PathLike) => boolean }} [hooks]
@@ -388,6 +399,7 @@ export async function runRelease(options, runner = defaultRunner, hooks = {}) {
   }
 
   let publishOutput = ''
+  let publishNeedsPush = false
   let deployOutput = ''
   const prereleaseSteps = plan.steps.filter((step) => !isReleaseStep(step))
   const releaseSteps = plan.steps.filter(isReleaseStep)
@@ -413,14 +425,30 @@ export async function runRelease(options, runner = defaultRunner, hooks = {}) {
     assertStepSucceeded(step, result)
     if (step.id === 'publish') {
       publishOutput = `${result.stdout}\n${result.stderr}`
+      publishNeedsPush = fileServerPushFailed(result)
     }
     if (step.id === 'deploy') {
       deployOutput = `${result.stdout}\n${result.stderr}`
     }
   }
 
+  const publish = parsePublishOutput(publishOutput)
+  if (publishNeedsPush) {
+    const pushStep = {
+      id: 'push',
+      label: `Retry ${profile.appName} file-server upload`,
+      command: resolveHtreeCommand('push', publish.nhash, '--force'),
+      cwd: appDir,
+    }
+    const result = await runner(pushStep)
+    assertStepSucceeded(pushStep, result)
+    if (fileServerPushFailed(result)) {
+      throw new Error(`${pushStep.label} completed with file-server errors`)
+    }
+  }
+
   return {
-    publish: parsePublishOutput(publishOutput),
+    publish,
     pagesUrl: deployOutput ? parsePagesOutput(deployOutput) : null,
     pagesProject: options.skipCloudflare || options.workerName ? null : options.pagesProject ?? null,
     workerName: options.skipCloudflare ? null : options.workerName ?? null,
