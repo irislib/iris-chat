@@ -22,8 +22,8 @@ importers:
         specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz
         version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz
       '@hashtree/core':
-        specifier: 0.1.7
-        version: 0.1.7
+        specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.4.2/hashtree-core-0.2.1.tgz
+        version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.4.2/hashtree-core-0.2.1.tgz
       '@noble/hashes':
         specifier: ^2.0.1
         version: 2.0.1
@@ -49,8 +49,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: github:irislib/nostr-double-ratchet#83f6951&path:/ts
-        version: https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951#path:/ts(typescript@5.9.3)
+        specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.164/nostr-double-ratchet-0.0.164.tgz
+        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.164/nostr-double-ratchet-0.0.164.tgz(typescript@5.9.3)
       nostr-pubsub:
         specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz
         version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz(nostr-tools@2.23.8(typescript@5.9.3))
@@ -859,8 +859,9 @@ packages:
     resolution: {integrity: sha512-T3l48GfWLX5FWXhjHjuFvuIp74SyQUwFkux7U6uhHaaOsCOU772H6N+FeRJJSl3NnjKoWxRTBAsx+ftr2Qmj2w==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz}
     version: 0.0.41
 
-  '@hashtree/core@0.1.7':
-    resolution: {integrity: sha512-VoSt33mejcaZ1+tbJYpjOD2FnnJaXKEHZAFurbjqILxVNXJTxFjuHPYzqFVxI3i7vJF5dJ+5LYSKOEhy0Im5Jg==}
+  '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.4.2/hashtree-core-0.2.1.tgz':
+    resolution: {integrity: sha512-kkZKx/mNqImMy1DnWXRgv2LHaf5HbZg8sIpHV6/wLZKl3cQkmSY9xtjCZSTlUXeXIgOmxDzqDGa2GNf5Rg7b/A==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.4.2/hashtree-core-0.2.1.tgz}
+    version: 0.2.1
 
   '@iconify-json/carbon@1.2.18':
     resolution: {integrity: sha512-Grb13E6r/RqTEV4Sqd/BQR2FUt57U2WLuticJ5H8JbTdHLop1LmdePu3EJJA3Xi8DcWRbD6OnC133hKfOwlgtg==}
@@ -2170,9 +2171,9 @@ packages:
   node-releases@2.0.38:
     resolution: {integrity: sha512-3qT/88Y3FbH/Kx4szpQQ4HzUbVrHPKTLVpVocKiLfoYvw9XSGOX2FmD2d6DrXbVYyAQTF2HeF6My8jmzx7/CRw==}
 
-  nostr-double-ratchet@https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951#path:/ts:
-    resolution: {path: /ts, tarball: https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951}
-    version: 0.0.163
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.164/nostr-double-ratchet-0.0.164.tgz:
+    resolution: {integrity: sha256-XTo4sjJBYUCQtjT1Rcb7KDTi+7N9TD1SOzt4tA0F60Q=, tarball: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.164/nostr-double-ratchet-0.0.164.tgz}
+    version: 0.0.164
 
   nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz:
     resolution: {integrity: sha512-ApsAMv4jaHtff8cIcDoRjPF+RpZ6cn2IFPl0iMYvliXJd/5Dtz9umh6uRHSjFvkVlCNUCyEgQ2p5IEOKRd+Mpw==, tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz}
@@ -3863,11 +3864,11 @@ snapshots:
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
 
-  '@hashtree/core@0.1.7':
+  '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.4.2/hashtree-core-0.2.1.tgz':
     dependencies:
       '@msgpack/msgpack': 3.1.3
       '@noble/hashes': 2.0.1
-      '@scure/base': 2.0.0
+      '@scure/base': 2.2.0
 
   '@iconify-json/carbon@1.2.18':
     dependencies:
@@ -5279,7 +5280,7 @@ snapshots:
 
   node-releases@2.0.38: {}
 
-  nostr-double-ratchet@https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951#path:/ts(typescript@5.9.3):
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.164/nostr-double-ratchet-0.0.164.tgz(typescript@5.9.3):
     dependencies:
       nostr-tools: 2.23.8(typescript@5.9.3)
     transitivePeerDependencies:

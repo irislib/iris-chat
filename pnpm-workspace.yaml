@@ -5,7 +5,5 @@ overrides:
   '@isaacs/brace-expansion': 5.0.1
   '@fips/core': 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz'
 
-allowBuilds:
-  esbuild: true
-  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/617b6f78b98a3a0d403fb8965d4f638abd33f77c#path:/ts: true
-  nostr-double-ratchet@https://codeload.github.com/mmalmi/nostr-double-ratchet/tar.gz/678045d1333db8103d77e8cb4bf75d620d5814fa#path:/ts: false
+onlyBuiltDependencies:
+  - esbuild

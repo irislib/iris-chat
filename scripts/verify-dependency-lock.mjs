@@ -18,9 +18,17 @@ const releases = {
     url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz',
     integrity: 'sha512-T3l48GfWLX5FWXhjHjuFvuIp74SyQUwFkux7U6uhHaaOsCOU772H6N+FeRJJSl3NnjKoWxRTBAsx+ftr2Qmj2w==',
   },
+  '@hashtree/core': {
+    url: 'https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.4.2/hashtree-core-0.2.1.tgz',
+    integrity: 'sha512-kkZKx/mNqImMy1DnWXRgv2LHaf5HbZg8sIpHV6/wLZKl3cQkmSY9xtjCZSTlUXeXIgOmxDzqDGa2GNf5Rg7b/A==',
+  },
   'nostr-pubsub': {
     url: 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz',
     integrity: 'sha512-ApsAMv4jaHtff8cIcDoRjPF+RpZ6cn2IFPl0iMYvliXJd/5Dtz9umh6uRHSjFvkVlCNUCyEgQ2p5IEOKRd+Mpw==',
+  },
+  'nostr-double-ratchet': {
+    url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.164/nostr-double-ratchet-0.0.164.tgz',
+    integrity: 'sha256-XTo4sjJBYUCQtjT1Rcb7KDTi+7N9TD1SOzt4tA0F60Q=',
   },
 }
 
@@ -53,4 +61,4 @@ if (manifest.scripts?.test?.startsWith('pnpm verify:dependency-lock') !== true) 
   throw new Error('The normal test gate must verify GitHub dependency integrity')
 }
 
-console.log('Verified immutable FIPS and nostr-pubsub release integrity')
+console.log('Verified immutable shared runtime release integrity')
