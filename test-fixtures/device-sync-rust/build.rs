@@ -3,14 +3,14 @@ use std::{env, fs, path::PathBuf};
 fn main() {
     let core = PathBuf::from(
         env::var("IRIS_CHAT_RS_CORE_DIR")
-            .expect("IRIS_CHAT_RS_CORE_DIR must point to the iris-chat-rs 0.1.36 core crate"),
+            .expect("IRIS_CHAT_RS_CORE_DIR must point to the iris-chat-rs 0.1.37 core crate"),
     );
     let manifest = read(core.join("Cargo.toml"));
     assert!(
         manifest
             .lines()
-            .any(|line| line.trim() == "version = \"0.1.36\""),
-        "device-sync fixture requires iris-chat-rs 0.1.36"
+            .any(|line| line.trim() == "version = \"0.1.37\""),
+        "device-sync fixture requires iris-chat-rs 0.1.37"
     );
 
     let protocol_path = core.join("src/core/device_sync.rs");

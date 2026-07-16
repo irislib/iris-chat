@@ -3,32 +3,34 @@ import { readFile } from 'node:fs/promises'
 const root = new URL('../', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 const lockfile = await readFile(new URL('pnpm-lock.yaml', root), 'utf8')
-const irisPubsubCommit = '3c78a5adef9af1053f6563a1b25bee4510dccc53'
-const irisPubsub = `github:mmalmi/iris-kit#${irisPubsubCommit}&path:/packages/nostr-pubsub`
+const workspace = await readFile(new URL('pnpm-workspace.yaml', root), 'utf8')
+const pubsubRuntime = await readFile(new URL('src/lib/nostrPubsubRuntime.ts', root), 'utf8')
 const releases = {
   '@fips/core': {
-    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz',
-    integrity: 'sha512-oncWv7eAjKDjMVpxqFELcidOPHQc7S3ocD9K/d++8vdbQKuJEm+gnQTWfyOi1gKeu/U9NoR5UBJ9SCMIhjU2Sg==',
+    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz',
+    integrity: 'sha512-xlD87cnd5DrzqBxl5s1l1YZxv4Xo1OumG+Pf/0X4U2TyKCmh33KP3L065djpiWlVca1uRhGppELaYT1mIZWNnw==',
   },
   '@fips/tcp': {
     url: 'https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz',
     integrity: 'sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w==',
   },
   '@fips/transport-webrtc': {
-    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz',
-    integrity: 'sha512-9XxawnsV0NfsnBxrjvHDm+b7ceiJ7NoleBbREo0vS4uqASFDr0I6xacG+XOBUEmcnWvKK5Vm1w3NNoL6hFJyNQ==',
+    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz',
+    integrity: 'sha512-T3l48GfWLX5FWXhjHjuFvuIp74SyQUwFkux7U6uhHaaOsCOU772H6N+FeRJJSl3NnjKoWxRTBAsx+ftr2Qmj2w==',
   },
   'nostr-pubsub': {
-    url: 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz',
-    integrity: 'sha512-6lMNGBDy9git6nDUydr3B77ZAux6wWfeZgEpF7hJ3ckZ1162soR57jguX3N1hToMkPWvYUwFK+cbTfPvGxbTqw==',
+    url: 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz',
+    integrity: 'sha512-ApsAMv4jaHtff8cIcDoRjPF+RpZ6cn2IFPl0iMYvliXJd/5Dtz9umh6uRHSjFvkVlCNUCyEgQ2p5IEOKRd+Mpw==',
   },
 }
 
-if (manifest.dependencies?.['@iris/nostr-pubsub'] !== irisPubsub) {
-  throw new Error(`@iris/nostr-pubsub must use audited revision ${irisPubsub}`)
+if (manifest.dependencies?.['@iris/nostr-pubsub'] || lockfile.includes('@iris/nostr-pubsub')) {
+  throw new Error('The product-local @iris/nostr-pubsub carrier must stay removed')
 }
-if (!lockfile.includes(`mmalmi/iris-kit/tar.gz/${irisPubsubCommit}#path:/packages/nostr-pubsub`)) {
-  throw new Error('@iris/nostr-pubsub lock entry is not pinned to the audited revision')
+for (const forbidden of ['iris.chat.nostr', 'sendEndpointData', 'endpointData']) {
+  if (pubsubRuntime.includes(forbidden)) {
+    throw new Error(`Nostr runtime must not restore raw carrier token ${forbidden}`)
+  }
 }
 
 for (const [name, release] of Object.entries(releases)) {
@@ -43,6 +45,9 @@ for (const [name, release] of Object.entries(releases)) {
   if (!entry.includes(`tarball: ${release.url}`) || !entry.includes(`integrity: ${release.integrity}`)) {
     throw new Error(`${name} lock entry is missing its verified release integrity`)
   }
+}
+if (!workspace.includes(`'@fips/core': '${releases['@fips/core'].url}'`)) {
+  throw new Error('pnpm workspace override must use the audited @fips/core release')
 }
 if (manifest.scripts?.test?.startsWith('pnpm verify:dependency-lock') !== true) {
   throw new Error('The normal test gate must verify GitHub dependency integrity')

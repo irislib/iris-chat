@@ -29,7 +29,7 @@ const peer = 'b'.repeat(64)
 
 const interop = nativeAvailable || required ? describe : describe.skip
 
-interop('iris-chat-rs 0.1.36 device-sync interop', () => {
+interop('iris-chat-rs 0.1.37 device-sync interop', () => {
   beforeAll(() => {
     if (!nativeAvailable) throw new Error(`iris-chat-rs core is missing at ${nativeCore}`)
     const build = spawnSync(

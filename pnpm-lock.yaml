@@ -6,27 +6,24 @@ settings:
 
 overrides:
   '@isaacs/brace-expansion': 5.0.1
-  '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz
+  '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz
 
 importers:
 
   .:
     dependencies:
       '@fips/core':
-        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz
-        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz
+        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz
+        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz
       '@fips/tcp':
         specifier: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
         version: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
       '@fips/transport-webrtc':
-        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz
-        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz
+        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz
+        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz
       '@hashtree/core':
         specifier: 0.1.7
         version: 0.1.7
-      '@iris/nostr-pubsub':
-        specifier: github:mmalmi/iris-kit#3c78a5adef9af1053f6563a1b25bee4510dccc53&path:/packages/nostr-pubsub
-        version: https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53#path:/packages/nostr-pubsub(nostr-tools@2.23.8(typescript@5.9.3))
       '@noble/hashes':
         specifier: ^2.0.1
         version: 2.0.1
@@ -55,8 +52,8 @@ importers:
         specifier: github:irislib/nostr-double-ratchet#83f6951&path:/ts
         version: https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951#path:/ts(typescript@5.9.3)
       nostr-pubsub:
-        specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz
-        version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz(nostr-tools@2.23.8(typescript@5.9.3))
+        specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz
+        version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz(nostr-tools@2.23.8(typescript@5.9.3))
       nostr-tools:
         specifier: ^2.23.1
         version: 2.23.8(typescript@5.9.3)
@@ -850,17 +847,17 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz':
-    resolution: {integrity: sha512-oncWv7eAjKDjMVpxqFELcidOPHQc7S3ocD9K/d++8vdbQKuJEm+gnQTWfyOi1gKeu/U9NoR5UBJ9SCMIhjU2Sg==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz}
-    version: 0.0.24
+  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz':
+    resolution: {integrity: sha512-xlD87cnd5DrzqBxl5s1l1YZxv4Xo1OumG+Pf/0X4U2TyKCmh33KP3L065djpiWlVca1uRhGppELaYT1mIZWNnw==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz}
+    version: 0.0.25
 
   '@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz':
     resolution: {integrity: sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w==, tarball: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz}
     version: 0.2.0
 
-  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz':
-    resolution: {integrity: sha512-9XxawnsV0NfsnBxrjvHDm+b7ceiJ7NoleBbREo0vS4uqASFDr0I6xacG+XOBUEmcnWvKK5Vm1w3NNoL6hFJyNQ==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz}
-    version: 0.0.40
+  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz':
+    resolution: {integrity: sha512-T3l48GfWLX5FWXhjHjuFvuIp74SyQUwFkux7U6uhHaaOsCOU772H6N+FeRJJSl3NnjKoWxRTBAsx+ftr2Qmj2w==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz}
+    version: 0.0.41
 
   '@hashtree/core@0.1.7':
     resolution: {integrity: sha512-VoSt33mejcaZ1+tbJYpjOD2FnnJaXKEHZAFurbjqILxVNXJTxFjuHPYzqFVxI3i7vJF5dJ+5LYSKOEhy0Im5Jg==}
@@ -873,12 +870,6 @@ packages:
 
   '@iconify/utils@3.1.0':
     resolution: {integrity: sha512-Zlzem1ZXhI1iHeeERabLNzBHdOa4VhQbqAcOQaMKuTuyZCpwKbC2R4Dd0Zo3g9EAc+Y4fiarO8HIHRAth7+skw==}
-
-  '@iris/nostr-pubsub@https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53#path:/packages/nostr-pubsub':
-    resolution: {path: /packages/nostr-pubsub, tarball: https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53}
-    version: 0.1.0
-    peerDependencies:
-      nostr-tools: '>=2.17.0 <3'
 
   '@isaacs/cliui@9.0.0':
     resolution: {integrity: sha512-AokJm4tuBHillT+FpMtxQ60n8ObyXBatq7jD2/JA9dxbDDokKQm8KMht5ibGzLVU9IJDIKK4TPKgMHEYMn3lMg==}
@@ -2183,15 +2174,9 @@ packages:
     resolution: {path: /ts, tarball: https://codeload.github.com/irislib/nostr-double-ratchet/tar.gz/83f6951}
     version: 0.0.163
 
-  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz:
-    resolution: {tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz}
-    version: 0.1.5
-    peerDependencies:
-      nostr-tools: '>=2.17.0 <3'
-
-  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz:
-    resolution: {integrity: sha512-6lMNGBDy9git6nDUydr3B77ZAux6wWfeZgEpF7hJ3ckZ1162soR57jguX3N1hToMkPWvYUwFK+cbTfPvGxbTqw==, tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz}
-    version: 0.2.0
+  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz:
+    resolution: {integrity: sha512-ApsAMv4jaHtff8cIcDoRjPF+RpZ6cn2IFPl0iMYvliXJd/5Dtz9umh6uRHSjFvkVlCNUCyEgQ2p5IEOKRd+Mpw==, tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz}
+    version: 0.3.0
     peerDependencies:
       nostr-tools: '>=2.17.0 <3'
 
@@ -3862,7 +3847,7 @@ snapshots:
   '@esbuild/win32-x64@0.27.2':
     optional: true
 
-  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz':
+  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz':
     dependencies:
       '@noble/ciphers': 1.3.0
       '@noble/curves': 1.9.7
@@ -3871,9 +3856,9 @@ snapshots:
 
   '@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz': {}
 
-  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz':
+  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz':
     dependencies:
-      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz
+      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz
       '@noble/ciphers': 1.3.0
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
@@ -3895,11 +3880,6 @@ snapshots:
       '@antfu/install-pkg': 1.1.0
       '@iconify/types': 2.0.0
       mlly: 1.8.0
-
-  '@iris/nostr-pubsub@https://codeload.github.com/mmalmi/iris-kit/tar.gz/3c78a5adef9af1053f6563a1b25bee4510dccc53#path:/packages/nostr-pubsub(nostr-tools@2.23.8(typescript@5.9.3))':
-    dependencies:
-      nostr-pubsub: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz(nostr-tools@2.23.8(typescript@5.9.3))
-      nostr-tools: 2.23.8(typescript@5.9.3)
 
   '@isaacs/cliui@9.0.0': {}
 
@@ -5305,11 +5285,7 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.1.5/nostr-pubsub-0.1.5.tgz(nostr-tools@2.23.8(typescript@5.9.3)):
-    dependencies:
-      nostr-tools: 2.23.8(typescript@5.9.3)
-
-  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz(nostr-tools@2.23.8(typescript@5.9.3)):
+  nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz(nostr-tools@2.23.8(typescript@5.9.3)):
     dependencies:
       '@fips/tcp': https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
       nostr-tools: 2.23.8(typescript@5.9.3)

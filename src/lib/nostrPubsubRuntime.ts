@@ -1,7 +1,11 @@
-import { createIrisFipsPubsub, type IrisFipsMessagingEndpoint } from '@iris/nostr-pubsub'
-import { matchFilter, type Filter, type VerifiedEvent } from 'nostr-tools'
+import {
+  FipsNostrPubsubClient,
+  type FipsNostrPubsubSubscription,
+  type FipsPubsubClientNode,
+} from 'nostr-pubsub'
+import type { Filter, VerifiedEvent } from 'nostr-tools'
 
-const ALLOWED_RUNTIME_KINDS = new Set([1059, 1060, 30078, 37368])
+const ALLOWED_RUNTIME_KINDS = [1059, 1060, 30078, 37368]
 
 export type PubsubPeerSource = () => readonly string[]
 export type PubsubEventHandler = (event: VerifiedEvent) => void
@@ -9,74 +13,80 @@ export type PubsubEventHandler = (event: VerifiedEvent) => void
 interface Subscription {
   filter: Filter
   onEvent: PubsubEventHandler
+  active?: FipsNostrPubsubSubscription
 }
 
 /**
- * Live Nostr event path over an app-owned FIPS node. Relays remain responsible
- * for initial contact and durable backfill; this runtime owns neither.
+ * Live signed Nostr events over the shared authenticated nostr.pubsub/1
+ * carrier. Relays still own initial contact and durable backfill.
  */
 export class NostrPubsubRuntime {
   private readonly subscriptions = new Set<Subscription>()
-  private adapter: ReturnType<typeof createIrisFipsPubsub> | null = null
+  private client: FipsNostrPubsubClient | null = null
 
-  activate(endpoint: IrisFipsMessagingEndpoint, peers: PubsubPeerSource): void {
-    this.deactivate()
-    const admittedEndpoint = machineAdmittedEndpoint(endpoint, peers)
-    this.adapter = createIrisFipsPubsub({
-      endpoint: admittedEndpoint,
+  async activate(node: FipsPubsubClientNode, peers: PubsubPeerSource): Promise<void> {
+    await this.deactivate()
+    const client = new FipsNostrPubsubClient({
+      node,
       peers,
-      protocol: 'iris.chat.nostr',
       allowedKinds: ALLOWED_RUNTIME_KINDS,
-      mesh: {
-        fanout: 8,
-        unknownPeerReserve: 2,
-        maxCachedEvents: 256,
-        maxCachedEventBytes: 4 * 1024 * 1024,
-      },
+      limits: { maxCachedEvents: 256 },
       onError: (error, context) => {
         console.warn(`[nostrPubsub] ${context.operation} failed:`, error)
       },
-    })
-    this.adapter.subscribe(({ event }) => {
-      for (const subscription of this.subscriptions) {
-        if (!matchFilter(subscription.filter, event)) continue
-        try {
-          subscription.onEvent(event)
-        } catch (error) {
-          console.warn('[nostrPubsub] subscription callback failed:', error)
-        }
-      }
-    })
+    }).start()
+    this.client = client
+    try {
+      for (const subscription of this.subscriptions) this.attach(subscription)
+    } catch (error) {
+      this.client = null
+      await client.stop()
+      throw error
+    }
   }
 
-  deactivate(): void {
-    this.adapter?.close()
-    this.adapter = null
+  async deactivate(): Promise<void> {
+    const client = this.client
+    this.client = null
+    for (const subscription of this.subscriptions) subscription.active = undefined
+    await client?.stop()
   }
 
   subscribe(filter: Filter, onEvent: PubsubEventHandler): () => void {
-    const subscription = { filter: structuredClone(filter), onEvent }
+    const subscription: Subscription = { filter: structuredClone(filter), onEvent }
     this.subscriptions.add(subscription)
-    return () => this.subscriptions.delete(subscription)
+    this.attach(subscription)
+    return () => {
+      if (!this.subscriptions.delete(subscription)) return
+      subscription.active?.close()
+      subscription.active = undefined
+    }
   }
 
   async publish(event: VerifiedEvent): Promise<void> {
-    await this.adapter?.publish(event)
+    await this.client?.publish(event)
   }
 
   async idle(): Promise<void> {
-    await this.adapter?.idle()
+    await this.client?.idle()
+  }
+
+  private attach(subscription: Subscription): void {
+    subscription.active = this.client?.subscribe(
+      [subscription.filter],
+      (event) => subscription.onEvent(event),
+    )
   }
 }
 
 const runtime = new NostrPubsubRuntime()
 
 export const activateNostrPubsub = (
-  endpoint: IrisFipsMessagingEndpoint,
+  node: FipsPubsubClientNode,
   peers: PubsubPeerSource,
-): void => runtime.activate(endpoint, peers)
+): Promise<void> => runtime.activate(node, peers)
 
-export const deactivateNostrPubsub = (): void => runtime.deactivate()
+export const deactivateNostrPubsub = (): Promise<void> => runtime.deactivate()
 
 export const subscribeNostrPubsub = (
   filter: Filter,
@@ -85,27 +95,3 @@ export const subscribeNostrPubsub = (
 
 export const publishNostrPubsub = (event: VerifiedEvent): Promise<void> =>
   runtime.publish(event)
-
-function machineAdmittedEndpoint(
-  endpoint: IrisFipsMessagingEndpoint,
-  peers: PubsubPeerSource,
-): IrisFipsMessagingEndpoint {
-  const isAdmitted = (peerId: unknown) =>
-    typeof peerId === 'string'
-    && peers().some((peer) => peer.toLowerCase() === peerId.toLowerCase())
-
-  return {
-    async sendEndpointData(args) {
-      if (!isAdmitted(args.dst)) throw new Error('FIPS pubsub destination is not machine-admitted')
-      await endpoint.sendEndpointData(args)
-    },
-    on(event, listener) {
-      return endpoint.on(event, (value) => {
-        const source = value && typeof value === 'object'
-          ? (value as { src?: unknown }).src
-          : undefined
-        if (isAdmitted(source)) listener(value)
-      })
-    },
-  }
-}

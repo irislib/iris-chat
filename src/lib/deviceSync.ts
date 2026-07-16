@@ -645,7 +645,7 @@ async function stopActiveNode(): Promise<void> {
   activeKey = ''
   activeOwnerPubkey = ''
   activePeers = new Set()
-  deactivateNostrPubsub()
+  await deactivateNostrPubsub()
   await tcp?.dispose().catch(() => undefined)
   await node?.stop().catch(() => undefined)
 }
@@ -733,7 +733,7 @@ async function reconcileRuntime(
   activePeers = peers
   // This first production lane is intentionally limited to machine-admitted
   // sibling devices discovered by the owner-scoped transport above.
-  activateNostrPubsub(node, () => Array.from(peers))
+  await activateNostrPubsub(node, () => Array.from(peers))
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {

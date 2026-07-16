@@ -56,7 +56,7 @@ const packets: DeviceSyncPacket[] = [
 ]
 
 describe('native device-sync protocol', () => {
-  it('locks the native 0.1.36 service and page bounds', () => {
+  it('locks the native 0.1.37 service and page bounds', () => {
     expect(DEVICE_SYNC_PORT).toBe(7369)
     expect(DEVICE_SYNC_MAX_PACKET_BYTES).toBe(64 * 1024)
     expect(DEVICE_SYNC_PAGE_MESSAGES).toBe(32)

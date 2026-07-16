@@ -47,11 +47,10 @@
     "ws": "^8.19.0"
   },
   "dependencies": {
-    "@fips/core": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-core-0.0.24.tgz",
+    "@fips/core": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-core-0.0.25.tgz",
     "@fips/tcp": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
-    "@fips/transport-webrtc": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.24/fips-transport-webrtc-0.0.40.tgz",
+    "@fips/transport-webrtc": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.25/fips-transport-webrtc-0.0.41.tgz",
     "@hashtree/core": "0.1.7",
-    "@iris/nostr-pubsub": "github:mmalmi/iris-kit#3c78a5adef9af1053f6563a1b25bee4510dccc53&path:/packages/nostr-pubsub",
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@nostr-dev-kit/ndk": "^2.18.1",
@@ -61,7 +60,7 @@
     "marked": "^15.0.0",
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "github:irislib/nostr-double-ratchet#83f6951&path:/ts",
-    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.2.0/nostr-pubsub-0.2.0.tgz",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz",
     "nostr-tools": "^2.23.1",
     "qrcode": "^1.5.4"
   }

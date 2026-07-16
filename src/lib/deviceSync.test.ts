@@ -46,7 +46,6 @@ vi.mock('@fips/core', () => ({
     start = vi.fn(async () => undefined)
     stop = vi.fn(async () => undefined)
     sendDatagram = fips.sendDatagram
-    sendEndpointData = vi.fn(async () => undefined)
   },
   identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32) })),
   toHex: vi.fn(() => 'a'.repeat(64)),
