@@ -30,6 +30,10 @@ describe('release site config', () => {
     const publishStep = plan.steps.find((step) => step.id === 'publish')
     const portableTestStep = plan.steps.find((step) => step.id === 'test-portable')
 
+    expect(plan.steps[0]).toMatchObject({
+      id: 'install',
+      command: ['pnpm', 'install', '--frozen-lockfile'],
+    })
     expect(publishStep?.command).toContain(defaultSiteTreeName)
     expect(publishStep?.command[0]).toBe('htree')
     expect(publishStep?.command).not.toContain('--manifest-path')
@@ -86,6 +90,7 @@ describe('release site config', () => {
     )
 
     expect(calls).toEqual([
+      'install',
       'build',
       'test-portable',
       'test-smoke',

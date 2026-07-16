@@ -4,6 +4,10 @@ import UnoCSS from 'unocss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath } from 'node:url'
 
+export function runtimeChunk(id: string): string | undefined {
+  return id.includes('/node_modules/') ? 'vendor' : undefined
+}
+
 export default defineConfig({
   base: './',
   // The pinned Git package omits a generated module; bundle its complete source tree.
@@ -37,6 +41,7 @@ export default defineConfig({
         if (warning.code === 'EVAL' && warning.id?.includes('tseep')) return
         warn(warning)
       },
+      output: { manualChunks: runtimeChunk },
     },
   },
   server: {

@@ -12,7 +12,7 @@
   "packageManager": "pnpm@10.24.0",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "pnpm run verify:dependency-lock && vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "pnpm verify:dependency-lock && NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run",

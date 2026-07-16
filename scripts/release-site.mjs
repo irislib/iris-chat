@@ -184,6 +184,12 @@ export function createReleasePlan(options) {
 
   const steps = [
     {
+      id: 'install',
+      label: `Install ${profile.appName} from frozen lockfile`,
+      command: ['pnpm', 'install', '--frozen-lockfile'],
+      cwd: appDir,
+    },
+    {
       id: 'build',
       label: `Build ${profile.appName}`,
       command: ['pnpm', 'run', 'build'],

@@ -25,6 +25,17 @@ describe('portable build config', () => {
     expect(config.base ?? '/').toBe('./')
   })
 
+  it('separates application code from the dependency runtime', async () => {
+    const config = await loadViteConfig()
+    const output = config.build?.rollupOptions?.output
+    const manualChunks = !Array.isArray(output) ? output?.manualChunks : undefined
+
+    expect(manualChunks).toBeTypeOf('function')
+    expect(manualChunks?.('/repo/node_modules/@fips/core/dist/index.js', {} as never)).toBe('vendor')
+    expect(manualChunks?.('/repo/node_modules/@nostr-dev-kit/ndk/dist/index.js', {} as never)).toBe('vendor')
+    expect(manualChunks?.('/repo/node_modules/marked/lib/marked.esm.js', {} as never)).toBe('vendor')
+  })
+
   it('keeps the HTML entrypoint free of root-absolute asset refs', () => {
     const indexHtml = stripInlineScripts(fs.readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8'))
 
