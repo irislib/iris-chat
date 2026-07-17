@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.14 - 2026-07-16
+
+- Upgrade the browser to immutable Hashtree core 0.3.0, sharing the native
+  `BlobRoute` request/result/context boundary without changing the device-sync
+  port, v1 JSON variants, 64 KiB record bound, or pagination.
+
 ## 2.6.13 - 2026-07-16
 
 - Pin the immutable FIPS TypeScript 0.0.26 runtime, preserving browser identity

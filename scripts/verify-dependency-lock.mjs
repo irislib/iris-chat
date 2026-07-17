@@ -19,8 +19,8 @@ const releases = {
     integrity: 'sha512-vqbMj4mgJdS5sAXYLe4kb9B3ZtdnNFsQof3y0W2vF4TruccMH48AmxY+J6gOKCwhOHkFFgJ9V/4m1MVKzLsIiw==',
   },
   '@hashtree/core': {
-    url: 'https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.4.2/hashtree-core-0.2.1.tgz',
-    integrity: 'sha512-kkZKx/mNqImMy1DnWXRgv2LHaf5HbZg8sIpHV6/wLZKl3cQkmSY9xtjCZSTlUXeXIgOmxDzqDGa2GNf5Rg7b/A==',
+    url: 'https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.0/hashtree-core-0.3.0.tgz',
+    integrity: 'sha512-kh4ZhzsJTd/iLAYUeZ/+Q9EzA/Ev9FObOLcOveIvx7Ghtk6qdeiTexoGCOiu5X8VmlksxRPleCVeMh1k9/2AGA==',
   },
   'nostr-pubsub': {
     url: 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.0/nostr-pubsub-0.3.0.tgz',
