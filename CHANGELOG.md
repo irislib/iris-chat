@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Upgrade the shared browser pubsub runtime to `nostr-pubsub` 0.5.0 and pass
+- Upgrade the shared browser pubsub runtime to `nostr-pubsub` 0.5.1 and pass
   the compressed local FIPS identity required by its reliable TCP
   `REQ`/`INV`/`WANT`/`EVENT` transport.
 
