@@ -24,10 +24,15 @@ export class NostrPubsubRuntime {
   private readonly subscriptions = new Set<Subscription>()
   private client: FipsNostrPubsubClient | null = null
 
-  async activate(node: FipsPubsubClientNode, peers: PubsubPeerSource): Promise<void> {
+  async activate(
+    node: FipsPubsubClientNode,
+    localPeerId: string,
+    peers: PubsubPeerSource,
+  ): Promise<void> {
     await this.deactivate()
     const client = new FipsNostrPubsubClient({
       node,
+      localPeerId,
       peers,
       allowedKinds: ALLOWED_RUNTIME_KINDS,
       limits: { maxCachedEvents: 256 },
@@ -83,8 +88,9 @@ const runtime = new NostrPubsubRuntime()
 
 export const activateNostrPubsub = (
   node: FipsPubsubClientNode,
+  localPeerId: string,
   peers: PubsubPeerSource,
-): Promise<void> => runtime.activate(node, peers)
+): Promise<void> => runtime.activate(node, localPeerId, peers)
 
 export const deactivateNostrPubsub = (): Promise<void> => runtime.deactivate()
 

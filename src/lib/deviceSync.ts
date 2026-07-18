@@ -733,7 +733,7 @@ async function reconcileRuntime(
   activePeers = peers
   // This first production lane is intentionally limited to machine-admitted
   // sibling devices discovered by the owner-scoped transport above.
-  await activateNostrPubsub(node, () => Array.from(peers))
+  await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers))
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {

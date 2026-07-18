@@ -23,8 +23,8 @@ const releases = {
     integrity: 'sha512-kh4ZhzsJTd/iLAYUeZ/+Q9EzA/Ev9FObOLcOveIvx7Ghtk6qdeiTexoGCOiu5X8VmlksxRPleCVeMh1k9/2AGA==',
   },
   'nostr-pubsub': {
-    url: 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.3.1/nostr-pubsub-0.3.1.tgz',
-    integrity: 'sha512-hXw3ON9MSNgQc0/t4kl46yBIvTZPZWpCeR4QMOyr7FXJAKLW2qtenRMRQczO7lnTdlYbsN7+/eMtL/fQ/6wVRA==',
+    url: 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.0/nostr-pubsub-0.5.0.tgz',
+    integrity: 'sha512-MEI6WgLqSi9ECfzlsQFm29WNV5msRq3ypiZ2CtSKNXKMY5FyCZwKETDvVh69Pspu72oixOjDkGT9WP+sHGgqmQ==',
   },
   'nostr-double-ratchet': {
     url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.165/nostr-double-ratchet-0.0.165.tgz',

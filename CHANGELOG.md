@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Upgrade the shared browser pubsub runtime to `nostr-pubsub` 0.5.0 and pass
+  the compressed local FIPS identity required by its reliable TCP
+  `REQ`/`INV`/`WANT`/`EVENT` transport.
+
 ## 2.6.15 - 2026-07-17
 
 - Upgrade the shared authenticated `nostr.pubsub/1` client to immutable
