@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+## 2.6.16 - 2026-07-20
+
 - Upgrade the shared browser pubsub runtime to `nostr-pubsub` 0.5.1 and pass
   the compressed local FIPS identity required by its reliable TCP
   `REQ`/`INV`/`WANT`/`EVENT` transport.
+- Upgrade to FIPS TypeScript runtime 0.0.29, negotiating direct FSP only with
+  capable peers while retaining routed FSP compatibility with upstream FIPS
+  0.4.1 and older runtimes.
 
 ## 2.6.15 - 2026-07-17
 
