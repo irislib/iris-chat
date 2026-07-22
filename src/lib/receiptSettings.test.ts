@@ -18,28 +18,28 @@ describe('receiptSettings', () => {
     localStorageMock.setItem.mockReset()
   })
 
-  it('should default to both receipts enabled', async () => {
+  it('should default to both receipts disabled', async () => {
     const { receiptSettings } = await import('./receiptSettings')
     const settings = get(receiptSettings)
-    expect(settings.sendDeliveryReceipts).toBe(true)
-    expect(settings.sendReadReceipts).toBe(true)
+    expect(settings.sendDeliveryReceipts).toBe(false)
+    expect(settings.sendReadReceipts).toBe(false)
   })
 
   it('should persist sendDeliveryReceipts to localStorage', async () => {
     const { setSendDeliveryReceipts } = await import('./receiptSettings')
-    setSendDeliveryReceipts(false)
+    setSendDeliveryReceipts(true)
     expect(localStorageMock.setItem).toHaveBeenCalledWith(
       'iris-chat-receipts',
-      expect.stringContaining('"sendDeliveryReceipts":false')
+      expect.stringContaining('"sendDeliveryReceipts":true')
     )
   })
 
   it('should persist sendReadReceipts to localStorage', async () => {
     const { setSendReadReceipts } = await import('./receiptSettings')
-    setSendReadReceipts(false)
+    setSendReadReceipts(true)
     expect(localStorageMock.setItem).toHaveBeenCalledWith(
       'iris-chat-receipts',
-      expect.stringContaining('"sendReadReceipts":false')
+      expect.stringContaining('"sendReadReceipts":true')
     )
   })
 

@@ -18,25 +18,25 @@ describe('typingSettings', () => {
     localStorageMock.setItem.mockReset()
   })
 
-  it('should default to sendTypingIndicators enabled', async () => {
+  it('should default to sendTypingIndicators disabled', async () => {
     const { typingSettings } = await import('./typingSettings')
     const settings = get(typingSettings)
-    expect(settings.sendTypingIndicators).toBe(true)
+    expect(settings.sendTypingIndicators).toBe(false)
   })
 
   it('should persist to localStorage', async () => {
     const { setSendTypingIndicators } = await import('./typingSettings')
-    setSendTypingIndicators(false)
+    setSendTypingIndicators(true)
     expect(localStorageMock.setItem).toHaveBeenCalledWith(
       'iris-chat-typing',
-      expect.stringContaining('"sendTypingIndicators":false')
+      expect.stringContaining('"sendTypingIndicators":true')
     )
   })
 
   it('should load saved settings from localStorage', async () => {
-    localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({ sendTypingIndicators: false }))
+    localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({ sendTypingIndicators: true }))
     const { typingSettings } = await import('./typingSettings')
     const settings = get(typingSettings)
-    expect(settings.sendTypingIndicators).toBe(false)
+    expect(settings.sendTypingIndicators).toBe(true)
   })
 })

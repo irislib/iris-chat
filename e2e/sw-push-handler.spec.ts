@@ -193,6 +193,19 @@ async function configureRelays(context: BrowserContext, relays: string[]) {
   }, relays)
 }
 
+async function enableTypingIndicators(context: BrowserContext) {
+  await context.addInitScript(() => {
+    try {
+      window.localStorage.setItem(
+        'iris-chat-typing',
+        JSON.stringify({ sendTypingIndicators: true }),
+      )
+    } catch {
+      /* ignore opaque origins */
+    }
+  })
+}
+
 // Old chrome-headless-shell ignores Browser.grantPermissions for
 // notifications, so showNotification silently no-ops and the e2e becomes
 // useless. Force the full Chromium binary in new headless mode for this
@@ -207,6 +220,9 @@ test.describe('SW push handler', () => {
     const bobContext = await browser.newContext()
     await useTestRelay(aliceContext, testRelayUrl)
     await useTestRelay(bobContext, testRelayUrl)
+    // Typing is private by default; this scenario explicitly exercises the
+    // opt-in send path.
+    await enableTypingIndicators(aliceContext)
     // Real notification permission so showNotification actually fires and
     // the resulting Notification instances appear in getNotifications().
     // Headless Chromium denies by default; without this, the SW silently

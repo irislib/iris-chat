@@ -346,6 +346,8 @@ describe('groups', () => {
     groups.set(new Map())
     groupMessages.set(new Map())
     currentGroupId.set(null)
+    const { typingSettings } = await import('./typingSettings')
+    typingSettings.set({ sendTypingIndicators: false })
     const typingState = await import('./typingState')
     vi.mocked(typingState.setRemoteTyping).mockClear()
     vi.mocked(typingState.clearRemoteTyping).mockClear()
@@ -812,6 +814,31 @@ describe('groups', () => {
         expect(expiresAt).toBeGreaterThanOrEqual(before + 60)
         expect(expiresAt).toBeLessThanOrEqual(after + 60)
       }
+    })
+  })
+
+  describe('sendGroupTypingEvent', () => {
+    it('does not send when typing indicators are disabled', async () => {
+      const { createGroup, sendGroupTypingEvent } = await import('./groups')
+      const group = await createGroup('Private Typing', [MEMBER_B])
+      sendEventCalls.length = 0
+
+      sendGroupTypingEvent(group.id)
+
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(sendEventCalls).toHaveLength(0)
+    })
+
+    it('sends after typing indicators are enabled', async () => {
+      const { createGroup, sendGroupTypingEvent } = await import('./groups')
+      const { typingSettings } = await import('./typingSettings')
+      const group = await createGroup('Shared Typing', [MEMBER_B])
+      sendEventCalls.length = 0
+      typingSettings.set({ sendTypingIndicators: true })
+
+      sendGroupTypingEvent(group.id)
+
+      await waitForRecipients(MEMBER_B)
     })
   })
 

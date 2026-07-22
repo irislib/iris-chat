@@ -57,6 +57,7 @@ import { expirationStore } from './expirationStore'
 import { onMessageRelayPublish } from './messageRelayStatus'
 import { parseReceipt, shouldAdvanceStatus, type MessageStatus, type ReceiptPayload } from './receipts'
 import { receiptSettings } from './receiptSettings'
+import { typingSettings } from './typingSettings'
 import { parseChatSettingsContent } from './chatSettings'
 
 export { GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE }
@@ -936,6 +937,8 @@ export function sendGroupReaction(groupId: string, messageId: string, emoji: str
 }
 
 export function sendGroupTypingEvent(groupId: string): void {
+  if (!get(typingSettings).sendTypingIndicators) return
+
   void sendNativeGroupEvent(groupId, {
     content: 'typing',
     kind: TYPING_KIND,

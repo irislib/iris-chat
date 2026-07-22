@@ -4,6 +4,9 @@
 
 ## 2.6.16 - 2026-07-20
 
+- Default delivery receipts, read receipts, and typing indicators to off while
+  keeping each available as an explicit privacy setting; apply the typing
+  preference to group chats as well as direct chats.
 - Upgrade the shared browser pubsub runtime to `nostr-pubsub` 0.5.1 and pass
   the compressed local FIPS identity required by its reliable TCP
   `REQ`/`INV`/`WANT`/`EVENT` transport.

@@ -7,7 +7,7 @@ export interface ReceiptSettings extends Record<string, unknown> {
 
 const { store, update } = createPersistedSettings<ReceiptSettings>(
   'iris-chat-receipts',
-  { sendDeliveryReceipts: true, sendReadReceipts: true },
+  { sendDeliveryReceipts: false, sendReadReceipts: false },
   (parsed) => {
     // Migrate old single-toggle format
     if ('sendReceipts' in parsed && !('sendDeliveryReceipts' in parsed)) {

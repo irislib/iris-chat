@@ -6,7 +6,7 @@ export interface TypingSettings extends Record<string, unknown> {
 
 const { store, update } = createPersistedSettings<TypingSettings>(
   'iris-chat-typing',
-  { sendTypingIndicators: true },
+  { sendTypingIndicators: false },
 )
 
 export const typingSettings = store
