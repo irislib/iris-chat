@@ -29,7 +29,7 @@ import type { Rumor } from 'nostr-double-ratchet'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getPubkey, identity, ndk } from './identity'
 import { devices } from './devices'
-import { chats, type ChatMessage, type RecipientDeliveryStatus } from './chat'
+import { chats, type ChatMessage } from './chat'
 import {
   ensureDeviceRegistered,
   getNdrRuntime,
@@ -54,7 +54,13 @@ import {
 import { asNdkEventSubscription } from './ndkSubscription'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { expirationStore } from './expirationStore'
-import { onMessageRelayPublish } from './messageRelayStatus'
+import {
+  advanceRecipientStatus,
+  mergeUniqueStrings,
+  onMessageRelayPublish,
+  relayChannelLabel,
+  type RecipientDeliveryStatus,
+} from './messageRelayStatus'
 import { parseReceipt, shouldAdvanceStatus, type MessageStatus, type ReceiptPayload } from './receipts'
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
@@ -370,42 +376,6 @@ export function initGroupRosterFactSync(): () => void {
   return groupRosterFactSyncCleanup
 }
 
-function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[] {
-  return Array.from(
-    new Set([...(existing || []), ...next].map((url) => url.trim()).filter(Boolean))
-  ).sort()
-}
-
-function mergeStringList(existing: string[] | undefined, next: string[]): string[] {
-  return Array.from(
-    new Set([...(existing || []), ...next].map((value) => value.trim()).filter(Boolean))
-  ).sort()
-}
-
-function relayChannelLabel(relayUrl: string): string {
-  return `message server: ${relayUrl.trim()}`
-}
-
-function recipientStatusRank(status: RecipientDeliveryStatus | undefined): number {
-  if (status === 'seen') return 3
-  if (status === 'delivered') return 2
-  if (status === 'sent') return 1
-  return 0
-}
-
-function advanceRecipientStatus(
-  existing: Record<string, RecipientDeliveryStatus> | undefined,
-  pubkey: string,
-  status: MessageStatus
-): Record<string, RecipientDeliveryStatus> | null {
-  const previous = existing?.[pubkey]
-  if (recipientStatusRank(previous) >= recipientStatusRank(status)) return null
-  return {
-    ...(existing || {}),
-    [pubkey]: status,
-  }
-}
-
 function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): void {
   let relaysToPersist: string[] | null = null
   let channelsToPersist: string[] | null = null
@@ -416,9 +386,9 @@ function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): v
       if (messageIndex === -1) continue
 
       const message = messages[messageIndex]
-      const sentToRelays = mergeRelayUrls(message.sentToRelays, relayUrls)
+      const sentToRelays = mergeUniqueStrings(message.sentToRelays, relayUrls)
       const currentRelays = message.sentToRelays || []
-      const deliveryChannels = mergeStringList(
+      const deliveryChannels = mergeUniqueStrings(
         message.deliveryChannels,
         relayUrls.map(relayChannelLabel)
       )
@@ -500,9 +470,10 @@ function reconcileLocalGroupMessageId(
 
 onMessageRelayPublish(markGroupMessageSentToRelays)
 
-function buildGroupRumor(
-  recipientPubkey: string,
-  partialEvent: { content: string; kind: number; tags: string[][] }
+function buildScopedGroupRumor(
+  scopeTag: string[],
+  partialEvent: { content: string; kind: number; tags: string[][] },
+  matchScopeValue = false,
 ): Rumor {
   const myPubkey = getPubkey()
   if (!myPubkey) {
@@ -511,38 +482,10 @@ function buildGroupRumor(
 
   const now = Date.now()
   const tags = [...partialEvent.tags]
-  if (!tags.some((t) => t[0] === 'p' && t[1] === recipientPubkey)) {
-    tags.unshift(['p', recipientPubkey])
-  }
-  if (!tags.some((t) => t[0] === 'ms')) {
-    tags.push(['ms', String(now)])
-  }
-
-  const rumor: Rumor = {
-    content: partialEvent.content,
-    kind: partialEvent.kind,
-    created_at: Math.floor(now / 1000),
-    tags,
-    pubkey: myPubkey,
-    id: '',
-  }
-  rumor.id = getEventHash(rumor)
-  return rumor
-}
-
-function buildGroupRuntimeRumor(
-  groupId: string,
-  partialEvent: { content: string; kind: number; tags: string[][] }
-): Rumor {
-  const myPubkey = getPubkey()
-  if (!myPubkey) {
-    throw new Error('Not logged in')
-  }
-
-  const now = Date.now()
-  const tags = [...partialEvent.tags]
-  if (!tags.some((t) => t[0] === 'l')) {
-    tags.unshift(['l', groupId])
+  if (!tags.some((tag) =>
+    tag[0] === scopeTag[0] && (!matchScopeValue || tag[1] === scopeTag[1])
+  )) {
+    tags.unshift(scopeTag)
   }
   if (!tags.some((t) => t[0] === 'ms')) {
     tags.push(['ms', String(now)])
@@ -626,7 +569,7 @@ function fanOutToMembers(
     if (!includeSelf && memberPubkey === myPubkey) continue
 
     try {
-      const rumor = buildGroupRumor(memberPubkey, { ...partialEvent, tags })
+      const rumor = buildScopedGroupRumor(['p', memberPubkey], { ...partialEvent, tags }, true)
       void ensureDeviceRegistered()
         .then(() => getNdrRuntime().sendEvent(memberPubkey, rumor))
         .catch((error) => {
@@ -650,10 +593,10 @@ async function fanOutToOwnDevices(
   if (!myPubkey) return
 
   await ensureDeviceRegistered()
-  const rumor = buildGroupRumor(myPubkey, {
+  const rumor = buildScopedGroupRumor(['p', myPubkey], {
     ...partialEvent,
     tags: [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]],
-  })
+  }, true)
   await getNdrRuntime().sendEvent(myPubkey, rumor)
 }
 
@@ -678,7 +621,7 @@ async function sendNativeGroupEvent(
     await waitForSendReadyRuntime()
     await runtime.upsertGroup(groupData)
     try {
-      const runtimeRumor = buildGroupRuntimeRumor(groupId, partialEvent)
+      const runtimeRumor = buildScopedGroupRumor(['l', groupId], partialEvent)
       const result = await runtime.sendGroupEvent(groupId, {
         kind: runtimeRumor.kind,
         content: JSON.stringify(runtimeRumor),
@@ -750,87 +693,42 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
   return group
 }
 
-export function addGroupMember(groupId: string, pubkey: string): void {
+function mutateGroup(
+  groupId: string,
+  transform: (group: Group, myPubkey: string) => Group | null,
+): void {
   const myPubkey = getPubkey()
-  if (!myPubkey) return
-
   const group = get(groups).get(groupId)
-  if (!group) return
+  if (!myPubkey || !group) return
 
-  // Verify we have a chat session with the new member
-  if (!get(chats).has(pubkey)) return
-
-  const updated = libAddMember(group, pubkey, myPubkey)
+  const updated = transform(group, myPubkey)
   if (!updated) return
 
-  groups.update(g => { g.set(groupId, updated); return g })
+  groups.update((current) => current.set(groupId, updated))
   saveGroupState(updated)
-
   publishGroupRosterFactSnapshotInBackground(updated)
+}
+
+export function addGroupMember(groupId: string, pubkey: string): void {
+  // Verify we have a chat session with the new member
+  if (!get(chats).has(pubkey)) return
+  mutateGroup(groupId, (group, myPubkey) => libAddMember(group, pubkey, myPubkey))
 }
 
 export function removeGroupMember(groupId: string, pubkey: string): void {
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-
-  const group = get(groups).get(groupId)
-  if (!group) return
-
-  const updated = libRemoveMember(group, pubkey, myPubkey)
-  if (!updated) return
-
-  groups.update(g => { g.set(groupId, updated); return g })
-  saveGroupState(updated)
-
-  publishGroupRosterFactSnapshotInBackground(updated)
+  mutateGroup(groupId, (group, myPubkey) => libRemoveMember(group, pubkey, myPubkey))
 }
 
 export function updateGroupInfo(groupId: string, updates: { name?: string, description?: string, picture?: string }): void {
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-
-  const group = get(groups).get(groupId)
-  if (!group) return
-
-  const updated = updateGroupData(group, updates, myPubkey)
-  if (!updated) return
-
-  groups.update(g => { g.set(groupId, updated); return g })
-  saveGroupState(updated)
-
-  publishGroupRosterFactSnapshotInBackground(updated)
+  mutateGroup(groupId, (group, myPubkey) => updateGroupData(group, updates, myPubkey))
 }
 
 export function addGroupAdmin(groupId: string, pubkey: string): void {
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-
-  const group = get(groups).get(groupId)
-  if (!group) return
-
-  const updated = libAddAdmin(group, pubkey, myPubkey)
-  if (!updated) return
-
-  groups.update(g => { g.set(groupId, updated); return g })
-  saveGroupState(updated)
-
-  publishGroupRosterFactSnapshotInBackground(updated)
+  mutateGroup(groupId, (group, myPubkey) => libAddAdmin(group, pubkey, myPubkey))
 }
 
 export function removeGroupAdmin(groupId: string, pubkey: string): void {
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-
-  const group = get(groups).get(groupId)
-  if (!group) return
-
-  const updated = libRemoveAdmin(group, pubkey, myPubkey)
-  if (!updated) return
-
-  groups.update(g => { g.set(groupId, updated); return g })
-  saveGroupState(updated)
-
-  publishGroupRosterFactSnapshotInBackground(updated)
+  mutateGroup(groupId, (group, myPubkey) => libRemoveAdmin(group, pubkey, myPubkey))
 }
 
 export function sendGroupMessage(groupId: string, text: string, replyTo?: string): void {

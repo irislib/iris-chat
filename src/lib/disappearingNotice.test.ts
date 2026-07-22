@@ -7,6 +7,7 @@ describe('buildDisappearingNotice', () => {
     expect(buildDisappearingNotice(null)).toBe('Disappearing messages turned off')
     expect(buildDisappearingNotice(0)).toBe('Disappearing messages turned off')
     expect(buildDisappearingNotice(-10)).toBe('Disappearing messages turned off')
+    expect(buildDisappearingNotice(Infinity)).toBe('Disappearing messages turned off')
   })
 
   it('returns a human-friendly notice when ttl is enabled', () => {

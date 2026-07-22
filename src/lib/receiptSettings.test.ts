@@ -51,6 +51,23 @@ describe('receiptSettings', () => {
     expect(settings.sendReadReceipts).toBe(true)
   })
 
+  it('should fill missing saved settings from defaults', async () => {
+    localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({ sendDeliveryReceipts: true }))
+    const { receiptSettings } = await import('./receiptSettings')
+    const settings = get(receiptSettings)
+    expect(settings.sendDeliveryReceipts).toBe(true)
+    expect(settings.sendReadReceipts).toBe(false)
+  })
+
+  it('should still update when localStorage is unavailable', async () => {
+    localStorageMock.setItem.mockImplementationOnce(() => {
+      throw new Error('storage unavailable')
+    })
+    const { receiptSettings, setSendDeliveryReceipts } = await import('./receiptSettings')
+    expect(() => setSendDeliveryReceipts(true)).not.toThrow()
+    expect(get(receiptSettings).sendDeliveryReceipts).toBe(true)
+  })
+
   it('should migrate old single-toggle format', async () => {
     localStorageMock.getItem.mockReturnValueOnce(JSON.stringify({ sendReceipts: false }))
     const { receiptSettings } = await import('./receiptSettings')

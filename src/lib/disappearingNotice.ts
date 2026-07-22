@@ -1,7 +1,7 @@
 import { getExpirationLabel } from './expiration'
 
 export function normalizeDisappearingTtl(ttlSeconds: number | null | undefined): number | null {
-  if (typeof ttlSeconds !== 'number' || ttlSeconds <= 0) return null
+  if (typeof ttlSeconds !== 'number' || !Number.isFinite(ttlSeconds) || ttlSeconds <= 0) return null
   return Math.floor(ttlSeconds)
 }
 

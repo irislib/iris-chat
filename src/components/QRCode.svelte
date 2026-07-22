@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-
   interface Props {
     data: string
     size?: number
@@ -10,38 +8,29 @@
 
   let qrCodeUrl = $state('')
 
-  onMount(async () => {
-    try {
-      const QRCode = await import('qrcode')
-      qrCodeUrl = await QRCode.toDataURL(data, {
-        width: size,
-        margin: 0,
-        color: {
-          dark: '#000000',
-          light: '#ffffff',
-        },
-      })
-    } catch (e) {
-      console.error('Failed to generate QR code:', e)
-    }
-  })
-
-  // Regenerate when data changes
   $effect(() => {
-    if (data) {
-      import('qrcode').then(QRCode => {
-        QRCode.toDataURL(data, {
-          width: size,
+    const value = data
+    const width = size
+    let cancelled = false
+    async function generate() {
+      try {
+        const QRCode = await import('qrcode')
+        const url = await QRCode.toDataURL(value, {
+          width,
           margin: 0,
           color: {
             dark: '#000000',
             light: '#ffffff',
           },
-        }).then(url => {
-          qrCodeUrl = url
         })
-      })
+        if (!cancelled) qrCodeUrl = url
+      } catch (e) {
+        console.error('Failed to generate QR code:', e)
+      }
     }
+
+    if (value) void generate()
+    return () => { cancelled = true }
   })
 </script>
 

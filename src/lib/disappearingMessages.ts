@@ -3,13 +3,7 @@ import { getNdrRuntime } from './privateChats'
 import { getPubkey } from './identity'
 import { expirationStore } from './expirationStore'
 import { groups, sendGroupSettingsEvent } from './groups'
-
-const normalizeTtlSeconds = (ttlSeconds: number | null): number | null => {
-  if (ttlSeconds === null) return null
-  if (typeof ttlSeconds !== 'number' || !Number.isFinite(ttlSeconds)) return null
-  const floored = Math.floor(ttlSeconds)
-  return floored > 0 ? floored : null
-}
+import { normalizeDisappearingTtl } from './disappearingNotice'
 
 export async function setDmDisappearingMessages(
   peerPubkey: string,
@@ -17,7 +11,7 @@ export async function setDmDisappearingMessages(
 ): Promise<void> {
   if (!peerPubkey) return
 
-  const normalizedTtl = normalizeTtlSeconds(messageTtlSeconds)
+  const normalizedTtl = normalizeDisappearingTtl(messageTtlSeconds)
 
   expirationStore.setExpiration(peerPubkey, normalizedTtl)
 
@@ -41,7 +35,7 @@ export async function setGroupDisappearingMessages(
   if (!group) return
   if (!group.admins?.includes(myPubKey)) return
 
-  const normalizedTtl = normalizeTtlSeconds(messageTtlSeconds)
+  const normalizedTtl = normalizeDisappearingTtl(messageTtlSeconds)
 
   expirationStore.setExpiration(groupId, normalizedTtl)
 

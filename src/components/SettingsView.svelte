@@ -42,16 +42,7 @@
     }
   }
 
-  // Reactive state from store
-  let settings = $state($notificationSettings)
-
-  // Subscribe to store changes
-  $effect(() => {
-    const unsubscribe = notificationSettings.subscribe((value) => {
-      settings = value
-    })
-    return unsubscribe
-  })
+  let settings = $derived($notificationSettings)
 
   // Status indicators
   let notificationApiAvailable = $state(false)
@@ -102,7 +93,7 @@
   const appLogoUrl = `${import.meta.env.BASE_URL}iris-logo.png`
 
   // Device state
-  let deviceState = $state($devices)
+  let deviceState = $derived($devices)
   let selectedDevicePubkeys = $state<string[]>([])
   let revocableDevicePubkeys = $derived(
     deviceState.registeredDevices
@@ -116,13 +107,6 @@
     revocableDevicePubkeys.length > 0 &&
       revocableDevicePubkeys.every((pubkey) => selectedRevocableDevicePubkeys.includes(pubkey))
   )
-  $effect(() => {
-    const unsubscribe = devices.subscribe((value) => {
-      deviceState = value
-    })
-    return unsubscribe
-  })
-
   // Relay settings
   let editingRelays = $state(false)
   let newRelayUrl = $state('')

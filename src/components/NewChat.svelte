@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount } from 'svelte'
   import {
     invites,
     createAndSaveInvite,
@@ -20,27 +20,20 @@
 
   let { onjoin }: Props = $props()
 
-  let inviteList = $state<ActiveInvite[]>([])
+  let inviteList = $derived(
+    Array.from($invites.values()).sort((a, b) => a.createdAt - b.createdAt)
+  )
   let editingLabel = $state<string | null>(null)
   let editLabelValue = $state('')
   let creating = $state(false)
   let qrModalInvite = $state<ActiveInvite | null>(null)
   let createError = $state('')
 
-  // Subscribe to invites store
-  const unsubscribe = invites.subscribe((inviteMap) => {
-    inviteList = Array.from(inviteMap.values()).sort((a, b) => a.createdAt - b.createdAt)
-  })
-
   onMount(async () => {
     // Auto-create an invite if none exist
     if (inviteList.length === 0) {
       await handleCreateInvite()
     }
-  })
-
-  onDestroy(() => {
-    unsubscribe()
   })
 
   async function handleCreateInvite() {

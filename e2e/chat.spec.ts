@@ -524,6 +524,8 @@ test.describe('iris chat', () => {
       await expect(page.getByText('Invite #1')).toBeVisible()
       // Should show copy button with URL
       await expect(page.locator('button[title*="#"]')).toBeVisible()
+      await page.getByTitle('Show QR Code').click()
+      await expect(page.getByRole('img', { name: 'QR Code' })).toBeVisible()
     })
 
     test('should copy invite link', async ({ page, context }) => {

@@ -65,9 +65,15 @@ import { parseChatSettingsContent } from './chatSettings'
 import { acceptChat } from './messageRequests'
 import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
 import { asVerifiedPushNostrEvent } from './pushEvents'
-import { onMessageRelayPublish } from './messageRelayStatus'
+import {
+  advanceRecipientStatus,
+  mergeUniqueStrings,
+  onMessageRelayPublish,
+  relayChannelLabel,
+  type RecipientDeliveryStatus,
+} from './messageRelayStatus'
 
-export type RecipientDeliveryStatus = 'sent' | MessageStatus
+export type { RecipientDeliveryStatus } from './messageRelayStatus'
 
 export interface ChatMessage {
   id: string
@@ -288,42 +294,6 @@ function updateChatSession(
   return updatedSession
 }
 
-function mergeRelayUrls(existing: string[] | undefined, next: string[]): string[] {
-  return Array.from(
-    new Set([...(existing || []), ...next].map((url) => url.trim()).filter(Boolean))
-  ).sort()
-}
-
-function mergeStringList(existing: string[] | undefined, next: string[]): string[] {
-  return Array.from(
-    new Set([...(existing || []), ...next].map((value) => value.trim()).filter(Boolean))
-  ).sort()
-}
-
-function relayChannelLabel(relayUrl: string): string {
-  return `message server: ${relayUrl.trim()}`
-}
-
-function recipientStatusRank(status: RecipientDeliveryStatus | undefined): number {
-  if (status === 'seen') return 3
-  if (status === 'delivered') return 2
-  if (status === 'sent') return 1
-  return 0
-}
-
-function advanceRecipientStatus(
-  existing: Record<string, RecipientDeliveryStatus> | undefined,
-  pubkey: string,
-  status: MessageStatus
-): Record<string, RecipientDeliveryStatus> | null {
-  const previous = existing?.[pubkey]
-  if (recipientStatusRank(previous) >= recipientStatusRank(status)) return null
-  return {
-    ...(existing || {}),
-    [pubkey]: status,
-  }
-}
-
 function findChatSessionIdByMessageId(messageId: string): string | null {
   for (const [sessionId, chatSession] of get(chats)) {
     if (chatSession.messages.some((message) => message.id === messageId)) {
@@ -344,9 +314,9 @@ function markMessageSentToRelays(messageId: string, relayUrls: string[]): void {
     if (messageIndex === -1) return null
 
     const message = latestSession.messages[messageIndex]
-    const mergedRelays = mergeRelayUrls(message.sentToRelays, relayUrls)
+    const mergedRelays = mergeUniqueStrings(message.sentToRelays, relayUrls)
     const currentRelays = message.sentToRelays || []
-    const mergedChannels = mergeStringList(
+    const mergedChannels = mergeUniqueStrings(
       message.deliveryChannels,
       relayUrls.map(relayChannelLabel)
     )

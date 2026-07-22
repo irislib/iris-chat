@@ -1,6 +1,7 @@
 // IndexedDB storage using Dexie
 
 import Dexie, { type Table } from 'dexie'
+import { mergeUniqueStrings } from './messageRelayStatus'
 
 // Re-export serialization functions from nostr-double-ratchet
 export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet'
@@ -176,18 +177,12 @@ export async function updateMessageStatus(id: string, status: 'delivered' | 'see
   await db.messages.update(id, { status })
 }
 
-function mergeStrings(existing: string[] | undefined, next: string[]): string[] {
-  return Array.from(
-    new Set([...(existing || []), ...next].map((value) => value.trim()).filter(Boolean))
-  ).sort()
-}
-
 export async function updateMessageSentToRelays(
   id: string,
   relayUrls: string[]
 ): Promise<void> {
   const existing = await db.messages.get(id)
-  const sentToRelays = mergeStrings(existing?.sentToRelays, relayUrls)
+  const sentToRelays = mergeUniqueStrings(existing?.sentToRelays, relayUrls)
   if (sentToRelays.length === 0) return
   await db.messages.update(id, { sentToRelays })
 }
@@ -216,13 +211,13 @@ export async function updateMessageDeliveryTrace(
   const existing = await db.messages.get(id)
   const updates: Partial<StoredMessage> = {}
   if (trace.deliveryChannels) {
-    updates.deliveryChannels = mergeStrings(existing?.deliveryChannels, trace.deliveryChannels)
+    updates.deliveryChannels = mergeUniqueStrings(existing?.deliveryChannels, trace.deliveryChannels)
   }
   if (trace.outerEventIds) {
-    updates.outerEventIds = mergeStrings(existing?.outerEventIds, trace.outerEventIds)
+    updates.outerEventIds = mergeUniqueStrings(existing?.outerEventIds, trace.outerEventIds)
   }
   if (trace.pendingRelayEventIds) {
-    updates.pendingRelayEventIds = mergeStrings(
+    updates.pendingRelayEventIds = mergeUniqueStrings(
       existing?.pendingRelayEventIds,
       trace.pendingRelayEventIds
     )

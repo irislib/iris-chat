@@ -2,16 +2,7 @@
   import { notificationSettings } from '../lib/notificationStore'
   import { subscribeToDMNotifications } from '../lib/notifications'
 
-  // Reactive state from store
-  let settings = $state($notificationSettings)
-
-  // Subscribe to store changes
-  $effect(() => {
-    const unsubscribe = notificationSettings.subscribe((value) => {
-      settings = value
-    })
-    return unsubscribe
-  })
+  let settings = $derived($notificationSettings)
 
   let isLoading = $state(false)
   let permissionState = $state<NotificationPermission>('default')

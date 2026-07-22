@@ -130,16 +130,8 @@ describe('parseChatSettingsContent', () => {
   })
 
   it('returns null for Infinity messageTtlSeconds', () => {
-    // JSON.stringify converts Infinity to null, so we test via a string
-    // that actually produces a non-finite number... but JSON can't
-    // represent Infinity. Test that NaN-like values are rejected.
-    const payload = JSON.stringify({
-      type: 'chat-settings',
-      v: 1,
-      messageTtlSeconds: null,  // This is the null case
-    })
-    // null case should parse fine
-    const result = parseChatSettingsContent(payload)
-    expect(result?.messageTtlSeconds).toBeNull()
+    expect(parseChatSettingsContent(
+      '{"type":"chat-settings","v":1,"messageTtlSeconds":1e400}'
+    )).toBeNull()
   })
 })

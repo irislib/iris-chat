@@ -4,6 +4,9 @@
 
 ## 2.6.16 - 2026-07-20
 
+- Consolidate duplicated delivery tracking, group mutations, persisted
+  settings, and reactive UI state while preserving the existing messaging and
+  release behavior with less runtime code.
 - Default delivery receipts, read receipts, and typing indicators to off while
   keeping each available as an explicit privacy setting; apply the typing
   preference to group chats as well as direct chats.

@@ -1,3 +1,5 @@
+import { normalizeDisappearingTtl } from './disappearingNotice'
+
 export interface ChatSettingsPayloadV1 {
   type: 'chat-settings'
   v: 1
@@ -23,11 +25,10 @@ export function parseChatSettingsContent(content: string): ChatSettingsPayloadV1
     return { type: 'chat-settings', v: 1, messageTtlSeconds: null }
   }
   if (typeof ttl === 'number' && Number.isFinite(ttl)) {
-    const normalized = Math.floor(ttl)
     return {
       type: 'chat-settings',
       v: 1,
-      messageTtlSeconds: normalized > 0 ? normalized : null,
+      messageTtlSeconds: normalizeDisappearingTtl(ttl),
     }
   }
 
