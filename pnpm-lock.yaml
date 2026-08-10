@@ -50,8 +50,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.165/nostr-double-ratchet-0.0.165.tgz
-        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.165/nostr-double-ratchet-0.0.165.tgz(typescript@5.9.3)
+        specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.166/nostr-double-ratchet-0.0.166.tgz
+        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.166/nostr-double-ratchet-0.0.166.tgz(typescript@5.9.3)
       nostr-pubsub:
         specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz
         version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz(nostr-tools@2.23.12(typescript@5.9.3))
@@ -2286,9 +2286,9 @@ packages:
     resolution: {integrity: sha512-wRNIrw4DmVLKQlbgOMdkMx27Wrpzes2hh5Jtbi2bjPd+4wJstWIqP5A+lscnqbm0xxmT5Bpg8Lec5ItEBwx6BQ==}
     engines: {node: '>=18'}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.165/nostr-double-ratchet-0.0.165.tgz:
-    resolution: {integrity: sha256-5vwY+wdlWoPfnyViBgHEoc4UFUechvthHuJ6MoYRBXU=, tarball: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.165/nostr-double-ratchet-0.0.165.tgz}
-    version: 0.0.165
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.166/nostr-double-ratchet-0.0.166.tgz:
+    resolution: {integrity: sha256-8Ti5o2yJyVRfqyhEjL/T1IX02nlgQgBAMIV5F3A0lrg=, tarball: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.166/nostr-double-ratchet-0.0.166.tgz}
+    version: 0.0.166
 
   nostr-pubsub@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz:
     resolution: {integrity: sha512-8Du8STeYMT98zz00lo3uoETYeWpvVGZO3n0Xi9pZycXWPMxCQP1FwRgl0mrxTMT5KK1xOw4pMnpSGmMeVOidag==, tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz}
@@ -5457,8 +5457,9 @@ snapshots:
 
   node-releases@2.0.51: {}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.165/nostr-double-ratchet-0.0.165.tgz(typescript@5.9.3):
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.166/nostr-double-ratchet-0.0.166.tgz(typescript@5.9.3):
     dependencies:
+      '@noble/curves': 2.0.1
       nostr-tools: 2.23.12(typescript@5.9.3)
     transitivePeerDependencies:
       - typescript

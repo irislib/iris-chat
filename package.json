@@ -60,7 +60,7 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.12",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.165/nostr-double-ratchet-0.0.165.tgz",
+    "nostr-double-ratchet": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.166/nostr-double-ratchet-0.0.166.tgz",
     "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz",
     "nostr-tools": "^2.23.12",
     "qrcode": "^1.5.4"
