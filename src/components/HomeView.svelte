@@ -6,6 +6,7 @@
   import ChatListItem from './ChatListItem.svelte'
   import NewChat from './NewChat.svelte'
   import JoinChat from './JoinChat.svelte'
+  import FindPeople from './FindPeople.svelte'
 
   interface Props {
     onopenChat: (event: CustomEvent<{ chat: ChatSession }>) => void
@@ -90,7 +91,8 @@
     <div class="w-full max-w-3xl space-y-6">
       <!-- New/Join boxes -->
       <div class="grid md:grid-cols-2 gap-6">
-        <NewChat onjoin={handleJoinChat} />
+        <FindPeople onjoin={handleJoinChat} />
+            <NewChat onjoin={handleJoinChat} />
         <JoinChat onjoin={handleJoinChat} />
       </div>
 

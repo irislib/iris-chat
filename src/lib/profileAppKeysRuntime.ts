@@ -5,7 +5,7 @@ import { ndk } from './identity'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { createProfileAppKeysStore } from './profileAppKeys'
 
-const createNostrSubscribe = (): NostrSubscribe => {
+export const createNostrSubscribe = (): NostrSubscribe => {
   const ndkInstance = get(ndk)
 
   return (filter, onEvent) => {

@@ -1,4 +1,5 @@
 import { writable, get } from 'svelte/store'
+import { verifyEvent, type Event } from 'nostr-tools'
 import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk'
 import { identity, ndk } from './identity'
 import {
@@ -24,8 +25,7 @@ function stopSubscription(): void {
   latestCreatedAt = 0
 }
 
-function parseFollowingFromEvent(event: NDKEvent): Set<string> {
-  const raw = event.rawEvent?.() as { tags?: string[][]; created_at?: number } | undefined
+function parseFollowingFromEvent(raw: Event): Set<string> {
   const next = new Set<string>()
   for (const tag of raw?.tags || []) {
     if (tag[0] === 'p' && typeof tag[1] === 'string' && tag[1].length > 0) {
@@ -33,6 +33,20 @@ function parseFollowingFromEvent(event: NDKEvent): Set<string> {
     }
   }
   return next
+}
+
+const FOLLOWING_CACHE_PREFIX = 'iris-chat-following:'
+function validFollowEvent(event: Event, owner: string): boolean {
+  try {
+    return event?.kind === 3 && event.pubkey === owner &&
+      event.created_at <= Math.floor(Date.now() / 1000) + 300 && verifyEvent(event)
+  } catch { return false }
+}
+function cachedFollowing(owner: string): Event | undefined {
+  try {
+    const event = JSON.parse(localStorage.getItem(FOLLOWING_CACHE_PREFIX + owner) || 'null')
+    return validFollowEvent(event, owner) ? event : undefined
+  } catch { return undefined }
 }
 
 // Call once on app start. Returns a cleanup function.
@@ -49,8 +63,10 @@ export function initFollowing(): () => void {
 
     if (!pubkey) return
 
+    const cached = cachedFollowing(pubkey)
+    if (cached) following.set(parseFollowingFromEvent(cached))
     const ndkInstance = get(ndk)
-    latestCreatedAt = 0
+    latestCreatedAt = cached?.created_at ?? 0
 
     // Keep listening; contact list updates should take effect immediately.
     sub = asNdkEventSubscription(ndkInstance.subscribe(
@@ -59,11 +75,13 @@ export function initFollowing(): () => void {
     ))
 
     sub.on('event', (ev: NDKEvent) => {
-      const raw = ev.rawEvent?.() as { created_at?: number } | undefined
-      const createdAt = raw?.created_at || 0
+      const raw = ev.rawEvent() as Event
+      if (!validFollowEvent(raw, pubkey)) return
+      const createdAt = raw.created_at
       if (createdAt && createdAt < latestCreatedAt) return
       latestCreatedAt = createdAt
-      following.set(parseFollowingFromEvent(ev))
+      following.set(parseFollowingFromEvent(raw))
+      try { localStorage.setItem(FOLLOWING_CACHE_PREFIX + pubkey, JSON.stringify(raw)) } catch { /* Storage can be unavailable. */ }
     })
   })
 

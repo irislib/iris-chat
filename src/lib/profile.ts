@@ -1,6 +1,6 @@
 import { writable, type Readable, get } from 'svelte/store'
 import { ndk } from './identity'
-import { saveProfileToStorage } from './storage'
+import { saveProfileToStorage, getProfileFromStorage } from './storage'
 
 export interface Profile {
   pubkey: string
@@ -165,6 +165,17 @@ async function fetchProfile(pubkey: string, retryCount = 0): Promise<void> {
   if (pendingFetches.has(pubkey)) return
 
   pendingFetches.add(pubkey)
+
+  // Show the last known name while message servers are offline or reconnecting.
+  if (!profileCache.has(pubkey)) {
+    try {
+      const cached = await getProfileFromStorage(pubkey)
+      if (cached && !profileCache.has(pubkey)) {
+        profileCache.set(pubkey, cached)
+        notifyListeners(pubkey, cached)
+      }
+    } catch { /* Continue with the network lookup if local storage is unavailable. */ }
+  }
 
   try {
     const ndkInstance = get(ndk)

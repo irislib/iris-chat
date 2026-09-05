@@ -1,3 +1,4 @@
+import { messagingDeviceList, type MessagingSupportEvent } from './messagingPeople'
 import { writable, get } from 'svelte/store'
 import {
   Invite,
@@ -931,6 +932,15 @@ function isChatFromLocalInvite(chatId: string): boolean {
   }
 
   return false
+}
+
+export async function startChatWithPerson(recipientPubkey: string, support: MessagingSupportEvent): Promise<ChatSession> {
+  if (!messagingDeviceList(support, recipientPubkey)?.length) {
+    throw new Error('This person can’t receive messages yet.')
+  }
+  const session = await ensureManagerChat(recipientPubkey)
+  acceptChat(session.recipientPubkey)
+  return session
 }
 
 async function ensureManagerChat(

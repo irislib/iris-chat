@@ -3,6 +3,7 @@
   import ChatView from './ChatView.svelte'
   import NewChat from './NewChat.svelte'
   import JoinChat from './JoinChat.svelte'
+  import FindPeople from './FindPeople.svelte'
 
   interface Props {
     chat: ChatSession | null
@@ -41,6 +42,7 @@
       <div class="flex-1 overflow-y-auto overscroll-contain overflow-x-hidden p-4 flex items-center justify-center">
         <div class="w-full max-w-3xl">
           <div class="flex flex-wrap justify-center gap-6">
+            <FindPeople onjoin={onChatJoined} />
             <NewChat onjoin={onChatJoined} />
             <JoinChat onjoin={onChatJoined} />
             {#if hasChats && onCreateGroup}
