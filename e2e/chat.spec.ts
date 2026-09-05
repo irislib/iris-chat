@@ -1358,7 +1358,7 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should show connected devices on another user profile', async ({ browser, testRelayUrl }) => {
+    test('should show connected devices on another user profile', async ({ browser, testRelayUrl }, testInfo) => {
       const context1 = await createContext(browser, testRelayUrl)
       const context2 = await createContext(browser, testRelayUrl)
 
@@ -1382,11 +1382,15 @@ test.describe('iris chat', () => {
         await expect(profileButton).toBeEnabled()
         await profileButton.click()
 
-      const disclosure = page1.getByTestId('profile-appkeys-disclosure')
-      await expect(disclosure).toBeVisible()
-      await expect(disclosure).toContainText('Connected devices')
-      await expect(disclosure).toContainText('device published')
+        const disclosure = page1.getByTestId('profile-appkeys-disclosure')
+        await expect(disclosure).toBeVisible()
+        await expect(disclosure).toContainText('Devices and sessions')
+        await expect(disclosure).toContainText(/1\s+device/)
 
+        await expect(page1.getByTestId('profile-session-count')).toContainText(/[1-9]\d* sessions? on this browser/)
+        await page1.screenshot({ path: testInfo.outputPath('profile-counts-desktop.png'), fullPage: true })
+        await page1.setViewportSize({ width: 390, height: 844 })
+        await page1.screenshot({ path: testInfo.outputPath('profile-counts-mobile.png'), fullPage: true })
         await disclosure.locator('summary').click()
 
         const appKeyButton = disclosure.locator('button[title]').first()

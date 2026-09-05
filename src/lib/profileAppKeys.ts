@@ -25,6 +25,7 @@ export interface CreateProfileAppKeysStoreOptions {
   subscribe: NostrSubscribe
   timeoutMs?: number
   initialDevices?: DeviceEntry[]
+  initialCreatedAt?: number
   initialDeviceLabels?: (identityPubkey: string) => DeviceLabels | undefined
 }
 
@@ -48,6 +49,7 @@ export const createProfileAppKeysStore = (
     subscribe,
     timeoutMs = DEFAULT_PROFILE_APP_KEYS_TIMEOUT_MS,
     initialDevices = [],
+    initialCreatedAt = 0,
     initialDeviceLabels,
   }: CreateProfileAppKeysStoreOptions
 ): Readable<ProfileAppKeysState> => {
@@ -69,10 +71,24 @@ export const createProfileAppKeysStore = (
 
       let active = true
       let latestDevices = initial
+      let latestCreatedAt = initialCreatedAt
+      const rosterKey = (devices: DeviceEntry[]) => JSON.stringify([...new Set(devices.map(device => device.identityPubkey))].sort())
+      let latestRoster = rosterKey(initial)
+      let conflicting = false
       const stop = subscribe(buildAppKeysFilter(pubkey), (event) => {
-        if (!active || event.pubkey !== pubkey) return
+        if (!active || event.pubkey !== pubkey || event.created_at < latestCreatedAt ||
+          event.created_at > Math.floor(Date.now() / 1000) + 300) return
         try {
-          latestDevices = cloneDevices(AppKeys.fromEvent(event).getAllDevices(), initialDeviceLabels)
+          const devices = AppKeys.fromEvent(event).getAllDevices()
+          const incomingRoster = rosterKey(devices)
+          if (event.created_at === latestCreatedAt) {
+            conflicting ||= incomingRoster !== latestRoster
+          } else {
+            conflicting = false
+          }
+          latestCreatedAt = event.created_at
+          latestRoster = incomingRoster
+          latestDevices = conflicting ? [] : cloneDevices(devices, initialDeviceLabels)
           set({
             devices: latestDevices,
             loading: false,

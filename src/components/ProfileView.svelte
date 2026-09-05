@@ -5,6 +5,8 @@
   import MediaModal from './MediaModal.svelte'
   import { createProfileStore, getProfileName } from '../lib/profile'
   import { getAnimalName } from '../lib/animalNames'
+  import { createProfileSessionsStore } from '../lib/profileSessions'
+  import { getNdrRuntime } from '../lib/privateChats'
   import { chats } from '../lib/chat'
   import { generateProxyUrl } from '../lib/imgproxy'
   import { createRuntimeProfileAppKeysStore } from '../lib/profileAppKeysRuntime'
@@ -34,6 +36,9 @@
   let profileAppKeys = $derived(
     profileAppKeysStore ? ($profileAppKeysStore ?? emptyProfileAppKeys) : emptyProfileAppKeys
   )
+
+  let sessionsStore = $derived(isValidPubkey ? createProfileSessionsStore(pubkey, getNdrRuntime()) : undefined)
+  let sessions = $derived(sessionsStore ? $sessionsStore : undefined)
 
   // Check if we have an existing chat with this user
   let hasExistingChat = $derived(isValidPubkey ? $chats.has(pubkey) : false)
@@ -154,23 +159,33 @@
             data-testid="profile-appkeys-disclosure"
           >
             <summary class="cursor-pointer px-4 py-3 select-none">
-              <span class="text-sm font-medium text-gray-200">Connected devices</span>
+              <span class="text-sm font-medium text-gray-200">Devices and sessions</span>
               <span class="block text-xs text-gray-400 mt-1">
                 {#if profileAppKeys.devices.length > 0}
                   {profileAppKeys.devices.length}
-                  {profileAppKeys.devices.length === 1 ? ' device published' : ' devices published'}
+                  {profileAppKeys.devices.length === 1 ? ' device' : ' devices'}
                 {:else if profileAppKeys.loading}
-                  Checking connected relays...
+                  Checking devices…
                 {:else}
-                  No device roster seen yet
+                  No devices found
+                {/if}
+              </span>
+              <span class="block text-xs text-gray-400 mt-1" data-testid="profile-session-count">
+                {#if sessions?.loading}
+                  Checking sessions…
+                {:else}
+                  {sessions?.total ?? 0} {(sessions?.total ?? 0) === 1 ? 'session' : 'sessions'} on this browser
                 {/if}
               </span>
             </summary>
 
             <div class="border-t border-surface-lighter px-4 py-3 space-y-3">
+              {#if sessions && !sessions.loading}
+                <p class="text-sm text-gray-400">{sessions.active} active · {sessions.older} older sessions</p>
+              {/if}
               {#if profileAppKeys.devices.length > 0}
                 {#if profileAppKeys.loading}
-                  <p class="text-xs text-gray-500">Refreshing from connected relays...</p>
+                  <p class="text-xs text-gray-500">Refreshing devices…</p>
                 {/if}
 
                 {#each profileAppKeys.devices as device}
@@ -184,7 +199,7 @@
                     </div>
                     <CopyButton
                       text={formatDeviceIdentity(device.identityPubkey)}
-                      label="Copy device code"
+                      label="Copy device ID"
                       maxLength={48}
                       className="text-xs"
                     />
@@ -193,11 +208,11 @@
                 {/each}
               {:else if profileAppKeys.loading}
                 <p class="text-sm text-gray-400">
-                  Checking connected relays for devices...
+                  Checking devices…
                 </p>
               {:else}
                 <p class="text-sm text-gray-400">
-                  No connected devices for this profile have been seen on your connected relays yet.
+                  No published devices found.
                 </p>
               {/if}
             </div>

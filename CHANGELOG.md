@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.6.18 - 2026-09-05
+
+- Find followed people and pasted user IDs with verified messaging support,
+  including cached results when message servers are unavailable.
+- Show published device counts and local encrypted session counts on user
+  profiles, with active and older sessions available in the details.
+- Keep revoked devices hidden when older device information arrives later.
+
 ## 2.6.17 - 2026-09-05
 
 - Preserve leading Unicode byte-order marks in synced messages and reject

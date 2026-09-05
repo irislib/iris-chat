@@ -28,14 +28,15 @@ const observeStore = <T>(store: { subscribe: (run: (value: T) => void) => () => 
 
 const appKeysSnapshot = (
   ownerPrivateKey: Uint8Array,
-  devices: Array<{ identityPubkey: string; createdAt: number }>
+  devices: Array<{ identityPubkey: string; createdAt: number }>,
+  createdAt = 1700000200,
 ): SubscribedEvent =>
   finalizeEvent(
     new AppKeys(devices).getEvent({
       ownerPrivateKey,
       ownerPubkey: getPublicKey(ownerPrivateKey),
       profileId: PROFILE_ID,
-      createdAt: 1700000200,
+      createdAt,
     }),
     ownerPrivateKey
   ) as unknown as SubscribedEvent
@@ -183,5 +184,27 @@ describe('profileAppKeys', () => {
   it('exports the canonical roster snapshot kind and type for UI/runtime filters', () => {
     expect(PROFILE_APP_KEYS_KIND).toBe(37368)
     expect(PROFILE_APP_KEYS_TYPE).toBe('app_keys_roster_snapshot')
+  })
+})
+
+
+describe('profile device head ordering', () => {
+  it('ignores stale device lists and keeps revocations and same-time conflicts hidden', () => {
+    const owner = generateSecretKey()
+    let emit: Parameters<NostrSubscribe>[1] = () => {}
+    const observer = observeStore(createProfileAppKeysStore(getPublicKey(owner), {
+      subscribe: (_filter, callback) => { emit = callback; return () => {} },
+    }))
+    const device = [{ identityPubkey: DEVICE_PUBKEY, createdAt: 1700000200 }]
+    emit(appKeysSnapshot(owner, device, 1700000200))
+    expect(observer.current().devices).toHaveLength(1)
+    emit(appKeysSnapshot(owner, [], 1700000201))
+    emit(appKeysSnapshot(owner, device, 1700000200))
+    expect(observer.current().devices).toHaveLength(0)
+    emit(appKeysSnapshot(owner, device, 1700000201))
+    expect(observer.current().devices).toHaveLength(0)
+    emit(appKeysSnapshot(owner, device, 1700000202))
+    expect(observer.current().devices).toHaveLength(1)
+    observer.unsubscribe()
   })
 })
