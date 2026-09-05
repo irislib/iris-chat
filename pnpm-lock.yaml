@@ -23,8 +23,8 @@ importers:
         specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-webrtc-0.0.45.tgz
         version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-webrtc-0.0.45.tgz
       '@hashtree/core':
-        specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.0/hashtree-core-0.3.0.tgz
-        version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.0/hashtree-core-0.3.0.tgz
+        specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.6/hashtree-core-0.3.1.tgz
+        version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.6/hashtree-core-0.3.1.tgz
       '@noble/hashes':
         specifier: ^2.2.0
         version: 2.2.0
@@ -852,9 +852,9 @@ packages:
     resolution: {integrity: sha512-aRonAlsJz56DlyBsc/IBMkKmKmrYuMuq24YLWbHfi8NmTphv6nOupWK3Tpd7DJphXgqCgKi2CnqW7PI6H2+bNw==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-webrtc-0.0.45.tgz}
     version: 0.0.45
 
-  '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.0/hashtree-core-0.3.0.tgz':
-    resolution: {integrity: sha512-kh4ZhzsJTd/iLAYUeZ/+Q9EzA/Ev9FObOLcOveIvx7Ghtk6qdeiTexoGCOiu5X8VmlksxRPleCVeMh1k9/2AGA==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.0/hashtree-core-0.3.0.tgz}
-    version: 0.3.0
+  '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.6/hashtree-core-0.3.1.tgz':
+    resolution: {integrity: sha512-NcR9gnj3wsxCdf+FaTf4YSkWB5Yi2uptgaUlH+VqXCI/dPXyUugt/5BDnc41sdiTzRX2IWP44fvJe9Pb0P+1WA==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.6/hashtree-core-0.3.1.tgz}
+    version: 0.3.1
 
   '@iconify-json/carbon@1.2.24':
     resolution: {integrity: sha512-b7u/eTWE3xFa7UXlRJBSEm6At1y6+F0P3imBEip5/8QeRzouxVjBf80Y2xnu1GYsFo9MYlHA0bZfxxMd5givfw==}
@@ -3969,7 +3969,7 @@ snapshots:
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
 
-  '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.0/hashtree-core-0.3.0.tgz':
+  '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.6/hashtree-core-0.3.1.tgz':
     dependencies:
       '@msgpack/msgpack': 3.1.3
       '@noble/hashes': 2.2.0

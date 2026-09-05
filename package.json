@@ -51,7 +51,7 @@
     "@fips/core": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-core-0.0.29.tgz",
     "@fips/tcp": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
     "@fips/transport-webrtc": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-webrtc-0.0.45.tgz",
-    "@hashtree/core": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.0/hashtree-core-0.3.0.tgz",
+    "@hashtree/core": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.6/hashtree-core-0.3.1.tgz",
     "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.1.0",
     "@nostr-dev-kit/ndk": "^2.18.1",
