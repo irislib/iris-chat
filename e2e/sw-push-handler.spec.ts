@@ -62,7 +62,7 @@ async function getInviteUrl(page: Page): Promise<string> {
   await expect(copyButton).toBeVisible()
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get invite URL')
-  return url.replace('https://chat.iris.to', 'http://localhost:4173')
+  return url
 }
 
 async function setupUserWithInvite(page: Page): Promise<string> {
@@ -223,12 +223,6 @@ test.describe('SW push handler', () => {
     // Typing is private by default; this scenario explicitly exercises the
     // opt-in send path.
     await enableTypingIndicators(aliceContext)
-    // Real notification permission so showNotification actually fires and
-    // the resulting Notification instances appear in getNotifications().
-    // Headless Chromium denies by default; without this, the SW silently
-    // drops every showNotification call and we'd be testing nothing.
-    await bobContext.grantPermissions(['notifications'], { origin: 'http://localhost:4173' })
-
     const alice = await aliceContext.newPage()
     const bob = await bobContext.newPage()
 
@@ -237,6 +231,8 @@ test.describe('SW push handler', () => {
       const inviteUrl = await setupUserWithInvite(alice)
 
       await loginAnonymously(bob)
+      // Grant the actual test origin, including any configured port.
+      await bobContext.grantPermissions(['notifications'], { origin: new URL(bob.url()).origin })
       await registerDevice(bob)
       await bob.getByRole('button', { name: 'New Chat' }).click()
       await joinAndExchange(alice, bob, inviteUrl, 'hi from bob')

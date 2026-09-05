@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 2.6.17 - 2026-09-05
+
+- Preserve leading Unicode byte-order marks in synced messages and reject
+  malformed base64 consistently with the native app.
+- Upgrade double ratchet to 0.0.167, fixing delayed messages becoming unreadable
+  after encryption keys rotate or a session is restored.
+- Test device-sync interoperability against explicitly selected native source,
+  reuse supplied native executables in browser tests, and use the configured
+  test origin for invites and notification permissions.
+
 ## 2.6.16 - 2026-07-20
 
 - Consolidate duplicated delivery tracking, group mutations, persisted

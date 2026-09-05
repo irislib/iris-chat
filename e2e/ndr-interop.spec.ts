@@ -25,7 +25,7 @@ function skipIfNdrWorkspaceMissing() {
 
 function resolveNativeCliBin(): string {
   if (process.env.IRIS_CHAT_RS_BIN) {
-    return process.env.IRIS_CHAT_RS_BIN
+    return path.resolve(process.env.IRIS_CHAT_RS_BIN)
   }
 
   if (fs.existsSync(NDR_MANIFEST)) {
@@ -476,6 +476,10 @@ function createNdrDataDir(relayUrls: string[]): string {
 let ndrBuildPromise: Promise<void> | null = null
 
 async function ensureNdrBinary(): Promise<void> {
+  if (process.env.IRIS_CHAT_RS_BIN) {
+    fs.accessSync(NDR_BIN, fs.constants.X_OK)
+    return
+  }
   if (!ndrBuildPromise) {
     ndrBuildPromise = new Promise((resolve, reject) => {
       const child = spawn(

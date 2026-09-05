@@ -78,7 +78,7 @@ test.describe('Message overflow', () => {
       await expect(copyButton).toBeVisible()
       const rawInviteUrl = await copyButton.getAttribute('title')
       if (!rawInviteUrl) throw new Error('Could not get invite URL')
-      const inviteUrl = rawInviteUrl.replace('https://chat.iris.to', 'http://localhost:4173')
+      const inviteUrl = rawInviteUrl.replace('https://chat.iris.to', new URL(page1.url()).origin)
 
       // User 2: Join via paste link
       await page2.goto('/')

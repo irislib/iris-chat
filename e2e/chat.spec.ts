@@ -20,15 +20,14 @@ async function safeReload(page: Page) {
 }
 
 // Helper to get invite URL from CopyButton (has title attribute with full URL)
-// Rewrites chat.iris.to URLs to localhost for e2e tests
+// Rewrites public invite URLs to the current test server.
 async function getInviteUrl(page: Page): Promise<string> {
   await registerDevice(page)
   const copyButton = page.locator('button[title*="#"]').first()
   await expect(copyButton).toBeVisible()
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get invite URL')
-  // Rewrite production URL to test server (invite URLs use chat.iris.to on localhost)
-  return url.replace('https://chat.iris.to', 'http://localhost:4173')
+  return url.replace('https://chat.iris.to', new URL(page.url()).origin)
 }
 
 // Helper to setup a user and get their invite URL

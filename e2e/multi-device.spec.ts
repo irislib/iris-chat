@@ -173,7 +173,7 @@ async function getInviteUrl(page: import('@playwright/test').Page): Promise<stri
   await expect(copyButton).toBeVisible({ timeout: 10000 })
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get invite URL')
-  return url.replace('https://chat.iris.to', 'http://localhost:4173')
+  return url.replace('https://chat.iris.to', new URL(page.url()).origin)
 }
 
 async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<string> {
@@ -313,7 +313,7 @@ test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
     await expect(linkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 20000 })
 
     await ownerPage.getByRole('button', { name: 'New Chat' }).click()
-    const selfInviteUrl = `http://localhost:4173/#${nip19.npubEncode(ownerPubkey)}`
+    const selfInviteUrl = `${new URL(ownerPage.url()).origin}/#${nip19.npubEncode(ownerPubkey)}`
     await ownerPage.getByPlaceholder('Paste invite link').fill(selfInviteUrl)
     await expect(ownerPage.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 15000 })
 

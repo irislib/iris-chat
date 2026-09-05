@@ -83,7 +83,7 @@ test.describe('NIP-07 Login', () => {
     await expect(copyButton).toBeVisible()
     const rawUrl = await copyButton.getAttribute('title')
     if (!rawUrl) throw new Error('Could not get invite URL')
-    const inviteUrl = rawUrl.replace('https://chat.iris.to', 'http://localhost:4173')
+    const inviteUrl = rawUrl.replace('https://chat.iris.to', new URL(page1.url()).origin)
 
     // User 2: NIP-07 login and join via paste link
     const context2 = await browser.newContext()
@@ -147,7 +147,7 @@ test.describe('NIP-07 Login', () => {
       ephemeralKey: 'a'.repeat(64),
       sharedSecret: 'b'.repeat(64),
     }
-    const legacyInviteUrl = `http://localhost:4173/#${encodeURIComponent(JSON.stringify(legacyInvitePayload))}`
+    const legacyInviteUrl = `${new URL(page.url()).origin}/#${encodeURIComponent(JSON.stringify(legacyInvitePayload))}`
     await page.getByPlaceholder('Paste invite link').fill(legacyInviteUrl)
 
     // Should show NIP-44 error message
