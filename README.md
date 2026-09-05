@@ -47,6 +47,15 @@ pnpm test
 pnpm test:e2e
 ```
 
+To test device-sync packets and framing against a native checkout, run:
+
+```sh
+IRIS_CHAT_RS_CORE_DIR=/path/to/iris-chat-rs/core pnpm test:device-sync-interop
+```
+
+This compiles the selected checkout's protocol and framing code in a small Rust
+fixture. Setting `IRIS_CHAT_RS_CORE_DIR` also enables these tests in `pnpm test`.
+
 ## Source
 
 [View source on decentralized git](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat)

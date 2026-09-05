@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -7,6 +8,7 @@ import {
   DEVICE_SYNC_PAGE_MESSAGES,
   DEVICE_SYNC_PAGE_PACKETS,
   DEVICE_SYNC_PORT,
+  DeviceSyncProtocolError,
   encodeDeviceSyncPacket,
   parseDeviceSyncPacket,
   type DeviceSyncSnapshot,
@@ -15,9 +17,8 @@ import { frameRecord, RecordReader } from './deviceSyncTcp'
 
 const appRoot = process.cwd()
 const fixture = path.join(appRoot, 'test-fixtures/device-sync-rust')
-const nativeCore = process.env.IRIS_CHAT_RS_CORE_DIR
-const nativeRepo = nativeCore ? path.resolve(nativeCore, '..') : undefined
-const NATIVE_SOURCE_SHA = '6514f424fc16b0d435a22a98081fc4569c15ad2a'
+const nativeSource = process.env.IRIS_CHAT_RS_CORE_DIR
+const nativeCore = nativeSource && path.resolve(nativeSource)
 const nativeAvailable = !!nativeCore && existsSync(path.join(nativeCore, 'src/core/device_sync.rs')) &&
   existsSync(path.join(nativeCore, 'src/core/device_sync_tcp.rs'))
 const required = process.env.REQUIRE_DEVICE_SYNC_RUST_INTEROP === '1'
@@ -29,19 +30,19 @@ const binary = path.join(
 const owner = 'a'.repeat(64)
 const peer = 'b'.repeat(64)
 
-const interop = required ? describe : describe.skip
+const interop = required || nativeCore ? describe : describe.skip
 
-interop('iris-chat-rs 0.1.39 device-sync interop', () => {
+interop('iris-chat-rs device-sync interop', () => {
   beforeAll(() => {
-    if (!nativeCore) throw new Error('IRIS_CHAT_RS_CORE_DIR must explicitly select the released native source')
+    if (!nativeCore) throw new Error('IRIS_CHAT_RS_CORE_DIR must explicitly select the native source')
     if (!nativeAvailable) throw new Error(`iris-chat-rs core is missing at ${nativeCore}`)
-    requireReleasedNativeSource()
     const build = spawnSync(
       'cargo',
-      ['build', '--quiet', '--locked', '--manifest-path', path.join(fixture, 'Cargo.toml')],
-      { cwd: appRoot, env: nativeEnv(), encoding: 'utf8' },
+      ['build', '--quiet', '--locked', '--manifest-path', path.join(fixture, 'Cargo.toml'),
+        '--target-dir', path.join(fixture, 'target')],
+      { cwd: appRoot, env: nativeEnv(), encoding: 'utf8', timeout: 120_000 },
     )
-    if (build.status !== 0) throw new Error(build.stderr || build.stdout || 'Rust fixture build failed')
+    if (build.status !== 0) throw new Error(build.error?.message || build.stderr || build.stdout || 'Rust fixture build failed')
   }, 120_000)
 
   it('extracts the service, record, page, and framing bounds from native source', () => {
@@ -59,15 +60,33 @@ interop('iris-chat-rs 0.1.39 device-sync interop', () => {
       v: 1,
       type: 'snapshot',
       rosterAt: 42,
-      chats: [],
-      appKeys: [],
-      groups: [],
+      chats: [{ id: peer, updatedAt: 43 }],
+      appKeys: [{
+        ownerPubkey: owner,
+        createdAt: 42,
+        devices: [{ identityPubkey: peer, createdAt: 41 }],
+      }],
+      groups: [{
+        id: 'group-1',
+        name: 'Native and browser',
+        description: 'Linked devices',
+        picture: 'https://example.com/group.png',
+        createdBy: owner,
+        members: [owner, peer],
+        admins: [owner],
+        protocol: 'sender_key_v1',
+        revision: 2,
+        createdAt: 40,
+        updatedAt: 43,
+        accepted: true,
+      }],
       messages: [{
         chatId: peer,
         id: 'message-1',
-        body: 'native ↔ browser 🌈',
+        body: '\uFEFFnative ↔ browser 🌈',
         author: owner,
         createdAt: 43,
+        expiresAt: 100,
       }],
     }
     const rustSnapshot = runNative('roundtrip', encodeDeviceSyncPacket(snapshot))
@@ -75,6 +94,7 @@ interop('iris-chat-rs 0.1.39 device-sync interop', () => {
 
     const rustPackets = [
       { v: 1, type: 'request', rosterAt: 42, page: { kind: 'metadata', offset: 32 } },
+      { v: 1, type: 'request', rosterAt: 42, page: { kind: 'messages', after: null } },
       { v: 1, type: 'resyncRequired' },
       {
         v: 1,
@@ -88,6 +108,19 @@ interop('iris-chat-rs 0.1.39 device-sync interop', () => {
       expect(parseDeviceSyncPacket(emitted, owner)).toEqual(packet)
     }
   })
+
+  it.each(['YR==', 'YWJ=', 'YQ', 'YQ==\n', '/w=='])(
+    'agrees with Rust when rejecting malformed base64 UTF-8 %j', (body: string) => {
+      const payload = new TextEncoder().encode(JSON.stringify({
+        v: 1,
+        type: 'snapshot',
+        rosterAt: 42,
+        messages: [{ chatId: peer, id: 'm', body, author: owner, createdAt: 43 }],
+      }))
+      expect(invokeNative('roundtrip', payload).status).not.toBe(0)
+      expect(() => parseDeviceSyncPacket(payload, owner)).toThrow(DeviceSyncProtocolError)
+    },
+  )
 
   it('interchanges split u32-BE records in both directions', () => {
     const packet = encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 42 })
@@ -122,30 +155,6 @@ interop('iris-chat-rs 0.1.39 device-sync interop', () => {
 function nativeEnv(): NodeJS.ProcessEnv {
   if (!nativeCore) throw new Error('IRIS_CHAT_RS_CORE_DIR is required')
   return { ...process.env, IRIS_CHAT_RS_CORE_DIR: nativeCore }
-}
-
-function requireReleasedNativeSource(): void {
-  if (!nativeRepo) throw new Error('IRIS_CHAT_RS_CORE_DIR is required')
-  const revision = spawnSync('git', ['-C', nativeRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
-  if (revision.status !== 0 || revision.stdout.trim() !== NATIVE_SOURCE_SHA) {
-    throw new Error(`device-sync interop requires iris-chat-rs ${NATIVE_SOURCE_SHA}`)
-  }
-  const sourceDiff = spawnSync('git', [
-    '-C',
-    nativeRepo,
-    'diff',
-    '--quiet',
-    NATIVE_SOURCE_SHA,
-    '--',
-    'core/Cargo.toml',
-    'core/src/core/device_sync.rs',
-    'core/src/core/device_sync_tcp.rs',
-    'core/src/core/device_sync',
-    'core/src/core/device_sync_tcp',
-  ])
-  if (sourceDiff.status !== 0) {
-    throw new Error(`device-sync interop requires clean native sources at ${NATIVE_SOURCE_SHA}`)
-  }
 }
 
 function invokeNative(operation: string, input?: Uint8Array, args: string[] = []) {

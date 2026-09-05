@@ -91,7 +91,7 @@ export class DeviceSyncProtocolError extends Error {
 }
 
 const encoder = new TextEncoder()
-const decoder = new TextDecoder('utf-8', { fatal: true })
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
 export function encodeDeviceSyncPacket(packet: DeviceSyncPacket): Uint8Array {
   const bytes = serializedPacket(packet)
@@ -288,10 +288,8 @@ function encodeBase64(bytes: Uint8Array): string {
 }
 
 function decodeBase64(value: string): Uint8Array {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    throw new Error('invalid base64')
-  }
   const binary = atob(value)
+  if (btoa(binary) !== value) throw new Error('invalid base64')
   return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import {
   DEVICE_SYNC_MAX_PACKET_BYTES,
@@ -56,7 +57,7 @@ const packets: DeviceSyncPacket[] = [
 ]
 
 describe('native device-sync protocol', () => {
-  it('locks the native 0.1.39 service and page bounds', () => {
+  it('locks the native service and page bounds', () => {
     expect(DEVICE_SYNC_PORT).toBe(7369)
     expect(DEVICE_SYNC_MAX_PACKET_BYTES).toBe(64 * 1024)
     expect(DEVICE_SYNC_PAGE_MESSAGES).toBe(32)
@@ -71,6 +72,23 @@ describe('native device-sync protocol', () => {
     const packet = packets.at(-1) as DeviceSyncSnapshot
     const wire = JSON.parse(new TextDecoder().decode(encodeDeviceSyncPacket(packet)))
     expect(wire.messages[0].body).toBe('SGVsbG8sIGxpbmtlZCBkZXZpY2Ug8J+Riw==')
+  })
+
+  it('preserves a leading Unicode byte-order mark in a message body', () => {
+    const packet = packets.at(-1) as DeviceSyncSnapshot
+    const snapshot = {
+      ...packet,
+      messages: [{ ...packet.messages[0], body: '\uFEFFnative ↔ browser' }],
+    }
+    expect(parseDeviceSyncPacket(encodeDeviceSyncPacket(snapshot), owner)).toEqual(snapshot)
+  })
+
+  it.each(['YR==', 'YWJ=', 'YQ', 'YQ==\n'])('rejects noncanonical native base64 %j', (body: string) => {
+    const packet = packets.at(-1) as DeviceSyncSnapshot
+    const wire = { ...packet, messages: [{ ...packet.messages[0], body }] }
+    expect(() => parseDeviceSyncPacket(
+      new TextEncoder().encode(JSON.stringify(wire)), owner,
+    )).toThrow(DeviceSyncProtocolError)
   })
 
   it('treats a native null request page as the initial page', () => {
