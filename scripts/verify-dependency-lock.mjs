@@ -27,8 +27,8 @@ const releases = {
     integrity: 'sha512-8Du8STeYMT98zz00lo3uoETYeWpvVGZO3n0Xi9pZycXWPMxCQP1FwRgl0mrxTMT5KK1xOw4pMnpSGmMeVOidag==',
   },
   'nostr-double-ratchet': {
-    url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.168/nostr-double-ratchet-0.0.168.tgz',
-    integrity: 'sha512-njK63S3xVKLfZlos6AVuhUy9q3G4aR50cJ6FWjly9pS7wUhx+9b/ZTHgHSZVv7GK2L5JKMADGn/2hsQhi/dTkQ==',
+    url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.169/nostr-double-ratchet-0.0.169.tgz',
+    integrity: 'sha512-rCnTbaoofWp9TqEitLRQELyXW5LsErS6RJCr6TywmCeRyQ/xhfERpnG6RAYenfkVjEgqoh4ZWtYFKZCo+BZsxQ==',
   },
 }
 

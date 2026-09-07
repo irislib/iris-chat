@@ -331,12 +331,7 @@ export async function deleteSessionManagerValue(key: string): Promise<void> {
 }
 
 export async function listSessionManagerKeys(prefix = ''): Promise<string[]> {
-  if (!prefix) {
-    const all = await db.sessionManager.toArray()
-    return all.map((item) => item.key)
-  }
-  const all = await db.sessionManager
-    .filter((item) => item.key.startsWith(prefix))
-    .toArray()
-  return all.map((item) => item.key)
+  return prefix
+    ? db.sessionManager.where('key').startsWith(prefix).primaryKeys()
+    : db.sessionManager.toCollection().primaryKeys()
 }

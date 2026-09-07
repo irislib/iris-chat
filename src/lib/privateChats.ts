@@ -22,7 +22,6 @@ import {
   type DeviceEntry,
   type NdrRuntimeState,
   type NostrFetch,
-  type NostrPublish,
   type NostrSubscribe,
 } from 'nostr-double-ratchet'
 import {
@@ -35,18 +34,21 @@ import {
 import { devices } from './devices'
 import { relayStore } from './relayStore'
 import { DexieStorageAdapter } from './sessionManagerStorage'
-import type { VerifiedEvent } from 'nostr-tools'
+import type { UnsignedEvent, VerifiedEvent } from 'nostr-tools'
 import {
   getCurrentDeviceRegistrationLabels,
   getLinkedDeviceRegistrationLabels,
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
+import { createRuntimePublish } from './runtimePublish'
 import { asNdkEventSubscription } from './ndkSubscription'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
 import { publishNostrPubsub } from './nostrPubsubRuntime'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 
 let runtime: NdrRuntime | null = null
+let runtimePublication: ReturnType<typeof createRuntimePublish> | null = null
+let runtimeOwnerPubkey: string | null = null
 let runtimeCleanup: (() => void) | null = null
 let previousRuntimeState: NdrRuntimeState | null = null
 let rotateInvitePromise: Promise<void> | null = null
@@ -204,78 +206,35 @@ const createRelayOnlySubscribe = (
   }
 }
 
-export const publishRuntimeEventFireAndForget = <T>(
-  event: T,
-  publish: () => Promise<RuntimePublishResult>,
-  onAcceptedRelays?: (relayUrls: string[]) => void
-): T => {
-  void publish()
-    .then((publishedRelays) => {
-      if (publishedRelays.size === 0) {
-        console.warn('[privateChats] Runtime event was not accepted by any relay')
-        return
-      }
-      const relayUrls = getPublishedRelayUrls(publishedRelays)
-      if (relayUrls.length > 0) {
-        onAcceptedRelays?.(relayUrls)
-      }
+const createSign = (ndkInstance: ReturnType<typeof getNDK>) => {
+  return async (event: UnsignedEvent): Promise<VerifiedEvent> => {
+    const e = new NDKEvent(ndkInstance, event)
+    await e.sign()
+    return e.rawEvent() as VerifiedEvent
+  }
+}
+
+const createRelayPublish = (ndkInstance: ReturnType<typeof getNDK>) => {
+  return async (event: VerifiedEvent) => {
+    const e = new NDKEvent(ndkInstance, event)
+    void publishNostrPubsub(event).catch((error) => {
+      console.warn('[privateChats] FIPS pubsub publish failed:', error)
     })
-    .catch((error) => {
-      console.warn('[privateChats] Runtime event publish failed:', error)
-    })
-  return event
-}
-
-export type RuntimePublishResult = {
-  size: number
-  [Symbol.iterator]?: () => IterableIterator<unknown>
-}
-
-function relayUrlFromPublishedRelay(relay: unknown): string | null {
-  if (!relay || typeof relay !== 'object') return null
-
-  const directUrl = (relay as { url?: unknown }).url
-  if (typeof directUrl === 'string' && directUrl.trim()) {
-    return directUrl.trim()
+    const relayUrls = [...relayStore.getState().relays]
+    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
+    return e.publish(relaySet, 10000, 1)
   }
-
-  const nestedUrl = (relay as { relay?: { url?: unknown } }).relay?.url
-  if (typeof nestedUrl === 'string' && nestedUrl.trim()) {
-    return nestedUrl.trim()
-  }
-
-  return null
 }
 
-export function getPublishedRelayUrls(publishedRelays: RuntimePublishResult): string[] {
-  const iterator = publishedRelays[Symbol.iterator]?.()
-  if (!iterator) return []
-
-  const urls: string[] = []
-  for (let next = iterator.next(); !next.done; next = iterator.next()) {
-    const url = relayUrlFromPublishedRelay(next.value)
-    if (url) urls.push(url)
-  }
-  return Array.from(new Set(urls)).sort()
+const reportPublicationError = (error: unknown) => {
+  console.warn('[privateChats] Runtime event remains queued for retry:', error)
 }
 
-const createPublish = (ndkInstance: ReturnType<typeof getNDK>): NostrPublish => {
-  return (async (event, innerEventId) => {
-    return publishRuntimeEventFireAndForget(event, async () => {
-      const e = new NDKEvent(ndkInstance, event)
-      if (!e.sig) await e.sign()
-      const signed = e.rawEvent() as VerifiedEvent
-      void publishNostrPubsub(signed).catch((error) => {
-        console.warn('[privateChats] FIPS pubsub publish failed:', error)
-      })
-      const relayUrls = [...relayStore.getState().relays]
-      const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
-      return e.publish(relaySet, 10000, 1)
-    }, (relayUrls) => {
-      notifyMessageRelayPublish(innerEventId, relayUrls)
-    }) as never
-  }) as NostrPublish
-}
+// Account cleanup may await storage before resetting managers. Stop old outgoing
+// work as soon as identity changes so a late ACK cannot update the new account.
+identity.subscribe((currentIdentity) => {
+  if (currentIdentity?.pubkey !== runtimeOwnerPubkey) runtimePublication?.close()
+})
 
 const createFetch = (
   ndkInstance: ReturnType<typeof getNDK>,
@@ -320,11 +279,19 @@ const republishInviteWithRetry = async (reason: string): Promise<void> => {
 
 const getRuntime = (): NdrRuntime => {
   const ownerIdentityKeyHex = getPrivkeyHex()
+  const ownerPubkey = get(identity)?.pubkey
+  if (!ownerPubkey) throw new Error('Private messaging requires an identity')
 
-  if (runtime && runtimeOwnerIdentityKeyHex === ownerIdentityKeyHex) {
+  if (
+    runtime &&
+    runtimeOwnerIdentityKeyHex === ownerIdentityKeyHex &&
+    runtimeOwnerPubkey === ownerPubkey
+  ) {
     return runtime
   }
 
+  runtimePublication?.close()
+  runtimePublication = null
   runtimeCleanup?.()
   runtimeCleanup = null
   runtime?.close()
@@ -336,9 +303,26 @@ const getRuntime = (): NdrRuntime => {
 
   const ndkInstance = getNDK()
   const ownerIdentityKey = getPrivkeyBytes()
+  const sign = createSign(ndkInstance)
+  const publication = createRuntimePublish({
+    owner: ownerPubkey,
+    publish: createRelayPublish(ndkInstance),
+    onAcceptedRelays: notifyMessageRelayPublish,
+    onError: reportPublicationError,
+  })
+  runtimePublication = publication
+  runtimeOwnerPubkey = ownerPubkey
   runtime = new NdrRuntime({
     nostrSubscribe: createSubscribe(ndkInstance),
-    nostrPublish: createPublish(ndkInstance),
+    nostrSign: sign,
+    nostrEnqueue: publication.enqueue,
+    nostrPublish: async (event, innerEventId) => {
+      const signed = 'sig' in event && event.sig
+        ? event as VerifiedEvent
+        : await sign(event)
+      return publication.publish(signed, innerEventId)
+    },
+    onPublishError: ({ error }) => reportPublicationError(error),
     nostrFetch: createFetch(ndkInstance),
     storage: new DexieStorageAdapter(),
     appKeysFetchTimeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
@@ -364,6 +348,7 @@ const getRuntime = (): NdrRuntime => {
 
     previousRuntimeState = state
   })
+  publication.start()
   return runtime
 }
 
@@ -756,6 +741,8 @@ export const resetManagers = (): void => {
     clearTimeout(linkedInviteRepublishTimer)
     linkedInviteRepublishTimer = null
   }
+  runtimePublication?.close()
+  runtimePublication = null
   runtimeCleanup?.()
   runtimeCleanup = null
   runtime?.close()
@@ -763,6 +750,7 @@ export const resetManagers = (): void => {
   previousRuntimeState = null
   rotateInvitePromise = null
   runtimeOwnerIdentityKeyHex = null
+  runtimeOwnerPubkey = null
   devices.reset()
   verifiedDeviceRegistrations.clear()
   activeDeviceRegistration = null
