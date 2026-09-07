@@ -17,6 +17,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "pnpm verify:dependency-lock && NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run",
     "test:device-sync-interop": "env REQUIRE_DEVICE_SYNC_RUST_INTEROP=1 NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run src/lib/deviceSyncRustInterop.test.ts",
+    "test:interop": "pnpm verify:dependency-lock && pnpm test:device-sync-interop && env REQUIRE_NATIVE_INTEROP=1 playwright test e2e/ndr-interop.spec.ts --workers=1 --retries=0",
     "verify:dependency-lock": "node scripts/verify-dependency-lock.mjs",
     "test:watch": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs",
     "test:e2e": "env -u NO_COLOR playwright test",

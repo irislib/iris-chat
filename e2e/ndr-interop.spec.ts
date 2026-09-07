@@ -5,7 +5,7 @@ import * as os from 'os'
 import * as path from 'path'
 import * as readline from 'readline'
 import { fileURLToPath } from 'url'
-import { generateSecretKey, getPublicKey } from 'nostr-tools'
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import type { BrowserContext, Page } from '@playwright/test'
 import type { TestRelay } from './test-relay'
 
@@ -20,7 +20,12 @@ const NDR_BIN = resolveNativeCliBin()
 const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
 
 function skipIfNdrWorkspaceMissing() {
-  test.skip(!fs.existsSync(NDR_MANIFEST), `iris-chat-rs native CLI missing: ${NDR_MANIFEST}`)
+  if (fs.existsSync(NDR_MANIFEST)) return
+  const reason = `iris-chat-rs native CLI missing: ${NDR_MANIFEST}`
+  if (process.env.REQUIRE_NATIVE_INTEROP === '1' || process.env.IRIS_CHAT_RS_CORE_DIR) {
+    throw new Error(reason)
+  }
+  test.skip(true, reason)
 }
 
 function resolveNativeCliBin(): string {
@@ -31,7 +36,7 @@ function resolveNativeCliBin(): string {
   if (fs.existsSync(NDR_MANIFEST)) {
     const metadata = spawnSync(
       'cargo',
-      ['metadata', '--format-version', '1', '--no-deps', '--manifest-path', NDR_MANIFEST],
+      ['metadata', '--locked', '--format-version', '1', '--no-deps', '--manifest-path', NDR_MANIFEST],
       {
         cwd: NDR_CWD,
         env: { ...process.env },
@@ -484,7 +489,7 @@ async function ensureNdrBinary(): Promise<void> {
     ndrBuildPromise = new Promise((resolve, reject) => {
       const child = spawn(
         'cargo',
-        ['build', '-q', '--manifest-path', NDR_MANIFEST, '--bin', 'iris'],
+        ['build', '-q', '--locked', '--manifest-path', NDR_MANIFEST, '--bin', 'iris'],
         {
           cwd: NDR_CWD,
           env: { ...process.env, NOSTR_PREFER_LOCAL: '0' },
@@ -810,6 +815,76 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
       page.locator('.max-w-\\[85\\%\\]').filter({ hasText: ndrMessage })
     ).toBeVisible({ timeout: 30000 })
     await silentRelayConnectionsReady
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('iris-chat user-ID discovery delivers to offline native and survives restart', async ({
+  page,
+  testRelay,
+  testRelayUrls,
+}) => {
+  skipIfNdrWorkspaceMissing()
+  test.setTimeout(240000)
+
+  const dataDir = createNdrDataDir(testRelayUrls)
+  const nativeSecret = generateSecretKey()
+  const nativePubkey = getPublicKey(nativeSecret)
+
+  try {
+    expect((await runNdr(['login', toHex(nativeSecret)], dataDir)).status).toBe('ok')
+    expect((await runNdr(['invite', 'create'], dataDir)).status).toBe('ok')
+    await waitForRelayEvent(
+      testRelay,
+      (event) => event.kind === 37368 && event.pubkey === nativePubkey &&
+        event.tags.some((tag) => tag[0] === 'device'),
+      30000,
+      'native messaging device publication'
+    )
+
+    await useTestRelay(page.context(), testRelayUrls)
+    await loginAnonymously(page)
+    await waitForWebDeviceRoster(page, testRelay)
+    await page.getByRole('button', { name: 'New Chat' }).click()
+    const people = page.getByRole('region', { name: 'Find people' })
+    await people.getByRole('textbox', { name: 'Search people' }).fill(nip19.npubEncode(nativePubkey))
+    await expect(people.getByRole('button')).toHaveCount(1)
+    await people.getByRole('button').click()
+
+    // No native process is running: publish both the bootstrap and first message
+    // before the recipient starts, just as when the mobile app is closed.
+    const firstMessage = 'web to offline native by user ID'
+    const eventStart = testRelay.publishedEvents.length
+    await page.getByPlaceholder('Type a message...').fill(firstMessage)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await waitForNewRelayEvent(testRelay, eventStart, (event) => event.kind === 1060,
+      30000, 'first message published while native is offline')
+
+    const nativeChat = await waitForNativeDirectChat(dataDir, 60000, 'offline first-contact bootstrap')
+    await waitForNativeMessage(dataDir, nativeChat.chat_id, firstMessage, 30000)
+
+    // Reload the web app's persisted session before sending a second message.
+    await page.reload()
+    await openChatFromList(page, firstMessage)
+    const afterRestart = 'web to native after restart'
+    await page.getByPlaceholder('Type a message...').fill(afterRestart)
+    await page.getByRole('button', { name: 'Send' }).click()
+    await waitForNativeMessage(dataDir, nativeChat.chat_id, afterRestart, 30000)
+
+    // Remove the web runtime entirely so a reply must be recovered from storage
+    // and the relay when it starts again, rather than delivered to a live socket.
+    await page.goto('about:blank')
+    const reply = 'native reply while web is closed'
+    expect((await runNdr(['send', nativeChat.chat_id, reply], dataDir)).status).toBe('ok')
+    await loginWithStoredKey(page)
+    await expectChatBubbleVisible(page, reply)
+    await expect(page.locator('.max-w-\\[85\\%\\]').filter({ hasText: reply })).toHaveCount(1)
+
+    const read = await runNdr(['read', nativeChat.chat_id], dataDir)
+    for (const body of [firstMessage, afterRestart]) {
+      expect(read.data.messages.filter((message: any) => message.body === body)).toHaveLength(1)
+    }
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true })
   }

@@ -7,6 +7,69 @@ on:
     branches: [main, master]
 
 jobs:
+  native-interop:
+    name: Web and native interop
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IRIS_CHAT_RS_CORE_DIR: ${{ github.workspace }}/iris-chat-rs/core
+    defaults:
+      run:
+        working-directory: iris-chat
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: iris-chat
+
+      - name: Checkout native app
+        uses: actions/checkout@v4
+        with:
+          repository: irislib/iris-chat-rs
+          ref: main
+          path: iris-chat-rs
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: iris-chat/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: iris-chat/pnpm-lock.yaml
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Record tested revisions
+        run: |
+          git log -1 --format='web %H'
+          git -C "$IRIS_CHAT_RS_CORE_DIR" log -1 --format='native %H'
+
+      - name: Install web dependencies and browser
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Build locked native core
+        run: cargo build --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" --bin iris
+
+      - name: Verify web and native messaging and device sync
+        run: pnpm test:interop
+
+      - name: Upload interop failures
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: native-interop-test-results
+          path: iris-chat/test-results/
+          retention-days: 14
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
