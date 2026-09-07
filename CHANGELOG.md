@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.19 - 2026-09-07
+
+- Update Hashtree to security runtime 0.5.7 with remote blob integrity checks.
+- Include the verified Nostr Double Ratchet security update for encrypted messaging.
+
 ## Unreleased
 
 ## 2.6.18 - 2026-09-05
