@@ -6,10 +6,10 @@ import type { Profile } from './profile'
 import { peopleSearchScore } from './peopleSearch'
 import { createNostrSubscribe } from './profileAppKeysRuntime'
 
-// Same public profile index and recovery snapshot used by Iris native.
-const INDEX_OWNER = nip19.decode('npub1dhuna75xx06lj4v4gkf9klgklrem9ez82h9u9zpxd77usm73pcdqctllwf').data as string
-const SNAPSHOT = 'nhash1qqsdspyk9j47vfde5w6lgjqftp2uuzw6wqptkwyuvlg8w7lh7dn370c9yr8hastd4k5cf49de7nfvtqu0t3v8mqn339fywyz4hafp66pspfx78z5lgs'
-const SERVERS = ['https://cdn.iris.to', 'https://hashtree.iris.to']
+// Public Iris Social profile index; snapshot announced by this owner on 2026-07-28.
+const INDEX_OWNER = nip19.decode('npub1yscmnnadrmvape0mvgzfx9uyl267klnhzy8znsr6ysl8wtxngpqsnx6dm0').data as string
+const SNAPSHOT = 'nhash1qqs2l0cus9gusd9q7njwhqva5card6vgasr2yahwpswccrtelvlnlcs9yrtr0lv032mslyg375sapxlzjtutvje6veznpj2sp89jzzknxxy96zg93n4'
+const SERVERS = ['https://cdn.iris.to']
 const MAX_BLOB_BYTES = 1024 * 1024
 const MAX_TOTAL_BYTES = 8 * MAX_BLOB_BYTES
 const MAX_RESULTS = 64

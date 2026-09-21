@@ -1,18 +1,19 @@
 # Changelog
 
-## 2.6.19 - 2026-09-07
-
-- Update Hashtree to security runtime 0.5.7 with remote blob integrity checks.
-- Include the verified Nostr Double Ratchet security update for encrypted messaging.
-
-## Unreleased
+## 2.6.20 - 2026-09-22
 
 - Rank people search by social connections, hide personally muted and overmuted
   accounts, and search the shared profile index with cached results, batched
   lookups, and cancellation when the query changes.
-
+- Restore global name search by using the active profile index and removing
+  the retired service address.
 - Upgrade Nostr Double Ratchet to 0.0.171 so removing group members rotates sender keys
   before the next message, while preserving recovery for missed group messages.
+
+## 2.6.19 - 2026-09-07
+
+- Update Hashtree to security runtime 0.5.7 with remote blob integrity checks.
+- Include the verified Nostr Double Ratchet security update for encrypted messaging.
 
 ## 2.6.18 - 2026-09-05
 
