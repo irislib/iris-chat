@@ -48,8 +48,11 @@ export interface StoredGroup {
 
 export interface StoredProfile {
   pubkey: string
+  eventCreatedAt?: number
   name?: string
   display_name?: string
+  username?: string
+  nip05?: string
   picture?: string
   updatedAt: number
 }
@@ -233,6 +236,11 @@ export async function saveProfileToStorage(profile: StoredProfile): Promise<void
 
 export async function getProfileFromStorage(pubkey: string): Promise<StoredProfile | undefined> {
   return db.profiles.get(pubkey)
+}
+
+export async function getPeopleProfilesFromStorage(pubkeys?: string[]): Promise<StoredProfile[]> {
+  if (!pubkeys) return db.profiles.limit(5000).toArray()
+  return (await db.profiles.bulkGet(pubkeys)).filter((profile): profile is StoredProfile => !!profile)
 }
 
 // Invite operations

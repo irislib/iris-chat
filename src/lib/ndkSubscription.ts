@@ -1,7 +1,11 @@
 import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk'
 
 export type NdkEventSubscription = NDKSubscription & {
-  on: (event: 'event', handler: (event: NDKEvent) => void) => void
+  on: {
+    (event: 'event', handler: (event: NDKEvent) => void): void
+    (event: 'eose', handler: () => void): void
+    (event: 'close', handler: () => void): void
+  }
 }
 
 export function asNdkEventSubscription(

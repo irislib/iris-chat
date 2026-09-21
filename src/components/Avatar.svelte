@@ -7,11 +7,12 @@
   interface Props {
     pubkey: string
     size?: number
+    loadProfile?: boolean
   }
 
-  let { pubkey, size = 32 }: Props = $props()
+  let { pubkey, size = 32, loadProfile = true }: Props = $props()
 
-  let profileStore = $derived(pubkey ? createProfileStore(pubkey) : undefined)
+  let profileStore = $derived(pubkey ? createProfileStore(pubkey, loadProfile) : undefined)
   let profile = $derived(profileStore ? $profileStore : undefined)
   let name = $derived(getProfileName(profile) || getAnimalName(pubkey))
 

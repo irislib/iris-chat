@@ -4,6 +4,7 @@ import { saveProfileToStorage, getProfileFromStorage } from './storage'
 
 export interface Profile {
   pubkey: string
+  eventCreatedAt?: number
   name?: string
   display_name?: string
   username?: string
@@ -17,6 +18,10 @@ const LOCAL_PROFILE_KEY = 'iris-chat-local-profile'
 
 // In-memory profile cache
 const profileCache = new Map<string, Profile>()
+
+export function getCachedPeopleProfiles(): Profile[] {
+  return [...profileCache.values()]
+}
 
 // Load local profile from storage
 function loadLocalProfile(): Profile | null {
@@ -67,8 +72,11 @@ function persistProfile(profile: Profile): void {
   // Save to IndexedDB for service worker access
   saveProfileToStorage({
     pubkey: profile.pubkey,
+    eventCreatedAt: profile.eventCreatedAt,
     name: profile.name,
     display_name: profile.display_name,
+    username: profile.username,
+    nip05: profile.nip05,
     picture: profile.picture,
     updatedAt: Date.now()
   }).catch(e => console.error('[profile] failed to save local profile to IndexedDB', e))
@@ -104,16 +112,24 @@ export function getLocalProfile(): Profile | null {
 }
 
 // Add a received profile to the cache (from data channel)
-export function addProfileToCache(profile: Profile): void {
+export function addProfileToCache(profile: Profile, persist = true): void {
   if (!profile.pubkey) return
+  const previous = profileCache.get(profile.pubkey)
+  if (previous?.eventCreatedAt !== undefined &&
+      ((profile.eventCreatedAt !== undefined && profile.eventCreatedAt < previous.eventCreatedAt) ||
+       (!persist && profile.eventCreatedAt === undefined))) return
   profileCache.set(profile.pubkey, profile)
   notifyListeners(profile.pubkey, profile)
+  if (!persist) return
 
   // Save to IndexedDB for service worker access
   saveProfileToStorage({
     pubkey: profile.pubkey,
+    eventCreatedAt: profile.eventCreatedAt,
     name: profile.name,
     display_name: profile.display_name,
+    username: profile.username,
+    nip05: profile.nip05,
     picture: profile.picture,
     updatedAt: Date.now()
   }).catch(e => console.error('[profile] failed to save to IndexedDB', e))
@@ -187,17 +203,8 @@ async function fetchProfile(pubkey: string, retryCount = 0): Promise<void> {
       try {
         const profile = JSON.parse(event.content) as Profile
         profile.pubkey = event.pubkey
-        profileCache.set(pubkey, profile)
-        notifyListeners(pubkey, profile)
-
-        // Save to IndexedDB for service worker access
-        saveProfileToStorage({
-          pubkey,
-          name: profile.name,
-          display_name: profile.display_name,
-          picture: profile.picture,
-          updatedAt: Date.now()
-        }).catch(e => console.error('[profile] failed to save to IndexedDB', e))
+        profile.eventCreatedAt = event.created_at
+        addProfileToCache(profile)
       } catch (e) {
         console.error('[profile] JSON parse error', e)
       }
@@ -212,7 +219,7 @@ async function fetchProfile(pubkey: string, retryCount = 0): Promise<void> {
   }
 }
 
-export function createProfileStore(pubkey: string | undefined): Readable<Profile | undefined> {
+export function createProfileStore(pubkey: string | undefined, load = true): Readable<Profile | undefined> {
   if (!pubkey) {
     const store = writable<Profile | undefined>(undefined)
     return { subscribe: store.subscribe }
@@ -224,7 +231,7 @@ export function createProfileStore(pubkey: string | undefined): Readable<Profile
     store.set(profile)
   })
 
-  if (!profileCache.get(pubkey)) {
+  if (load && !profileCache.get(pubkey)) {
     fetchProfile(pubkey)
   }
 

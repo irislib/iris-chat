@@ -30,6 +30,10 @@ const releases = {
     url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.171/nostr-double-ratchet-0.0.171.tgz',
     integrity: 'sha512-44MpOAoLoOYm7F8hG47mUQ+YRvT1nzQrhNwWyeGyIfRRlXUlGs5Yi7p8avcL97oxheuKMOfJcLcInbZG2lBMLg==',
   },
+  'nostr-social-graph': {
+    url: 'https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz',
+    integrity: 'sha512-7bR840Fmz7wYaHi0P9fXxxKlQSphFARmj2VBMIQdFvrNT584bj6ci18GaeJ49OghutUot/FwHmPOTjYqmg6koA==',
+  },
 }
 
 if (manifest.dependencies?.['@iris/nostr-pubsub'] || lockfile.includes('@iris/nostr-pubsub')) {

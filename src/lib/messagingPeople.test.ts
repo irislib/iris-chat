@@ -67,4 +67,18 @@ describe('messaging people', () => {
     store.unsubscribe()
     vi.useRealTimers()
   })
+  it('finishes as soon as every batch reports stored events, without a fixed wait', () => {
+    const owners = Array.from({ length: 65 }, () => getPublicKey(generateSecretKey()))
+    const done: Array<() => void> = []
+    let state!: MessagingPeopleState
+    const stop = createMessagingPeopleStore(owners, {
+      subscribe: (_filter, _event, onEose) => { done.push(onEose!); return () => {} },
+    }).subscribe(value => { state = value })
+    expect(state.loading).toBe(true)
+    done[0]()
+    expect(state.loading).toBe(true)
+    done[1]()
+    expect(state.loading).toBe(false)
+    stop()
+  })
 })

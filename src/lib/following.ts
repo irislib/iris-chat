@@ -9,6 +9,8 @@ import {
 
 // Set of pubkeys we follow (based on kind:3 contact list).
 export const following = writable<Set<string>>(new Set())
+const verifiedFollowingHead = writable<Event | null>(null)
+export const followingHead = { subscribe: verifiedFollowingHead.subscribe }
 
 let sub: NdkEventSubscription | null = null
 let identityUnsub: (() => void) | null = null
@@ -60,11 +62,15 @@ export function initFollowing(): () => void {
 
     stopSubscription()
     following.set(new Set())
+    verifiedFollowingHead.set(null)
 
     if (!pubkey) return
 
     const cached = cachedFollowing(pubkey)
-    if (cached) following.set(parseFollowingFromEvent(cached))
+    if (cached) {
+      verifiedFollowingHead.set(cached)
+      following.set(parseFollowingFromEvent(cached))
+    }
     const ndkInstance = get(ndk)
     latestCreatedAt = cached?.created_at ?? 0
 
@@ -80,6 +86,7 @@ export function initFollowing(): () => void {
       const createdAt = raw.created_at
       if (createdAt && createdAt < latestCreatedAt) return
       latestCreatedAt = createdAt
+      verifiedFollowingHead.set(raw)
       following.set(parseFollowingFromEvent(raw))
       try { localStorage.setItem(FOLLOWING_CACHE_PREFIX + pubkey, JSON.stringify(raw)) } catch { /* Storage can be unavailable. */ }
     })
@@ -91,5 +98,6 @@ export function initFollowing(): () => void {
     lastPubkey = null
     stopSubscription()
     following.set(new Set())
+    verifiedFollowingHead.set(null)
   }
 }

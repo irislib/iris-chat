@@ -7,6 +7,10 @@
 
 ## Unreleased
 
+- Rank people search by social connections, hide personally muted and overmuted
+  accounts, and search the shared profile index with cached results, batched
+  lookups, and cancellation when the query changes.
+
 - Upgrade Nostr Double Ratchet to 0.0.171 so removing group members rotates sender keys
   before the next message, while preserving recovery for missed group messages.
 

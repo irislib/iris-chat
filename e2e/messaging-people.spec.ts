@@ -3,6 +3,12 @@ import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-too
 import { AppKeys } from 'nostr-double-ratchet'
 import { WebSocket } from 'ws'
 
+test.beforeEach(async ({ page }) => {
+  // The remote index has its own real-tree tests; keep these browser scenarios
+  // deterministic while exercising cached discovery and the local relay.
+  await page.route(/https:\/\/(cdn|upload|hashtree)\.iris\.to\//, route => route.abort())
+})
+
 async function publish(url: string, events: ReturnType<typeof finalizeEvent>[]) {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url)
@@ -106,4 +112,65 @@ test('restores verified followed people when the message server has no data', as
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
   await people.getByRole('textbox', { name: 'Search people' }).fill('Alice')
   await expect(people.getByRole('button', { name: 'Alice Cached' })).toBeVisible()
+})
+
+test('ranks people by social connections, hides overmuted users, and keeps deliberate ID lookup', async ({ page, testRelayUrl }, testInfo) => {
+  const local = generateSecretKey()
+  const friends = [generateSecretKey(), generateSecretKey(), generateSecretKey()]
+  const peopleKeys = Array.from({ length: 6 }, () => generateSecretKey())
+  const [direct, supported, distant, stranger, overmuted, blocked] = peopleKeys
+  const names = ['Alice Zebra', 'Alice Beta', 'Alice Alpha', 'Alice Stranger', 'Alice Overmuted', 'Alice Blocked']
+  const time = Math.floor(Date.now() / 1000)
+  const list = (author: Uint8Array, kind: number, targets: Uint8Array[]) => finalizeEvent({
+    kind, created_at: time, tags: targets.map(target => ['p', getPublicKey(target)]), content: '',
+  }, author)
+  await publish(testRelayUrl, [
+    list(local, 3, [...friends, direct]), list(local, 10000, [blocked]),
+    list(friends[0], 3, [supported, distant, overmuted]), list(friends[1], 3, [supported]),
+    list(friends[1], 10000, [overmuted]), list(friends[2], 10000, [overmuted]),
+    ...peopleKeys.flatMap((key, index) => [
+      finalizeEvent({ kind: 0, created_at: time, tags: [], content: JSON.stringify({ name: names[index] }) }, key),
+      finalizeEvent(new AppKeys([{ identityPubkey: getPublicKey(generateSecretKey()), createdAt: time }]).getEvent({
+        ownerPrivateKey: key, ownerPubkey: getPublicKey(key), profileId: '123e4567-e89b-42d3-a456-426614174000', createdAt: time,
+      }), key),
+    ]),
+  ])
+  await page.addInitScript(key => localStorage.setItem('iris-chat-identity', key), Buffer.from(local).toString('hex'))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Create New Invite', exact: true })).toBeVisible()
+  // A previously seen profile remains searchable even outside the current graph.
+  await page.evaluate(async profiles => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('iris-chat')
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction('profiles', 'readwrite')
+      for (const profile of profiles) transaction.objectStore('profiles').put({ ...profile, updatedAt: Date.now() })
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error)
+    })
+    database.close()
+  }, [stranger, overmuted, blocked].map((key, index) => ({ pubkey: getPublicKey(key), name: names[index + 3] })))
+  const people = page.getByRole('region', { name: 'Find people' })
+  const search = people.getByRole('textbox', { name: 'Search people' })
+  await search.fill('Alice')
+  const rankedNames = [/^\s*Alice Zebra\s*$/, /^\s*Alice Beta\s*$/, /^\s*Alice Alpha\s*$/, /^\s*Alice Stranger\s*$/]
+  await expect(people.getByRole('button')).toHaveText(rankedNames)
+  await expect(people.getByRole('heading', { name: 'Find people' })).toBeInViewport()
+  await page.screenshot({ path: testInfo.outputPath('people-social-ranking.png'), fullPage: true })
+  await search.fill(nip19.npubEncode(getPublicKey(overmuted)))
+  await expect(people.getByRole('button', { name: 'Alice Overmuted' })).toBeVisible()
+  // A failed index must finish promptly and never pretend there are no people.
+  await search.fill('NoSuchPersonForThisTest')
+  await expect(people.getByText('Search is unavailable. Try again.', { exact: true })).toBeVisible({ timeout: 2000 })
+  await search.fill('Alice')
+  await expect(people.getByRole('button')).toHaveText(rankedNames)
+  // The same filters and ordering survive cache restoration and a fresh query.
+  await page.reload()
+  await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+  await search.fill('Alice')
+  await expect(people.getByRole('button')).toHaveText(rankedNames)
 })
