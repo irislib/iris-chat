@@ -7,6 +7,9 @@
 
 ## Unreleased
 
+- Upgrade Nostr Double Ratchet to 0.0.171 so removing group members rotates sender keys
+  before the next message, while preserving recovery for missed group messages.
+
 ## 2.6.18 - 2026-09-05
 
 - Find followed people and pasted user IDs with verified messaging support,
