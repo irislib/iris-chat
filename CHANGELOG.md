@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.21 - 2026-09-22
+
+- Find people from Sirius's network when an account has no follows, without
+  changing its follow list. Personal follows and mutes still take precedence.
+- Keep messaging-support checks running as search results arrive and fetch
+  them alongside profile names for faster discovery.
+
 ## 2.6.20 - 2026-09-22
 
 - Rank people search by social connections, hide personally muted and overmuted

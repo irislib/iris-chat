@@ -12,6 +12,9 @@ const MAX_EVENT_BYTES = 64 * 1024
 const MAX_CACHE_BYTES = 2 * 1024 * 1024
 const MAX_CACHE_EVENTS = 2 * (MAX_NEAR_AUTHORS + 1)
 const PUBKEY = /^[0-9a-f]{64}$/
+// Sirius, also the default discovery root in Iris Social. This is a local
+// discovery edge only; it never changes or publishes the account's follow list.
+export const DEFAULT_DISCOVERY_PUBKEY = '4523be58d395b1b196a9b8c82b038b6895cb02b683d0c253a955068dba1facd0'
 
 export interface PeopleGraphState {
   ownerPubkey: string | null
@@ -66,6 +69,7 @@ export class PeopleGraphController {
   private knownFollows = new Set<string>()
   private queried = new Set<string>()
   private hydrating = false
+  private discoveryEdge = false
   private signalCache = new Map<string, PeopleGraphSignals>()
   private candidateCache = new Map<string, string[]>()
   private refreshTimer: ReturnType<typeof setTimeout> | undefined
@@ -89,6 +93,8 @@ export class PeopleGraphController {
     if (!owner) return
 
     this.graph = new SocialGraph(owner)
+    this.updateDiscoveryEdge()
+    this.emit()
     this.listen([owner], generation)
 
     const [graph, cached] = await Promise.all([
@@ -98,10 +104,12 @@ export class PeopleGraphController {
     if (generation !== this.generation) return
     const live = [...this.events.values()]
     this.graph = graph
+    this.discoveryEdge = false
     this.events.clear()
     const valid = [...(Array.isArray(cached) ? cached.slice(-MAX_CACHE_EVENTS) : []), ...live]
       .filter(validOpinion).sort((left, right) => left.created_at - right.created_at)
     for (const event of valid.filter(event => event.pubkey === owner)) this.remember(event)
+    this.updateDiscoveryEdge()
     await graph.recalculateFollowDistances()
     if (generation !== this.generation) return
     for (const event of valid.filter(event => event.pubkey !== owner)) {
@@ -116,7 +124,22 @@ export class PeopleGraphController {
 
   setFollowing(follows: Set<string>) {
     this.knownFollows = new Set([...follows].filter(key => PUBKEY.test(key)).slice(0, MAX_NEAR_AUTHORS))
+    if (this.updateDiscoveryEdge()) void this.flush()
     if (this.graph) void this.hydrateNear(this.generation)
+  }
+
+  private updateDiscoveryEdge(): boolean {
+    if (!this.graph || !this.state.ownerPubkey) return false
+    const owner = this.state.ownerPubkey
+    const follows = this.graph.getFollowedByUser(owner)
+    if (this.discoveryEdge) follows.delete(DEFAULT_DISCOVERY_PUBKEY)
+    const needed = owner !== DEFAULT_DISCOVERY_PUBKEY && !follows.size && !this.knownFollows.size &&
+      !this.graph.getUserMutedBy(DEFAULT_DISCOVERY_PUBKEY).has(owner)
+    if (needed === this.discoveryEdge) return false
+    if (needed) this.graph.addFollower(owner, DEFAULT_DISCOVERY_PUBKEY)
+    else this.graph.removeFollower(owner, DEFAULT_DISCOVERY_PUBKEY)
+    this.discoveryEdge = needed
+    return true
   }
 
   setFollowingHead(event: Event | null) {
@@ -130,6 +153,9 @@ export class PeopleGraphController {
     const key = `${event.kind}:${event.pubkey}`
     if ((this.events.get(key)?.created_at ?? -1) >= event.created_at) return false
     if (!this.graph?.handleEvent(event, true)) return false
+    // A signed contact head replaces all root edges, including the local seed.
+    if (event.kind === 3 && event.pubkey === this.state.ownerPubkey) this.discoveryEdge = false
+    this.updateDiscoveryEdge()
     this.events.delete(key)
     this.events.set(key, event)
     while (this.events.size > MAX_CACHE_EVENTS) this.events.delete(this.events.keys().next().value!)
@@ -252,6 +278,7 @@ export class PeopleGraphController {
     for (const stop of this.stops) stop()
     this.stops.clear()
     this.hydrating = false
+    this.discoveryEdge = false
     this.graph = null
     this.events.clear()
     this.queried.clear()

@@ -6,7 +6,7 @@ import { writable } from 'svelte/store'
 vi.mock('./identity', () => ({ identity: writable(null), ndk: writable(null) }))
 vi.mock('./following', () => ({ following: writable(new Set()), followingHead: writable(null) }))
 
-import { PeopleGraphController, graphConsidersUserOvermuted } from './peopleGraph'
+import { PeopleGraphController, graphConsidersUserOvermuted, DEFAULT_DISCOVERY_PUBKEY } from './peopleGraph'
 
 const key = (n: string) => n.repeat(64)
 const signed = (secret: Uint8Array, kind: number, targets: string[], created_at = 10) =>
@@ -57,6 +57,56 @@ function fixture(loadGraph = async (owner: string) => new SocialGraph(owner)) {
 }
 
 describe('people graph runtime', () => {
+  it('offers Sirius immediately and uses the seed network for an account without follows', async () => {
+    const owner = getPublicKey(generateSecretKey()), person = key('4')
+    let resolveSeed!: (graph: SocialGraph) => void
+    const { controller, saved } = fixture(() => new Promise(resolve => { resolveSeed = resolve }))
+    const loading = controller.setOwner(owner)
+    expect(controller.candidates()).toContain(DEFAULT_DISCOVERY_PUBKEY)
+    const graph = new SocialGraph(owner)
+    graph.addFollower(DEFAULT_DISCOVERY_PUBKEY, person)
+    resolveSeed(graph)
+    await loading
+    expect(controller.candidates()).toContain(person)
+    expect(controller.signals(person).followDistance).toBe(2)
+    controller.stop()
+    expect(saved.get(owner)).toEqual([])
+  })
+
+  it('replaces the discovery entry point with actual follows and restores it after unfollowing', async () => {
+    const secret = generateSecretKey(), owner = getPublicKey(secret), person = key('4'), friend = key('6')
+    const { controller } = fixture(async root => {
+      const graph = new SocialGraph(root)
+      graph.addFollower(DEFAULT_DISCOVERY_PUBKEY, person)
+      return graph
+    })
+    await controller.setOwner(owner)
+    controller.setFollowingHead(signed(secret, 3, [friend], 20))
+    await controller.flush()
+    expect(controller.candidates()).toEqual([friend])
+    controller.setFollowingHead(signed(secret, 3, [], 21))
+    await controller.flush()
+    expect(controller.candidates()).toContain(person)
+    controller.setFollowingHead(signed(secret, 3, [DEFAULT_DISCOVERY_PUBKEY], 22))
+    await controller.flush()
+    expect(controller.candidates()).toContain(person)
+    controller.stop()
+  })
+
+  it('respects the empty account’s own mutes when using the discovery network', async () => {
+    const secret = generateSecretKey(), owner = getPublicKey(secret), person = key('4')
+    const { controller, saved } = fixture(async root => {
+      const graph = new SocialGraph(root)
+      graph.addFollower(DEFAULT_DISCOVERY_PUBKEY, person)
+      return graph
+    })
+    saved.set(owner, [signed(secret, 3, []), signed(secret, 10000, [person])])
+    await controller.setOwner(owner)
+    expect(controller.signals(person).overmuted).toBe(true)
+    expect(controller.candidates()).not.toContain(person)
+    controller.stop()
+  })
+
   it('replays signed account cache and rejects forged, stale, and unrelated live opinions', async () => {
     const rootSecret = generateSecretKey(), friendSecret = generateSecretKey()
     const owner = getPublicKey(rootSecret), friend = getPublicKey(friendSecret), target = key('3')

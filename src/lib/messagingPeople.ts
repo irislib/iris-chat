@@ -30,8 +30,10 @@ export function createMessagingPeopleStore(
     onCache?: (events: MessagingSupportEvent[], critical: boolean) => void
   },
 ) {
-  const requested = new Set(owners.filter(owner => /^[0-9a-f]{64}$/.test(owner)).slice(0, MAX_MESSAGING_PEOPLE))
-  return readable<MessagingPeopleState>({ events: new Map(), loading: requested.size > 0 }, set => {
+  const normalize = (keys: string[]) => new Set(keys.filter(owner => /^[0-9a-f]{64}$/.test(owner)).slice(0, MAX_MESSAGING_PEOPLE))
+  let requested = normalize(owners)
+  let update: (() => void) | undefined
+  const store = readable<MessagingPeopleState>({ events: new Map(), loading: requested.size > 0 }, set => {
     let active = true
     let loading = requested.size > 0
     // Keep both conflicting heads in the cache: a restart must not turn an
@@ -40,7 +42,7 @@ export function createMessagingPeopleStore(
     const publish = () => {
       const events = new Map<string, MessagingSupportEvent>()
       for (const [owner, head] of heads) {
-        if (head.variants.size !== 1) continue
+        if (!requested.has(owner) || head.variants.size !== 1) continue
         const [roster, event] = [...head.variants][0]
         if (roster !== '[]') events.set(owner, event)
       }
@@ -60,20 +62,58 @@ export function createMessagingPeopleStore(
       if (persist) options.onCache?.([...head.variants.values()], devices.length === 0 || head.variants.size > 1)
       publish()
     }
-    for (const event of options.initialEvents ?? []) receive(event, false)
-    publish()
-    const stops: Array<() => void> = []
-    const keys = [...requested]
-    let pending = Math.ceil(keys.length / 64)
-    for (let i = 0; i < keys.length; i += 64) {
-      let complete = false
-      stops.push(options.subscribe({ ...buildAppKeysFilter(keys.slice(i, i + 64)), limit: 2048 }, event => receive(event, true), () => {
-        if (!active || complete) return
-        complete = true
-        if (--pending === 0) { loading = false; publish() }
-      }))
+    type Batch = { owners: string[]; done: boolean; stop: () => void; timer?: ReturnType<typeof setTimeout> }
+    const batches = new Set<Batch>()
+    const updateLoading = () => {
+      loading = [...batches].some(batch => !batch.done && batch.owners.some(owner => requested.has(owner)))
+      publish()
     }
-    const timeout = setTimeout(() => { if (active) { loading = false; publish() } }, 5000)
-    return () => { active = false; clearTimeout(timeout); for (const stop of stops) stop() }
+    update = () => {
+      for (const batch of batches) {
+        // Narrow changed batches too: a removed owner must get a fresh replay
+        // when re-added, including any revocation received while absent.
+        if (batch.owners.every(owner => requested.has(owner))) continue
+        clearTimeout(batch.timer)
+        batch.stop()
+        batches.delete(batch)
+      }
+      // Restore cached heads when owners first enter the search, then retain
+      // them while the query changes so a stale result cannot undo a revocation.
+      for (const event of options.initialEvents ?? []) receive(event, false)
+      for (const owner of heads.keys()) {
+        if (heads.size <= MAX_MESSAGING_PEOPLE * 2) break
+        if (!requested.has(owner)) heads.delete(owner)
+      }
+      const subscribed = new Set([...batches].flatMap(batch => batch.owners))
+      const keys = [...requested].filter(owner => !subscribed.has(owner))
+      for (let i = 0; i < keys.length; i += 64) {
+        const batch: Batch = { owners: keys.slice(i, i + 64), done: false, stop: () => {} }
+        batches.add(batch)
+        const complete = () => {
+          if (!active || batch.done || !batches.has(batch)) return
+          batch.done = true
+          clearTimeout(batch.timer)
+          updateLoading()
+        }
+        batch.timer = setTimeout(complete, 5000)
+        batch.stop = options.subscribe({ ...buildAppKeysFilter(batch.owners), limit: 2048 }, event => receive(event, true), complete)
+      }
+      updateLoading()
+    }
+    update()
+    return () => {
+      active = false
+      update = undefined
+      for (const batch of batches) { clearTimeout(batch.timer); batch.stop() }
+    }
   })
+  return {
+    subscribe: store.subscribe,
+    setOwners(owners: string[]) {
+      const next = normalize(owners)
+      if (next.size === requested.size && [...next].every(owner => requested.has(owner))) return
+      requested = next
+      update?.()
+    },
+  }
 }

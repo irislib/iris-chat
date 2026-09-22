@@ -25,6 +25,37 @@ function observe(initialEvents: MessagingSupportEvent[] = []) {
 }
 
 describe('messaging people', () => {
+  it('keeps existing discovery subscriptions and results as search candidates arrive', () => {
+    const other = getPublicKey(generateSecretKey())
+    const subscriptions: Array<{ authors?: string[]; emit: Parameters<NostrSubscribe>[1]; done: () => void; stop: ReturnType<typeof vi.fn> }> = []
+    const store = createMessagingPeopleStore([ownerKey], {
+      subscribe: (filter, emit, done) => {
+        const stop = vi.fn()
+        subscriptions.push({ authors: filter.authors, emit, done: done!, stop })
+        return stop
+      },
+    })
+    let state!: MessagingPeopleState
+    const unsubscribe = store.subscribe(value => { state = value })
+    subscriptions[0].emit(event())
+    subscriptions[0].done()
+    store.setOwners([ownerKey, other])
+    expect(subscriptions.map(sub => sub.authors)).toEqual([[ownerKey], [other]])
+    expect(subscriptions[0].stop).not.toHaveBeenCalled()
+    expect(state.events.has(ownerKey)).toBe(true)
+    expect(state.loading).toBe(true)
+    subscriptions[1].done()
+    expect(state.loading).toBe(false)
+    store.setOwners([other, ownerKey])
+    expect(subscriptions).toHaveLength(2)
+    subscriptions[0].emit(event([], now + 1))
+    expect(state.events.has(ownerKey)).toBe(false)
+    store.setOwners([ownerKey])
+    expect(subscriptions[1].stop).toHaveBeenCalledOnce()
+    unsubscribe()
+    expect(subscriptions[0].stop).toHaveBeenCalledOnce()
+  })
+
   it('hides unknown users and shows only a verified nonempty device list', () => {
     const store = observe()
     expect(store.current().events.size).toBe(0)

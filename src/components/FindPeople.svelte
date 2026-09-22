@@ -39,11 +39,18 @@
       .sort((a, b) => b.score - a.score || a.key.localeCompare(b.key))
       .slice(0, MAX_MESSAGING_PEOPLE).map(item => item.key).sort().join(',')
   })
-  let capabilityStore = $derived(createRuntimeMessagingPeopleStore(candidateKeys ? candidateKeys.split(',') : []))
-  let loading = $derived($localProfiles.loading || $remoteProfiles.loading || $capabilityStore.loading)
+  const capabilityStore = createRuntimeMessagingPeopleStore([])
+  $effect(() => {
+    // Check social suggestions alongside metadata, and retain subscriptions as
+    // streamed name matches arrive. Typing must not restart every device lookup.
+    capabilityStore.setOwners([...new Set([...candidateKeys.split(','), ...socialKeys.split(',')].filter(Boolean))])
+  })
+  let loading = $derived(!$peopleGraph.ready || $localProfiles.loading || $remoteProfiles.loading || $capabilityStore.loading)
   let results = $derived.by(() => {
     $peopleGraph.version
+    const candidates = new Set(candidateKeys.split(','))
     return [...$capabilityStore.events.keys()]
+      .filter(key => candidates.has(key))
       .map(key => ({ key, score: exactKey ? 0 : peopleSearchScore(profiles.get(key), query, getPeopleGraphSignals(key)) }))
       .sort((a, b) => b.score - a.score ||
         getPeopleGraphSignals(a.key).followDistance - getPeopleGraphSignals(b.key).followDistance ||

@@ -2,6 +2,9 @@ import { test, expect } from './fixtures'
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { AppKeys } from 'nostr-double-ratchet'
 import { WebSocket } from 'ws'
+import { SocialGraph } from 'nostr-social-graph'
+
+const SIRIUS = '4523be58d395b1b196a9b8c82b038b6895cb02b683d0c253a955068dba1facd0'
 
 test.beforeEach(async ({ page }) => {
   // The remote index has its own real-tree tests; keep these browser scenarios
@@ -24,6 +27,33 @@ async function publish(url: string, events: ReturnType<typeof finalizeEvent>[]) 
     })
   })
 }
+
+for (const emptyHead of [false, true]) test(`discovers people without follows (${emptyHead ? 'empty list' : 'new account'})`, async ({ page, testRelayUrl }, testInfo) => {
+  const local = generateSecretKey(), person = generateSecretKey()
+  const owner = getPublicKey(person), time = Math.floor(Date.now() / 1000)
+  const graph = new SocialGraph(SIRIUS)
+  graph.addFollower(SIRIUS, owner)
+  const seed = Buffer.from(await graph.toBinary())
+  await page.route(/\/assets\/socialGraph-.*\.bin$/, route => route.fulfill({ body: seed, contentType: 'application/octet-stream' }))
+  await publish(testRelayUrl, [
+    ...(emptyHead ? [finalizeEvent({ kind: 3, created_at: time, tags: [], content: '' }, local)] : []),
+    finalizeEvent({ kind: 0, created_at: time, tags: [], content: JSON.stringify({ name: 'Alice Discovery' }) }, person),
+    finalizeEvent(new AppKeys([{ identityPubkey: getPublicKey(generateSecretKey()), createdAt: time }]).getEvent({
+      ownerPrivateKey: person, ownerPubkey: owner, profileId: '123e4567-e89b-42d3-a456-426614174000', createdAt: time,
+    }), person),
+  ])
+  await page.addInitScript(key => localStorage.setItem('iris-chat-identity', key), Buffer.from(local).toString('hex'))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+  const people = page.getByRole('region', { name: 'Find people' })
+  const result = people.getByRole('button', { name: 'Alice Discovery' })
+  await expect(result).toBeVisible({ timeout: 2500 })
+  await people.getByRole('textbox', { name: 'Search people' }).fill('Alice')
+  await expect(result).toBeVisible({ timeout: 500 })
+  await page.screenshot({ path: testInfo.outputPath('no-follows-discovery.png'), fullPage: true })
+  await result.click()
+  await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
+})
 
 test('finds only messaging users, supports user IDs, and opens a chat', async ({ page, testRelayUrl }, testInfo) => {
   const local = generateSecretKey()
