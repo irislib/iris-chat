@@ -37,6 +37,7 @@ export class TestRelay {
   private subscriptions: Map<WebSocket, Map<string, Filter[]>> = new Map()
   public port: number = 0
   public deliveryFilter?: (event: NostrEvent) => boolean
+  public acceptFilter?: (event: NostrEvent) => boolean
 
   constructor() {
     this.server = http.createServer()
@@ -73,6 +74,10 @@ export class TestRelay {
 
     if (type === 'EVENT') {
       const event = msg[1] as NostrEvent
+      if (this.acceptFilter && !this.acceptFilter(event)) {
+        ws.send(JSON.stringify(['OK', event.id, false, 'blocked: event kind not supported']))
+        return
+      }
       // Store event (no signature verification for tests)
       this.events.set(event.id, event)
       // Send OK

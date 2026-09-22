@@ -417,3 +417,37 @@ test('linked device-created group syncs without approval and carries messages bo
     await user2Context.close()
   }
 })
+
+
+test('delivers with bundled approval when the server rejects standalone sender registration', async ({ browser, testRelay, testRelayUrl }) => {
+  const senderKey = generateSecretKey()
+  const senderOwner = getPublicKey(senderKey)
+  testRelay.acceptFilter = event => !(event.kind === 37368 && event.pubkey === senderOwner)
+  const senderContext = await browser.newContext()
+  const receiverContext = await browser.newContext()
+  await useTestRelay(senderContext, testRelayUrl)
+  await useTestRelay(receiverContext, testRelayUrl)
+  await setIdentity(senderContext, toHex(senderKey))
+  await setIdentity(receiverContext, toHex(generateSecretKey()))
+  const sender = await senderContext.newPage()
+  const receiver = await receiverContext.newPage()
+  try {
+    await loginWithStoredKey(receiver)
+    await loginWithStoredKey(sender)
+    await receiver.getByRole('button', { name: 'New Chat' }).click()
+    const invite = await getInviteUrl(receiver)
+    await sender.getByRole('button', { name: 'New Chat' }).click()
+    await sender.getByPlaceholder('Paste invite link').fill(invite)
+    await expect(sender.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 15000 })
+    const message = 'Approval travels with this message'
+    await sender.getByPlaceholder('Type a message...').fill(message)
+    await sender.getByRole('button', { name: 'Send' }).click()
+    await waitForIncomingRequest(receiver, message)
+    expect(testRelay.publishedEvents.filter(event => event.kind === 37368 && event.pubkey === senderOwner)).toHaveLength(0)
+    expect(testRelay.publishedEvents.some(event => event.tags.some(tag => tag[0] === 'owner-proof'))).toBe(true)
+  } finally {
+    testRelay.acceptFilter = undefined
+    await senderContext.close()
+    await receiverContext.close()
+  }
+})
