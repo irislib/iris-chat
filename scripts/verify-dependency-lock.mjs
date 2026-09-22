@@ -27,8 +27,8 @@ const releases = {
     integrity: 'sha512-8Du8STeYMT98zz00lo3uoETYeWpvVGZO3n0Xi9pZycXWPMxCQP1FwRgl0mrxTMT5KK1xOw4pMnpSGmMeVOidag==',
   },
   'nostr-double-ratchet': {
-    url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.171/nostr-double-ratchet-0.0.171.tgz',
-    integrity: 'sha512-44MpOAoLoOYm7F8hG47mUQ+YRvT1nzQrhNwWyeGyIfRRlXUlGs5Yi7p8avcL97oxheuKMOfJcLcInbZG2lBMLg==',
+    url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz',
+    integrity: 'sha512-6Jk5iDUUHdWi0aDYfaJPvSFE2hb9gZN+XxIO46jTDtTk0/keQtp0xQLa5VtgiAM0/bzuHSV6H23YJzAxBOM4hw==',
   },
   'nostr-social-graph': {
     url: 'https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz',

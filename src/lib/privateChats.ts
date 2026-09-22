@@ -54,7 +54,7 @@ let previousRuntimeState: NdrRuntimeState | null = null
 let rotateInvitePromise: Promise<void> | null = null
 let linkedInviteRepublishTimer: ReturnType<typeof setTimeout> | null = null
 let runtimeOwnerIdentityKeyHex: string | null = null
-const verifiedDeviceRegistrations = new Set<string>()
+const readyDeviceRegistrations = new Set<string>()
 let activeDeviceRegistration:
   | { ownerPubkey: string; promise: Promise<void> }
   | null = null
@@ -104,12 +104,12 @@ const stateIncludesDevice = (
   )
 }
 
-const isVerifiedCurrentDevice = (ownerPubkey: string, state: NdrRuntimeState): boolean => {
+const isSendReadyCurrentDevice = (ownerPubkey: string, state: NdrRuntimeState): boolean => {
   const devicePubkey = state.currentDevicePubkey
   return !!(
     devicePubkey &&
     stateIncludesDevice(state, devicePubkey) &&
-    verifiedDeviceRegistrations.has(registrationKey(ownerPubkey, devicePubkey))
+    readyDeviceRegistrations.has(registrationKey(ownerPubkey, devicePubkey))
   )
 }
 
@@ -146,10 +146,10 @@ const verifyCurrentDeviceOnRelay = async (
   await currentRuntime
     .refreshOwnAppKeysFromRelay(ownerPubkey, APP_KEYS_FAST_TIMEOUT_MS)
     .catch(() => {})
-  verifiedDeviceRegistrations.add(registrationKey(ownerPubkey, devicePubkey))
+  readyDeviceRegistrations.add(registrationKey(ownerPubkey, devicePubkey))
 }
 
-const registerCurrentDeviceAndVerify = async (
+const registerCurrentDeviceApproval = async (
   currentRuntime: NdrRuntime,
   ownerPubkey: string,
   labels?: Awaited<ReturnType<typeof getCurrentDeviceRegistrationLabels>>
@@ -159,12 +159,18 @@ const registerCurrentDeviceAndVerify = async (
   }
 
   const promise = (async () => {
-    await currentRuntime.registerCurrentDevice({
+    const prepared = await currentRuntime.prepareRegistration({
       ownerPubkey,
       timeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
       ...labels,
     })
-    await verifyCurrentDeviceOnRelay(currentRuntime, ownerPubkey)
+    await currentRuntime.publishPreparedRegistration(prepared)
+    // The signed approval is now installed locally and travels in the handshake.
+    // Waiting for a server echo adds a full lookup timeout to the first send.
+    readyDeviceRegistrations.add(registrationKey(ownerPubkey, prepared.newDeviceIdentity))
+    void verifyCurrentDeviceOnRelay(currentRuntime, ownerPubkey).catch((error) => {
+      console.warn('[privateChats] Device registration confirmation pending:', error)
+    })
   })()
 
   activeDeviceRegistration = { ownerPubkey, promise }
@@ -298,7 +304,7 @@ const getRuntime = (): NdrRuntime => {
   runtime = null
   previousRuntimeState = null
   runtimeOwnerIdentityKeyHex = ownerIdentityKeyHex
-  verifiedDeviceRegistrations.clear()
+  readyDeviceRegistrations.clear()
   activeDeviceRegistration = null
 
   const ndkInstance = getNDK()
@@ -438,12 +444,12 @@ const refreshRestoredDeviceRegistration = async (
     // An existing current roster is authoritative, including revocations.
     await currentRuntime.refreshOwnAppKeysFromRelay(ownerPubkey, APP_KEYS_FAST_TIMEOUT_MS)
     if (published.getAllDevices().some(device => device.identityPubkey === state.currentDevicePubkey)) {
-      verifiedDeviceRegistrations.add(registrationKey(ownerPubkey, state.currentDevicePubkey))
+      readyDeviceRegistrations.add(registrationKey(ownerPubkey, state.currentDevicePubkey))
     }
     return
   }
   const labels = await getCurrentDeviceRegistrationLabels()
-  await registerCurrentDeviceAndVerify(currentRuntime, ownerPubkey, labels)
+  await registerCurrentDeviceApproval(currentRuntime, ownerPubkey, labels)
 }
 
 export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
@@ -503,7 +509,7 @@ export const registerDevice = async (): Promise<void> => {
   await ensureConnected()
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
-  await registerCurrentDeviceAndVerify(currentRuntime, ownerPubkey, labels)
+  await registerCurrentDeviceApproval(currentRuntime, ownerPubkey, labels)
 }
 
 export const registerLinkedDevice = async (identityPubkey: string): Promise<void> => {
@@ -662,7 +668,7 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
   await currentRuntime.initForOwner(ownerPubkey)
 
   let state = currentRuntime.getState()
-  if (!isVerifiedCurrentDevice(ownerPubkey, state)) {
+  if (!isSendReadyCurrentDevice(ownerPubkey, state)) {
     if (stateIncludesDevice(state, state.currentDevicePubkey)) {
       try {
         await verifyCurrentDeviceOnRelay(
@@ -672,16 +678,16 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
         )
         state = currentRuntime.getState()
       } catch {
-        verifiedDeviceRegistrations.delete(
+        readyDeviceRegistrations.delete(
           registrationKey(ownerPubkey, state.currentDevicePubkey!)
         )
       }
     }
   }
 
-  if (!isVerifiedCurrentDevice(ownerPubkey, state)) {
+  if (!isSendReadyCurrentDevice(ownerPubkey, state)) {
     const labels = await getCurrentDeviceRegistrationLabels()
-    await registerCurrentDeviceAndVerify(currentRuntime, ownerPubkey, labels)
+    await registerCurrentDeviceApproval(currentRuntime, ownerPubkey, labels)
   }
   void republishInvite().catch((e) => {
     console.warn('[privateChats] Invite republish after registration failed:', e)
@@ -779,7 +785,7 @@ export const resetManagers = (): void => {
   runtimeOwnerIdentityKeyHex = null
   runtimeOwnerPubkey = null
   devices.reset()
-  verifiedDeviceRegistrations.clear()
+  readyDeviceRegistrations.clear()
   activeDeviceRegistration = null
 }
 

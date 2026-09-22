@@ -18,9 +18,6 @@ const NDR_CWD =
 const NDR_MANIFEST = path.join(NDR_CWD, 'Cargo.toml')
 const NDR_BIN = resolveNativeCliBin()
 const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
-// Enable against a preview built with the bundled-proof protocol library until
-// that version is published and becomes this app's pinned dependency.
-const TEST_BUNDLED_OWNER_PROOF = process.env.IRIS_TEST_BUNDLED_OWNER_PROOF === '1'
 
 function skipIfNdrWorkspaceMissing() {
   if (fs.existsSync(NDR_MANIFEST)) return
@@ -781,9 +778,7 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
     const webOwner = await waitForWebDeviceRoster(page, testRelay)
     // Native has never seen this account. Hide every standalone registration;
     // only the encrypted handshake may supply the signed device authorization.
-    if (TEST_BUNDLED_OWNER_PROOF) {
-      testRelay.deliveryFilter = event => !(event.kind === 37368 && event.pubkey === webOwner)
-    }
+    testRelay.deliveryFilter = event => !(event.kind === 37368 && event.pubkey === webOwner)
 
     await page.getByRole('button', { name: 'New Chat' }).click()
 
@@ -829,7 +824,6 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
 
 for (const accountMode of ['created', 'restored'] as const) {
   test(`${accountMode} native account reaches browser without separate sender registration delivery`, async ({ page, testRelay, testRelayUrls }) => {
-    test.skip(!TEST_BUNDLED_OWNER_PROOF, 'Requires preview with bundled-proof protocol library')
     skipIfNdrWorkspaceMissing()
     test.setTimeout(180000)
     // Roster recovery needs a completed lookup. The browser still exercises its

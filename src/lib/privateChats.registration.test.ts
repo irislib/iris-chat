@@ -12,7 +12,8 @@ vi.mock('nostr-double-ratchet', async (original) => {
     NdrRuntime: class {
       getState() { return mocks.state }
       initForOwner = vi.fn().mockResolvedValue(undefined)
-      registerCurrentDevice = mocks.register
+      prepareRegistration = vi.fn(async () => ({ newDeviceIdentity: mocks.device }))
+      publishPreparedRegistration = mocks.register
       refreshOwnAppKeysFromRelay = mocks.refresh
       republishInvite = mocks.invite
       onStateChange() { return () => {} }
@@ -36,7 +37,7 @@ vi.mock('./messageRelayStatus', () => ({ notifyMessageRelayPublish: vi.fn() }))
 vi.mock('./nostrPubsubRuntime', () => ({ publishNostrPubsub: vi.fn() }))
 vi.mock('./storage', () => ({ deleteSessionManagerValue: vi.fn(), putSessionManagerValue: vi.fn() }))
 
-import { initMultiDevice, resetManagers } from './privateChats'
+import { initMultiDevice, resetManagers, waitForSendReadyRuntime } from './privateChats'
 
 const roster = (devices: string[]) => ({ getAllDevices: () => devices.map(identityPubkey => ({ identityPubkey, createdAt: 1 })) })
 
@@ -85,4 +86,24 @@ describe('restored device registration on startup', () => {
     await initMultiDevice(mocks.owner)
     expect(mocks.register).not.toHaveBeenCalled()
   })
+})
+
+it('can send after signing device approval while server confirmation is still pending', async () => {
+  mocks.state.registeredDevices = []
+  mocks.state.isCurrentDeviceRegistered = false
+  mocks.waitFor.mockReturnValue(new Promise(() => {}))
+  await Promise.race([
+    waitForSendReadyRuntime(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Send waited for server confirmation')), 100)),
+  ])
+  expect(mocks.register).toHaveBeenCalledOnce()
+})
+
+
+it('keeps sending blocked when preparing the signed approval fails', async () => {
+  mocks.state.registeredDevices = []
+  mocks.state.isCurrentDeviceRegistered = false
+  mocks.register.mockRejectedValueOnce(new Error('Signing approval failed'))
+  await expect(waitForSendReadyRuntime()).rejects.toThrow('Signing approval failed')
+  expect(mocks.waitFor).not.toHaveBeenCalled()
 })
