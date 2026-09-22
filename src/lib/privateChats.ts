@@ -420,6 +420,32 @@ export const getAppKeysManager = (): AppKeysManager => {
   return manager
 }
 
+const refreshRestoredDeviceRegistration = async (
+  currentRuntime: NdrRuntime,
+  ownerPubkey: string
+): Promise<void> => {
+  const state = currentRuntime.getState()
+  if (!stateIncludesDevice(state, state.currentDevicePubkey)) return
+
+  // Cached devices can predate the current registration format. Restore
+  // receiving capability on startup, without waiting for an outgoing message.
+  const published = await AppKeys.waitFor(
+    ownerPubkey,
+    createRelayOnlySubscribe(getNDK()),
+    APP_KEYS_FETCH_TIMEOUT_MS
+  )
+  if (published) {
+    // An existing current roster is authoritative, including revocations.
+    await currentRuntime.refreshOwnAppKeysFromRelay(ownerPubkey, APP_KEYS_FAST_TIMEOUT_MS)
+    if (published.getAllDevices().some(device => device.identityPubkey === state.currentDevicePubkey)) {
+      verifiedDeviceRegistrations.add(registrationKey(ownerPubkey, state.currentDevicePubkey))
+    }
+    return
+  }
+  const labels = await getCurrentDeviceRegistrationLabels()
+  await registerCurrentDeviceAndVerify(currentRuntime, ownerPubkey, labels)
+}
+
 export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
   await ensureConnected()
 
@@ -449,11 +475,12 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
       if (isLinkedDeviceLogin()) {
         await republishInviteWithRetry('linked device init')
       } else {
+        await refreshRestoredDeviceRegistration(currentRuntime, ownerPubkey)
         await republishInvite()
       }
     }
   } catch (e) {
-    console.warn('[privateChats] Republish invite failed:', e)
+    console.warn('[privateChats] Restore device registration or invite failed:', e)
   }
 }
 
