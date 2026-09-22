@@ -31,6 +31,7 @@
   let profiles = $derived(mergePeopleProfiles($remoteProfiles.profiles, $localProfiles.profiles))
   let candidateKeys = $derived.by(() => {
     $peopleGraph.version
+    if (!query.trim()) return ''
     const keys = exactKey ? [exactKey] : [...new Set([...socialKeys.split(',').filter(Boolean), ...profiles.keys()])]
     return keys.filter(key => key !== $identity?.pubkey && !$messageRequests.rejectedChats[key] &&
       (exactKey || !getPeopleGraphSignals(key).overmuted))
@@ -41,16 +42,15 @@
   })
   const capabilityStore = createRuntimeMessagingPeopleStore([])
   $effect(() => {
-    // Check social suggestions alongside metadata, and retain subscriptions as
-    // streamed name matches arrive. Typing must not restart every device lookup.
-    capabilityStore.setOwners([...new Set([...candidateKeys.split(','), ...socialKeys.split(',')].filter(Boolean))])
+    // Availability controls the row action, never whether a profile is found.
+    // Keep these checks running as additional name matches arrive.
+    capabilityStore.setOwners(candidateKeys.split(',').filter(Boolean))
+    if (!query.trim()) error = ''
   })
-  let loading = $derived(!$peopleGraph.ready || $localProfiles.loading || $remoteProfiles.loading || $capabilityStore.loading)
+  let loading = $derived(!$peopleGraph.ready || $localProfiles.loading || $remoteProfiles.loading)
   let results = $derived.by(() => {
     $peopleGraph.version
-    const candidates = new Set(candidateKeys.split(','))
-    return [...$capabilityStore.events.keys()]
-      .filter(key => candidates.has(key))
+    return candidateKeys.split(',').filter(Boolean)
       .map(key => ({ key, score: exactKey ? 0 : peopleSearchScore(profiles.get(key), query, getPeopleGraphSignals(key)) }))
       .sort((a, b) => b.score - a.score ||
         getPeopleGraphSignals(a.key).followDistance - getPeopleGraphSignals(b.key).followDistance ||
@@ -74,15 +74,27 @@
 <section class="w-full max-w-md p-6 bg-surface rounded-2xl shadow-xl overflow-hidden" aria-label="Find people">
   <h2 class="text-2xl font-bold text-white mb-4 text-center">Find people</h2>
   <input class="input-field" aria-label="Search people" placeholder="Search people or paste a user ID" bind:value={query} />
-  <div class="mt-3 max-h-64 overflow-y-auto" aria-live="polite">
-    {#each results as key (key)}
-      <button class="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-surface-light text-left" disabled={opening} onclick={() => openPerson(key)}>
-        <Avatar pubkey={key} size={40} loadProfile={false} />
-        <Name pubkey={key} loadProfile={false} />
-      </button>
-    {:else}
-      <p class="text-gray-400 text-sm py-3">{loading ? 'Finding people…' : $remoteProfiles.unavailable ? 'Search is unavailable. Try again.' : 'No people found'}</p>
-    {/each}
-  </div>
+  {#if query.trim()}
+    <div class="mt-3 max-h-64 overflow-y-auto" aria-live="polite">
+      {#each results as key (key)}
+        {#if $capabilityStore.events.has(key)}
+          <button class="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-surface-light text-left" disabled={opening} onclick={() => openPerson(key)}>
+            <Avatar pubkey={key} size={40} loadProfile={false} />
+            <Name pubkey={key} loadProfile={false} />
+          </button>
+        {:else}
+          <a href={`#profile-${key}`} class="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-surface-light text-left">
+            <Avatar pubkey={key} size={40} loadProfile={false} />
+            <span class="min-w-0 flex flex-col">
+              <Name pubkey={key} loadProfile={false} />
+              <span class="text-gray-400 text-xs">View profile</span>
+            </span>
+          </a>
+        {/if}
+      {:else}
+        <p class="text-gray-400 text-sm py-3">{loading ? 'Finding people…' : $remoteProfiles.unavailable ? 'Search is unavailable. Try again.' : 'No people found'}</p>
+      {/each}
+    </div>
+  {/if}
   {#if error}<p role="alert" class="text-red-400 text-sm mt-3">{error}</p>{/if}
 </section>

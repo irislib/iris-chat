@@ -47,15 +47,15 @@ for (const emptyHead of [false, true]) test(`discovers people without follows ($
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
   const people = page.getByRole('region', { name: 'Find people' })
   const result = people.getByRole('button', { name: 'Alice Discovery' })
-  await expect(result).toBeVisible({ timeout: 2500 })
+  await expect(people.getByRole('button')).toHaveCount(0)
   await people.getByRole('textbox', { name: 'Search people' }).fill('Alice')
-  await expect(result).toBeVisible({ timeout: 500 })
+  await expect(result).toBeVisible({ timeout: 2500 })
   await page.screenshot({ path: testInfo.outputPath('no-follows-discovery.png'), fullPage: true })
   await result.click()
   await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
 })
 
-test('finds only messaging users, supports user IDs, and opens a chat', async ({ page, testRelayUrl }, testInfo) => {
+test('finds profiles regardless of messaging support, supports user IDs, and opens a ready chat', async ({ page, testRelayUrl }, testInfo) => {
   const local = generateSecretKey()
   const supported = generateSecretKey()
   const unsupported = generateSecretKey()
@@ -78,14 +78,13 @@ test('finds only messaging users, supports user IDs, and opens a chat', async ({
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
   const people = page.getByRole('region', { name: 'Find people' })
   const alice = people.getByRole('button', { name: 'Alice Ready' })
-  await expect(alice).toBeVisible()
-  await expect(people.getByRole('button', { name: 'Bob Unknown' })).toHaveCount(0)
-  await expect(people.getByRole('button', { name: 'Carol Revoked' })).toHaveCount(0)
   const search = people.getByRole('textbox', { name: 'Search people' })
   await search.fill('alice')
   await expect(alice).toBeVisible()
   await search.fill(nip19.npubEncode(getPublicKey(unsupported)))
-  await expect(people.getByText('No people found', { exact: true })).toBeVisible()
+  await expect(people.getByRole('link', { name: 'Bob Unknown View profile' })).toBeVisible()
+  await search.fill('Carol')
+  await expect(people.getByRole('link', { name: 'Carol Revoked View profile' })).toBeVisible()
   await search.fill(nip19.npubEncode(supportedKey))
   await expect(alice).toBeVisible()
   await search.fill('Alice')
@@ -97,7 +96,46 @@ test('finds only messaging users, supports user IDs, and opens a chat', async ({
   await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
 })
 
-test('removes a visible person when their messaging devices are revoked', async ({ page, testRelayUrl }) => {
+test('finds an older messaging profile and clears all results when the query is removed', async ({ page, testRelayUrl }, testInfo) => {
+  const local = generateSecretKey(), person = generateSecretKey(), owner = getPublicKey(person)
+  const time = Math.floor(Date.now() / 1000)
+  const graph = new SocialGraph(SIRIUS)
+  graph.addFollower(SIRIUS, owner)
+  const seed = Buffer.from(await graph.toBinary())
+  await page.route(/\/assets\/socialGraph-.*\.bin$/, route => route.fulfill({ body: seed, contentType: 'application/octet-stream' }))
+  await publish(testRelayUrl, [
+    finalizeEvent({ kind: 0, created_at: time, tags: [], content: JSON.stringify({ name: 'lauri' }) }, person),
+    finalizeEvent({ kind: 30078, created_at: time, tags: [
+      ['d', 'double-ratchet/app-keys'], ['version', '1'],
+      ['device', getPublicKey(generateSecretKey()), String(time)],
+    ], content: '' }, person),
+  ])
+  await page.addInitScript(key => localStorage.setItem('iris-chat-identity', key), Buffer.from(local).toString('hex'))
+  await page.goto('/')
+  await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+  const people = page.getByRole('region', { name: 'Find people' })
+  const search = people.getByRole('textbox', { name: 'Search people' })
+  const lauri = people.getByRole('link', { name: 'lauri View profile' })
+  await search.fill('lauri')
+  await expect(lauri).toBeVisible({ timeout: 2500 })
+  await expect(lauri).toHaveAttribute('href', `#profile-${owner}`)
+  await expect(people.getByText('No people found', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('older-profile-search.png'), fullPage: true })
+  await search.fill('')
+  await expect(people.getByRole('link')).toHaveCount(0)
+  await expect(people.getByRole('button')).toHaveCount(0)
+  await expect(people.getByText(/Finding people|No people found|Search is unavailable/)).toHaveCount(0)
+  // Late metadata must not repopulate an empty search.
+  await publish(testRelayUrl, [finalizeEvent({ kind: 0, created_at: time + 1, tags: [], content: JSON.stringify({ name: 'lauri' }) }, person)])
+  await expect(people.getByRole('link')).toHaveCount(0)
+  await search.fill(nip19.npubEncode(owner))
+  await expect(lauri).toBeVisible()
+  await lauri.click()
+  await expect(page.getByRole('heading', { name: 'Profile', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'lauri', exact: true })).toBeVisible()
+})
+
+test('keeps a profile searchable but removes direct chat when messaging devices are revoked', async ({ page, testRelayUrl }) => {
   const local = generateSecretKey()
   const owner = generateSecretKey()
   const time = Math.floor(Date.now() / 1000)
@@ -113,12 +151,15 @@ test('removes a visible person when their messaging devices are revoked', async 
   await page.goto('/')
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
   const people = page.getByRole('region', { name: 'Find people' })
+  await people.getByRole('textbox', { name: 'Search people' }).fill('Alice')
   await expect(people.getByRole('button', { name: 'Alice Available' })).toBeVisible()
   await publish(testRelayUrl, [snapshot([], time + 1)])
   await expect(people.getByRole('button', { name: 'Alice Available' })).toHaveCount(0)
+  await expect(people.getByRole('link', { name: 'Alice Available View profile' })).toBeVisible()
   await page.reload()
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
-  await expect(people.getByText('No people found', { exact: true })).toBeVisible()
+  await people.getByRole('textbox', { name: 'Search people' }).fill('Alice')
+  await expect(people.getByRole('link', { name: 'Alice Available View profile' })).toBeVisible()
 })
 
 test('restores verified followed people when the message server has no data', async ({ page, testRelay, testRelayUrl }) => {
@@ -136,6 +177,7 @@ test('restores verified followed people when the message server has no data', as
   await page.goto('/')
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
   const people = page.getByRole('region', { name: 'Find people' })
+  await people.getByRole('textbox', { name: 'Search people' }).fill('Alice')
   await expect(people.getByRole('button', { name: 'Alice Cached' })).toBeVisible()
   testRelay.clear()
   await page.reload()

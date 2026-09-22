@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.22 - 2026-09-22
+
+- Show matching profiles even when their messaging setup is unavailable or uses
+  an older format. Those results open the profile; ready accounts can open a chat.
+- Clear people-search results when the query is erased, and preserve verified
+  messaging availability across an immediate reload.
+
 ## 2.6.21 - 2026-09-22
 
 - Find people from Sirius's network when an account has no follows, without
