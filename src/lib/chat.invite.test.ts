@@ -45,6 +45,7 @@ vi.mock('./privateChats', () => ({
     }
   },
   waitForSendReadyRuntime: async () => {
+    await mocks.ensureDeviceRegistered()
     await mocks.waitForSendReadySessionManager()
     return {
       setupUser: (...args: any[]) => mocks.getSessionManager()?.setupUser?.(...args),
@@ -238,7 +239,7 @@ describe('Invite Parsing / Acceptance', () => {
     expect(session?.id).toBe(pubkey)
     expect(get(chats).has(pubkey)).toBe(true)
     expect(mocks.waitForSendReadySessionManager).toHaveBeenCalledTimes(1)
-    expect(mocks.ensureDeviceRegistered).not.toHaveBeenCalled()
+    expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
 
     registration.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -309,7 +310,7 @@ describe('Invite Parsing / Acceptance', () => {
     await vi.waitFor(() => expect(managerAccept).toHaveBeenCalledTimes(1))
   })
 
-  it('acceptInvite(legacy) should open without waiting for relay registration', async () => {
+  it('acceptInvite(legacy) sends its handshake only after device approval is ready', async () => {
     const ownerPubkey = 'h'.repeat(64)
     const devicePubkey = 'i'.repeat(64)
     const registration = defer<void>()
@@ -325,20 +326,16 @@ describe('Invite Parsing / Acceptance', () => {
     const legacyInvite = Invite.createNew(devicePubkey)
     legacyInvite.ownerPubkey = ownerPubkey
 
-    const session = await Promise.race([
-      acceptInvite({ type: 'legacy', invite: legacyInvite }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 25)
-      ),
-    ])
-
+    const accepting = acceptInvite({ type: 'legacy', invite: legacyInvite })
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(mocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    expect(managerAccept).not.toHaveBeenCalled()
+
+    registration.resolve()
+    const session = await accepting
     expect(session.id).toBe(ownerPubkey)
     expect(get(chats).has(ownerPubkey)).toBe(true)
     expect(managerAccept).toHaveBeenCalledTimes(1)
-
-    registration.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
   })
 
   it('acceptInvite(legacy) should surface handshake errors', async () => {

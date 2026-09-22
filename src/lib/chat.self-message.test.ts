@@ -718,7 +718,7 @@ describe('handleManagerEvent', () => {
     expect(typingMocks.clearRemoteTyping).toHaveBeenCalledWith(PEER_PUBKEY)
   })
 
-  it('sends via runtime without waiting for current-device relay registration', async () => {
+  it('renders a pending message immediately and sends after device approval is ready', async () => {
     let resolveRegistration!: () => void
     const registrationReady = new Promise<void>((resolve) => {
       resolveRegistration = resolve
@@ -745,15 +745,17 @@ describe('handleManagerEvent', () => {
     await new Promise((resolve) => setTimeout(resolve, 10))
 
     expect(privateChatsMocks.ensureDeviceRegistered).toHaveBeenCalledTimes(1)
+    expect(get(chats).get(MY_PUBKEY)?.messages.at(-1)?.content).toBe('register before send')
+    expect(runtimeMocks.sendEvent).not.toHaveBeenCalled()
+
+    resolveRegistration()
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(runtimeMocks.sendEvent).toHaveBeenCalledTimes(1)
     expect(runtimeMocks.sendEvent.mock.calls[0]?.[0]).toBe(MY_PUBKEY)
     expect(runtimeMocks.sendEvent.mock.calls[0]?.[1]).toMatchObject({
       pubkey: MY_PUBKEY,
       content: 'register before send',
     })
-
-    resolveRegistration()
-    await new Promise((resolve) => setTimeout(resolve, 0))
   })
 
   it('delegates first peer message sends to the runtime', async () => {

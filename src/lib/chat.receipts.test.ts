@@ -87,6 +87,10 @@ vi.mock('./privateChats', () => ({
   waitForNdrRuntime: async () => ({
     sendEvent: (...args: [string, unknown]) => mocks.runtimeSendEvent(...args),
   }),
+  waitForSendReadyRuntime: async () => {
+    await mocks.ensureDeviceRegistered()
+    return { sendEvent: (...args: [string, unknown]) => mocks.runtimeSendEvent(...args) }
+  },
   getNdrRuntime: () => ({
     sendEvent: (...args: [string, unknown]) => mocks.runtimeSendEvent(...args),
     sendReceipt: vi.fn().mockResolvedValue(undefined),

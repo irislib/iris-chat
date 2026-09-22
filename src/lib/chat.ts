@@ -1238,10 +1238,9 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
     throw new Error('NIP-07 extension does not support NIP-44')
   }
 
-  // Legacy invite responses carry the owner claim; AppKeys relay verification
-  // can catch up after the chat opens instead of blocking invite acceptance.
-  registerDeviceInBackground('joining invite')
-  const runtime = await waitForNdrRuntime()
+  // Registration must finish before the handshake captures its device proof.
+  // An account key alone is not evidence available to the receiving device.
+  const runtime = await waitForSendReadyRuntime()
   const accepted = await runtime.acceptInvite(invite.invite, { ownerPublicKey })
   const chatTarget = accepted.ownerPublicKey || ownerPublicKey
   const chatSession = await ensureManagerChat(chatTarget)
@@ -1537,8 +1536,9 @@ function sendRuntimeEvent(
   event: Partial<Rumor>,
   context: string
 ): void {
-  registerDeviceInBackground(context)
-  void waitForNdrRuntime()
+  // The caller renders and saves the pending message immediately. Keep network
+  // setup asynchronous, but do not send an unprovable account/device claim.
+  void waitForSendReadyRuntime()
     .then((runtime) => runtime.sendEvent(recipientPubkey, event))
     .catch((e) => console.error(`[chat] Failed to ${context} via NdrRuntime:`, e))
 }
