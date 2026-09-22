@@ -18,6 +18,9 @@ const NDR_CWD =
 const NDR_MANIFEST = path.join(NDR_CWD, 'Cargo.toml')
 const NDR_BIN = resolveNativeCliBin()
 const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
+// Enable against a preview built with the bundled-proof protocol library until
+// that version is published and becomes this app's pinned dependency.
+const TEST_BUNDLED_OWNER_PROOF = process.env.IRIS_TEST_BUNDLED_OWNER_PROOF === '1'
 
 function skipIfNdrWorkspaceMissing() {
   if (fs.existsSync(NDR_MANIFEST)) return
@@ -758,10 +761,8 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
   test.setTimeout(240000)
 
   const dataDir = createNdrDataDir(testRelayUrls)
-  const ndrSecret = randomNdrSecretHex()
-
   try {
-    const login = await runNdr(['login', ndrSecret], dataDir)
+    const login = await runNdr(['account', 'create'], dataDir)
     expect(login.status).toBe('ok')
     await runNdr(['relay', 'set', ...testRelayUrls], dataDir)
 
@@ -777,7 +778,12 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
       timeout: 30000,
     })
     await registerDevice(page)
-    await waitForWebDeviceRoster(page, testRelay)
+    const webOwner = await waitForWebDeviceRoster(page, testRelay)
+    // Native has never seen this account. Hide every standalone registration;
+    // only the encrypted handshake may supply the signed device authorization.
+    if (TEST_BUNDLED_OWNER_PROOF) {
+      testRelay.deliveryFilter = event => !(event.kind === 37368 && event.pubkey === webOwner)
+    }
 
     await page.getByRole('button', { name: 'New Chat' }).click()
 
@@ -816,9 +822,74 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
     ).toBeVisible({ timeout: 30000 })
     await silentRelayConnectionsReady
   } finally {
+    testRelay.deliveryFilter = undefined
     fs.rmSync(dataDir, { recursive: true, force: true })
   }
 })
+
+for (const accountMode of ['created', 'restored'] as const) {
+  test(`${accountMode} native account reaches browser without separate sender registration delivery`, async ({ page, testRelay, testRelayUrls }) => {
+    test.skip(!TEST_BUNDLED_OWNER_PROOF, 'Requires preview with bundled-proof protocol library')
+    skipIfNdrWorkspaceMissing()
+    test.setTimeout(180000)
+    // Roster recovery needs a completed lookup. The browser still exercises its
+    // silent-server fallback, while native uses the responding test server.
+    const dataDir = createNdrDataDir([testRelay.url])
+    try {
+      const importedSecret = randomNdrSecretHex()
+      const created = await runNdr(
+        accountMode === 'restored' ? ['login', importedSecret] : ['account', 'create'],
+        dataDir
+      )
+      expect(created.status).toBe('ok')
+      const nativeOwner = accountMode === 'restored'
+        ? getPublicKey(Buffer.from(importedSecret, 'hex'))
+        : created.data?.user_id
+      expect(nativeOwner).toBeTruthy()
+      // The browser must never receive the native account's standalone roster.
+      testRelay.deliveryFilter = event => !(event.kind === 37368 && event.pubkey === nativeOwner)
+      if (accountMode === 'restored') {
+        // Keep the core alive, as the native app does, while its background
+        // lookup recovers the imported account's local device approval.
+        const listener = await startNdrListen(dataDir)
+        try {
+          await waitForRelayEvent(
+            testRelay,
+            event => event.kind === 37368 && event.pubkey === nativeOwner,
+            20000,
+            'restored account device approval'
+          )
+        } finally {
+          await stopNdrListen(listener.child)
+        }
+      }
+      await useTestRelay(page.context(), testRelayUrls)
+      await page.goto('/')
+      await page.getByRole('button', { name: 'Go' }).click()
+      await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible()
+      await registerDevice(page)
+      await waitForWebDeviceRoster(page, testRelay)
+      await page.getByRole('button', { name: 'New Chat' }).click()
+      const copy = page.locator('button[title*="#"]').first()
+      await expect(copy).toBeVisible()
+      const inviteUrl = await copy.getAttribute('title')
+      expect(inviteUrl).toBeTruthy()
+      const accepted = await runNdrRetry(['invite', 'accept', inviteUrl!], dataDir, 30000, 500)
+      const chatId = accepted.data?.current_chat?.chat_id
+      expect(chatId).toBeTruthy()
+      const message = 'native message with bundled device proof'
+      await runNdrRetry(['send', chatId, message], dataDir, 30000, 500)
+      const responses = testRelay.publishedEvents.filter(event => event.kind === 1059)
+      const response = responses.find(event => event.tags.some(tag => tag[0] === 'owner-proof'))
+      expect(response, `handshakes=${responses.length}; tags=${JSON.stringify(responses.map(event => event.tags.map(tag => tag[0])))}`).toBeTruthy()
+      await openChatFromList(page, message)
+      await expect(page.getByText(message, { exact: true }).last()).toBeVisible()
+    } finally {
+      testRelay.deliveryFilter = undefined
+      fs.rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+}
 
 test('iris-chat user-ID discovery delivers to offline native and survives restart', async ({
   page,

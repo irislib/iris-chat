@@ -36,6 +36,7 @@ export class TestRelay {
   private events: Map<string, NostrEvent> = new Map()
   private subscriptions: Map<WebSocket, Map<string, Filter[]>> = new Map()
   public port: number = 0
+  public deliveryFilter?: (event: NostrEvent) => boolean
 
   constructor() {
     this.server = http.createServer()
@@ -155,6 +156,7 @@ export class TestRelay {
   public debug = false
 
   private matchesFilters(event: NostrEvent, filters: Filter[]): boolean {
+    if (this.deliveryFilter && !this.deliveryFilter(event)) return false
     return filters.some(f => this.matchesFilter(event, f))
   }
 
