@@ -23,6 +23,7 @@ dev-dist
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+/work/
 /test-fixtures/device-sync-rust/target/
 .vitest-localstorage*
 
