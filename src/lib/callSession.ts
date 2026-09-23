@@ -166,7 +166,13 @@ export class CallSession {
       this.state.set({ id: p.call_id, owner, peer, peers: [peer], direction: 'incoming', status: 'ringing', video: !!p.video, muted: false, camera: !!p.video, remoteMuted: false, remoteVideo: !!p.video, started: Date.now(), receivedAudio: 0, receivedVideo: 0 })
       return
     }
-    if (!s || s.id !== p.call_id || s.owner !== owner || !s.peers.includes(peer) || (s.peer && s.peer !== peer)) return
+    if (!s || s.id !== p.call_id || s.owner !== owner || !s.peers.includes(peer)) return
+    if (s.peer && s.peer !== peer) {
+      if (s.direction === 'outgoing' && s.status === 'active' && (p.type === 'answer' || p.type === 'ping')) {
+        this.send(peer, { v: 3, type: 'end', call_id: s.id, reason: 'answered_elsewhere', video: s.video })
+      }
+      return
+    }
     this.lastHeard = Date.now()
     if (p.type === 'answer' && s.direction === 'outgoing' && s.status === 'ringing') {
       for (const other of s.peers) if (other !== peer) this.send(other, { v: 3, type: 'end', call_id: s.id, reason: 'answered_elsewhere', video: s.video && !!p.video })

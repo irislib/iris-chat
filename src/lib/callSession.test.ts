@@ -9,12 +9,13 @@ class Endpoint implements CallEndpoint {
   others?: Map<string, Endpoint>
   sent: Uint8Array[] = []
   drop = false
+  dropEndTo?: string
   gate?: Promise<void>
   constructor(readonly id: string) {}
   registerService(_port: number, handler: typeof this.handler) { this.handler = handler; return () => { this.handler = undefined } }
   async sendDatagram({ dst, payload }: { dst: string; srcPort: number; dstPort: number; payload: Uint8Array }) {
     this.sent.push(payload)
-    if (!this.drop) (this.others?.get(dst) ?? this.other)?.handler?.({ src: this.id, payload })
+    if (!this.drop && !(dst === this.dropEndTo && parseCallControl(payload)?.type === 'end')) (this.others?.get(dst) ?? this.other)?.handler?.({ src: this.id, payload })
     await this.gate
   }
 }
@@ -55,6 +56,28 @@ describe('FIPS calls', () => {
       expect(callHistoryLabel(history)).toBe('Answered on another device')
       ea.handler?.({ src: 'c', payload: encodeCallControl({ v: 3, type: 'answer', call_id: callId, video: true }) })
       expect(get(a.state)?.peer).toBe('b')
+    } finally { c.dispose() }
+  })
+  it.each(['answer', 'ping'])('repeats a lost answered-elsewhere notice on sibling %s', (type: 'answer' | 'ping') => {
+    a.dispose()
+    const ec = new Endpoint('c'); ec.other = ea
+    const c = new CallSession(ec, source => source === 'a' ? 'Alice' : undefined)
+    ea.others = new Map([['b', eb], ['c', ec]])
+    a = new CallSession(ea, source => ['b', 'c'].includes(source) ? 'Bob' : undefined)
+    try {
+      a.start('Bob', ['b', 'c'], true)
+      const callId = get(a.state)!.id
+      ec.drop = true; c.markMediaReady(); c.accept(true)
+      ea.dropEndTo = 'c'; b.markMediaReady(); b.accept(false)
+      expect(get(c.state)?.status).toBe('active')
+      const sent = ea.sent.length
+      ea.dropEndTo = undefined
+      ea.handler?.({ src: 'c', payload: encodeCallControl({ v: 3, type, call_id: 'ee'.repeat(16), video: true }) })
+      expect(ea.sent).toHaveLength(sent)
+      ea.handler?.({ src: 'c', payload: encodeCallControl({ v: 3, type, call_id: callId, video: true }) })
+      expect(get(a.state)).toMatchObject({ status: 'active', peer: 'b', video: false })
+      expect(get(c.state)).toMatchObject({ status: 'ended', outcome: 'answered_elsewhere', video: false })
+      expect(callHistoryFromState(get(c.state)!).durationSeconds).toBe(0)
     } finally { c.dispose() }
   })
   it('counts answered duration only after accepted media is ready', () => {
