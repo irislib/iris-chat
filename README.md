@@ -82,6 +82,10 @@ pnpm test
 pnpm test:e2e
 ```
 
+The locked FIPS core has a small pnpm patch for concurrent session setup and
+reordered handshake traffic. `fipsSessionConcurrency.test.ts` exercises the
+installed runtime with real Noise handshakes, including stalled-send timeouts.
+
 To test device-sync packets and framing against a native checkout, run:
 
 ```sh

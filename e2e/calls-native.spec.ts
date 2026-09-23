@@ -45,6 +45,21 @@ test('browser and native exchange voice/video over local FIPS without a media se
     }, { seed: `ws://127.0.0.1:${port}/fips`, key: Buffer.from(key).toString('hex') })
     await context.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort())
     await context.routeWebSocket('**/*', socket => { if (new URL(socket.url()).hostname === '127.0.0.1') socket.connectToServer(); else socket.close() })
+    await context.addInitScript((disableRtc) => {
+      const Original = window.RTCPeerConnection
+      const events: Array<{ event: string, connection?: string, ice?: string }> = []
+      Object.assign(window, { __nativeInteropRtc: events })
+      window.RTCPeerConnection = class extends Original {
+        constructor(configuration?: RTCConfiguration) {
+          if (disableRtc) { events.push({ event: 'disabled' }); throw new Error('WebRTC disabled for FIPS route isolation') }
+          super(configuration)
+          events.push({ event: 'created' })
+          for (const event of ['connectionstatechange', 'iceconnectionstatechange']) {
+            this.addEventListener(event, () => events.push({ event, connection: this.connectionState, ice: this.iceConnectionState }))
+          }
+        }
+      }
+    }, process.env.CALL_INTEROP_WS_ONLY === '1')
     const page = await context.newPage()
     page.on('console', message => logs.push(message.text()))
     page.on('pageerror', error => logs.push(error.message))
@@ -92,9 +107,16 @@ test('browser and native exchange voice/video over local FIPS without a media se
     await expect(page.getByTestId('call-screen')).toHaveAttribute('data-status', 'ended')
     await writeFile('work/calls/native-evidence.json', JSON.stringify(events, null, 2))
   } finally {
+    const rtc = await context.pages()[0]?.evaluate(() => (window as Window & { __nativeInteropRtc?: unknown }).__nativeInteropRtc).catch(() => [])
+    await writeFile('work/calls/native-rtc.json', JSON.stringify(rtc, null, 2))
     await writeFile('work/calls/native-evidence.json', JSON.stringify(events, null, 2))
     await writeFile('work/calls/native-browser.log', logs.join('\n'))
     await writeFile('work/calls/native-runtime.log', stderr)
+    await Promise.all([
+      writeFile(resolve(data, 'browser.log'), logs.join('\n')),
+      writeFile(resolve(data, 'events.json'), JSON.stringify(events, null, 2)),
+      writeFile(resolve(data, 'rtc.json'), JSON.stringify(rtc ?? [], null, 2)),
+    ])
     command('stop')
     await context.close(); await browser.close()
     const exited = new Promise<void>(r => native.once('exit', () => r()))
