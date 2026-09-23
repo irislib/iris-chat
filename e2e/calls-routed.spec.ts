@@ -20,11 +20,12 @@ test('two browsers route voice and video through an intermediate FIPS node when 
     await useTestRelay(context, relay.url)
     await context.addInitScript(seed => {
       localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed], stunServers: [] }))
-      const evidence = { blockedRtc: 0 }
-      Object.assign(window, { routedCallEvidence: evidence })
-      window.RTCPeerConnection = new Proxy(window.RTCPeerConnection, {
+      const evidence = { blockedRtc: 0, isRtcBlocked: () => window.RTCPeerConnection === blockedConstructor }
+      const blockedConstructor = new Proxy(window.RTCPeerConnection, {
         construct() { evidence.blockedRtc++; throw new Error('Direct WebRTC connections disabled for routed FIPS test') },
       })
+      Object.assign(window, { routedCallEvidence: evidence })
+      window.RTCPeerConnection = blockedConstructor
     }, seed.url)
     await context.route('**/*', route => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort())
     const allowedSockets = [new URL(seed.url).origin, new URL(relay.url).origin]
@@ -52,7 +53,10 @@ test('two browsers route voice and video through an intermediate FIPS node when 
       audio: Number(await page.getByTestId('call-screen').getAttribute('data-audio-frames')),
       video: Number(await page.getByTestId('call-screen').getAttribute('data-video-frames')),
       energy: Number(await page.getByTestId('call-screen').getAttribute('data-audio-energy')),
-      ...await page.evaluate(() => (window as Window & { routedCallEvidence?: { blockedRtc: number } }).routedCallEvidence),
+      ...await page.evaluate(() => {
+        const evidence = (window as Window & { routedCallEvidence?: { blockedRtc: number; isRtcBlocked: () => boolean } }).routedCallEvidence
+        return { blockedRtc: evidence?.blockedRtc ?? 0, rtcProhibited: evidence?.isRtcBlocked() ?? false }
+      }),
     }
   }
   try {
@@ -80,9 +84,11 @@ test('two browsers route voice and video through an intermediate FIPS node when 
       await expect.poll(async () => (await sample(page)).audio).toBeGreaterThan(10)
       await expect.poll(async () => (await sample(page)).video).toBeGreaterThan(10)
       await expect.poll(async () => (await sample(page)).energy).toBeGreaterThan(0.01)
-      await expect.poll(async () => (await sample(page)).blockedRtc ?? 0).toBeGreaterThan(0)
+      expect((await sample(page)).rtcProhibited).toBe(true)
       await expect.poll(() => page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBeGreaterThanOrEqual(640)
     }
+    // Only the caller may attempt a direct upgrade; the callee can remain routed.
+    await expect.poll(async () => (await Promise.all([a, b].map(sample))).reduce((sum, peer) => sum + peer.blockedRtc, 0)).toBeGreaterThan(0)
     evidence.push({ phase: 'routed-call', peers: await Promise.all([a, b].map(sample)) })
     await relay.stop()
     relayStopped = true
