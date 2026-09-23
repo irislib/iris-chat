@@ -4,6 +4,8 @@
 
 - Improve direct calls across different networks using STUN, while retaining
   local connections and encrypted routing through FIPS nodes.
+- Start routed calls without waiting for a direct connection, and prevent a
+  canceled connection attempt from replacing a working one.
 
 ## 2.6.22 - 2026-09-22
 

@@ -21,7 +21,7 @@ vi.mock('./callMedia', () => ({ BrowserCallMedia: class {
 } }))
 import { chats, recordCallHistory } from './chat'
 import { callHistoryLabel, type CallHistory } from './callHistory'
-import { attachCalls, detachCalls, answerCall, callState } from './calls'
+import { attachCalls, detachCalls, answerCall, startCall, callState } from './calls'
 import { callSettings } from './callSettings'
 
 describe('answer capture ownership', () => {
@@ -34,6 +34,23 @@ describe('answer capture ownership', () => {
   })
   afterEach(() => detachCalls())
   const offer = (id: string) => fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'offer', call_id: id, video: true }) })
+  it.each(['stalled', 'failed'])('starts a routed call to a verified device when direct connection setup is %s', async (state: string) => {
+    const seed = `02${'e'.repeat(64)}`
+    const send = vi.fn(async () => {})
+    const connect = vi.fn(() => state === 'stalled' ? new Promise<void>(() => {}) : Promise.reject(new Error('Direct connection unavailable')))
+    attachCalls({
+      registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} },
+      sendDatagram: send,
+    } as unknown as FipsNode, () => [seed], connect)
+    const starting = startCall(owner, false)
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(1))
+    fixture.media[0].finish()
+    await starting
+    expect(get(callState)).toMatchObject({ status: 'ringing', peers: [peer] })
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ dst: peer }))
+    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ dst: seed }))
+    expect(connect).toHaveBeenCalledWith(owner)
+  })
   it('does not ring a persisted call again after the session is recreated', () => {
     const oldId = 'ab'.repeat(16), newId = 'cd'.repeat(16)
     offer(oldId)

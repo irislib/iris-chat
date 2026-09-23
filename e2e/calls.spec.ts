@@ -231,21 +231,21 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
           .every(candidate => candidate.candidateType === 'host')).toBe(true)
       }
     }
-    const beforeCutoff = await Promise.all([a, b].map(async page => ({
-      audio: Number(await page.getByTestId('call-screen').getAttribute('data-audio-frames')),
-      video: Number(await page.getByTestId('call-screen').getAttribute('data-video-frames')),
-      ...await directStats(page),
-    })))
-    directEvidence.push({ phase: 'before-server-cutoff', stunRequests: stun.requests(), peers: beforeCutoff })
     await testRelay.stop()
     relayStopped = true
     await seed.close()
     seedStopped = true
+    const afterCutoff = await Promise.all([a, b].map(async page => ({
+      audio: Number(await page.getByTestId('call-screen').getAttribute('data-audio-frames')),
+      video: Number(await page.getByTestId('call-screen').getAttribute('data-video-frames')),
+      ...await directStats(page),
+    })))
+    directEvidence.push({ phase: 'server-cutoff-baseline', stunRequests: stun.requests(), relayStopped, seedStopped, peers: afterCutoff })
     for (const [index, page] of [a, b].entries()) {
       // Count newly decoded media well beyond queued frames, in both directions.
-      await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-audio-frames'))).toBeGreaterThan(beforeCutoff[index].audio + 50)
-      await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(beforeCutoff[index].video + 45)
-      await expect.poll(async () => (await directStats(page)).received).toBeGreaterThan(beforeCutoff[index].received + 65536)
+      await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-audio-frames'))).toBeGreaterThan(afterCutoff[index].audio + 50)
+      await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(afterCutoff[index].video + 45)
+      await expect.poll(async () => (await directStats(page)).received).toBeGreaterThan(afterCutoff[index].received + 65536)
       await expect(page.getByTestId('call-screen')).toHaveAttribute('data-status', 'active')
       await expect(page.getByLabel('Caller video')).toBeVisible()
       await expect.poll(() => page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBeGreaterThanOrEqual(1280)

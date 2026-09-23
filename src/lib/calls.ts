@@ -126,10 +126,12 @@ export async function startCall(owner: string, video: boolean) {
     // A freshly accepted invite may still be loading the signed device roster.
     if (!knownCallDevices(owner).length) await preparePeerNdrRuntime(owner)
     if (session !== current) return
-    if (!connectedPeers().some(p => callOwnerForPeer(p) === owner)) await connectCallPeers?.(owner)
-    if (session !== current) return
-    current.start(owner, connectedPeers().filter(p => callOwnerForPeer(p) === owner), video)
+    const adjacent = connectedPeers().filter(p => callOwnerForPeer(p) === owner)
+    // Authenticated device identities are routable even without a direct link.
+    current.start(owner, [...adjacent, ...knownCallDevices(owner).map(device => `02${device.toLowerCase()}`)], video)
     startedId = get(current.state)?.id
+    // NAT traversal must not delay or prevent an offer on the existing FIPS route.
+    if (!adjacent.length) void connectCallPeers?.(owner).catch(() => {})
     await openMedia(video, current, startedId!)
     const state = get(callState)
     if (state) media?.setState(state.status === 'active', state.muted, state.camera, state.video)
