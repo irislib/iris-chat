@@ -1,11 +1,15 @@
 import { get } from 'svelte/store'
 import {
   FipsNode,
+  fromHex,
+  deriveNodeAddr,
   identityFromSecretKey,
   toHex,
   type PeerEvent,
 } from '@fips/core'
 import { WebRtcTransport } from '@fips/transport-webrtc'
+import { WebSocketTransport } from '@fips/transport-websocket'
+import { callConnectionSettings } from './callConnectionSettings'
 import { AppKeys } from 'nostr-double-ratchet'
 import { chats, currentChat, type ChatMessage, type ChatSession } from './chat'
 import { devices, type DeviceState } from './devices'
@@ -23,6 +27,7 @@ import {
 import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
 import { DeviceSyncTcp } from './deviceSyncTcp'
+import { attachCalls, detachCalls, callOwnerForPeer, knownCallDevices } from './calls'
 import {
   saveGroup,
   saveMessage,
@@ -67,7 +72,7 @@ export type {
   DeviceSyncSnapshot,
 } from './deviceSyncProtocol'
 
-const DEVICE_SYNC_SCOPE = 'iris-chat-device-sync-v1'
+const DEVICE_SYNC_SCOPE = 'iris-chat-nearby-v1'
 const STUN_SERVERS = [
   'stun:stun.l.google.com:19302',
   'stun:stun.cloudflare.com:3478',
@@ -631,6 +636,7 @@ async function handlePacket(
 function runtimeKey(ownerPubkey: string, state: DeviceState): string {
   return [
     ownerPubkey,
+    ...get(callConnectionSettings).servers,
     state.identityPubkey,
     state.lastEventTimestamp,
     ...state.registeredDevices.map((device) => device.identityPubkey).sort(),
@@ -645,6 +651,7 @@ async function stopActiveNode(): Promise<void> {
   activeKey = ''
   activeOwnerPubkey = ''
   activePeers = new Set()
+  detachCalls()
   await deactivateNostrPubsub()
   await tcp?.dispose().catch(() => undefined)
   await node?.stop().catch(() => undefined)
@@ -676,18 +683,32 @@ async function reconcileRuntime(
 
   const relays = Array.from(relayStore.getState().relays)
   if (relays.length === 0 || run !== generation) return
-  const siblingCount = Math.max(0, state.registeredDevices.length - 1)
   const transport = new WebRtcTransport({
     relays,
-    stunServers: STUN_SERVERS,
+    // Host ICE candidates work without Internet when using a local message server.
+    stunServers: relays.every(url => { try { const host = new URL(url).hostname; return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local') || /^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\./.test(host) } catch { return false } }) ? [] : STUN_SERVERS,
     advertiseOnNostr: true,
     autoConnect: true,
-    discoveryApp: `${DEVICE_SYNC_SCOPE}:${ownerPubkey.toLowerCase()}`,
-    maxConnections: Math.max(4, state.registeredDevices.length + 1),
-    maxAutoConnections: siblingCount,
+    discoveryApp: DEVICE_SYNC_SCOPE,
+    allowIncomingPeer: peer => isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer),
+    maxConnections: Math.max(16, state.registeredDevices.length + 1),
+    maxAutoConnections: 16,
+    ordered: false,
+    maxRetransmits: 0,
   })
-  const node = new FipsNode({ identity, transports: [transport] })
+  // Match Drive's admission on both sides of the shared WebRTC transport.
+  const connect = transport.connect.bind(transport)
+  transport.connect = async address => {
+    if (!isAuthorizedDeviceSyncSource(address.addr, get(devices)) && !callOwnerForPeer(address.addr)) {
+      throw new Error('This device is not an accepted contact')
+    }
+    await connect(address)
+  }
+  const seeds = get(callConnectionSettings).servers
+  const transports = seeds.length ? [new WebSocketTransport({ seedUrls: seeds }), transport] : [transport]
+  const node = new FipsNode({ identity, transports, routingMode: 'reply_learned' })
   const peers = new Set<string>()
+  const callPeers = new Set<string>()
   let tcp: DeviceSyncTcp
   tcp = new DeviceSyncTcp({
     endpoint: node,
@@ -709,10 +730,12 @@ async function reconcileRuntime(
   node.on('peer', (value) => {
     const peer = value as PeerEvent
     if (peer.state === 'disconnected') {
+      callPeers.delete(peer.remotePubkey)
       peers.delete(peer.remotePubkey)
       tcp.setPeer(peer.remotePubkey, false)
       return
     }
+    callPeers.add(peer.remotePubkey)
     if (
       !isAuthorizedDeviceSyncSource(peer.remotePubkey, get(devices))
     ) return
@@ -720,6 +743,12 @@ async function reconcileRuntime(
     tcp.setPeer(peer.remotePubkey, true)
   })
   node.on('error', (error) => console.warn('[deviceSync] FIPS error:', error))
+  attachCalls(node, () => Array.from(callPeers), async owner => {
+    await Promise.allSettled(knownCallDevices(owner).map(async device => {
+      const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
+      if (peer) await node.connect(peer.remoteAddr)
+    }))
+  })
   await node.start()
   if (run !== generation) {
     await tcp.dispose()
@@ -731,8 +760,7 @@ async function reconcileRuntime(
   activeKey = key
   activeOwnerPubkey = ownerPubkey
   activePeers = peers
-  // This first production lane is intentionally limited to machine-admitted
-  // sibling devices discovered by the owner-scoped transport above.
+  // Message synchronization remains restricted to this account's registered devices.
   await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers))
 }
 
@@ -743,6 +771,9 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
     store.subscribe(scheduleSnapshotPush)
   )
   const key = new Uint8Array(secretKey)
+  storeUnsubscribers.push(callConnectionSettings.subscribe(() => {
+    void reconcileRuntime(ownerPubkey, key, get(devices)).catch(error => console.warn('[calls] Connection failed:', error))
+  }))
   deviceUnsubscribe = devices.subscribe((state) => {
     void reconcileRuntime(ownerPubkey, key, state).catch((error) =>
       console.warn('[deviceSync] Runtime start failed:', error)

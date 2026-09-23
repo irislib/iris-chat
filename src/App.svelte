@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import LoginView from './components/LoginView.svelte'
+  import CallView from './components/CallView.svelte'
   import Sidebar from './components/Sidebar.svelte'
   import MainContent from './components/MainContent.svelte'
   import SettingsView from './components/SettingsView.svelte'
@@ -639,3 +640,5 @@
   <!-- PWA Install Prompt -->
   <InstallPrompt />
 </main>
+
+<CallView />
