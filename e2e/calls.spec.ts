@@ -5,7 +5,8 @@ import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { TestRelay } from './test-relay'
 
 test('voice and video over local FIPS with Internet blocked, voice answer and call preferences', async ({ baseURL }) => {
-  test.setTimeout(180000)
+  test.setTimeout(240000)
+  const bandwidth: Record<string, unknown>[] = []
   const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'] })
   const seed = await startLocalFipsWebSocketSeed()
   // This test stops its server to prove live calls survive without it. Keep
@@ -20,30 +21,34 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
     const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera'], viewport: { width: 1100, height: 780 }, serviceWorkers: 'block' })
     contexts.push(context)
     await useTestRelay(context, testRelayUrl)
-    await context.addInitScript(url => { localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [url] })) }, seed.url)
+    await context.addInitScript(seed => { localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed] })) }, seed.url)
     await context.addInitScript(() => {
-      const evidence = { played: 0, nonSilent: 0, streams: [] as MediaStream[], peers: [] as RTCPeerConnection[] }
+      const evidence = { streams: [] as MediaStream[], peers: [] as RTCPeerConnection[], rate: Infinity, dropEvery: 0 }
       ;(window as unknown as { callEvidence: typeof evidence }).callEvidence = evidence
-      const start = AudioBufferSourceNode.prototype.start
-      AudioBufferSourceNode.prototype.start = function (...args: Parameters<typeof start>) {
-        if (this.buffer?.sampleRate === 16000 && this.buffer.length === 320) {
-          evidence.played++
-          if (this.buffer.getChannelData(0).some(v => Math.abs(v) > 0.001)) evidence.nonSilent++
-        }
-        return start.apply(this, args)
-      }
       const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
       navigator.mediaDevices.getUserMedia = async constraints => {
         const stream = await getMedia(constraints); evidence.streams.push(stream); return stream
       }
+      const sendData = RTCDataChannel.prototype.send
+      const limits = new WeakMap<RTCDataChannel, { allowance: number; at: number; packets: number }>()
+      RTCDataChannel.prototype.send = function(data: string | Blob | ArrayBuffer | ArrayBufferView) {
+        if (typeof data === 'string') { sendData.call(this, data); return }
+        const now = performance.now(), size = data instanceof Blob ? data.size : data.byteLength
+        const limit = limits.get(this) ?? { allowance: 10000, at: now, packets: 0 }
+        limit.allowance = Number.isFinite(evidence.rate) ? Math.min(10000, limit.allowance + (now - limit.at) * evidence.rate / 1000) : Infinity
+        limit.at = now; limit.packets++; limits.set(this, limit)
+        if ((evidence.dropEvery && limit.packets % evidence.dropEvery === 0) || size > limit.allowance) return
+        limit.allowance -= size
+        sendData.call(this, data as ArrayBuffer)
+      }
       const Peer = window.RTCPeerConnection
-      window.RTCPeerConnection = class extends Peer { constructor(config?: RTCConfiguration) { super(config); evidence.peers.push(this) } }
+      window.RTCPeerConnection = class extends Peer { constructor(config?: RTCConfiguration) { super(config); evidence.peers.push(this); this.addEventListener('icecandidateerror', event => console.warn('Call ICE', event.errorCode, event.errorText)); this.addEventListener('connectionstatechange', () => console.log('Call RTC', this.connectionState)); this.addEventListener('icegatheringstatechange', () => console.log('Call gather', this.iceGatheringState, this.getConfiguration().iceTransportPolicy)); } }
     })
     // Block all Internet HTTP and WebSocket traffic, including service workers.
     await context.route('**/*', route => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort())
     await context.routeWebSocket('**/*', socket => {
-      if (['127.0.0.1', 'localhost'].includes(new URL(socket.url()).hostname)) socket.connectToServer()
-      else socket.close()
+      if (!['127.0.0.1', 'localhost'].includes(new URL(socket.url()).hostname)) { socket.close(); return }
+      socket.connectToServer()
     })
     const page = await context.newPage()
     const userIndex = contexts.length
@@ -85,6 +90,10 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
   }
   try {
     const a = await user(), b = await user()
+    async function shape(rate: number, dropEvery = 0) {
+      seed.shape(rate, dropEvery)
+      for (const page of [a, b]) await page.evaluate(({ rate, dropEvery }) => { const e = (window as unknown as { callEvidence: { rate: number; dropEvery: number } }).callEvidence; e.rate = rate; e.dropEvery = dropEvery }, { rate, dropEvery })
+    }
     await a.getByRole('button', { name: 'New Chat', exact: true }).click()
     const copy = a.locator('button[title*="#"]').first()
     await expect(copy).toBeVisible()
@@ -104,7 +113,7 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
     await start(a, b, false)
     await b.getByRole('button', { name: 'Answer call', exact: true }).click()
     await received(a, 'audio'); await received(b, 'audio')
-    for (const page of [a, b]) await expect.poll(() => page.evaluate(() => (window as unknown as { callEvidence: { nonSilent: number } }).callEvidence.nonSilent)).toBeGreaterThan(3)
+    for (const page of [a, b]) await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-audio-energy'))).toBeGreaterThan(0.01)
     await a.getByRole('button', { name: 'Mute microphone' }).click()
     await expect(a.getByRole('button', { name: 'Unmute microphone' })).toBeVisible()
     await a.getByRole('button', { name: 'Unmute microphone' }).click()
@@ -115,15 +124,53 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
     await b.getByRole('button', { name: 'Answer with video' }).click()
     await received(a, 'audio'); await received(b, 'audio')
     await received(a, 'video'); await received(b, 'video')
+    for (const page of [a, b]) {
+      await page.getByRole('button', { name: 'Call quality', exact: true }).click()
+      await page.getByRole('combobox', { name: 'Call quality' }).selectOption('high')
+      await page.getByRole('button', { name: 'Call quality', exact: true }).click()
+    }
+    for (const page of [a, b]) {
+      await expect.poll(() => page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => ({ width: canvas.width, height: canvas.height }))).toEqual({ width: 1280, height: 720 })
+      bandwidth.push({ phase: 'high-quality-capture', tracks: await page.evaluate(() => (window as unknown as { callEvidence: { streams: MediaStream[] } }).callEvidence.streams.flatMap(s => s.getVideoTracks()).filter(t => t.readyState === 'live').map(t => t.getSettings())) })
+    }
     await a.screenshot({ path: 'work/calls/active-video.png' })
     // A live encrypted call continues after the discovery/message server is gone.
     await testRelay.stop()
     relayStopped = true
     for (const page of [a, b]) {
       await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(35)
-      await expect(page.getByAltText('Caller video')).toBeVisible()
-      expect(await page.evaluate(() => (window as unknown as { callEvidence: { peers: RTCPeerConnection[] } }).callEvidence.peers.every(p => !p.getConfiguration().iceServers?.length))).toBe(true)
+      await expect(page.getByLabel('Caller video')).toBeVisible()
+      await expect.poll(() => page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBeGreaterThanOrEqual(1280)
+      expect(await page.evaluate(() => (window as unknown as { callEvidence: { peers: RTCPeerConnection[] } }).callEvidence.peers.every(p => p.getSenders().every(sender => !sender.track)))).toBe(true)
     }
+    const senderStats = async () => ({ target: Number(await a.getByTestId('call-screen').getAttribute('data-target-bitrate')), bytes: Number(await a.getByTestId('call-screen').getAttribute('data-sent-bytes')), at: Date.now() })
+    await expect.poll(async () => (await senderStats()).target).toBeGreaterThan(600000)
+    bandwidth.push({ phase: 'unrestricted', ...await senderStats() })
+    const beforeLoss = Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))
+    await shape(Infinity, 100)
+    await expect.poll(async () => Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(beforeLoss + 30)
+    await shape(Infinity)
+    const beforeLimitedFrames = Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))
+    await shape(50000) // 400 kbit/s across the actual FIPS node, including encrypted overhead.
+    await expect.poll(async () => { const sample = await senderStats(); bandwidth.push({ phase: 'limited', ...sample }); return sample.target }, { timeout: 40000 }).toBeLessThan(450000)
+    await expect.poll(async () => Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(beforeLimitedFrames + 10)
+    const constrained = await senderStats()
+    await shape(Infinity)
+    await expect.poll(async () => { const sample = await senderStats(); bandwidth.push({ phase: 'restored', ...sample }); return sample.target }, { timeout: 40000 }).toBeGreaterThan(Math.max(500000, constrained.target * 1.3))
+    // Change the real sender's cap live; stats verify the engine applies it.
+    await a.getByRole('button', { name: 'Call quality', exact: true }).click()
+    await a.getByRole('combobox', { name: 'Call quality' }).selectOption('custom')
+    await a.getByRole('spinbutton', { name: 'Video limit (kbps)' }).fill('250')
+    await a.getByRole('spinbutton', { name: 'Video limit (kbps)' }).press('Tab')
+    await expect.poll(async () => (await senderStats()).target).toBeLessThanOrEqual(250000)
+    await a.screenshot({ path: 'work/calls/video-quality.png' })
+    await a.getByRole('button', { name: 'Call quality', exact: true }).click()
+    // Interrupt FIPS packet forwarding, then verify media recovers without ending the call.
+    await shape(0)
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    const frozen = Number(await a.getByTestId('call-screen').getAttribute('data-video-frames'))
+    await shape(Infinity)
+    await expect.poll(async () => Number(await a.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(frozen + 10)
     await a.getByRole('button', { name: 'Turn camera off' }).click()
     await expect(a.getByRole('button', { name: 'Turn camera on' })).toBeVisible()
     await hangup(a, b)
@@ -140,5 +187,5 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
     await b.reload()
     await expect(b.getByRole('switch', { name: 'Voice calls', exact: true })).toHaveAttribute('aria-checked', 'false')
     await expect(b.getByRole('switch', { name: 'Video calls', exact: true })).toHaveAttribute('aria-checked', 'false')
-  } finally { await mkdir('work/calls', { recursive: true }); await writeFile('work/calls/browser.log', logs.join('\n')); await Promise.all(contexts.map(c => c.close())); await browser.close(); await seed.close(); if (!relayStopped) await testRelay.stop() }
+  } finally { await mkdir('work/calls', { recursive: true }); await writeFile('work/calls/rtc-evidence.json', JSON.stringify(await Promise.all(contexts.map(async context => { const page = context.pages()[0]; return page ? page.evaluate(async () => { const peers = (window as unknown as { callEvidence?: { peers: RTCPeerConnection[] } }).callEvidence?.peers ?? []; return Promise.all(peers.map(async peer => ({ state: peer.connectionState, local: peer.localDescription, remote: peer.remoteDescription, stats: [...(await peer.getStats()).values()] }))) }).catch(() => []) : [] })), null, 2)); await writeFile('work/calls/browser.log', logs.join('\n')); await writeFile('work/calls/bandwidth.json', JSON.stringify(bandwidth, null, 2)); await Promise.all(contexts.map(c => c.close())); await browser.close(); await seed.close(); if (!relayStopped) await testRelay.stop() }
 })

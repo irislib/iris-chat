@@ -73,11 +73,6 @@ export type {
 } from './deviceSyncProtocol'
 
 const DEVICE_SYNC_SCOPE = 'iris-chat-nearby-v1'
-const STUN_SERVERS = [
-  'stun:stun.l.google.com:19302',
-  'stun:stun.cloudflare.com:3478',
-  'stun:global.stun.twilio.com:3478',
-]
 
 export interface DeviceSyncSnapshotSource {
   requestRosterAt: number
@@ -685,8 +680,8 @@ async function reconcileRuntime(
   if (relays.length === 0 || run !== generation) return
   const transport = new WebRtcTransport({
     relays,
-    // Host ICE candidates work without Internet when using a local message server.
-    stunServers: relays.every(url => { try { const host = new URL(url).hostname; return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local') || /^10\.|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\./.test(host) } catch { return false } }) ? [] : STUN_SERVERS,
+    // Local candidates can upgrade a FIPS path; existing FIPS nodes handle other routes.
+    stunServers: [],
     advertiseOnNostr: true,
     autoConnect: true,
     discoveryApp: DEVICE_SYNC_SCOPE,

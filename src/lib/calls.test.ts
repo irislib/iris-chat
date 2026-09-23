@@ -16,7 +16,7 @@ vi.mock('./callMedia', () => ({ BrowserCallMedia: class {
   stream = {} as MediaStream
   stop = vi.fn()
   setState = vi.fn()
-  receive = vi.fn()
+  setQuality = vi.fn(async () => {})
   open = () => new Promise<void>(resolve => { fixture.media.push({ finish: resolve, stop: this.stop }) })
 } }))
 import { attachCalls, detachCalls, answerCall, callState } from './calls'
@@ -29,12 +29,12 @@ describe('answer capture ownership', () => {
     attachCalls({ registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} }, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode, () => [peer])
   })
   afterEach(() => detachCalls())
-  const offer = (id: string) => fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 1, type: 'offer', call_id: id, video: true }) })
+  const offer = (id: string) => fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'offer', call_id: id, video: true }) })
   it('opens capture once when Answer is invoked twice while permission is pending', async () => {
     offer('ab'.repeat(16))
     expect(get(callState)?.owner).toBe(owner)
     const first = answerCall(true), second = answerCall(true)
-    expect(fixture.media).toHaveLength(1)
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(1))
     fixture.media[0].finish()
     await Promise.all([first, second])
     expect(get(callState)?.status).toBe('active')
@@ -44,9 +44,11 @@ describe('answer capture ownership', () => {
     const oldId = 'ab'.repeat(16), newId = 'cd'.repeat(16)
     offer(oldId)
     const first = answerCall(true)
-    fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 1, type: 'end', call_id: oldId }) })
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(1))
+    fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'end', call_id: oldId }) })
     offer(newId)
     const second = answerCall(false)
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(2))
     fixture.media[1].finish(); await second
     fixture.media[0].finish(); await first
     expect(get(callState)?.id).toBe(newId)

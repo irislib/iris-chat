@@ -14,16 +14,24 @@ export interface CallEndpoint {
 export class CallSession {
   readonly state = writable<CallState | null>(null)
   onMedia?: (frame: MediaFrame) => void
+  onFeedback?: (feedback: CallControl) => void
+  onKeyframe?: () => void
   onEnded?: () => void
   private receiver = new CallMediaReceiver()
-  private sequence = [0, 0, 0]
   private ended = new Map<string, number>()
   private lastHeard = 0
+  private retransmitCache = new Map<number, { at: number; packets: Uint8Array[]; bytes: number }>()
+  private retransmitWindow = 0
+  private retransmitCount = 0
+  private recoveryTimer: ReturnType<typeof setInterval>
   private unregister: () => void
   private timer: ReturnType<typeof setInterval>
   constructor(private endpoint: CallEndpoint, private ownerForPeer: (peer: string) => string | undefined, private settings: () => Pick<CallSettings, 'voice' | 'video'> = () => ({ voice: true, video: true })) {
     this.unregister = endpoint.registerService(CALL_PORT, ({ src, payload }) => { this.receive(src, payload) })
     this.timer = setInterval(() => this.tick(), 1000)
+    this.recoveryTimer = setInterval(() => {
+      if (get(this.state)?.status === 'active') for (const missing of this.receiver.missing()) this.broadcast('nack', missing)
+    }, 50)
   }
   private rememberEnded(id: string) {
     this.ended.set(id, Date.now())
@@ -35,13 +43,13 @@ export class CallSession {
   private broadcast(type: CallControl['type'], extra: Partial<CallControl> = {}) {
     const s = get(this.state)
     if (!s) return
-    for (const peer of s.peer ? [s.peer] : s.peers) this.send(peer, { v: 1, type, call_id: s.id, video: s.camera, muted: s.muted, ...extra })
+    for (const peer of s.peer ? [s.peer] : s.peers) this.send(peer, { v: 3, type, call_id: s.id, video: s.camera, muted: s.muted, ...extra })
   }
   start(owner: string, peers: string[], video: boolean) {
     if (get(this.state)?.status !== 'ended' && get(this.state)) throw new Error('A call is already open')
     if (!peers.length || peers.some(p => this.ownerForPeer(p) !== owner)) throw new Error('This person is not connected. Try again when they are nearby or online.')
     const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')
-    this.receiver = new CallMediaReceiver()
+    this.resetMedia()
     this.state.set({ id, owner, peers, direction: 'outgoing', status: 'ringing', video, muted: false, camera: video, remoteMuted: false, remoteVideo: video, started: Date.now(), receivedAudio: 0, receivedVideo: 0 })
     this.broadcast('offer', { video, codec: CALL_CODEC })
   }
@@ -51,7 +59,7 @@ export class CallSession {
     this.lastHeard = Date.now()
     const withVideo = s.video && video && this.settings().video
     if (!withVideo && !this.settings().voice) return
-    this.state.set({ ...s, status: 'active', video: withVideo, camera: withVideo, remoteVideo: withVideo, connected: Date.now() })
+    this.state.set({ ...s, status: 'active', connected: Date.now(), video: withVideo, camera: s.camera && withVideo, remoteVideo: withVideo })
     this.broadcast('answer', { video: withVideo, codec: CALL_CODEC })
   }
   end(reason = 'Call ended', notify = true) {
@@ -64,17 +72,34 @@ export class CallSession {
   }
   clear() { if (get(this.state)?.status === 'ended') this.state.set(null) }
   setMedia(muted: boolean, camera: boolean) {
+    if (!camera) this.retransmitCache.clear()
     this.state.update(s => s ? { ...s, muted, camera: s.video && camera } : s)
     this.broadcast('media_state', { muted, video: camera })
   }
-  async sendMedia(kind: 1 | 2, bytes: Uint8Array) {
+  private resetMedia() { this.receiver = new CallMediaReceiver(); this.retransmitCache.clear() }
+  sendFeedback(feedback: Pick<CallControl, 'feedback_seq' | 'video_seq' | 'received_frames' | 'received_bytes' | 'interval_ms'>) {
+    if (get(this.state)?.status === 'active') this.broadcast('feedback', feedback)
+  }
+  get highestVideo() { return this.receiver.highestVideo }
+  requestKeyframe() { if (get(this.state)?.status === 'active') this.broadcast('keyframe') }
+  async sendMedia(frame: MediaFrame) {
     const s = get(this.state)
-    if (!s || s.status !== 'active' || !s.peer || (kind === 1 ? s.muted : !s.camera)) return
-    for (const payload of encodeCallMedia(s.id, kind, this.sequence[kind]++, bytes)) {
+    if (!s?.peer || s.status !== 'active' || (frame.kind === 1 && s.muted) || (frame.kind === 2 && (!s.video || !s.camera))) return
+    const began = performance.now()
+    const packets = encodeCallMedia(s.id, frame)
+    if (frame.kind === 2) {
+      for (const [seq, cached] of this.retransmitCache) if (began - cached.at > 300) this.retransmitCache.delete(seq)
+      this.retransmitCache.set(frame.seq, { at: began, packets, bytes: packets.reduce((n, p) => n + p.length, 0) })
+      while (this.retransmitCache.size > 8 || [...this.retransmitCache.values()].reduce((n, entry) => n + entry.bytes, 0) > 1048576) this.retransmitCache.delete(this.retransmitCache.keys().next().value!)
+    }
+    for (const payload of packets) {
       const current = get(this.state)
-      if (current?.status !== 'active' || current.id !== s.id || current.peer !== s.peer) return
+      if (!current || current.status !== 'active' || (frame.kind === 1 && current.muted) || (frame.kind === 2 && (!current.video || !current.camera)) || current.id !== s.id || current.peer !== s.peer || this.ownerForPeer(s.peer) !== s.owner || performance.now() - began > 150) return
       await this.endpoint.sendDatagram({ dst: s.peer, srcPort: CALL_PORT, dstPort: CALL_PORT, payload })
     }
+  }
+  updateStats(receivedAudio: number, receivedVideo: number) {
+    this.state.update(s => s && s.status === 'active' ? { ...s, receivedAudio, receivedVideo: s.video ? receivedVideo : 0 } : s)
   }
   private receive(peer: string, payload: Uint8Array) {
     const owner = this.ownerForPeer(peer)
@@ -84,14 +109,12 @@ export class CallSession {
     if (!p) {
       if (!s || s.status !== 'active' || s.peer !== peer || s.owner !== owner) return
       const frame = this.receiver.receive(s.id, payload)
-      if (frame && (frame.kind === 1 || s.video)) {
-        this.state.update(current => current ? { ...current, receivedAudio: current.receivedAudio + Number(frame.kind === 1), receivedVideo: current.receivedVideo + Number(frame.kind === 2) } : current)
-        this.onMedia?.(frame)
-      }
+      if (!frame) return
+      if (frame.kind === 1 || s.video) this.onMedia?.(frame)
       return
     }
     if (this.ended.has(p.call_id)) {
-      if (p.type === 'ping' || p.type === 'offer') this.send(peer, { v: 1, type: 'end', call_id: p.call_id })
+      if (p.type === 'ping' || p.type === 'offer') this.send(peer, { v: 3, type: 'end', call_id: p.call_id })
       return
     }
     // Datagram order is not guaranteed: a cancelled offer must not ring later.
@@ -103,7 +126,7 @@ export class CallSession {
       const settings = this.settings()
       if (p.video ? !settings.video && !settings.voice : !settings.voice) {
         this.rememberEnded(p.call_id)
-        this.send(peer, { v: 1, type: 'reject', call_id: p.call_id }); return
+        this.send(peer, { v: 3, type: 'reject', call_id: p.call_id }); return
       }
       if (s && s.status === 'ringing' && s.direction === 'outgoing' && s.owner === owner && p.call_id < s.id) {
         this.end('Call ended')
@@ -113,25 +136,43 @@ export class CallSession {
         if (s.id === p.call_id && s.peer === peer && s.status === 'active') this.broadcast('answer', { video: s.video, codec: CALL_CODEC })
         else if (s.id !== p.call_id) {
           this.rememberEnded(p.call_id)
-          this.send(peer, { v: 1, type: 'reject', call_id: p.call_id, reason: 'busy' })
+          this.send(peer, { v: 3, type: 'reject', call_id: p.call_id, reason: 'busy' })
         }
         return
       }
-      this.receiver = new CallMediaReceiver()
+      this.resetMedia()
       this.state.set({ id: p.call_id, owner, peer, peers: [peer], direction: 'incoming', status: 'ringing', video: !!p.video, muted: false, camera: !!p.video, remoteMuted: false, remoteVideo: !!p.video, started: Date.now(), receivedAudio: 0, receivedVideo: 0 })
       return
     }
     if (!s || s.id !== p.call_id || s.owner !== owner || !s.peers.includes(peer) || (s.peer && s.peer !== peer)) return
     this.lastHeard = Date.now()
     if (p.type === 'answer' && s.direction === 'outgoing' && s.status === 'ringing') {
-      for (const other of s.peers) if (other !== peer) this.send(other, { v: 1, type: 'end', call_id: s.id })
-      this.state.set({ ...s, status: 'active', peer, connected: Date.now(), video: s.video && !!p.video, camera: s.camera && !!p.video, remoteVideo: s.video && !!p.video })
+      for (const other of s.peers) if (other !== peer) this.send(other, { v: 3, type: 'end', call_id: s.id })
+      this.state.set({ ...s, status: 'active', connected: Date.now(), peer, video: s.video && !!p.video, camera: s.camera && !!p.video, remoteVideo: s.video && !!p.video })
+    } else if (p.type === 'nack' && s.status === 'active' && s.video) {
+      void this.retransmit(s, p)
+    } else if (p.type === 'feedback' && s.status === 'active' && s.video) {
+      this.onFeedback?.(p)
+    } else if (p.type === 'keyframe' && s.status === 'active' && s.video) {
+      this.onKeyframe?.()
     } else if (p.type === 'reject' || p.type === 'end') {
       if (!s.peer && p.type === 'reject' && s.peers.length > 1) this.state.set({ ...s, peers: s.peers.filter(x => x !== peer) })
       else this.end(p.type === 'reject' ? (p.reason === 'busy' ? 'Busy' : 'Call declined') : 'Call ended', false)
     } else if (p.type === 'ping' || p.type === 'pong' || p.type === 'media_state') {
       this.state.set({ ...s, remoteMuted: p.muted ?? s.remoteMuted, remoteVideo: s.video && (p.video ?? s.remoteVideo) })
       if (p.type === 'ping') this.broadcast('pong')
+    }
+  }
+  private async retransmit(s: CallState, control: CallControl) {
+    const now = performance.now(), cached = this.retransmitCache.get(control.frame_seq!)
+    if (!cached || now - cached.at > 300 || !s.peer) return
+    if (now - this.retransmitWindow >= 1000) { this.retransmitWindow = now; this.retransmitCount = 0 }
+    for (const index of new Set(control.missing)) {
+      const current = get(this.state), payload = cached.packets[index]
+      if (this.retransmitCount >= 128 || !current || current.id !== s.id || current.status !== 'active' || !current.camera || current.peer !== s.peer || this.ownerForPeer(s.peer) !== s.owner) return
+      if (!payload) continue
+      this.retransmitCount++
+      try { await this.endpoint.sendDatagram({ dst: s.peer, srcPort: CALL_PORT, dstPort: CALL_PORT, payload }) } catch { return }
     }
   }
   private tick() {
@@ -146,5 +187,5 @@ export class CallSession {
       else if (Math.floor(Date.now() / 1000) % 3 === 0) this.broadcast('ping')
     }
   }
-  dispose() { this.end(); clearInterval(this.timer); this.unregister() }
+  dispose() { this.end(); clearInterval(this.timer); clearInterval(this.recoveryTimer); this.unregister() }
 }

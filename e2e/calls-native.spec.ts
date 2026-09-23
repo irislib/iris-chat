@@ -1,7 +1,7 @@
 import { test, expect, useTestRelay } from './fixtures'
 import { chromium } from '@playwright/test'
 import { spawn } from 'node:child_process'
-import { createServer, type AddressInfo } from 'node:net'
+import { createServer, createConnection, type AddressInfo } from 'node:net'
 import { createInterface } from 'node:readline'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
@@ -11,7 +11,7 @@ import { getPublicKey, generateSecretKey } from 'nostr-tools'
 // cargo build --features stack-fixture --bin iris-call-fixture in iris-chat-rs/core
 const fixture = process.env.IRIS_CALL_FIXTURE_BIN
 
-test('browser and native exchange voice/video over a local FIPS bridge', async ({ testRelayUrl, baseURL }) => {
+test('browser and native exchange voice/video over local FIPS without a media server', async ({ testRelayUrl, baseURL }) => {
   test.setTimeout(180000)
   if (!fixture || !existsSync(fixture)) {
     if (process.env.REQUIRE_CALL_INTEROP === '1') throw new Error('Set IRIS_CALL_FIXTURE_BIN to the built native call fixture')
@@ -28,7 +28,7 @@ test('browser and native exchange voice/video over a local FIPS bridge', async (
   const events: Array<Record<string, any>> = []
   let stderr = ''
   native.stderr.on('data', bytes => { stderr = (stderr + bytes.toString()).slice(-20000) })
-  createInterface({ input: native.stdout }).on('line', line => { try { events.push(JSON.parse(line)) } catch { /* Non-JSON runtime diagnostics. */ } })
+  createInterface({ input: native.stdout }).on('line', line => { try { const event = JSON.parse(line); events.push(event) } catch { /* Non-JSON runtime diagnostics. */ } })
   const command = (text: string) => native.stdin.write(`${text}\n`)
   const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'] })
   const key = generateSecretKey(), owner = getPublicKey(key)
@@ -37,6 +37,7 @@ test('browser and native exchange voice/video over a local FIPS bridge', async (
   try {
     await expect.poll(() => events.find(e => e.event === 'ready'), { timeout: 40000 }).toBeTruthy()
     const ready = events.find(e => e.event === 'ready')!
+    await expect.poll(() => new Promise<boolean>(resolve => { const socket = createConnection({ host: '127.0.0.1', port }); socket.once('connect', () => { socket.destroy(); resolve(true) }); socket.once('error', () => resolve(false)) }), { timeout: 30000 }).toBe(true)
     await useTestRelay(context, testRelayUrl)
     await context.addInitScript(({ seed, key }) => {
       localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed] }))
@@ -66,14 +67,16 @@ test('browser and native exchange voice/video over a local FIPS bridge', async (
       if (!await page.getByTestId('call-screen').isVisible()) {
         await page.getByRole('button', { name: 'Video call', exact: true }).click()
         const dismiss = page.getByRole('button', { name: 'Dismiss call error' })
-        if (await dismiss.isVisible()) await dismiss.click()
+        if (await dismiss.isVisible()) { logs.push(await page.getByRole('alert').innerText()); await dismiss.click() }
       }
       await expect(page.getByTestId('call-screen')).toHaveAttribute('data-status', 'active', { timeout: 4000 })
     }).toPass({ timeout: 40000 })
     for (const kind of ['audio', 'video']) {
       await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute(`data-${kind}-frames`))).toBeGreaterThan(5)
     }
-    await expect(async () => { command('status'); await expect.poll(() => events.filter(e => e.event === 'status').at(-1)?.nonzero_audio_frames, { timeout: 3000 }).toBeGreaterThan(3) }).toPass()
+    await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-audio-energy'))).toBeGreaterThan(0.01)
+    command('status')
+    await expect.poll(() => events.some(event => Number(event.nonzero_audio_frames) > 5)).toBe(true)
     await page.screenshot({ path: 'work/calls/native-browser-video.png' })
     await page.getByRole('button', { name: 'End call', exact: true }).click()
     await page.getByRole('button', { name: 'Done', exact: true }).click()
@@ -87,9 +90,9 @@ test('browser and native exchange voice/video over a local FIPS bridge', async (
     command('end')
     command('status')
     await expect(page.getByTestId('call-screen')).toHaveAttribute('data-status', 'ended')
-    await writeFile('work/calls/native-evidence.json', JSON.stringify(events.filter(e => e.event === 'status' || e.event === 'call'), null, 2))
+    await writeFile('work/calls/native-evidence.json', JSON.stringify(events, null, 2))
   } finally {
-    await writeFile('work/calls/native-evidence.json', JSON.stringify(events.filter(e => e.event === 'status' || e.event === 'call'), null, 2))
+    await writeFile('work/calls/native-evidence.json', JSON.stringify(events, null, 2))
     await writeFile('work/calls/native-browser.log', logs.join('\n'))
     await writeFile('work/calls/native-runtime.log', stderr)
     command('stop')

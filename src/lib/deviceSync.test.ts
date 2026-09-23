@@ -7,6 +7,7 @@ import type { DeviceState } from './devices'
 import type { Group } from './groups'
 
 const fips = vi.hoisted(() => ({
+  transports: [] as Array<Record<string, unknown>>,
   nodes: [] as Array<{ emit: (event: string, value: unknown) => void }>,
   sendDatagram: vi.fn(async () => undefined),
 }))
@@ -50,7 +51,7 @@ vi.mock('@fips/core', () => ({
   identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32) })),
   toHex: vi.fn(() => 'a'.repeat(64)),
 }))
-vi.mock('@fips/transport-webrtc', () => ({ WebRtcTransport: class { connect = vi.fn(async () => undefined) } }))
+vi.mock('@fips/transport-webrtc', () => ({ WebRtcTransport: class { constructor(config: Record<string, unknown>) { fips.transports.push(config) } connect = vi.fn(async () => undefined) } }))
 vi.mock('./deviceSyncTcp', () => ({
   DeviceSyncTcp: class {
     port: number
@@ -181,9 +182,19 @@ function appKeys(
 describe('device sync', () => {
   beforeEach(() => {
     fips.nodes.length = 0
+    fips.transports.length = 0
     ndr.knownSnapshots = []
     ndr.applyTrustedAppKeysSnapshot.mockClear()
     tcp.instances.length = 0
+  })
+
+  it('uses host-only FIPS upgrades even with public message servers configured', async () => {
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      for (let tick = 0; tick < 10 && fips.nodes.length === 0; tick++) await Promise.resolve()
+      expect(fips.transports).toHaveLength(1)
+      expect(fips.transports[0]).toMatchObject({ relays: ['wss://relay.example'], stunServers: [], ordered: false, maxRetransmits: 0 })
+    } finally { await stopDeviceSync() }
   })
 
   it('accepts only authenticated devices on the active roster', () => {

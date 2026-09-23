@@ -17,7 +17,7 @@ class Endpoint implements CallEndpoint {
   }
 }
 const id = 'ab'.repeat(16)
-function jpeg(size: number) { const bytes = new Uint8Array(size); bytes.set([255, 216]); bytes.set([255, 217], size - 2); return bytes }
+function packet(size: number) { return new Uint8Array(size).fill(17) }
 describe('FIPS calls', () => {
   let a: CallSession, b: CallSession, ea: Endpoint, eb: Endpoint
   beforeEach(() => {
@@ -27,34 +27,34 @@ describe('FIPS calls', () => {
     b = new CallSession(eb, peer => peer === 'a' ? 'Alice' : undefined)
   })
   afterEach(() => { a.dispose(); b.dispose(); vi.useRealTimers() })
-  it('sends no media before answer, then carries audio and fragmented video in both directions', async () => {
+  it('sends no media before answer, then carries compressed Opus and H264 frames', async () => {
     const frames = vi.fn(); b.onMedia = frames
     a.start('Bob', ['b'], true)
-    await a.sendMedia(1, new Uint8Array(640))
+    await a.sendMedia({ kind: 1, seq: 0, timestamp: 0, key: true, bytes: new Uint8Array(640) })
     expect(frames).not.toHaveBeenCalled()
     b.accept(true)
     expect(get(a.state)?.status).toBe('active')
-    await a.sendMedia(1, new Uint8Array(640))
-    const frame = jpeg(5000)
-    await a.sendMedia(2, frame)
+    await a.sendMedia({ kind: 1, seq: 0, timestamp: 0, key: true, bytes: new Uint8Array(640) })
+    const frame = packet(5000)
+    await a.sendMedia({ kind: 2, seq: 0, timestamp: 0, key: true, bytes: frame })
     expect(frames).toHaveBeenCalledTimes(2)
     expect(frames.mock.calls[1][0].bytes).toEqual(frame)
     a.end()
     expect(get(b.state)?.status).toBe('ended')
-    await a.sendMedia(1, new Uint8Array(640))
+    await a.sendMedia({ kind: 1, seq: 0, timestamp: 0, key: true, bytes: new Uint8Array(640) })
     expect(frames).toHaveBeenCalledTimes(2)
   })
-  it('supports answering a video offer with voice and forbids subsequent video', async () => {
+  it('supports answering a video offer with voice and keeps control packets flowing', async () => {
     a.start('Bob', ['b'], true); b.accept(false)
     expect(get(a.state)?.video).toBe(false)
     expect(get(a.state)?.camera).toBe(false)
     expect(get(b.state)?.video).toBe(false)
     const receive = vi.fn(); b.onMedia = receive
-    await a.sendMedia(2, new Uint8Array(100))
-    expect(receive).not.toHaveBeenCalled()
+    await a.sendMedia({ kind: 1, seq: 0, timestamp: 0, key: true, bytes: new Uint8Array(100) })
+    expect(receive).toHaveBeenCalledTimes(1)
   })
   it('ignores strangers, rejects disabled calls, admits video as voice when only voice enabled', () => {
-    eb.handler?.({ src: 'stranger', payload: encodeCallControl({ v: 1, type: 'offer', call_id: id }) })
+    eb.handler?.({ src: 'stranger', payload: encodeCallControl({ v: 3, type: 'offer', call_id: id }) })
     expect(get(b.state)).toBeNull()
     b.dispose()
     b = new CallSession(eb, () => 'Alice', () => ({ voice: false, video: false }))
@@ -102,26 +102,37 @@ describe('FIPS calls', () => {
     expect(get(a.state)?.remoteVideo).toBe(false)
   })
   it('remembers cancellation received before a delayed offer', () => {
-    eb.handler?.({ src: 'a', payload: encodeCallControl({ v: 1, type: 'end', call_id: id }) })
-    eb.handler?.({ src: 'a', payload: encodeCallControl({ v: 1, type: 'offer', call_id: id }) })
+    eb.handler?.({ src: 'a', payload: encodeCallControl({ v: 3, type: 'end', call_id: id }) })
+    eb.handler?.({ src: 'a', payload: encodeCallControl({ v: 3, type: 'offer', call_id: id }) })
     expect(get(b.state)).toBeNull()
   })
   it('does not resume an old fragmented frame after a new call starts', async () => {
     a.start('Bob', ['b'], true); b.accept(true)
     let release!: () => void
     ea.gate = new Promise<void>(resolve => { release = resolve })
-    const pending = a.sendMedia(2, jpeg(5000))
+    const pending = a.sendMedia({ kind: 2, seq: 0, timestamp: 0, key: true, bytes: packet(5000) })
     const oldId = get(a.state)!.id
     a.end(); a.start('Bob', ['b'], true); b.accept(true)
     expect(get(a.state)?.id).not.toBe(oldId)
     release(); await pending
     expect(ea.sent.filter(bytes => bytes[0] === 73)).toHaveLength(1)
   })
+  it('stops pending video fragments when the camera is turned off', async () => {
+    a.start('Bob', ['b'], true); b.accept(true)
+    let release!: () => void
+    ea.gate = new Promise<void>(resolve => { release = resolve })
+    const pending = a.sendMedia({ kind: 2, seq: 1, timestamp: 0, key: true, bytes: packet(5000) })
+    a.setMedia(false, false)
+    release(); await pending
+    expect(ea.sent.filter(bytes => bytes[0] === 73)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(150)
+    expect(ea.sent.filter(bytes => bytes[0] === 73)).toHaveLength(1)
+  })
   it('keeps rejected offers rejected after preferences are enabled', () => {
     b.dispose()
     let enabled = false
     b = new CallSession(eb, () => 'Alice', () => ({ voice: enabled, video: enabled }))
-    const packet = encodeCallControl({ v: 1, type: 'offer', call_id: id })
+    const packet = encodeCallControl({ v: 3, type: 'offer', call_id: id })
     eb.handler?.({ src: 'a', payload: packet })
     enabled = true
     eb.handler?.({ src: 'a', payload: packet })
@@ -142,18 +153,41 @@ describe('FIPS calls', () => {
     expect(get(a.state)?.status).toBe('active')
     expect(get(b.state)?.status).toBe('active')
   })
-  it('validates controls and bounds fragmented media by size, age, identity and sequence', () => {
-    expect(parseCallControl(new TextEncoder().encode(JSON.stringify({ v: 1, type: 'offer', call_id: id, video: 'yes' })))).toBeNull()
+  it('recovers missing video fragments with bounded NACK retransmission', async () => {
+    a.start('Bob', ['b'], true); b.accept(true)
+    const handler = eb.handler!, receive = vi.fn(); b.onMedia = receive
+    let lost = false
+    eb.handler = context => {
+      if (!lost && context.payload[20] === 2 && new DataView(context.payload.buffer).getUint16(34) === 1) { lost = true; return }
+      handler(context)
+    }
+    await a.sendMedia({ kind: 2, seq: 1, timestamp: 20000, key: true, bytes: packet(5000) })
+    expect(receive).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(60)
+    expect(receive).toHaveBeenCalledTimes(1)
+    expect(receive.mock.calls[0][0].bytes).toHaveLength(5000)
+    expect(eb.sent.map(parseCallControl).some(p => p?.type === 'nack')).toBe(true)
+  })
+  it('retains reordered compressed frames while suppressing duplicate packets', () => {
     const receiver = new CallMediaReceiver()
-    const parts = encodeCallMedia(id, 2, 1, jpeg(2500))
+    const newer = encodeCallMedia(id, { kind: 2, seq: 10, timestamp: 0, key: true, bytes: packet(10) })[0]
+    const older = encodeCallMedia(id, { kind: 2, seq: 9, timestamp: 0, key: true, bytes: packet(10) })[0]
+    expect(receiver.receive(id, newer, 0)?.seq).toBe(10)
+    expect(receiver.receive(id, older, 1)?.seq).toBe(9)
+    expect(receiver.receive(id, newer, 2)).toBeNull()
+  })
+  it('validates controls and bounds fragmented media by size, age, identity and sequence', () => {
+    expect(parseCallControl(new TextEncoder().encode(JSON.stringify({ v: 3, type: 'offer', call_id: id, video: 'yes' })))).toBeNull()
+    const receiver = new CallMediaReceiver()
+    const parts = encodeCallMedia(id, { kind: 2, seq: 1, timestamp: 0, key: true, bytes: packet(2500) })
     expect(receiver.receive(id, parts[0], 0)).toBeNull()
     expect(receiver.receive(id, parts[1], 600)).toBeNull()
     expect(receiver.receive(id, parts[2], 600)).toBeNull()
-    const fresh = encodeCallMedia(id, 2, 2, jpeg(2000))
+    const fresh = encodeCallMedia(id, { kind: 2, seq: 2, timestamp: 0, key: true, bytes: packet(2000) })
     expect(receiver.receive(id, fresh[1], 610)).toBeNull()
     expect(receiver.receive(id, fresh[0], 610)?.bytes.length).toBe(2000)
     expect(receiver.receive(id, fresh[0], 620)).toBeNull()
     expect(receiver.receive('ff'.repeat(16), fresh[0], 620)).toBeNull()
-    expect(encodeCallMedia(id, 2, 3, new Uint8Array(65537))).toHaveLength(0)
+    expect(encodeCallMedia(id, { kind: 2, seq: 3, timestamp: 0, key: true, bytes: new Uint8Array(262145) })).toHaveLength(0)
   })
 })

@@ -20,6 +20,7 @@ const MAX_CONNECTIONS = 64;
 export interface LocalFipsWebSocketSeed {
   url: string;
   close(): Promise<void>;
+  shape(bytesPerSecond: number, dropEvery?: number): void;
 }
 
 class InboundWebSocketTransport implements Transport {
@@ -27,6 +28,9 @@ class InboundWebSocketTransport implements Transport {
   readonly mtu = 1_400;
 
   private context?: TransportContext;
+  rate = Infinity;
+  dropEvery = 0;
+  private counts = new Map<string, { allowance: number; at: number; packets: number }>();
   private server?: WebSocketServer;
   private readonly sockets = new Map<string, WebSocket>();
   private nextConnection = 0;
@@ -90,6 +94,13 @@ class InboundWebSocketTransport implements Transport {
     if (socket.bufferedAmount + packet.length > MAX_FRAME_BYTES * 16) {
       throw new Error('WebSocket seed backpressure limit');
     }
+    const now = Date.now();
+    const limit = this.counts.get(address.addr) ?? { allowance: 10000, at: now, packets: 0 };
+    limit.allowance = Number.isFinite(this.rate) ? Math.min(10000, limit.allowance + (now - limit.at) * this.rate / 1000) : Infinity;
+    limit.at = now; limit.packets++;
+    this.counts.set(address.addr, limit);
+    if ((this.dropEvery && limit.packets % this.dropEvery === 0) || packet.length > limit.allowance) return;
+    limit.allowance -= packet.length;
     socket.send(packet);
   }
 
@@ -155,5 +166,6 @@ export async function startLocalFipsWebSocketSeed(): Promise<LocalFipsWebSocketS
   return {
     url: transport.url,
     close: () => node.stop(),
+    shape: (rate, dropEvery = 0) => { transport.rate = rate; transport.dropEvery = dropEvery; },
   };
 }

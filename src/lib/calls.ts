@@ -5,14 +5,15 @@ import { getNdrRuntime, preparePeerNdrRuntime } from './privateChats'
 import { getMessageRequestPolicyContext, isChatAccepted, isChatRejected } from './messageRequestPolicy'
 import { callSettings } from './callSettings'
 import { CallSession, type CallState } from './callSession'
-import { BrowserCallMedia } from './callMedia'
+import { BrowserCallMedia, type CallMediaStats } from './callMedia'
 import { CallRingtone } from './callRingtone'
 const ringtone = new CallRingtone()
 
 export const callState = writable<CallState | null>(null)
 export const callError = writable('')
+export const callMediaStats = writable<CallMediaStats | null>(null)
 export const localCallStream = writable<MediaStream | null>(null)
-export const remoteCallVideo = writable('')
+export const remoteCallVideo = writable<HTMLCanvasElement | null>(null)
 let session: CallSession | null = null
 let runtimeCleanup: (() => void) | undefined
 let connectedPeers: () => string[] = () => []
@@ -37,8 +38,8 @@ function stopMedia() {
   generation++
   media?.stop(); media = null
   localCallStream.set(null)
-  const old = get(remoteCallVideo); if (old) URL.revokeObjectURL(old)
-  remoteCallVideo.set('')
+  remoteCallVideo.set(null)
+  callMediaStats.set(null)
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none'
 }
 export function knownCallDevices(owner: string): string[] {
@@ -51,6 +52,8 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   session = new CallSession(node, callOwnerForPeer, () => get(callSettings))
   session.onEnded = stopMedia
   session.onMedia = frame => media?.receive(frame)
+  session.onFeedback = feedback => media?.feedback(feedback)
+  session.onKeyframe = () => media?.requestKeyframe()
   const unsubscribe = session.state.subscribe(state => {
     callState.set(state)
     if (state?.direction === 'incoming' && state.status === 'ringing' && get(callSettings).ringtone !== false) ringtone.start()
@@ -60,6 +63,7 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   const settingsUnsubscribe = callSettings.subscribe(settings => {
     const state = get(callState)
     if (settings.ringtone === false) ringtone.stop()
+    void media?.setQuality(settings).catch(() => callError.set('Could not change call quality'))
     if (state && state.status !== 'ended' && !(state.video ? settings.video || (state.status === 'ringing' && state.direction === 'incoming' && settings.voice) : settings.voice)) session?.end('Calls disabled')
   })
   runtimeCleanup = () => { unsubscribe(); settingsUnsubscribe() }
@@ -70,14 +74,20 @@ export function detachCalls() {
 }
 async function openMedia(video: boolean, capturedSession: CallSession, callId: string) {
   const token = ++generation
-  const isCurrent = () => session === capturedSession && get(capturedSession.state)?.id === callId
-  const next = new BrowserCallMedia(async (kind, bytes) => { if (isCurrent()) await capturedSession.sendMedia(kind, bytes) }, url => {
-    if (!isCurrent()) { URL.revokeObjectURL(url); return }
-    const old = get(remoteCallVideo); remoteCallVideo.set(url); if (old) URL.revokeObjectURL(old)
+  const isCurrent = () => session === capturedSession && get(capturedSession.state)?.id === callId && get(capturedSession.state)?.status !== 'ended'
+  const fail = (error: Error) => { if (isCurrent()) { capturedSession.end('Call could not connect'); callError.set(error.message) } }
+  const next = new BrowserCallMedia({
+    send: frame => isCurrent() ? capturedSession.sendMedia(frame) : Promise.resolve(),
+    remoteVideo: canvas => { if (isCurrent()) remoteCallVideo.set(canvas) },
+    feedback: feedback => { if (isCurrent()) capturedSession.sendFeedback(feedback) },
+    highestVideo: () => isCurrent() ? capturedSession.highestVideo : undefined,
+    requestKeyframe: () => { if (isCurrent()) capturedSession.requestKeyframe() },
+    stats: stats => { if (isCurrent()) { callMediaStats.set(stats); capturedSession.updateStats(stats.receivedAudio, stats.receivedVideo) } },
+    error: fail,
   })
   media = next
   try {
-    await next.open(video)
+    await next.open(video, get(callSettings))
     if (token !== generation || !isCurrent()) { next.stop(); throw new Error('Call ended') }
     localCallStream.set(next.stream)
     if ('mediaSession' in navigator) {
@@ -112,7 +122,7 @@ export async function startCall(owner: string, video: boolean) {
     const state = get(callState)
     if (state) media?.setState(state.status === 'active', state.muted, state.camera, state.video)
   } catch (error) {
-    if (session === initialSession && (!startedId || get(callState)?.id === startedId)) {
+    if (session === initialSession && (!startedId || (get(callState)?.id === startedId && get(callState)?.status !== 'ended'))) {
       session?.end('Call could not start'); callError.set(error instanceof Error ? error.message : 'Microphone or camera unavailable')
     }
   } finally { starting = false }

@@ -16,6 +16,8 @@ Decentralized encrypted messaging over Nostr using the double-ratchet protocol.
   sibling devices; Nostr relays remain the initial-contact and durable-backfill path
 - **Reliable linked-device sync** as bounded records over TCP/FIPS service 7369;
   chat delivery and seen receipts remain end-to-end application signals
+- **Voice and video calls** use WebRTC codecs and adaptive bitrate, with signaling
+  and encrypted media packets carried over authenticated FIPS links
 
 ## Tech Stack
 
@@ -38,6 +40,39 @@ npm run dev
 ```bash
 npm run build
 npm run preview
+```
+
+## Call servers
+
+Calls work in a standalone browser through existing FIPS nodes. No media server,
+TURN gateway, native helper, or extra FIPS-node feature is required. Opus audio
+and H.264 video are encoded locally, then sent inside authenticated FIPS
+connections to accepted contacts. Browser video support is checked before
+capture; audio loss concealment uses bundled libopus 1.6.1. All codec assets
+are served with the app. To rebuild the bundled codec, run
+`scripts/opus/build.sh` (requires CMake and downloads pinned build tools).
+
+Call quality can be changed in Settings or during a video call. Automatic
+quality caps video at 2 Mbps, High quality at 4 Mbps, and Use less data at
+400 kbps. Custom accepts 100–8000 kbps. The encoder reduces its rate when
+receivers report loss and increases it as the connection recovers. Automatic
+requests 720p30; High requests 1080p30, subject to the camera and codec.
+
+For offline calls, load or host the app locally, pair the contacts, and use a
+reachable local FIPS WebSocket node in Settings → Call servers. Pairing needs
+a reachable local message server; established calls continue after that
+server stops. Microphone/camera access requires a secure browser context:
+HTTPS with a trusted certificate, or localhost for a same-computer test. Plain
+HTTP on another computer's LAN address is insufficient. No public STUN, TURN,
+or media service is used. FIPS tries direct local connections using host-only
+ICE candidates; connections across NAT can continue through existing FIPS nodes.
+
+Run the browser call check with local FIPS routing and Internet HTTP/WebSocket
+traffic blocked:
+
+```sh
+pnpm test:e2e e2e/calls.spec.ts --workers=1 --retries=0
+node scripts/test-call-codecs.mjs # Chromium + WebKit codecs, 1080p, Opus loss concealment
 ```
 
 ## Tests

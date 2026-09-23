@@ -16,6 +16,7 @@
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
   import { callSettings, setCallSettings } from '../lib/callSettings'
+  import CallQualityControls from './CallQualityControls.svelte'
   import { callConnectionSettings, setCallServers } from '../lib/callConnectionSettings'
   let callServers = $state('')
   let callServerError = $state('')
@@ -1097,13 +1098,15 @@
               </button>
             </div>
           {/each}
+          <CallQualityControls />
         </div>
       </section>
 
       <details class="mb-6">
         <summary class="text-sm cursor-pointer">Call servers</summary>
         <form class="mt-3 space-y-2" onsubmit={(event) => { event.preventDefault(); try { setCallServers(callServers); callServerError = '' } catch (error) { callServerError = error instanceof Error ? error.message : 'Invalid address' } }}>
-          <textarea class="input w-full" aria-label="Call server addresses" rows="2" bind:value={callServers}></textarea>
+          <label class="block text-sm" for="call-connection-servers">Connection servers</label>
+          <textarea id="call-connection-servers" class="input w-full" aria-label="Call server addresses" rows="2" bind:value={callServers}></textarea>
           <p class="text-xs text-gray-500">A local call server lets you call without internet.</p>
           {#if callServerError}<p class="text-sm text-red-400" role="alert">{callServerError}</p>{/if}
           <button type="submit" class="btn-primary text-sm">Save</button>

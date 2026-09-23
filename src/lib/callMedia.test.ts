@@ -1,37 +1,63 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { BrowserCallMedia } from './callMedia'
-
-describe('camera capture cleanup', () => {
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers() })
-  it('does not send a JPEG whose encoding completes after the call ends', async () => {
-    vi.useFakeTimers()
-    const stop = vi.fn(), track = { stop, enabled: true }
-    const stream = { getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [track] }
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => stream) } })
-    const connection = { connect: vi.fn(), disconnect: vi.fn() }
-    vi.stubGlobal('AudioContext', class {
-      destination = {}
-      resume = vi.fn(async () => {})
-      close = vi.fn(async () => {})
-      createMediaStreamSource = () => connection
-      createScriptProcessor = () => ({ ...connection, onaudioprocess: null })
-    })
-    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
-    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
-    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(4)
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D)
-    let finish!: (value: ArrayBuffer) => void
-    const encoded = new Promise<ArrayBuffer>(resolve => { finish = resolve })
-    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback: BlobCallback) => callback({ arrayBuffer: () => encoded } as Blob))
-    const send = vi.fn(async () => {})
-    const media = new BrowserCallMedia(send, vi.fn())
-    await media.open(true)
-    media.setState(true, false, true, true)
-    vi.advanceTimersByTime(125)
+import { CallAdaptation } from './callAdaptation'
+import { callEncoding, callVideoSize, normalizeCallQuality } from './callQuality'
+import { BrowserCallMedia, type CallMediaCallbacks } from './callMedia'
+vi.mock('./callOpus', () => ({ CallOpus: { open: async () => ({ close: vi.fn() }) } }))
+const feedback = (feedback_seq: number, video_seq: number, received_frames: number) => ({ v: 3 as const, type: 'feedback' as const, call_id: 'ab'.repeat(16), feedback_seq, video_seq, received_frames, received_bytes: 10000, interval_ms: 1000 })
+afterEach(() => vi.unstubAllGlobals())
+describe('compressed call media', () => {
+  it('adapts to loss, ignores replayed feedback, recovers and obeys the selected cap', () => {
+    const a = new CallAdaptation(2_000_000, 0)
+    a.feedback(feedback(0, 29, 20), 1000)
+    expect(a.target).toBe(900000)
+    a.feedback(feedback(0, 29, 20), 2000)
+    expect(a.target).toBe(900000)
+    a.feedback(feedback(1, 59, 30), 2000)
+    expect(a.target).toBe(1055000)
+    a.setCap(400000)
+    a.feedback(feedback(2, 89, 30), 3000)
+    expect(a.target).toBe(400000)
+    a.tick(6100); expect(a.target).toBe(300000)
+    a.tick(7200); expect(a.target).toBe(225000)
+  })
+  it('backs off during total video loss even when feedback still arrives', () => {
+    const a = new CallAdaptation(2000000, 0)
+    a.sentFrame()
+    a.feedback({ ...feedback(0, 0, 0), video_seq: undefined }, 1000)
+    expect(a.target).toBe(900000)
+    a.sentFrame(); a.feedback(feedback(1, 0, 1), 2000)
+    a.sentFrame(); a.feedback(feedback(2, 0, 0), 3000)
+    expect(a.target).toBe(791250)
+  })
+  it('uses configured resolution and bounded bitrate preferences', () => {
+    expect(normalizeCallQuality({ quality: 'bogus', customBitrateKbps: NaN })).toEqual({ quality: 'auto', customBitrateKbps: 2000 })
+    expect(callVideoSize({ quality: 'auto' }, { width: 1080, height: 1920 })).toEqual({ width: 720, height: 1280 })
+    expect(callVideoSize({ quality: 'high' }, { width: 640, height: 480 })).toEqual({ width: 640, height: 480 })
+    expect(callEncoding({ quality: 'auto' })).toMatchObject({ width: 1280, height: 720, maxBitrate: 2000000 })
+    expect(callEncoding({ quality: 'high' })).toMatchObject({ width: 1920, height: 1080, codec: 'avc1.42e028' })
+    expect(callEncoding({ quality: 'custom', customBitrateKbps: -1 }).maxBitrate).toBe(100000)
+    expect(callEncoding({ quality: 'custom', customBitrateKbps: 1e10 }).maxBitrate).toBe(8000000)
+  })
+  it('stops a late capture result after the call has ended', async () => {
+    let finish!: (value: unknown) => void
+    const stop = vi.fn()
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => new Promise(resolve => { finish = resolve }) } })
+    vi.stubGlobal('AudioWorkletNode', class {})
+    const media = new BrowserCallMedia({} as CallMediaCallbacks)
+    const opening = media.open(false)
+    await vi.waitFor(() => expect(finish).toBeDefined())
     media.stop()
-    finish(new Uint8Array([255, 216, 255, 217]).buffer)
-    await Promise.resolve(); await Promise.resolve()
-    expect(send).not.toHaveBeenCalled()
-    expect(stop).toHaveBeenCalled()
+    finish({ getTracks: () => [{ stop }] })
+    await expect(opening).rejects.toThrow('Call ended')
+    expect(stop).toHaveBeenCalledOnce()
+  })
+  it('checks real video encoder capability before opening the microphone', async () => {
+    const capture = vi.fn()
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: capture } })
+    vi.stubGlobal('AudioWorkletNode', class {})
+    vi.stubGlobal('VideoEncoder', class { static isConfigSupported = async () => ({ supported: false }) })
+    vi.stubGlobal('VideoDecoder', class {})
+    await expect(new BrowserCallMedia({} as CallMediaCallbacks).open(true)).rejects.toThrow('Update your browser')
+    expect(capture).not.toHaveBeenCalled()
   })
 })
