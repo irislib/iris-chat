@@ -29,6 +29,18 @@ describe('NIP-46 transport', () => {
     }
   })
 
+  it('encodes connection-link spaces for Amber without changing literal plus signs', async () => {
+    const { relay, controller } = await setup()
+    const relayUrl = `${relay.url}/signer+channel`
+    let link = ''
+    const client = new RemoteSigner({ relays: [relayUrl], signal: controller.signal, onConnectionLink: value => { link = value; controller.abort() } })
+    await expect(client.connect()).rejects.toThrow('cancelled')
+    expect(link).toContain('name=Iris%20Chat')
+    expect(link).not.toContain('+')
+    expect(link).toContain('%2B')
+    expect(new URL(link).searchParams.get('relay')).toBe(relayUrl)
+  })
+
   it('uses a live signer relay when another one is unavailable', async () => {
     const { signer, controller } = await setup()
     const link = new URL(signer.bunkerLink)

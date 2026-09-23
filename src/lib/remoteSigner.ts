@@ -105,7 +105,8 @@ export class RemoteSigner {
       link.searchParams.set('perms', 'sign_event:37368')
       link.searchParams.set('name', 'Iris Chat')
       link.searchParams.set('url', 'https://chat.iris.to')
-      this.options.onConnectionLink?.(link.toString())
+      // Amber treats a literal '+' as a plus, rather than a query-space.
+      this.options.onConnectionLink?.(link.toString().replaceAll('+', '%20'))
       await connected
     }
     this.check()
