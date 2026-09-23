@@ -82,15 +82,14 @@ const remote = { transport: 'webrtc', addr: '' }
 const transports: WebRtcTransport[] = []
 const flush = () => vi.advanceTimersByTimeAsync(0)
 
-async function fixture(sendGate?: ReturnType<typeof deferred<void>>) {
+async function fixture(sendGate?: ReturnType<typeof deferred<void>>, localScalar = 2, remoteScalar = 1) {
   const secret = (scalar: number) => {
     const bytes = new Uint8Array(32)
     bytes[31] = scalar
     return bytes
   }
-  const identities = await Promise.all([1, 2].map(value => identityFromSecretKey(secret(value))))
-  identities.sort((a, b) => Buffer.compare(a.publicKey, b.publicKey))
-  remote.addr = Buffer.from(identities[0].publicKey).toString('hex')
+  const identities = await Promise.all([remoteScalar, localScalar].map(value => identityFromSecretKey(secret(value))))
+  remote.addr = `02${Buffer.from(identities[0].xOnlyPubkey).toString('hex')}`
   const sent: Array<{ kind: string; negotiationId: string }> = []
   const states: string[] = []
   const transport = new WebRtcTransport({
@@ -144,6 +143,20 @@ afterEach(async () => {
 })
 
 describe('WebRTC simultaneous negotiation ownership', () => {
+  it.each([[22, 1, false], [1, 22, true], [22, 22, false]] as const)(
+    'uses full x-only ordering for local scalar%s versus remote scalar%s',
+    async (localScalar: number, remoteScalar: number, accept: boolean) => {
+      const { transport, sent } = await fixture(undefined, localScalar, remoteScalar)
+      await transport.handleLinkNegotiation(remote.addr, {
+        version: 1, negotiationId: 'parity-ordering-offer', linkType: 'webrtc', kind: 'offer',
+        createdAtMs: Date.now(), expiresAtMs: Date.now() + 60_000,
+        payload: { sdp: 'incoming-sdp' },
+      })
+      expect(sent.map(signal => signal.kind)).toEqual([accept ? 'answer' : 'reject'])
+      expect(FakePeerConnection.instances).toHaveLength(accept ? 2 : 1)
+    },
+  )
+
   it('does not send a canceled offer or remove the winning connection after slow ICE gathering', async () => {
     const { transport, sent, states, result } = await fixture()
     const replacement = await incomingWins(transport)
