@@ -1,8 +1,6 @@
+import { DEFAULT_STUN_SERVERS } from '@fips/transport-webrtc'
 import { createPersistedSettings } from './createSettings'
-export const DEFAULT_CALL_STUN_SERVERS = [
-  'stun:stun.l.google.com:19302',
-  'stun:stun.cloudflare.com:3478',
-]
+export const DEFAULT_CALL_STUN_SERVERS = [...DEFAULT_STUN_SERVERS]
 export interface CallConnectionSettings extends Record<string, unknown> { servers: string[]; stunServers: string[] }
 const { store, update } = createPersistedSettings<CallConnectionSettings>('iris-chat-call-servers', {
   servers: ['wss://fips2.iris.to/fips', 'wss://fips1.iris.to/fips'],

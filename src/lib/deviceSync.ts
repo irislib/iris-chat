@@ -683,7 +683,6 @@ async function reconcileRuntime(
     relays,
     // STUN helps direct FIPS links cross NAT; local/routed paths remain available.
     stunServers: get(callConnectionSettings).stunServers,
-    iceGatherTimeoutMs: 2_000,
     advertiseOnNostr: true,
     autoConnect: true,
     discoveryApp: DEVICE_SYNC_SCOPE,

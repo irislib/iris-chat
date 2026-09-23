@@ -3,12 +3,8 @@ packages:
 
 overrides:
   '@isaacs/brace-expansion': 5.0.1
-  '@fips/core': 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz'
+  '@fips/core': 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz'
   serialize-javascript: 7.0.5
 
 onlyBuiltDependencies:
   - esbuild
-
-patchedDependencies:
-  '@fips/core@0.0.31': patches/fips-core-session-setup.patch
-  '@fips/transport-webrtc@0.0.47': patches/fips-webrtc-negotiation.patch
