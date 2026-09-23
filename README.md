@@ -66,12 +66,15 @@ reachable local FIPS WebSocket node in Settings → Call servers. Pairing needs
 a reachable local message server; established calls continue after that
 server stops. Microphone/camera access requires a secure browser context:
 HTTPS with a trusted certificate, or localhost for a same-computer test. Plain
-HTTP on another computer's LAN address is insufficient. No public STUN, TURN,
-or media service is used. FIPS tries direct local connections using host-only
-ICE candidates; connections across NAT can continue through existing FIPS nodes.
+HTTP on another computer's LAN address is insufficient. Public STUN servers
+(the same Google and Cloudflare defaults as Iris Drive) help FIPS establish
+direct connections across NAT. They do not carry call media. Gathering is
+limited to two seconds, so unavailable STUN does not prevent local connections
+or existing FIPS routes. No TURN or media service is used. Saved connection
+settings may set `stunServers: []` for local-only address gathering.
 
-Run the browser call check with local FIPS routing and Internet HTTP/WebSocket
-traffic blocked:
+Run the browser call check with Internet HTTP/WebSocket traffic blocked,
+unanswered local STUN, and both bootstrap servers stopped during the call:
 
 ```sh
 pnpm test:e2e e2e/calls.spec.ts --workers=1 --retries=0

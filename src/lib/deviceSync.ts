@@ -632,6 +632,7 @@ function runtimeKey(ownerPubkey: string, state: DeviceState): string {
   return [
     ownerPubkey,
     ...get(callConnectionSettings).servers,
+    ...get(callConnectionSettings).stunServers,
     state.identityPubkey,
     state.lastEventTimestamp,
     ...state.registeredDevices.map((device) => device.identityPubkey).sort(),
@@ -680,8 +681,9 @@ async function reconcileRuntime(
   if (relays.length === 0 || run !== generation) return
   const transport = new WebRtcTransport({
     relays,
-    // Local candidates can upgrade a FIPS path; existing FIPS nodes handle other routes.
-    stunServers: [],
+    // STUN helps direct FIPS links cross NAT; local/routed paths remain available.
+    stunServers: get(callConnectionSettings).stunServers,
+    iceGatherTimeoutMs: 2_000,
     advertiseOnNostr: true,
     autoConnect: true,
     discoveryApp: DEVICE_SYNC_SCOPE,

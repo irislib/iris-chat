@@ -188,12 +188,18 @@ describe('device sync', () => {
     tcp.instances.length = 0
   })
 
-  it('uses host-only FIPS upgrades even with public message servers configured', async () => {
+  it('uses bounded STUN-assisted FIPS upgrades with public message servers configured', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
       for (let tick = 0; tick < 10 && fips.nodes.length === 0; tick++) await Promise.resolve()
       expect(fips.transports).toHaveLength(1)
-      expect(fips.transports[0]).toMatchObject({ relays: ['wss://relay.example'], stunServers: [], ordered: false, maxRetransmits: 0 })
+      expect(fips.transports[0]).toMatchObject({
+        relays: ['wss://relay.example'],
+        stunServers: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'],
+        iceGatherTimeoutMs: 2_000,
+        ordered: false,
+        maxRetransmits: 0,
+      })
     } finally { await stopDeviceSync() }
   })
 

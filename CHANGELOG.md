@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.25 - 2026-09-23
+
+- Improve direct calls across different networks using STUN, while retaining
+  local connections and encrypted routing through FIPS nodes.
+
 ## 2.6.22 - 2026-09-22
 
 - Show matching profiles even when their messaging setup is unavailable or uses
