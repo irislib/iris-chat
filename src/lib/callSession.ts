@@ -12,6 +12,10 @@ export interface CallEndpoint {
   sendDatagram(args: { dst: string; srcPort: number; dstPort: number; payload: Uint8Array }): Promise<void>
   registerService(port: number, handler: (ctx: { src: string; payload: Uint8Array }) => void): () => void
 }
+// FIPS addresses identify the full x-only key; Noise may reveal its actual parity.
+function canonicalCallPeer(peer: string) {
+  return /^(02|03)[0-9a-f]{64}$/.test(peer) ? `02${peer.slice(2)}` : peer
+}
 export class CallSession {
   readonly state = writable<CallState | null>(null)
   onMedia?: (frame: MediaFrame) => void
@@ -54,6 +58,7 @@ export class CallSession {
   }
   start(owner: string, peers: string[], video: boolean) {
     if (get(this.state)?.status !== 'ended' && get(this.state)) throw new Error('A call is already open')
+    peers = [...new Set(peers.map(canonicalCallPeer))]
     if (!peers.length || peers.some(p => this.ownerForPeer(p) !== owner)) throw new Error('This person is not connected. Try again when they are nearby or online.')
     const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')
     this.resetMedia()
@@ -117,6 +122,7 @@ export class CallSession {
     this.state.update(s => s && s.status === 'active' ? { ...s, receivedAudio, receivedVideo: s.video ? receivedVideo : 0 } : s)
   }
   private receive(peer: string, payload: Uint8Array) {
+    peer = canonicalCallPeer(peer)
     const owner = this.ownerForPeer(peer)
     if (!owner) return
     let s = get(this.state)

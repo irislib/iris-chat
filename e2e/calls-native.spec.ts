@@ -34,6 +34,7 @@ test('browser and native exchange voice/video over local FIPS without a media se
   const key = generateSecretKey(), owner = getPublicKey(key)
   const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera'], serviceWorkers: 'block', viewport: { width: 1100, height: 780 } })
   const logs: string[] = []
+  const rtcBeforeReload: unknown[] = []
   try {
     await expect.poll(() => events.find(e => e.event === 'ready'), { timeout: 40000 }).toBeTruthy()
     const ready = events.find(e => e.event === 'ready')!
@@ -116,6 +117,7 @@ test('browser and native exchange voice/video over local FIPS without a media se
     await page.getByRole('button', { name: 'Done', exact: true }).click()
     await expect(page.getByTestId('call-history-row').last()).toContainText('Missed voice call')
     await expect(page.getByTestId('call-history-row')).toHaveCount(3)
+    rtcBeforeReload.push(...await page.evaluate(() => (window as Window & { __nativeInteropRtc?: unknown[] }).__nativeInteropRtc ?? []))
     await page.reload()
     await page.getByTestId('sidebar-chat-list').getByRole('button', { name: /Missed voice call/ }).first().click()
     await expect(page.getByTestId('call-history-row')).toHaveCount(3)
@@ -123,7 +125,7 @@ test('browser and native exchange voice/video over local FIPS without a media se
     await page.screenshot({ path: 'work/calls/native-chat-call-history.png' })
     await writeFile('work/calls/native-evidence.json', JSON.stringify(events, null, 2))
   } finally {
-    const rtc = await context.pages()[0]?.evaluate(() => (window as Window & { __nativeInteropRtc?: unknown }).__nativeInteropRtc).catch(() => [])
+    const rtc = [...rtcBeforeReload, ...await context.pages()[0]?.evaluate(() => (window as Window & { __nativeInteropRtc?: unknown[] }).__nativeInteropRtc ?? []).catch(() => []) ?? []]
     await writeFile('work/calls/native-rtc.json', JSON.stringify(rtc, null, 2))
     await writeFile('work/calls/native-evidence.json', JSON.stringify(events, null, 2))
     await writeFile('work/calls/native-browser.log', logs.join('\n'))

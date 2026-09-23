@@ -11,7 +11,7 @@ overrides:
 
 patchedDependencies:
   '@fips/core@0.0.31':
-    hash: b5dce5c642147e6fca600c8118961dc229e62315d0f568aedb761f7b3019d9fe
+    hash: 86b7ac9e31f386f8abc8ebcc2c5200bad756aedcbf5caa076d3844bc345e8302
     path: patches/fips-core-session-setup.patch
 
 importers:
@@ -20,7 +20,7 @@ importers:
     dependencies:
       '@fips/core':
         specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz
-        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=b5dce5c642147e6fca600c8118961dc229e62315d0f568aedb761f7b3019d9fe)
+        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=86b7ac9e31f386f8abc8ebcc2c5200bad756aedcbf5caa076d3844bc345e8302)
       '@fips/tcp':
         specifier: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
         version: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
@@ -3994,7 +3994,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=b5dce5c642147e6fca600c8118961dc229e62315d0f568aedb761f7b3019d9fe)':
+  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=86b7ac9e31f386f8abc8ebcc2c5200bad756aedcbf5caa076d3844bc345e8302)':
     dependencies:
       '@noble/ciphers': 1.3.0
       '@noble/curves': 1.9.7
@@ -4005,14 +4005,14 @@ snapshots:
 
   '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-webrtc-0.0.47.tgz':
     dependencies:
-      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=b5dce5c642147e6fca600c8118961dc229e62315d0f568aedb761f7b3019d9fe)
+      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=86b7ac9e31f386f8abc8ebcc2c5200bad756aedcbf5caa076d3844bc345e8302)
       '@noble/ciphers': 1.3.0
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
 
   '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz':
     dependencies:
-      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=b5dce5c642147e6fca600c8118961dc229e62315d0f568aedb761f7b3019d9fe)
+      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz(patch_hash=86b7ac9e31f386f8abc8ebcc2c5200bad756aedcbf5caa076d3844bc345e8302)
 
   '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.7/hashtree-core-0.3.2.tgz':
     dependencies:

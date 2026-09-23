@@ -30,6 +30,23 @@ describe('FIPS calls', () => {
     b = new CallSession(eb, peer => peer === 'a' ? 'Alice' : undefined)
   })
   afterEach(() => { a.dispose(); b.dispose(); vi.useRealTimers() })
+  it('matches authenticated device addresses across compressed key parity after an upgrade', async () => {
+    a.dispose()
+    const x = 'a1'.repeat(32), advertised = `02${x}`, authenticated = `03${x}`
+    a = new CallSession(ea, peer => [advertised, authenticated].includes(peer) ? 'Bob' : undefined)
+    a.start('Bob', [advertised, authenticated], true)
+    expect(get(a.state)?.peers).toHaveLength(1)
+    const callId = get(a.state)!.id
+    ea.handler?.({ src: authenticated, payload: encodeCallControl({ v: 3, type: 'answer', call_id: callId, video: true }) })
+    expect(get(a.state)?.status).toBe('active')
+    const delivered = vi.fn(); a.onMedia = delivered
+    for (const payload of encodeCallMedia(callId, { kind: 1, key: false, seq: 0, timestamp: 0, bytes: packet(20) })) {
+      ea.handler?.({ src: advertised, payload })
+    }
+    expect(delivered).toHaveBeenCalledOnce()
+    ea.handler?.({ src: advertised, payload: encodeCallControl({ v: 3, type: 'end', call_id: callId }) })
+    expect(get(a.state)?.status).toBe('ended')
+  })
   it.each([false, true])('records answered elsewhere on a sibling (locally accepted: %s)', (siblingAccepted: boolean) => {
     a.dispose()
     const ec = new Endpoint('c'); ec.other = ea

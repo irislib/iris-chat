@@ -88,6 +88,9 @@ pnpm test:e2e
 The locked FIPS core has a small pnpm patch for concurrent session setup and
 reordered handshake traffic. `fipsSessionConcurrency.test.ts` exercises the
 installed runtime with real Noise handshakes, including stalled-send timeouts.
+The same bounded patch compares authenticated peer identities by their full
+x-only key while preserving the actual compressed keys in Noise. `fipsIdentityParity.test.ts` covers real even/odd-key link
+replacement and session rekey handshakes, including different-identity rejection.
 
 To test device-sync packets and framing against a native checkout, run:
 
