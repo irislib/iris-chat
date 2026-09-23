@@ -11,3 +11,4 @@ onlyBuiltDependencies:
 
 patchedDependencies:
   '@fips/core@0.0.31': patches/fips-core-session-setup.patch
+  '@fips/transport-webrtc@0.0.47': patches/fips-webrtc-negotiation.patch
