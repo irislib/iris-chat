@@ -1,6 +1,7 @@
 import { get, writable } from 'svelte/store'
 import type { FipsNode } from '@fips/core'
-import { chats } from './chat'
+import { chats, recordCallHistory } from './chat'
+import { callHistoryFromState } from './callHistory'
 import { getNdrRuntime, preparePeerNdrRuntime } from './privateChats'
 import { getMessageRequestPolicyContext, isChatAccepted, isChatRejected } from './messageRequestPolicy'
 import { callSettings } from './callSettings'
@@ -54,7 +55,12 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   session.onMedia = frame => media?.receive(frame)
   session.onFeedback = feedback => media?.feedback(feedback)
   session.onKeyframe = () => media?.requestKeyframe()
+  let historyKey = ''
   const unsubscribe = session.state.subscribe(state => {
+    if (state) {
+      const key = JSON.stringify([state.id, state.status, state.video, state.connected, state.endedAt, state.outcome])
+      if (key !== historyKey) { historyKey = key; recordCallHistory(state.owner, callHistoryFromState(state)) }
+    }
     callState.set(state)
     if (state?.direction === 'incoming' && state.status === 'ringing' && get(callSettings).ringtone !== false) ringtone.start()
     else ringtone.stop()
@@ -69,8 +75,9 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   runtimeCleanup = () => { unsubscribe(); settingsUnsubscribe() }
 }
 export function detachCalls() {
+  session?.dispose()
   runtimeCleanup?.(); runtimeCleanup = undefined
-  session?.dispose(); session = null; connectCallPeers = undefined; stopMedia(); callState.set(null)
+  session = null; connectCallPeers = undefined; stopMedia(); callState.set(null)
 }
 async function openMedia(video: boolean, capturedSession: CallSession, callId: string) {
   const token = ++generation
@@ -89,6 +96,7 @@ async function openMedia(video: boolean, capturedSession: CallSession, callId: s
   try {
     await next.open(video, get(callSettings))
     if (token !== generation || !isCurrent()) { next.stop(); throw new Error('Call ended') }
+    capturedSession.markMediaReady()
     localCallStream.set(next.stream)
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({ title: video ? 'Video call' : 'Voice call', artist: 'Iris' })
@@ -149,7 +157,10 @@ export async function answerCall(video: boolean) {
     }
   } finally { answersInFlight.delete(state.id) }
 }
-export function endCall() { session?.end() }
+export function endCall() {
+  const state = get(callState)
+  session?.end('Call ended', true, state?.direction === 'incoming' && state.status === 'ringing' ? 'declined' : undefined)
+}
 export function dismissCall() { session?.clear(); callError.set('') }
 export function toggleCallMute() { const s = get(callState); if (s) session?.setMedia(!s.muted, s.camera) }
 export function toggleCallCamera() { const s = get(callState); if (s?.video) session?.setMedia(s.muted, !s.camera) }

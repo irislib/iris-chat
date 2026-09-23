@@ -181,6 +181,23 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
     await expect(b.getByRole('button', { name: 'Turn camera off' })).toHaveCount(0)
     await expect(a.getByTestId('call-screen')).toHaveAttribute('data-video-frames', '0')
     await hangup(a, b)
+    for (const page of [a, b]) {
+      await expect(page.locator('[data-testid="call-history-row"][data-outcome="answered"]')).toHaveCount(3)
+      await expect(page.getByTestId('call-history-row').nth(2)).toContainText('voice call')
+    }
+    await start(a, b, false)
+    await hangup(a, b) // Caller cancels before answer: a missed call for the recipient.
+    await expect(a.getByTestId('call-history-row').last()).toContainText('Canceled voice call')
+    await expect(b.getByTestId('call-history-row').last()).toContainText('Missed voice call')
+    for (const page of [a, b]) {
+      await expect(page.getByTestId('call-history-row')).toHaveCount(4)
+      await page.reload()
+      await page.getByTestId('sidebar-chat-list').getByRole('button', { name: /(?:Canceled|Missed) voice call/ }).first().click()
+      await expect(page.getByTestId('call-history-row')).toHaveCount(4)
+      await expect(page.locator('[data-testid="call-history-row"][data-outcome="answered"]')).toHaveCount(3)
+    }
+    await expect(b.getByTestId('call-history-row').last()).toContainText('Missed voice call')
+    await b.screenshot({ path: 'work/calls/chat-call-history.png' })
     await b.getByRole('button', { name: 'Settings', exact: true }).click()
     await b.getByRole('switch', { name: 'Video calls', exact: true }).click()
     await b.getByRole('switch', { name: 'Voice calls', exact: true }).click()

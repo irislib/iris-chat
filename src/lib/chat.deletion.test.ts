@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+import { saveMessage } from './storage'
+import type { CallHistory } from './callHistory'
 
 const MY_PUBKEY = 'a'.repeat(64)
 const PEER_PUBKEY = 'b'.repeat(64)
@@ -100,7 +102,7 @@ vi.mock('./receipts', () => ({
   parseReceipt: vi.fn(() => null),
 }))
 
-import { chats, currentChat, deleteChat, type ChatSession } from './chat'
+import { chats, currentChat, deleteChat, recordCallHistory, type ChatSession } from './chat'
 
 beforeEach(() => {
   chats.set(new Map())
@@ -140,5 +142,31 @@ describe('deleteChat', () => {
     expect(get(currentChat)).toBeNull()
     expect(mocks.deleteSession).toHaveBeenCalledWith(chatSession.id)
     expect(mocks.deleteMessagesForSession).toHaveBeenCalledWith(chatSession.id)
+  })
+})
+
+
+describe('local call records', () => {
+  const call: CallHistory = { callId: 'ab'.repeat(16), direction: 'incoming', outcome: 'missed',
+    video: true, startedAt: 1000, endedAt: 1000, durationSeconds: 0, inProgress: true }
+  it('updates one durable chronological entry across ringing, answer and end', async () => {
+    const chat: ChatSession = { id: PEER_PUBKEY, recipientPubkey: PEER_PUBKEY, mode: 'manager', messages: [
+      { id: 'before', content: 'hello', timestamp: 500, isMine: false },
+      { id: 'after', content: 'later', timestamp: 2000, isMine: true },
+    ] }
+    chats.set(new Map([[chat.id, chat]])); currentChat.set(chat)
+    recordCallHistory(PEER_PUBKEY, call)
+    const answered = { ...call, video: false, outcome: 'answered' as const, answeredAt: 4000, endedAt: 9000, durationSeconds: 5, inProgress: undefined }
+    recordCallHistory(PEER_PUBKEY, answered)
+    recordCallHistory(PEER_PUBKEY, answered)
+    recordCallHistory(PEER_PUBKEY, call) // A delayed ringing update cannot overwrite a result.
+    const messages = get(currentChat)!.messages
+    expect(messages.map(m => m.id)).toEqual(['before', `call:${call.callId}`, 'after'])
+    expect(messages[1]).toMatchObject({ call: answered, content: 'Incoming voice call', isMine: false })
+    expect(saveMessage).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: PEER_PUBKEY, call: answered }))
+  })
+  it('does not create a chat for a call from an unknown person', () => {
+    recordCallHistory(PEER_PUBKEY, call)
+    expect(get(chats).size).toBe(0)
   })
 })

@@ -52,6 +52,9 @@ capture; audio loss concealment uses bundled libopus 1.6.1. All codec assets
 are served with the app. To rebuild the bundled codec, run
 `scripts/opus/build.sh` (requires CMake and downloads pinned build tools).
 
+Missed, answered, canceled, and declined calls appear in the chat with their
+direction and duration. Call history stays on this device and survives reloads.
+
 Call quality can be changed in Settings or during a video call. Automatic
 quality caps video at 2 Mbps, High quality at 4 Mbps, and Use less data at
 400 kbps. Custom accepts 100–8000 kbps. The encoder reduces its rate when

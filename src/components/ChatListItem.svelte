@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { callHistoryLabel } from '../lib/callHistory'
   import type { ChatSession } from '../lib/chat'
   import { isTyping } from '../lib/typingState'
   import { countUnseenMessages, formatUnseenCount } from '../lib/unseenCount'
@@ -55,7 +56,7 @@
               {/if}
               <span class="text-xs text-gray-500">{formatTime(lastMessage.timestamp)}</span>
             </div>
-            {#if lastMessage.isMine}
+            {#if lastMessage.isMine && !lastMessage.call}
               <StatusIndicator status={lastMessage.status} />
             {/if}
           {/if}
@@ -65,7 +66,12 @@
         <div class="text-sm text-primary">typing...</div>
       {:else if lastMessage}
         <div class="text-sm text-gray-400 truncate">
-          {lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}
+          {#if lastMessage.call}
+            <span class={lastMessage.call.video ? 'i-carbon-video-filled align-middle mr-1' : 'i-carbon-phone-filled align-middle mr-1'} aria-hidden="true"></span>
+            {callHistoryLabel(lastMessage.call)}
+          {:else}
+            {lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}
+          {/if}
         </div>
       {:else}
         <div class="text-sm text-gray-500 italic">No messages yet</div>

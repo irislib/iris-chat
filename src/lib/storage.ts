@@ -1,5 +1,6 @@
 // IndexedDB storage using Dexie
 
+import type { CallHistory } from './callHistory'
 import Dexie, { type Table } from 'dexie'
 import { mergeUniqueStrings } from './messageRelayStatus'
 
@@ -17,6 +18,7 @@ export interface StoredSession {
 }
 
 export interface StoredMessage {
+  call?: CallHistory
   id: string
   sessionId: string
   content: string

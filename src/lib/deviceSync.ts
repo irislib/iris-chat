@@ -270,7 +270,7 @@ function collectDeviceSyncMessages(
   for (const chat of source.chats) {
     for (const message of chat.messages) {
       const createdAt = seconds(message.timestamp)
-      if (createdAt < rosterAt || expired(message)) continue
+      if (message.call || message.id.startsWith('call:') || createdAt < rosterAt || expired(message)) continue
       messages.push({
         chatId: chat.id,
         id: message.id,
@@ -284,7 +284,7 @@ function collectDeviceSyncMessages(
   for (const group of source.groups) {
     for (const message of source.groupMessages.get(group.id) || []) {
       const createdAt = seconds(message.timestamp)
-      if (createdAt < rosterAt || expired(message)) continue
+      if (message.call || message.id.startsWith('call:') || createdAt < rosterAt || expired(message)) continue
       const author = message.isMine ? source.ownerPubkey : message.senderPubkey
       if (!author || !isPubkey(author)) continue
       messages.push({
@@ -388,7 +388,7 @@ export function selectDeviceSyncAdditions(
         (group.revision === local.revision && group.updatedAt > local.updatedAt)
     }),
     messages: packet.messages.filter(
-      (message) => message.createdAt >= cutoff &&
+      (message) => !message.id.startsWith('call:') && message.createdAt >= cutoff &&
         !expired(message) &&
         !seenMessages.has(message.id) &&
         !!seenMessages.add(message.id),

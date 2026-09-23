@@ -230,6 +230,21 @@ describe('device sync', () => {
     expect(packets[0].rosterAt).toBe(101)
   })
 
+  it('keeps call history local and rejects remote IDs in its reserved namespace', () => {
+    const chat: ChatSession = { id: 'peer', recipientPubkey: 'peer', mode: 'manager', messages: [
+      { id: 'call:local', content: 'Missed voice call', timestamp: 100_000, isMine: false },
+      { id: 'normal', content: 'hello', timestamp: 100_000, isMine: false },
+    ] }
+    const sent = buildDeviceSyncSnapshots({ requestRosterAt: 1, localRosterAt: 1,
+      ownerPubkey: owner, appKeys: [], chats: [chat], groups: [], groupMessages: new Map(),
+    }).flatMap(packet => packet.messages)
+    expect(sent.map(m => m.id)).toEqual(['normal'])
+    const additions = selectDeviceSyncAdditions(snapshot([message('call:forged', 100), message('normal', 100)]), {
+      rosterAt: 1, chatIds: new Set(), groupVersions: new Map(), messageIds: new Set(),
+    })
+    expect(additions.messages.map(m => m.id)).toEqual(['normal'])
+  })
+
   it('does not send or apply expired messages', () => {
     vi.useFakeTimers()
     vi.setSystemTime(200_000)

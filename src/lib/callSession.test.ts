@@ -27,6 +27,38 @@ describe('FIPS calls', () => {
     b = new CallSession(eb, peer => peer === 'a' ? 'Alice' : undefined)
   })
   afterEach(() => { a.dispose(); b.dispose(); vi.useRealTimers() })
+  it('counts answered duration only after accepted media is ready', () => {
+    a.start('Bob', ['b'], true)
+    b.accept(false)
+    expect(get(a.state)?.connected).toBeUndefined()
+    expect(get(b.state)?.connected).toBeUndefined()
+    vi.advanceTimersByTime(1200)
+    a.markMediaReady(); b.markMediaReady()
+    const began = get(a.state)!.connected!
+    vi.advanceTimersByTime(3200)
+    a.end()
+    expect(get(a.state)).toMatchObject({ outcome: 'answered', endedAt: began + 3200, video: false })
+    expect(get(b.state)?.outcome).toBe('answered')
+  })
+  it('records missed incoming and canceled outgoing calls, with replay ignored', () => {
+    a.start('Bob', ['b'], false)
+    const offer = ea.sent[0]
+    a.end()
+    expect(get(a.state)?.outcome).toBe('canceled')
+    expect(get(b.state)?.outcome).toBe('missed')
+    b.clear()
+    eb.handler?.({ src: 'a', payload: offer })
+    expect(get(b.state)).toBeNull()
+  })
+  it('distinguishes explicit declines and an accepted call whose media never opens', () => {
+    a.start('Bob', ['b'], false)
+    b.end('Call ended', true, 'declined')
+    expect(get(a.state)?.outcome).toBe('declined')
+    expect(get(b.state)?.outcome).toBe('declined')
+    a.start('Bob', ['b'], true); b.accept(true); a.end()
+    expect(get(a.state)?.outcome).toBe('canceled')
+    expect(get(b.state)?.outcome).toBe('missed')
+  })
   it('sends no media before answer, then carries compressed Opus and H264 frames', async () => {
     const frames = vi.fn(); b.onMedia = frames
     a.start('Bob', ['b'], true)

@@ -21,6 +21,7 @@
   import { callSettings } from '../lib/callSettings'
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
+  import CallHistoryRow from './CallHistoryRow.svelte'
   import MediaModal from './MediaModal.svelte'
   import VoiceRecorder from './VoiceRecorder.svelte'
   import DisappearingMessagesModal from './DisappearingMessagesModal.svelte'
@@ -556,8 +557,8 @@
         {@const newDay = !prevMsg || isDifferentDay(prevMsg.timestamp, message.timestamp)}
         {@const timeGapPrev = prevMsg ? (message.timestamp - prevMsg.timestamp) > 3 * 60 * 1000 : false}
         {@const timeGapNext = nextMsg ? (nextMsg.timestamp - message.timestamp) > 3 * 60 * 1000 : false}
-        {@const isFirst = prevMsg?.isMine !== message.isMine || timeGapPrev || newDay}
-        {@const isLast = nextMsg?.isMine !== message.isMine || timeGapNext || (nextMsg && isDifferentDay(message.timestamp, nextMsg.timestamp))}
+        {@const isFirst = !!prevMsg?.call || prevMsg?.isMine !== message.isMine || timeGapPrev || newDay}
+        {@const isLast = !!nextMsg?.call || nextMsg?.isMine !== message.isMine || timeGapNext || (nextMsg && isDifferentDay(message.timestamp, nextMsg.timestamp))}
         {@const prevHasReactions = prevMsg?.reactions && Object.keys(prevMsg.reactions).length > 0}
         {@const hasReactions = message.reactions && Object.keys(message.reactions).length > 0}
         {@const replyToMessage = message.replyTo ? messageMap.get(message.replyTo) ?? null : null}
@@ -568,6 +569,9 @@
             </span>
           </div>
         {/if}
+        {#if message.call}
+          <CallHistoryRow call={message.call} />
+        {:else}
         <MessageBubble
           {message}
           {isFirst}
@@ -581,6 +585,7 @@
           ondelete={handleDeleteMessage}
           onreply={handleReply}
         />
+        {/if}
       {/each}
     {/if}
 

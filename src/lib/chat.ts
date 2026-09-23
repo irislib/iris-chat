@@ -1,3 +1,4 @@
+import { callHistoryLabel, restoredCallHistory, type CallHistory } from './callHistory'
 import { messagingDeviceList, type MessagingSupportEvent } from './messagingPeople'
 import { writable, get } from 'svelte/store'
 import {
@@ -77,6 +78,7 @@ import {
 export type { RecipientDeliveryStatus } from './messageRelayStatus'
 
 export interface ChatMessage {
+  call?: CallHistory
   id: string
   content: string
   timestamp: number
@@ -961,6 +963,7 @@ async function ensureManagerChat(
       ...(m.replyTo && { replyTo: m.replyTo }),
       reactions: m.reactions,
       status: m.status,
+      ...restoredCallHistory(m.call),
       ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
       ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
       ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),
@@ -1256,6 +1259,8 @@ function handleIncomingRumor(
   outerEventId?: string,
   receiptAuthorPubkey?: string
 ) {
+  // This namespace belongs to local call records, never remote message IDs.
+  if (rumor.id.startsWith('call:')) return
   const myPubkey = getPubkey()
   const sessionId = chatSession.id
 
@@ -1455,7 +1460,7 @@ function handleIncomingReceipt(
 
     for (const messageId of receipt.messageIds) {
       const index = updatedMessages.findIndex(
-        (m) => m.id === messageId && (isFromSelf ? !m.isMine : m.isMine)
+        (m) => !m.call && m.id === messageId && (isFromSelf ? !m.isMine : m.isMine)
       )
       if (index === -1) continue
 
@@ -1589,7 +1594,8 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
 
   const policyCtx = getMessageRequestPolicyContext()
   if (get(receiptSettings).sendReadReceipts && isChatAccepted(updatedSession, policyCtx)) {
-    sendReceipt(updatedSession, 'seen', toAck)
+    const messageIds = toAck.filter(id => !updatedSession.messages.find(m => m.id === id)?.call)
+    if (messageIds.length) sendReceipt(updatedSession, 'seen', messageIds)
   }
 }
 
@@ -1754,6 +1760,26 @@ export function deleteChat(chatSession: ChatSession): void {
   history.replaceState(null, '', window.location.pathname)
 }
 
+// Call history is authored only by the authenticated local call lifecycle.
+// It is never sent as a message or accepted from a remote history payload.
+export function recordCallHistory(owner: string, call: CallHistory): void {
+  const chat = Array.from(get(chats).values()).find(chat => chat.recipientPubkey === owner)
+  if (!chat) return
+  const id = `call:${call.callId}`
+  const previous = chat.messages.find(message => message.id === id)
+  // Finalized history cannot be replaced by a delayed ringing/answer update.
+  if (previous?.call && !previous.call.inProgress && call.inProgress) return
+  const message: ChatMessage = {
+    id, call, content: callHistoryLabel(call), timestamp: call.startedAt,
+    isMine: call.direction === 'outgoing',
+    ...(previous?.status && { status: previous.status }),
+  }
+  updateChatSession(chat.id, latest => ({ ...latest,
+    messages: mergeChatMessages([...latest.messages.filter(item => item.id !== id), message]),
+  }))
+  void saveMessageToStorage(chat.id, message)
+}
+
 // Storage helpers
 export async function saveSessionToStorage(chatSession: ChatSession): Promise<void> {
   try {
@@ -1787,6 +1813,7 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       ...(message.replyTo && { replyTo: message.replyTo }),
       reactions,
       status: message.status,
+      ...(message.call && { call: message.call }),
       ...(message.sentToRelays && { sentToRelays: message.sentToRelays }),
       ...(message.recipientStatuses && { recipientStatuses: message.recipientStatuses }),
       ...(message.deliveryChannels && { deliveryChannels: message.deliveryChannels }),
@@ -1821,6 +1848,7 @@ export async function loadChatsFromStorage(): Promise<void> {
             ...(m.replyTo && { replyTo: m.replyTo }),
             reactions: m.reactions,
             status: m.status,
+            ...restoredCallHistory(m.call),
             ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
             ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
             ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),

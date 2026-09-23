@@ -1,10 +1,11 @@
 import { writable, get } from 'svelte/store'
+import type { CallOutcome } from './callHistory'
 import type { CallSettings } from './callSettings'
 import { CALL_CODEC, CALL_PORT, CallMediaReceiver, encodeCallControl, encodeCallMedia, parseCallControl, type CallControl, type MediaFrame } from './callProtocol'
 export interface CallState {
   id: string; owner: string; peer?: string; peers: string[]; direction: 'incoming' | 'outgoing'
   status: 'ringing' | 'connecting' | 'active' | 'ended'; video: boolean; muted: boolean
-  camera: boolean; remoteMuted: boolean; remoteVideo: boolean; started: number; connected?: number; reason?: string
+  camera: boolean; remoteMuted: boolean; remoteVideo: boolean; started: number; connected?: number; endedAt?: number; outcome?: CallOutcome; reason?: string
   receivedAudio: number; receivedVideo: number
 }
 export interface CallEndpoint {
@@ -20,6 +21,7 @@ export class CallSession {
   private receiver = new CallMediaReceiver()
   private ended = new Map<string, number>()
   private lastHeard = 0
+  private mediaReady = false
   private retransmitCache = new Map<number, { at: number; packets: Uint8Array[]; bytes: number }>()
   private retransmitWindow = 0
   private retransmitCount = 0
@@ -59,15 +61,19 @@ export class CallSession {
     this.lastHeard = Date.now()
     const withVideo = s.video && video && this.settings().video
     if (!withVideo && !this.settings().voice) return
-    this.state.set({ ...s, status: 'active', connected: Date.now(), video: withVideo, camera: s.camera && withVideo, remoteVideo: withVideo })
+    this.state.set({ ...s, status: 'active', connected: this.mediaReady ? Date.now() : undefined, video: withVideo, camera: s.camera && withVideo, remoteVideo: withVideo })
     this.broadcast('answer', { video: withVideo, codec: CALL_CODEC })
   }
-  end(reason = 'Call ended', notify = true) {
+  markMediaReady() {
+    this.mediaReady = true
+    this.state.update(s => s?.status === 'active' && s.connected === undefined ? { ...s, connected: Date.now() } : s)
+  }
+  end(reason = 'Call ended', notify = true, outcome?: CallOutcome) {
     const s = get(this.state)
     if (!s || s.status === 'ended') return
     if (notify) this.broadcast(s.direction === 'incoming' && s.status === 'ringing' ? 'reject' : 'end')
     this.rememberEnded(s.id)
-    this.state.set({ ...s, status: 'ended', reason })
+    this.state.set({ ...s, status: 'ended', reason, endedAt: Date.now(), outcome: s.connected !== undefined ? 'answered' : outcome ?? (s.direction === 'incoming' ? 'missed' : 'canceled') })
     this.onEnded?.()
   }
   clear() { if (get(this.state)?.status === 'ended') this.state.set(null) }
@@ -76,7 +82,7 @@ export class CallSession {
     this.state.update(s => s ? { ...s, muted, camera: s.video && camera } : s)
     this.broadcast('media_state', { muted, video: camera })
   }
-  private resetMedia() { this.receiver = new CallMediaReceiver(); this.retransmitCache.clear() }
+  private resetMedia() { this.mediaReady = false; this.receiver = new CallMediaReceiver(); this.retransmitCache.clear() }
   sendFeedback(feedback: Pick<CallControl, 'feedback_seq' | 'video_seq' | 'received_frames' | 'received_bytes' | 'interval_ms'>) {
     if (get(this.state)?.status === 'active') this.broadcast('feedback', feedback)
   }
@@ -148,7 +154,7 @@ export class CallSession {
     this.lastHeard = Date.now()
     if (p.type === 'answer' && s.direction === 'outgoing' && s.status === 'ringing') {
       for (const other of s.peers) if (other !== peer) this.send(other, { v: 3, type: 'end', call_id: s.id })
-      this.state.set({ ...s, status: 'active', connected: Date.now(), peer, video: s.video && !!p.video, camera: s.camera && !!p.video, remoteVideo: s.video && !!p.video })
+      this.state.set({ ...s, status: 'active', connected: this.mediaReady ? Date.now() : undefined, peer, video: s.video && !!p.video, camera: s.camera && !!p.video, remoteVideo: s.video && !!p.video })
     } else if (p.type === 'nack' && s.status === 'active' && s.video) {
       void this.retransmit(s, p)
     } else if (p.type === 'feedback' && s.status === 'active' && s.video) {
@@ -157,7 +163,7 @@ export class CallSession {
       this.onKeyframe?.()
     } else if (p.type === 'reject' || p.type === 'end') {
       if (!s.peer && p.type === 'reject' && s.peers.length > 1) this.state.set({ ...s, peers: s.peers.filter(x => x !== peer) })
-      else this.end(p.type === 'reject' ? (p.reason === 'busy' ? 'Busy' : 'Call declined') : 'Call ended', false)
+      else this.end(p.type === 'reject' ? (p.reason === 'busy' ? 'Busy' : 'Call declined') : 'Call ended', false, p.type === 'reject' ? 'declined' : undefined)
     } else if (p.type === 'ping' || p.type === 'pong' || p.type === 'media_state') {
       this.state.set({ ...s, remoteMuted: p.muted ?? s.remoteMuted, remoteVideo: s.video && (p.video ?? s.remoteVideo) })
       if (p.type === 'ping') this.broadcast('pong')
