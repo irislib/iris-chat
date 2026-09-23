@@ -45,6 +45,7 @@ import { asNdkEventSubscription } from './ndkSubscription'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
 import { publishNostrPubsub } from './nostrPubsubRuntime'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
+import { restoreSignerAuthorization } from './signerAuthorizationStorage'
 
 let runtime: NdrRuntime | null = null
 let runtimePublication: ReturnType<typeof createRuntimePublish> | null = null
@@ -457,6 +458,8 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
 
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
+
+  if (isLinkedDeviceLogin()) await restoreSignerAuthorization(currentRuntime, ownerPubkey)
 
   let linkedDeviceAuthorized = currentRuntime.getState().isCurrentDeviceRegistered
   if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {

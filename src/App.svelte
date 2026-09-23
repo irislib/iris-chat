@@ -554,15 +554,17 @@
       </div>
     </div>
   {:else if !loggedIn}
-    <div class="h-full flex flex-col items-center justify-center p-4">
-      <div class="mb-8 text-center flex flex-col items-center select-none">
-        <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-16 h-16 mb-4" draggable="false" />
-        <h1 class="text-4xl font-bold">
-          <span class="text-primary">iris</span> chat
-        </h1>
-        <p class="text-gray-400 mt-2">Secure, private messaging</p>
+    <div class="h-full overflow-y-auto p-4">
+      <div class="min-h-full flex flex-col items-center justify-center py-4">
+        <div class="mb-8 text-center flex flex-col items-center select-none shrink-0">
+          <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-16 h-16 mb-4" draggable="false" />
+          <h1 class="text-4xl font-bold">
+            <span class="text-primary">iris</span> chat
+          </h1>
+          <p class="text-gray-400 mt-2">Secure, private messaging</p>
+        </div>
+        <LoginView onlogin={handleLogin} />
       </div>
-      <LoginView onlogin={handleLogin} />
     </div>
   {:else}
     <div class="h-full flex flex-col">

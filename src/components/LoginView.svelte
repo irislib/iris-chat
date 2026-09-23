@@ -6,6 +6,7 @@
   import { getErrorMessage } from '../lib/utils'
   import QRCode from './QRCode.svelte'
   import CopyButton from './CopyButton.svelte'
+  import SignerLogin from './SignerLogin.svelte'
 
   interface Props {
     onlogin: () => void
@@ -22,7 +23,7 @@
   const inviteFromUrl = parseInviteFromHash()
   const isLinkInviteInUrl = isLinkInvite(inviteFromUrl)
   const hasInviteInUrl = !!inviteFromUrl && !isLinkInviteInUrl
-  let mode = $state<'login' | 'link'>('login')
+  let mode = $state<'login' | 'link' | 'signer'>('login')
 
   let linkInviteUrl = $state('')
   let linkInviteStatus = $state<'idle' | 'waiting' | 'linked' | 'error'>('idle')
@@ -112,7 +113,9 @@
 </script>
 
 <div class="w-full max-w-md mx-auto p-6 bg-surface rounded-2xl shadow-xl">
-  {#if mode === 'link'}
+  {#if mode === 'signer'}
+    <SignerLogin {onlogin} onback={() => mode = 'login'} />
+  {:else if mode === 'link'}
     <div class="space-y-4">
       <h2 class="text-2xl font-bold text-white text-center">Link this device</h2>
       <p class="text-sm text-gray-400 text-center">
@@ -206,6 +209,15 @@
             {hasInviteInUrl ? 'Join Chat' : 'Go'}
           </button>
         {/if}
+
+        <button
+          class="btn-ghost w-full flex items-center justify-center gap-2"
+          onclick={() => mode = 'signer'}
+          disabled={loading}
+        >
+          <span class="i-carbon-pen"></span>
+          Signer app/device
+        </button>
 
         <button
           class="btn-ghost w-full flex items-center justify-center gap-2"

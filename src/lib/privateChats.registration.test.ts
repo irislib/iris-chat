@@ -35,7 +35,7 @@ vi.mock('./runtimeSubscribe', () => ({ createRuntimeSubscribe: vi.fn() }))
 vi.mock('./runtimePublish', () => ({ createRuntimePublish: () => ({ start() {}, close() {}, enqueue: vi.fn(), publish: vi.fn() }) }))
 vi.mock('./messageRelayStatus', () => ({ notifyMessageRelayPublish: vi.fn() }))
 vi.mock('./nostrPubsubRuntime', () => ({ publishNostrPubsub: vi.fn() }))
-vi.mock('./storage', () => ({ deleteSessionManagerValue: vi.fn(), putSessionManagerValue: vi.fn() }))
+vi.mock('./storage', () => ({ deleteSessionManagerValue: vi.fn(), putSessionManagerValue: vi.fn(), getSessionManagerValue: vi.fn(async () => undefined) }))
 
 import { initMultiDevice, resetManagers, waitForSendReadyRuntime } from './privateChats'
 
