@@ -1,5 +1,5 @@
 // @vitest-environment node
-// Audits the installed, pnpm-patched FIPS runtime through real Noise handshakes.
+// Audits the installed shared FIPS runtime through real Noise handshakes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { toHex } from "../../node_modules/@fips/core/dist/codec/hex.js";
@@ -11,7 +11,12 @@ import {
 import { FspSession } from "../../node_modules/@fips/core/dist/fsp/session.js";
 import { identityFromSecretKey } from "../../node_modules/@fips/core/dist/identity/index.js";
 import { FspSessionManager } from "../../node_modules/@fips/core/dist/node/FspSessionManager.js";
+import type { FipsRouting } from "../../node_modules/@fips/core/dist/node/FipsRouting.js";
+import type { AdjacentPeer } from "../../node_modules/@fips/core/dist/node/PeerState.js";
 
+type RoutedPayload = Parameters<FipsRouting["sendFspToward"]>[1];
+const routedFrames = (payload: RoutedPayload, nextHop: AdjacentPeer): Uint8Array[] =>
+  typeof payload === "function" ? payload(nextHop) : [payload];
 
 afterEach(() => {
   vi.useRealTimers();
@@ -102,29 +107,32 @@ describe("FspSessionManager", () => {
       coords: [initiatorIdentity.nodeAddr],
       coordinatesFor: () => [responderIdentity.nodeAddr],
       learnReverseRoute: () => {},
-      sendFspToward: async (_remoteNodeAddr: Uint8Array, frame: Uint8Array) => {
-        const phase = peekFspPhase(frame);
-        if (phase === 1) {
-          setupAttempts += 1;
-          if (!completeSetup) return;
-          responder = new FspSession({
-            identity: responderIdentity,
-            role: "responder",
-            localEpoch: new Uint8Array(8).fill(0x77),
-          });
-          const ack = responder.handleSessionSetup(
-            frame,
-            (length) => new Uint8Array(length).fill(0x31),
-            responderIdentity.nodeAddr,
-          );
-          await manager.handleFromPeer(peer, responderIdentity.nodeAddr, ack);
-          return;
+      sendFspToward: async (_remoteNodeAddr: Uint8Array, payload: RoutedPayload) => {
+        for (const frame of routedFrames(payload, peer)) {
+          const phase = peekFspPhase(frame);
+          if (phase === 1) {
+            setupAttempts += 1;
+            if (!completeSetup) return;
+            responder = new FspSession({
+              identity: responderIdentity,
+              role: "responder",
+              localEpoch: new Uint8Array(8).fill(0x77),
+            });
+            const ack = responder.handleSessionSetup(
+              frame,
+              (length) => new Uint8Array(length).fill(0x31),
+              responderIdentity.nodeAddr,
+            );
+            await manager.handleFromPeer(peer, responderIdentity.nodeAddr, ack);
+            continue;
+          }
+          if (phase === 3) {
+            responder?.handleSessionMsg3(frame);
+            continue;
+          }
+          expect(phase).toBe(FSP_PHASE_ESTABLISHED);
+          expect(responder?.decryptIncoming(frame).data?.payload).toEqual(new Uint8Array([1, 2, 3]));
         }
-        if (phase === 3) {
-          responder?.handleSessionMsg3(frame);
-          return;
-        }
-        expect(phase).toBe(FSP_PHASE_ESTABLISHED);
       },
     };
     const manager = new FspSessionManager({
@@ -176,7 +184,7 @@ describe("FspSessionManager", () => {
         coords: [local.nodeAddr], coordinatesFor: () => undefined,
         ensureFirstContactRoute: () => routeReady, learnReverseRoute: () => {},
         sendFspReplyToward: async (_: unknown, frame: Uint8Array) => { sent.push(frame); },
-        sendFspToward: async (_: unknown, frame: Uint8Array) => { sent.push(frame); },
+        sendFspToward: async (_: unknown, payload: RoutedPayload) => { sent.push(...routedFrames(payload, peer)); },
       } as never,
       getPeerByNodeAddr: () => undefined, emitDatagram: () => {}, emitEndpointData: () => {},
       handleLinkNegotiation: async () => {}, emitSession: () => {},

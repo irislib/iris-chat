@@ -51,7 +51,13 @@ vi.mock('@fips/core', () => ({
   identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32) })),
   toHex: vi.fn(() => 'a'.repeat(64)),
 }))
-vi.mock('@fips/transport-webrtc', () => ({ WebRtcTransport: class { constructor(config: Record<string, unknown>) { fips.transports.push(config) } connect = vi.fn(async () => undefined) } }))
+vi.mock('@fips/transport-webrtc', async importOriginal => ({
+  ...await importOriginal<typeof import('@fips/transport-webrtc')>(),
+  WebRtcTransport: class {
+    constructor(config: Record<string, unknown>) { fips.transports.push(config) }
+    connect = vi.fn(async () => undefined)
+  },
+}))
 vi.mock('./deviceSyncTcp', () => ({
   DeviceSyncTcp: class {
     port: number
@@ -188,7 +194,7 @@ describe('device sync', () => {
     tcp.instances.length = 0
   })
 
-  it('uses bounded STUN-assisted FIPS upgrades with public message servers configured', async () => {
+  it('uses shared STUN-assisted FIPS defaults with public message servers configured', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
       for (let tick = 0; tick < 10 && fips.nodes.length === 0; tick++) await Promise.resolve()
@@ -196,10 +202,10 @@ describe('device sync', () => {
       expect(fips.transports[0]).toMatchObject({
         relays: ['wss://relay.example'],
         stunServers: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'],
-        iceGatherTimeoutMs: 2_000,
         ordered: false,
         maxRetransmits: 0,
       })
+      expect(fips.transports[0]).not.toHaveProperty('iceGatherTimeoutMs')
     } finally { await stopDeviceSync() }
   })
 

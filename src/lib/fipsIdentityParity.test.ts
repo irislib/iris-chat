@@ -30,6 +30,7 @@ async function fixture(parity: 'even' | 'odd' = 'odd') {
   const peer: AdjacentPeer = { pubkey: advertised, pubkeyHex: toHex(advertised), remoteAddr, transport, link }
   const peers = new Map([[transportAddressKey(remoteAddr), peer]])
   const delivered = vi.fn(async () => {})
+  const removePeerPath = vi.fn()
   let nextSessionIdx = 10
   const processor = new FmpTransportPacketProcessor({
     identity: local, startupEpoch: localEpoch, nextSessionIdx: () => nextSessionIdx++, randomBytes: n => crypto.getRandomValues(new Uint8Array(n)),
@@ -37,10 +38,11 @@ async function fixture(parity: 'even' | 'odd' = 'odd') {
     peersByPubkey: new Map([[peer.pubkeyHex, peer]]), peersByNodeAddr: new Map([[toHex(deriveNodeAddr(advertised)), peer]]),
     routing: { scheduleTreeAnnounce() {}, handleLinkMessage: delivered } as never,
     sessionManager: { closePeerSessions() {} } as never,
+    removePeerPath,
     emitError: error => errors.push(error), emitPeer() {}, handlePeerRestart() {},
   })
   const receive = (data: Uint8Array) => processor.process(transport, { remoteAddr, transportType: 'memory', data, receivedAtMs: Date.now() })
-  return { local, remote, remoteEpoch, original, peer, errors, sent, receive, delivered }
+  return { local, remote, remoteEpoch, original, peer, errors, sent, receive, delivered, removePeerPath }
 }
 
 describe('authenticated FIPS identity parity', () => {
@@ -56,6 +58,7 @@ describe('authenticated FIPS identity parity', () => {
     expect(f.errors).toEqual([])
     expect(f.delivered).toHaveBeenCalledWith(f.peer, expect.any(Number), payload)
     expect(f.peer.link.role).toBe('responder')
+    expect(f.removePeerPath).not.toHaveBeenCalled()
   })
   it('still rejects a different authenticated x-only identity on the established address', async () => {
     const f = await fixture()
@@ -68,6 +71,7 @@ describe('authenticated FIPS identity parity', () => {
     // Rejection must leave the authenticated, established carrier usable.
     f.receive(f.original.encryptOutgoing(new Uint8Array([7])))
     expect(f.delivered).toHaveBeenCalledWith(f.peer, expect.any(Number), new Uint8Array([7]))
+    expect(f.removePeerPath).not.toHaveBeenCalled()
   })
 })
 
