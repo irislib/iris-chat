@@ -8,7 +8,7 @@ import { TestRelay } from './test-relay'
 test('voice and video continue directly over FIPS with STUN unavailable and servers stopped', async ({ baseURL }) => {
   test.setTimeout(240000)
   const bandwidth: Record<string, unknown>[] = []
-  const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'] })
+  const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--disable-features=WebRtcHideLocalIpsWithMdns'] })
   const seed = await startLocalFipsWebSocketSeed()
   const stun = await startSilentStunServer()
   // Stop both bootstrap servers during the call, independently of other tests.
@@ -22,13 +22,35 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
   const contexts: BrowserContext[] = []
   const logs: string[] = []
   async function user() {
-    const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera'], viewport: { width: 1100, height: 780 }, serviceWorkers: 'block' })
+    const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera', 'notifications'], viewport: { width: 1100, height: 780 }, serviceWorkers: 'block' })
     contexts.push(context)
     await useTestRelay(context, testRelayUrl)
     await context.addInitScript(({ seed, stun }) => {
       localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed], stunServers: [stun] }))
     }, { seed: seed.url, stun: stun.url })
     await context.addInitScript(() => {
+      // Headless macOS denies Notification.permission even when the browser's
+      // permission controller grants it. Simulate OS authorization, retaining
+      // real API handles to assert lifetime; this does not prove OS presentation.
+      const alerts = { notifications: new Set<Notification>(), oscillators: new Set<OscillatorNode>() }
+      ;(window as unknown as { callAlerts: typeof alerts }).callAlerts = alerts
+      const OriginalNotification = window.Notification
+      window.Notification = class extends OriginalNotification {
+        static get permission(): NotificationPermission { return 'granted' }
+        constructor(title: string, options?: NotificationOptions) {
+          super(title, options)
+          if (options?.tag?.startsWith('iris-call-')) alerts.notifications.add(this)
+        }
+        close() { alerts.notifications.delete(this); super.close() }
+      }
+      const createOscillator = AudioContext.prototype.createOscillator
+      AudioContext.prototype.createOscillator = function() {
+        const oscillator = createOscillator.call(this)
+        const start = oscillator.start.bind(oscillator), stop = oscillator.stop.bind(oscillator)
+        oscillator.start = (when?: number) => { alerts.oscillators.add(oscillator); start(when) }
+        oscillator.stop = (when?: number) => { if (when === undefined) alerts.oscillators.delete(oscillator); stop(when) }
+        return oscillator
+      }
       const evidence = { streams: [] as MediaStream[], peers: [] as RTCPeerConnection[], rate: Infinity, dropEvery: 0 }
       ;(window as unknown as { callEvidence: typeof evidence }).callEvidence = evidence
       const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
@@ -129,12 +151,17 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
           if (await a.getByRole('button', { name: 'Dismiss call error' }).isVisible()) { logs.push(await a.getByRole('alert').innerText()); await a.getByRole('button', { name: 'Dismiss call error' }).click() }
         }
         await expect(b.getByTestId('call-screen')).toHaveAttribute('data-status', 'ringing', { timeout: 2000 })
+        await expect.poll(() => b.evaluate(() => {
+          const a = (window as unknown as { callAlerts: { notifications: Set<Notification>; oscillators: Set<OscillatorNode> } }).callAlerts
+          return [a.notifications.size, a.oscillators.size]
+        })).toEqual([1, 2])
       }).toPass({ timeout: 30000 })
     } catch (error) {
       await mkdir('work/calls', { recursive: true })
       for (const [index, page] of [a, b].entries()) {
         await writeFile(`work/calls/start-failure-${index + 1}.json`, JSON.stringify({
           at: Date.now(), body: (await page.locator('body').innerText()).slice(-6000),
+          alerts: await page.evaluate(() => { const a = (window as any).callAlerts; return { permission: Notification.permission, notifications: a.notifications.size, oscillators: a.oscillators.size } }),
           call: await page.getByTestId('call-screen').evaluateAll(elements => elements[0]?.getAttribute('data-status') ?? null),
           history: await page.getByTestId('call-history-row').allTextContents(),
         }, null, 2))
@@ -168,6 +195,10 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     await a.getByRole('button', { name: 'End call', exact: true }).click()
     await expect(b.getByTestId('call-screen')).toHaveAttribute('data-status', 'ended')
     for (const page of [a, b]) {
+      await expect.poll(() => page.evaluate(() => {
+        const a = (window as unknown as { callAlerts: { notifications: Set<Notification>; oscillators: Set<OscillatorNode> } }).callAlerts
+        return [a.notifications.size, a.oscillators.size]
+      })).toEqual([0, 0])
       await page.getByRole('button', { name: 'Done', exact: true }).click()
       expect(await page.evaluate(() => (window as unknown as { callEvidence: { streams: MediaStream[] } }).callEvidence.streams.every(s => s.getTracks().every(t => t.readyState === 'ended')))).toBe(true)
     }
@@ -196,6 +227,10 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     if (await a.getByTestId('request-accept-chat').isVisible()) await a.getByTestId('request-accept-chat').click()
     await start(a, b, false)
     await b.getByRole('button', { name: 'Answer call', exact: true }).click()
+    await expect.poll(() => b.evaluate(() => {
+      const a = (window as unknown as { callAlerts: { notifications: Set<Notification>; oscillators: Set<OscillatorNode> } }).callAlerts
+      return [a.notifications.size, a.oscillators.size]
+    })).toEqual([0, 0])
     await received(a, 'audio'); await received(b, 'audio')
     for (const page of [a, b]) await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-audio-energy'))).toBeGreaterThan(0.01)
     await a.getByRole('button', { name: 'Mute microphone' }).click()

@@ -24,6 +24,7 @@ export class CallSession {
   onEnded?: () => void
   private receiver = new CallMediaReceiver()
   private ended = new Map<string, number>()
+  private dispositions = new Map<string, { owner: string; peers: string[]; packet: CallControl }>()
   private lastHeard = 0
   private mediaReady = false
   private retransmitCache = new Map<number, { at: number; packets: Uint8Array[]; bytes: number }>()
@@ -50,6 +51,10 @@ export class CallSession {
   }
   private send(peer: string, packet: CallControl) {
     void this.endpoint.sendDatagram({ dst: peer, srcPort: CALL_PORT, dstPort: CALL_PORT, payload: encodeCallControl(packet) }).catch(() => {})
+  }
+  private rememberDisposition(s: CallState, peers: string[], packet: CallControl) {
+    this.dispositions.set(s.id, { owner: s.owner, peers, packet })
+    while (this.dispositions.size > 128) this.dispositions.delete(this.dispositions.keys().next().value!)
   }
   private broadcast(type: CallControl['type'], extra: Partial<CallControl> = {}) {
     const s = get(this.state)
@@ -81,14 +86,19 @@ export class CallSession {
   end(reason = 'Call ended', notify = true, outcome?: CallOutcome) {
     const s = get(this.state)
     if (!s || s.status === 'ended') return
-    if (notify) this.broadcast(s.direction === 'incoming' && s.status === 'ringing' ? 'reject' : 'end')
+    const declined = outcome === 'declined'
+    const packet: CallControl = { v: 3, type: s.direction === 'incoming' && s.status === 'ringing' ? 'reject' : 'end', call_id: s.id,
+      reason: declined ? 'declined' : undefined }
+    const targets = s.peer ? [s.peer] : s.peers
+    if (notify && declined) this.rememberDisposition(s, targets, packet)
     this.rememberEnded(s.id)
     const elsewhere = outcome === 'answered_elsewhere'
     this.state.set({ ...s, status: 'ended', reason, endedAt: Date.now(),
-      connected: elsewhere ? undefined : s.connected,
-      outcome: elsewhere ? 'answered_elsewhere' : s.connected !== undefined ? 'answered' : outcome ?? (s.direction === 'incoming' ? 'missed' : 'canceled'),
+      connected: elsewhere || declined ? undefined : s.connected,
+      outcome: elsewhere ? 'answered_elsewhere' : declined ? 'declined' : s.connected !== undefined ? 'answered' : outcome ?? (s.direction === 'incoming' ? 'missed' : 'canceled'),
     })
     this.onEnded?.()
+    if (notify) for (const peer of targets) this.send(peer, packet)
   }
   clear() { if (get(this.state)?.status === 'ended') this.state.set(null) }
   setMedia(muted: boolean, camera: boolean) {
@@ -134,6 +144,11 @@ export class CallSession {
       if (frame.kind === 1 || s.video) this.onMedia?.(frame)
       return
     }
+    const disposition = this.dispositions.get(p.call_id)
+    if (disposition?.owner === owner && disposition.peers.includes(peer) && ['offer', 'answer', 'ping'].includes(p.type)) {
+      this.send(peer, disposition.packet)
+      return
+    }
     if (this.ended.has(p.call_id)) {
       if (p.type === 'ping' || p.type === 'offer') this.send(peer, { v: 3, type: 'end', call_id: p.call_id })
       return
@@ -161,6 +176,7 @@ export class CallSession {
         s = get(this.state)
       }
       if (s && s.status !== 'ended') {
+        if (s.id === p.call_id && s.peer === peer) this.lastHeard = Date.now()
         if (s.id === p.call_id && s.peer === peer && s.status === 'active') this.broadcast('answer', { video: s.video, codec: CALL_CODEC })
         else if (s.id !== p.call_id) {
           this.rememberEnded(p.call_id)
@@ -169,6 +185,7 @@ export class CallSession {
         return
       }
       this.resetMedia()
+      this.lastHeard = Date.now()
       this.state.set({ id: p.call_id, owner, peer, peers: [peer], direction: 'incoming', status: 'ringing', video: !!p.video, muted: false, camera: !!p.video, remoteMuted: false, remoteVideo: !!p.video, started: Date.now(), receivedAudio: 0, receivedVideo: 0 })
       return
     }
@@ -181,8 +198,11 @@ export class CallSession {
     }
     this.lastHeard = Date.now()
     if (p.type === 'answer' && s.direction === 'outgoing' && s.status === 'ringing') {
-      for (const other of s.peers) if (other !== peer) this.send(other, { v: 3, type: 'end', call_id: s.id, reason: 'answered_elsewhere', video: s.video && !!p.video })
+      const others = s.peers.filter(other => other !== peer)
+      const packet: CallControl = { v: 3, type: 'end', call_id: s.id, reason: 'answered_elsewhere', video: s.video && !!p.video }
+      this.rememberDisposition(s, others, packet)
       this.state.set({ ...s, status: 'active', connected: this.mediaReady ? Date.now() : undefined, peer, video: s.video && !!p.video, camera: s.camera && !!p.video, remoteVideo: s.video && !!p.video })
+      for (const other of others) this.send(other, packet)
     } else if (p.type === 'nack' && s.status === 'active' && s.video) {
       void this.retransmit(s, p)
     } else if (p.type === 'feedback' && s.status === 'active' && s.video) {
@@ -193,7 +213,8 @@ export class CallSession {
       this.state.set({ ...s, video: s.video && (p.video ?? s.video) })
       this.end('Answered on another device', false, 'answered_elsewhere')
     } else if (p.type === 'reject' || p.type === 'end') {
-      if (!s.peer && p.type === 'reject' && s.peers.length > 1) this.state.set({ ...s, peers: s.peers.filter(x => x !== peer) })
+      if (p.reason === 'declined') this.end('Call declined', s.direction === 'outgoing', 'declined')
+      else if (!s.peer && p.type === 'reject' && s.peers.length > 1) this.state.set({ ...s, peers: s.peers.filter(x => x !== peer) })
       else this.end(p.type === 'reject' ? (p.reason === 'busy' ? 'Busy' : 'Call declined') : 'Call ended', false, p.type === 'reject' ? 'declined' : undefined)
     } else if (p.type === 'ping' || p.type === 'pong' || p.type === 'media_state') {
       this.state.set({ ...s, remoteMuted: p.muted ?? s.remoteMuted, remoteVideo: s.video && (p.video ?? s.remoteVideo) })
@@ -217,8 +238,12 @@ export class CallSession {
     if (!s || s.status === 'ended') return
     if (s.peers.some(p => this.ownerForPeer(p) !== s.owner)) { this.end('Call ended'); return }
     if (s.status === 'ringing') {
-      if (Date.now() - s.started > 30000) this.end('No answer')
+      if (s.direction === 'incoming' && Date.now() - this.lastHeard > 10000) this.end('Connection lost')
+      else if (Date.now() - s.started > 30000) this.end('No answer')
       else if (s.direction === 'outgoing') this.broadcast('offer', { video: s.video, codec: CALL_CODEC })
+      // Recover a dropped answered-elsewhere/cancel notice without waiting for
+      // the incoming ring timeout. The caller alone chooses the winning device.
+      else if (Math.floor(Date.now() / 1000) % 3 === 0) this.broadcast('ping')
     } else if (s.status === 'active') {
       if (Date.now() - this.lastHeard > 15000) this.end('Connection lost')
       else if (Math.floor(Date.now() / 1000) % 3 === 0) this.broadcast('ping')

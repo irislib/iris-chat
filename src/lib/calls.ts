@@ -8,7 +8,11 @@ import { callSettings } from './callSettings'
 import { CallSession, type CallState } from './callSession'
 import { BrowserCallMedia, type CallMediaStats } from './callMedia'
 import { CallRingtone } from './callRingtone'
+import { CallNotification } from './callNotification'
+import { createProfileStore, getProfileName } from './profile'
+import { getAnimalName } from './animalNames'
 const ringtone = new CallRingtone()
+const callNotification = new CallNotification()
 
 export const callState = writable<CallState | null>(null)
 export const callError = writable('')
@@ -36,6 +40,7 @@ export function callOwnerForPeer(peer: string): string | undefined {
 }
 function stopMedia() {
   ringtone.stop()
+  callNotification.clear()
   generation++
   media?.stop(); media = null
   localCallStream.set(null)
@@ -48,6 +53,10 @@ export function knownCallDevices(owner: string): string[] {
 }
 export function attachCalls(node: FipsNode, peers: () => string[], connect?: (owner: string) => Promise<void>) {
   detachCalls()
+  window.addEventListener('pointerdown', ringtone.unlock)
+  window.addEventListener('keydown', ringtone.unlock)
+  const clearAlerts = () => { ringtone.stop(); callNotification.clear() }
+  window.addEventListener('pagehide', clearAlerts)
   connectedPeers = peers
   connectCallPeers = connect
   session = new CallSession(node, callOwnerForPeer, () => get(callSettings), (owner, id) =>
@@ -66,17 +75,27 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
       if (key !== historyKey) { historyKey = key; recordCallHistory(state.owner, callHistoryFromState(state)) }
     }
     callState.set(state)
-    if (state?.direction === 'incoming' && state.status === 'ringing' && get(callSettings).ringtone !== false) ringtone.start()
+    if (state?.direction === 'incoming' && state.status === 'ringing' && !answersInFlight.has(state.id) && get(callSettings).ringtone !== false) ringtone.start()
     else ringtone.stop()
+    const chat = state && Array.from(get(chats).values()).find(c => c.recipientPubkey === state.owner)
+    callNotification.update(state?.direction === 'incoming' && state.status === 'ringing' && !answersInFlight.has(state.id) && get(callSettings).notifications !== false
+      ? { id: state.id, name: getProfileName(get(createProfileStore(state.owner, false))) || getAnimalName(state.owner), video: state.video, chatId: chat?.id } : null)
     if (state) media?.setState(state.status === 'active', state.muted, state.camera, state.video)
   })
   const settingsUnsubscribe = callSettings.subscribe(settings => {
     const state = get(callState)
     if (settings.ringtone === false) ringtone.stop()
+    if (settings.notifications === false) callNotification.clear()
     void media?.setQuality(settings).catch(() => callError.set('Could not change call quality'))
     if (state && state.status !== 'ended' && !(state.video ? settings.video || (state.status === 'ringing' && state.direction === 'incoming' && settings.voice) : settings.voice)) session?.end('Calls disabled')
   })
-  runtimeCleanup = () => { unsubscribe(); settingsUnsubscribe() }
+  runtimeCleanup = () => {
+    unsubscribe(); settingsUnsubscribe()
+    window.removeEventListener('pointerdown', ringtone.unlock)
+    window.removeEventListener('keydown', ringtone.unlock)
+    window.removeEventListener('pagehide', clearAlerts)
+    ringtone.dispose(); callNotification.clear()
+  }
 }
 export function detachCalls() {
   session?.dispose()
@@ -149,6 +168,7 @@ export async function answerCall(video: boolean) {
   if (!withVideo && !get(callSettings).voice) return
   answersInFlight.add(state.id)
   ringtone.stop()
+  callNotification.clear()
   try {
     const captured = await openMedia(withVideo, current, state.id)
     if (session !== current || get(callState)?.id !== state.id || get(callState)?.status !== 'ringing') {

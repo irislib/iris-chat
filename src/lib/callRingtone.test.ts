@@ -1,27 +1,33 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { CallRingtone } from './callRingtone'
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
-it('rings at most 30 seconds and closes audio immediately when stopped', () => {
+function audio(state = 'running') {
+  const close = vi.fn(async () => {}), stop = vi.fn(), start = vi.fn(), disconnect = vi.fn()
+  const context = { state, currentTime: 0, destination: {}, close,
+    resume: vi.fn(async () => { context.state = 'running' }),
+    createGain: vi.fn(() => ({ connect() {}, disconnect, gain: { setValueAtTime() {}, linearRampToValueAtTime() {} } })),
+    createOscillator: () => ({ frequency: { value: 0 }, connect() {}, disconnect, start, stop }) }
+  vi.stubGlobal('AudioContext', class { constructor() { return context } })
+  return { context, close, start, stop, disconnect }
+}
+it('bounds each ring and stops sound immediately while preserving gesture-unlocked audio', () => {
   vi.useFakeTimers()
-  const close = vi.fn(async () => {}), stop = vi.fn(), start = vi.fn()
-  vi.stubGlobal('AudioContext', class {
-    state = 'running'; currentTime = 0; destination = {}; close = close
-    createGain = () => ({ connect() {}, gain: { setValueAtTime() {}, linearRampToValueAtTime() {} } })
-    createOscillator = () => ({ frequency: { value: 0 }, connect() {}, start, stop })
-  })
-  const ringtone = new CallRingtone()
-  ringtone.start(); ringtone.start()
-  expect(start).toHaveBeenCalledTimes(2)
-  expect(stop).toHaveBeenCalledWith(30)
-  ringtone.stop()
-  expect(close).toHaveBeenCalledTimes(1)
-  ringtone.start(); vi.advanceTimersByTime(30000)
-  expect(close).toHaveBeenCalledTimes(2)
+  const a = audio(), ring = new CallRingtone()
+  ring.start(); ring.start()
+  expect(a.start).toHaveBeenCalledTimes(2)
+  ring.stop()
+  expect(a.disconnect).toHaveBeenCalledTimes(3)
+  expect(a.close).not.toHaveBeenCalled()
+  ring.start(); vi.advanceTimersByTime(30000)
+  expect(a.disconnect).toHaveBeenCalledTimes(6)
+  ring.dispose(); expect(a.close).toHaveBeenCalledOnce()
 })
-it('respects browser autoplay restrictions instead of forcing playback', () => {
-  const close = vi.fn(async () => {}), createGain = vi.fn()
-  vi.stubGlobal('AudioContext', class { state = 'suspended'; close = close; createGain = createGain })
-  new CallRingtone().start()
-  expect(close).toHaveBeenCalled()
-  expect(createGain).not.toHaveBeenCalled()
+it('unlocks suspended audio with a gesture and never resumes a canceled ring', async () => {
+  vi.useFakeTimers()
+  const a = audio('suspended'), ring = new CallRingtone()
+  ring.start(); expect(a.start).not.toHaveBeenCalled()
+  ring.unlock(); ring.stop(); await Promise.resolve()
+  expect(a.start).not.toHaveBeenCalled()
+  ring.start(); expect(a.start).toHaveBeenCalledTimes(2)
+  ring.dispose()
 })

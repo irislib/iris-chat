@@ -97,6 +97,39 @@ describe('FIPS calls', () => {
       expect(callHistoryFromState(get(c.state)!).durationSeconds).toBe(0)
     } finally { c.dispose() }
   })
+  it.each(['answer', 'decline', 'cancel'])('recovers a lost %s notice on a still-ringing sibling', (action: string) => {
+    a.dispose()
+    const ec = new Endpoint('c'); ec.other = ea
+    const c = new CallSession(ec, source => source === 'a' ? 'Alice' : undefined)
+    ea.others = new Map([['b', eb], ['c', ec]])
+    a = new CallSession(ea, source => ['b', 'c'].includes(source) ? 'Bob' : undefined)
+    try {
+      a.start('Bob', ['b', 'c'], true)
+      ea.dropEndTo = 'c'
+      if (action === 'answer') b.accept(false)
+      else if (action === 'decline') b.end('Call declined', true, 'declined')
+      else a.end()
+      expect(get(c.state)?.status).toBe('ringing')
+      // Recovery must also work when the accepted call has already finished.
+      if (action === 'answer') a.end()
+      ea.dropEndTo = undefined
+      vi.advanceTimersByTime(3000)
+      expect(get(c.state)).toMatchObject({ status: 'ended', outcome: action === 'answer' ? 'answered_elsewhere' : action === 'decline' ? 'declined' : 'missed' })
+    } finally { c.dispose() }
+  })
+  it('retries a lost explicit decline and declines all ringing devices', () => {
+    a.start('Bob', ['b'], false)
+    eb.drop = true; b.end('Call declined', true, 'declined'); eb.drop = false
+    expect(get(a.state)?.status).toBe('ringing')
+    vi.advanceTimersByTime(1000)
+    expect(get(a.state)).toMatchObject({ status: 'ended', outcome: 'declined' })
+  })
+  it('stops ringing within eleven seconds if the caller disappears', () => {
+    a.start('Bob', ['b'], false)
+    ea.drop = true
+    vi.advanceTimersByTime(11000)
+    expect(get(b.state)).toMatchObject({ status: 'ended', reason: 'Connection lost' })
+  })
   it('counts answered duration only after accepted media is ready', () => {
     a.start('Bob', ['b'], true)
     b.accept(false)

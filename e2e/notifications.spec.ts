@@ -39,7 +39,7 @@ test.describe('Notifications', () => {
       await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
 
       // Should see notification section
-      await expect(page.getByText('Notifications')).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible()
 
       // Should see status indicators
       await expect(page.getByText('Notification API')).toBeVisible()

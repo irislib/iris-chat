@@ -1098,6 +1098,20 @@
               </button>
             </div>
           {/each}
+          {#if notificationApiAvailable}
+            <div class="flex items-center justify-between">
+              <span class="text-sm">Call notifications</span>
+              <button class="w-10 h-5 rounded-full transition-colors relative {$callSettings.notifications && permissionState === 'granted' ? 'bg-primary' : 'bg-gray-600'}" role="switch" aria-checked={$callSettings.notifications && permissionState === 'granted'} aria-label="Call notifications" onclick={async () => {
+                if ($callSettings.notifications && permissionState === 'granted') setCallSettings({ notifications: false })
+                else {
+                  permissionState = await Notification.requestPermission()
+                  setCallSettings({ notifications: permissionState === 'granted' })
+                }
+              }}>
+                <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$callSettings.notifications && permissionState === 'granted' ? 'translate-x-5' : ''}"></span>
+              </button>
+            </div>
+          {/if}
           <CallQualityControls />
         </div>
       </section>
