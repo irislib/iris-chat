@@ -7,16 +7,20 @@ const workspace = await readFile(new URL('pnpm-workspace.yaml', root), 'utf8')
 const pubsubRuntime = await readFile(new URL('src/lib/nostrPubsubRuntime.ts', root), 'utf8')
 const releases = {
   '@fips/core': {
-    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-core-0.0.29.tgz',
-    integrity: 'sha512-C5GN4Fj7D3X9riGaZwej9aoVsLG7TI8ar4RvT25Wmv+tiLsGWSY2Gn7wGAzYHqhhT7wVonc5cMjfs95qjdUwWQ==',
+    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-core-0.0.31.tgz',
+    integrity: 'sha512-WteYHt8rgOGyvJTVbQt6IWiahK5GD1r31rq415l1Unk8gqVfncT/Mi1Jxm8n9v7cCdjKzh1GuBSYLe3x6NB6FA==',
   },
   '@fips/tcp': {
     url: 'https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz',
     integrity: 'sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w==',
   },
   '@fips/transport-webrtc': {
-    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-webrtc-0.0.45.tgz',
-    integrity: 'sha512-aRonAlsJz56DlyBsc/IBMkKmKmrYuMuq24YLWbHfi8NmTphv6nOupWK3Tpd7DJphXgqCgKi2CnqW7PI6H2+bNw==',
+    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-webrtc-0.0.47.tgz',
+    integrity: 'sha512-2PngOs3tjO2JOQYdh4MbDkgawtZ5n2hry/pTDFnz3NiLAMjGns3d7g4XwewrTnVWv4hhTVNMEx3YdhF1Qvf2qw==',
+  },
+  '@fips/transport-websocket': {
+    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz',
+    integrity: 'sha512-Qj641P/xa7CQpcVQl52u5PgftzGPtGHIva9mpXRcNgdteB5LlTdCA7/GBfRKtuSxGoNaRi1iKHH4fBHitNe30A==',
   },
   '@hashtree/core': {
     url: 'https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.7/hashtree-core-0.3.2.tgz',

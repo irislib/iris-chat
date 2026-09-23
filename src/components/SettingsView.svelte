@@ -15,6 +15,11 @@
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
+  import { callSettings, setCallSettings } from '../lib/callSettings'
+  import { callConnectionSettings, setCallServers } from '../lib/callConnectionSettings'
+  let callServers = $state('')
+  let callServerError = $state('')
+  $effect(() => { callServers = $callConnectionSettings.servers.join('\n') })
   import { messageRequestSettings, setReceiveMessageRequests } from '../lib/messageRequestSettings'
   import { devices } from '../lib/devices'
   import { describeDeviceRosterDevice } from '../lib/deviceLabels'
@@ -1080,6 +1085,30 @@
           </div>
         </div>
       </div>
+
+      <section class="mb-6">
+        <h2 class="font-medium mb-3">Calls</h2>
+        <div class="space-y-4">
+          {#each [{ key: 'voice' as const, label: 'Voice calls' }, { key: 'video' as const, label: 'Video calls' }, { key: 'ringtone' as const, label: 'Ring sound' }] as option}
+            <div class="flex items-center justify-between">
+              <span class="text-sm">{option.label}</span>
+              <button class="w-10 h-5 rounded-full transition-colors relative {$callSettings[option.key] ? 'bg-primary' : 'bg-gray-600'}" role="switch" aria-checked={$callSettings[option.key]} aria-label={option.label} onclick={() => setCallSettings({ [option.key]: !$callSettings[option.key] })}>
+                <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$callSettings[option.key] ? 'translate-x-5' : ''}"></span>
+              </button>
+            </div>
+          {/each}
+        </div>
+      </section>
+
+      <details class="mb-6">
+        <summary class="text-sm cursor-pointer">Call servers</summary>
+        <form class="mt-3 space-y-2" onsubmit={(event) => { event.preventDefault(); try { setCallServers(callServers); callServerError = '' } catch (error) { callServerError = error instanceof Error ? error.message : 'Invalid address' } }}>
+          <textarea class="input w-full" aria-label="Call server addresses" rows="2" bind:value={callServers}></textarea>
+          <p class="text-xs text-gray-500">A local call server lets you call without internet.</p>
+          {#if callServerError}<p class="text-sm text-red-400" role="alert">{callServerError}</p>{/if}
+          <button type="submit" class="btn-primary text-sm">Save</button>
+        </form>
+      </details>
 
       <!-- Notifications Section -->
       <div class="bg-surface rounded-lg p-4">

@@ -17,6 +17,8 @@
   import { getExpirationLabel } from '../lib/expiration'
   import { buildDisappearingNotice, normalizeDisappearingTtl } from '../lib/disappearingNotice'
   import Avatar from './Avatar.svelte'
+  import { startCall, callState } from '../lib/calls'
+  import { callSettings } from '../lib/callSettings'
   import Name from './Name.svelte'
   import MessageBubble from './MessageBubble.svelte'
   import MediaModal from './MediaModal.svelte'
@@ -450,6 +452,15 @@
         </p>
       </div>
     </button>
+
+    {#if !isRequest}
+      {#if $callSettings.voice}
+        <button class="btn-ghost p-2 rounded-full" aria-label="Voice call" disabled={!!$callState && $callState.status !== 'ended'} onclick={() => startCall(chat.recipientPubkey, false)}><span class="i-carbon-phone-filled text-xl"></span></button>
+      {/if}
+      {#if $callSettings.video}
+        <button class="btn-ghost p-2 rounded-full" aria-label="Video call" disabled={!!$callState && $callState.status !== 'ended'} onclick={() => startCall(chat.recipientPubkey, true)}><span class="i-carbon-video-filled text-xl"></span></button>
+      {/if}
+    {/if}
 
     <!-- Menu -->
     <div class="relative">

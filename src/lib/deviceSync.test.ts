@@ -50,7 +50,7 @@ vi.mock('@fips/core', () => ({
   identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32) })),
   toHex: vi.fn(() => 'a'.repeat(64)),
 }))
-vi.mock('@fips/transport-webrtc', () => ({ WebRtcTransport: class {} }))
+vi.mock('@fips/transport-webrtc', () => ({ WebRtcTransport: class { connect = vi.fn(async () => undefined) } }))
 vi.mock('./deviceSyncTcp', () => ({
   DeviceSyncTcp: class {
     port: number
