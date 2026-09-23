@@ -2,11 +2,18 @@ import { test, expect, useTestRelay } from './fixtures'
 import { chromium, type Page, type BrowserContext } from '@playwright/test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
+import { TestRelay } from './test-relay'
 
-test('voice and video over local FIPS with Internet blocked, voice answer and call preferences', async ({ testRelayUrl, testRelay, baseURL }) => {
+test('voice and video over local FIPS with Internet blocked, voice answer and call preferences', async ({ baseURL }) => {
   test.setTimeout(180000)
   const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'] })
   const seed = await startLocalFipsWebSocketSeed()
+  // This test stops its server to prove live calls survive without it. Keep
+  // that lifecycle separate from the worker relay used by subsequent tests.
+  const testRelay = new TestRelay()
+  await testRelay.start()
+  const testRelayUrl = testRelay.url
+  let relayStopped = false
   const contexts: BrowserContext[] = []
   const logs: string[] = []
   async function user() {
@@ -111,6 +118,7 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
     await a.screenshot({ path: 'work/calls/active-video.png' })
     // A live encrypted call continues after the discovery/message server is gone.
     await testRelay.stop()
+    relayStopped = true
     for (const page of [a, b]) {
       await expect.poll(async () => Number(await page.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(35)
       await expect(page.getByAltText('Caller video')).toBeVisible()
@@ -132,5 +140,5 @@ test('voice and video over local FIPS with Internet blocked, voice answer and ca
     await b.reload()
     await expect(b.getByRole('switch', { name: 'Voice calls', exact: true })).toHaveAttribute('aria-checked', 'false')
     await expect(b.getByRole('switch', { name: 'Video calls', exact: true })).toHaveAttribute('aria-checked', 'false')
-  } finally { await mkdir('work/calls', { recursive: true }); await writeFile('work/calls/browser.log', logs.join('\n')); await Promise.all(contexts.map(c => c.close())); await browser.close(); await seed.close() }
+  } finally { await mkdir('work/calls', { recursive: true }); await writeFile('work/calls/browser.log', logs.join('\n')); await Promise.all(contexts.map(c => c.close())); await browser.close(); await seed.close(); if (!relayStopped) await testRelay.stop() }
 })
