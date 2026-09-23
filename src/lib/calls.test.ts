@@ -64,6 +64,24 @@ describe('answer capture ownership', () => {
     offer(newId)
     expect(get(callState)?.status).toBe('ringing')
   })
+  it('cannot write old call history after teardown and an account runtime change', async () => {
+    const oldId = 'ab'.repeat(16)
+    offer(oldId)
+    const oldEndpointHandler = fixture.receive
+    const answer = answerCall(false)
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(1))
+    // Logout awaits this teardown before clearing chats or enabling a new login.
+    detachCalls()
+    chats.set(new Map([['new-account-chat', { id: 'new-account-chat', recipientPubkey: owner, mode: 'manager', messages: [] }]]))
+    attachCalls({ registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} }, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode, () => [peer])
+    vi.mocked(recordCallHistory).mockClear()
+    oldEndpointHandler?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'end', call_id: oldId }) })
+    fixture.media[0].finish()
+    await answer
+    expect(get(callState)).toBeNull()
+    expect(recordCallHistory).not.toHaveBeenCalled()
+    expect(fixture.media[0].stop).toHaveBeenCalled()
+  })
   it('does not create history from an unverified offer', () => {
     fixture.receive?.({ src: `02${'f'.repeat(64)}`, payload: encodeCallControl({ v: 3, type: 'offer', call_id: 'ab'.repeat(16), video: false }) })
     expect(get(callState)).toBeNull()

@@ -1,18 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+import { callHistoryFromState, callHistoryLabel } from './callHistory'
 import { CallSession, type CallEndpoint } from './callSession'
 import { CallMediaReceiver, encodeCallControl, encodeCallMedia, parseCallControl } from './callProtocol'
 class Endpoint implements CallEndpoint {
   handler?: (ctx: { src: string; payload: Uint8Array }) => void
   other?: Endpoint
+  others?: Map<string, Endpoint>
   sent: Uint8Array[] = []
   drop = false
   gate?: Promise<void>
   constructor(readonly id: string) {}
   registerService(_port: number, handler: typeof this.handler) { this.handler = handler; return () => { this.handler = undefined } }
-  async sendDatagram({ payload }: { dst: string; srcPort: number; dstPort: number; payload: Uint8Array }) {
+  async sendDatagram({ dst, payload }: { dst: string; srcPort: number; dstPort: number; payload: Uint8Array }) {
     this.sent.push(payload)
-    if (!this.drop) this.other?.handler?.({ src: this.id, payload })
+    if (!this.drop) (this.others?.get(dst) ?? this.other)?.handler?.({ src: this.id, payload })
     await this.gate
   }
 }
@@ -27,6 +29,34 @@ describe('FIPS calls', () => {
     b = new CallSession(eb, peer => peer === 'a' ? 'Alice' : undefined)
   })
   afterEach(() => { a.dispose(); b.dispose(); vi.useRealTimers() })
+  it.each([false, true])('records answered elsewhere on a sibling (locally accepted: %s)', (siblingAccepted: boolean) => {
+    a.dispose()
+    const ec = new Endpoint('c'); ec.other = ea
+    const c = new CallSession(ec, source => source === 'a' ? 'Alice' : undefined)
+    ea.others = new Map([['b', eb], ['c', ec]])
+    a = new CallSession(ea, source => ['b', 'c'].includes(source) ? 'Bob' : undefined)
+    try {
+      a.start('Bob', ['b', 'c'], true)
+      const callId = get(a.state)!.id
+      if (siblingAccepted) {
+        ec.drop = true
+        c.markMediaReady(); c.accept(true)
+        expect(get(c.state)?.connected).toBeDefined()
+        vi.advanceTimersByTime(1200)
+      }
+      a.markMediaReady(); b.markMediaReady(); b.accept(false)
+      expect(get(a.state)).toMatchObject({ status: 'active', peer: 'b', video: false })
+      expect(get(b.state)?.status).toBe('active')
+      expect(get(c.state)).toMatchObject({ status: 'ended', outcome: 'answered_elsewhere', video: false })
+      const history = callHistoryFromState(get(c.state)!)
+      expect(history.outcome).toBe('answered_elsewhere')
+      expect(history.answeredAt).toBeUndefined()
+      expect(history.durationSeconds).toBe(0)
+      expect(callHistoryLabel(history)).toBe('Answered on another device')
+      ea.handler?.({ src: 'c', payload: encodeCallControl({ v: 3, type: 'answer', call_id: callId, video: true }) })
+      expect(get(a.state)?.peer).toBe('b')
+    } finally { c.dispose() }
+  })
   it('counts answered duration only after accepted media is ready', () => {
     a.start('Bob', ['b'], true)
     b.accept(false)

@@ -1,6 +1,6 @@
 import type { CallState } from './callSession'
 
-export type CallOutcome = 'missed' | 'answered' | 'canceled' | 'declined'
+export type CallOutcome = 'missed' | 'answered' | 'canceled' | 'declined' | 'answered_elsewhere'
 export interface CallHistory {
   callId: string
   direction: 'incoming' | 'outgoing'
@@ -14,7 +14,7 @@ export interface CallHistory {
 }
 
 export function callHistoryFromState(state: CallState): CallHistory {
-  const answered = state.connected !== undefined
+  const answered = state.connected !== undefined && state.outcome !== 'answered_elsewhere'
   const endedAt = state.endedAt ?? state.connected ?? state.started
   return {
     callId: state.id,
@@ -30,6 +30,7 @@ export function callHistoryFromState(state: CallState): CallHistory {
 }
 
 export function callHistoryLabel(call: CallHistory): string {
+  if (call.outcome === 'answered_elsewhere') return 'Answered on another device'
   const kind = call.video ? 'video call' : 'voice call'
   const prefix = call.inProgress || call.outcome === 'answered'
     ? (call.direction === 'incoming' ? 'Incoming' : 'Outgoing')

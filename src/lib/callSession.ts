@@ -78,7 +78,11 @@ export class CallSession {
     if (!s || s.status === 'ended') return
     if (notify) this.broadcast(s.direction === 'incoming' && s.status === 'ringing' ? 'reject' : 'end')
     this.rememberEnded(s.id)
-    this.state.set({ ...s, status: 'ended', reason, endedAt: Date.now(), outcome: s.connected !== undefined ? 'answered' : outcome ?? (s.direction === 'incoming' ? 'missed' : 'canceled') })
+    const elsewhere = outcome === 'answered_elsewhere'
+    this.state.set({ ...s, status: 'ended', reason, endedAt: Date.now(),
+      connected: elsewhere ? undefined : s.connected,
+      outcome: elsewhere ? 'answered_elsewhere' : s.connected !== undefined ? 'answered' : outcome ?? (s.direction === 'incoming' ? 'missed' : 'canceled'),
+    })
     this.onEnded?.()
   }
   clear() { if (get(this.state)?.status === 'ended') this.state.set(null) }
@@ -165,7 +169,7 @@ export class CallSession {
     if (!s || s.id !== p.call_id || s.owner !== owner || !s.peers.includes(peer) || (s.peer && s.peer !== peer)) return
     this.lastHeard = Date.now()
     if (p.type === 'answer' && s.direction === 'outgoing' && s.status === 'ringing') {
-      for (const other of s.peers) if (other !== peer) this.send(other, { v: 3, type: 'end', call_id: s.id })
+      for (const other of s.peers) if (other !== peer) this.send(other, { v: 3, type: 'end', call_id: s.id, reason: 'answered_elsewhere', video: s.video && !!p.video })
       this.state.set({ ...s, status: 'active', connected: this.mediaReady ? Date.now() : undefined, peer, video: s.video && !!p.video, camera: s.camera && !!p.video, remoteVideo: s.video && !!p.video })
     } else if (p.type === 'nack' && s.status === 'active' && s.video) {
       void this.retransmit(s, p)
@@ -173,6 +177,9 @@ export class CallSession {
       this.onFeedback?.(p)
     } else if (p.type === 'keyframe' && s.status === 'active' && s.video) {
       this.onKeyframe?.()
+    } else if (p.type === 'end' && p.reason === 'answered_elsewhere' && s.direction === 'incoming') {
+      this.state.set({ ...s, video: s.video && (p.video ?? s.video) })
+      this.end('Answered on another device', false, 'answered_elsewhere')
     } else if (p.type === 'reject' || p.type === 'end') {
       if (!s.peer && p.type === 'reject' && s.peers.length > 1) this.state.set({ ...s, peers: s.peers.filter(x => x !== peer) })
       else this.end(p.type === 'reject' ? (p.reason === 'busy' ? 'Busy' : 'Call declined') : 'Call ended', false, p.type === 'reject' ? 'declined' : undefined)

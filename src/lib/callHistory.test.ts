@@ -16,6 +16,10 @@ describe('call history', () => {
     const answered = callHistoryFromState({ ...state, video: false, connected: 18_000 })
     expect(answered).toMatchObject({ outcome: 'answered', video: false, answeredAt: 18_000, durationSeconds: 32 })
     expect(callHistoryLabel(answered)).toBe('Incoming voice call')
+    const elsewhere = callHistoryFromState({ ...state, connected: 18_000, outcome: 'answered_elsewhere' })
+    expect(elsewhere).toMatchObject({ outcome: 'answered_elsewhere', durationSeconds: 0 })
+    expect(elsewhere.answeredAt).toBeUndefined()
+    expect(callHistoryLabel(elsewhere)).toBe('Answered on another device')
   })
   it('restores interrupted calls without counting time spent away as talking', () => {
     const ringing = callHistoryFromState({ ...state, status: 'ringing', endedAt: undefined })
