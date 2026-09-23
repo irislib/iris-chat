@@ -28,7 +28,12 @@ export class CallSession {
   private recoveryTimer: ReturnType<typeof setInterval>
   private unregister: () => void
   private timer: ReturnType<typeof setInterval>
-  constructor(private endpoint: CallEndpoint, private ownerForPeer: (peer: string) => string | undefined, private settings: () => Pick<CallSettings, 'voice' | 'video'> = () => ({ voice: true, video: true })) {
+  constructor(
+    private endpoint: CallEndpoint,
+    private ownerForPeer: (peer: string) => string | undefined,
+    private settings: () => Pick<CallSettings, 'voice' | 'video'> = () => ({ voice: true, video: true }),
+    private hasCallHistory: (owner: string, id: string) => boolean = () => false,
+  ) {
     this.unregister = endpoint.registerService(CALL_PORT, ({ src, payload }) => { this.receive(src, payload) })
     this.timer = setInterval(() => this.tick(), 1000)
     this.recoveryTimer = setInterval(() => {
@@ -129,6 +134,13 @@ export class CallSession {
       return
     }
     if (p.type === 'offer') {
+      // Persisted history outlives the in-memory tombstones. A duplicate of the
+      // current call still needs its normal answer/retransmission handling.
+      if ((!s || s.id !== p.call_id || s.owner !== owner) && this.hasCallHistory(owner, p.call_id)) {
+        this.rememberEnded(p.call_id)
+        this.send(peer, { v: 3, type: 'end', call_id: p.call_id })
+        return
+      }
       const settings = this.settings()
       if (p.video ? !settings.video && !settings.voice : !settings.voice) {
         this.rememberEnded(p.call_id)

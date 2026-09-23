@@ -50,7 +50,11 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   detachCalls()
   connectedPeers = peers
   connectCallPeers = connect
-  session = new CallSession(node, callOwnerForPeer, () => get(callSettings))
+  session = new CallSession(node, callOwnerForPeer, () => get(callSettings), (owner, id) =>
+    // Chat hydration loads its complete message history before admission.
+    Array.from(get(chats).values()).some(chat => chat.recipientPubkey === owner &&
+      chat.messages.some(message => message.call?.callId === id)),
+  )
   session.onEnded = stopMedia
   session.onMedia = frame => media?.receive(frame)
   session.onFeedback = feedback => media?.feedback(feedback)

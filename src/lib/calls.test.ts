@@ -19,19 +19,51 @@ vi.mock('./callMedia', () => ({ BrowserCallMedia: class {
   setQuality = vi.fn(async () => {})
   open = () => new Promise<void>(resolve => { fixture.media.push({ finish: resolve, stop: this.stop }) })
 } }))
-import { recordCallHistory } from './chat'
+import { chats, recordCallHistory } from './chat'
+import { callHistoryLabel, type CallHistory } from './callHistory'
 import { attachCalls, detachCalls, answerCall, callState } from './calls'
 import { callSettings } from './callSettings'
 
 describe('answer capture ownership', () => {
   beforeEach(() => {
     fixture.media.length = 0
+    chats.set(new Map([['contact', { id: 'contact', recipientPubkey: owner, mode: 'manager', messages: [] }]]))
     vi.mocked(recordCallHistory).mockClear()
     callSettings.set({ voice: true, video: true })
     attachCalls({ registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} }, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode, () => [peer])
   })
   afterEach(() => detachCalls())
   const offer = (id: string) => fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'offer', call_id: id, video: true }) })
+  it('does not ring a persisted call again after the session is recreated', () => {
+    const oldId = 'ab'.repeat(16), newId = 'cd'.repeat(16)
+    offer(oldId)
+    fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'end', call_id: oldId }) })
+    const finished = structuredClone(vi.mocked(recordCallHistory).mock.calls.at(-1)![1])
+    detachCalls()
+    const message = (call: CallHistory) => ({ id: `call:${call.callId}`, call,
+      content: callHistoryLabel(call), timestamp: call.startedAt, isMine: false })
+    // The normal storage load restores each conversation's complete history.
+    chats.set(new Map([
+      ['contact', { id: 'contact', recipientPubkey: owner, mode: 'manager', messages: [message(finished)] }],
+      ['other', { id: 'other', recipientPubkey: 'f'.repeat(64), mode: 'manager', messages: [message({ ...finished, callId: newId })] }],
+    ]))
+    attachCalls({ registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} }, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode, () => [peer])
+    vi.mocked(recordCallHistory).mockClear()
+    offer(oldId)
+    expect(get(callState)).toBeNull()
+    expect(recordCallHistory).not.toHaveBeenCalled()
+    // IDs belonging to a different authenticated person cannot suppress a call.
+    offer(newId)
+    expect(get(callState)?.id).toBe(newId)
+    const pending = vi.mocked(recordCallHistory).mock.calls.at(-1)![1]
+    chats.update(all => {
+      const chat = all.get('contact')!
+      all.set('contact', { ...chat, messages: [...chat.messages, message(pending)] })
+      return all
+    })
+    offer(newId)
+    expect(get(callState)?.status).toBe('ringing')
+  })
   it('does not create history from an unverified offer', () => {
     fixture.receive?.({ src: `02${'f'.repeat(64)}`, payload: encodeCallControl({ v: 3, type: 'offer', call_id: 'ab'.repeat(16), video: false }) })
     expect(get(callState)).toBeNull()
