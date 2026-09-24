@@ -92,7 +92,7 @@ jobs:
         run: pnpm run check
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install chromium
+        run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Run E2E tests
         run: pnpm run test:e2e

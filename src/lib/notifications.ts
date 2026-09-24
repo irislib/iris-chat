@@ -2,6 +2,7 @@
 import { get } from 'svelte/store'
 import { identity, ndk } from './identity'
 import { notificationSettings } from './notificationStore'
+import { getNotificationSupportError, requestNotificationPermission } from './notificationPermission'
 import { getInviteEphemeralPubkeys } from './chat'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { getNdrRuntime } from './privateChats'
@@ -163,7 +164,7 @@ let lastSyncedInviteRecipients: string[] = []
 
 // Get or create push subscription
 export async function getOrCreatePushSubscription(): Promise<PushSubscription | null> {
-  if (!('serviceWorker' in navigator) || !('Notification' in window)) {
+  if (getNotificationSupportError()) {
     return null
   }
 
@@ -256,13 +257,8 @@ function getInviteRecipients(): string[] {
 // Subscribe to DM notifications
 export async function subscribeToDMNotifications(): Promise<{ success: boolean; error?: string }> {
   try {
-    // Check permission
-    if (Notification.permission !== 'granted') {
-      const result = await Notification.requestPermission()
-      if (result !== 'granted') {
-        return { success: false, error: 'Notification permission denied' }
-      }
-    }
+    const permission = await requestNotificationPermission()
+    if (permission.error) return { success: false, error: permission.error }
 
     // Get push subscription
     const pushSubscription = await getOrCreatePushSubscription()

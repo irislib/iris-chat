@@ -25,6 +25,11 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'webkit-notifications',
+      testMatch: 'notification-permission.spec.ts',
+      use: { ...devices['iPhone 13'], defaultBrowserType: 'webkit' },
+    },
   ],
   webServer: {
     command: `pnpm run build && pnpm run preview --host 127.0.0.1 --port ${port} --strictPort`,

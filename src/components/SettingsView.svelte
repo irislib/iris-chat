@@ -1,5 +1,6 @@
 <script lang="ts">
   import { notificationSettings } from '../lib/notificationStore'
+  import { getNotificationSupportError, requestNotificationPermission } from '../lib/notificationPermission'
   import { subscribeToDMNotifications, unsubscribeFromDMNotifications, NotificationService, type NotificationSubscription } from '../lib/notifications'
   import { identity, getPrivkeyHex, updateOwnProfile } from '../lib/identity'
   import { nip19 } from 'nostr-tools'
@@ -52,6 +53,8 @@
 
   // Status indicators
   let notificationApiAvailable = $state(false)
+  let notificationSupportError = $state<string | null>(null)
+  let notificationStatus = $state<{ type: 'success' | 'error'; text: string } | null>(null)
   let permissionState = $state<NotificationPermission>('default')
   let serviceWorkerRunning = $state(false)
   let isSubscribed = $state(false)
@@ -346,6 +349,7 @@
   async function checkStatus() {
     // Check Notification API
     notificationApiAvailable = 'Notification' in window
+    notificationSupportError = getNotificationSupportError()
 
     // Check permission
     if (notificationApiAvailable) {
@@ -367,28 +371,28 @@
 
   async function handleToggleNotifications() {
     isLoading = true
-    statusMessage = null
+    notificationStatus = null
 
     try {
       if (!settings.enabled) {
         // Enable notifications
         const result = await subscribeToDMNotifications()
         if (result.success) {
-          statusMessage = { type: 'success', text: 'Notifications enabled' }
+          notificationStatus = { type: 'success', text: 'Notifications enabled' }
         } else {
-          statusMessage = { type: 'error', text: result.error || 'Failed to enable notifications' }
+          notificationStatus = { type: 'error', text: result.error || 'Failed to enable notifications' }
         }
       } else {
         // Disable notifications
         const result = await unsubscribeFromDMNotifications()
         if (result.success) {
-          statusMessage = { type: 'success', text: 'Notifications disabled' }
+          notificationStatus = { type: 'success', text: 'Notifications disabled' }
         } else {
-          statusMessage = { type: 'error', text: result.error || 'Failed to disable notifications' }
+          notificationStatus = { type: 'error', text: result.error || 'Failed to disable notifications' }
         }
       }
     } catch (error) {
-      statusMessage = { type: 'error', text: String(error) }
+      notificationStatus = { type: 'error', text: String(error) }
     }
 
     isLoading = false
@@ -396,23 +400,27 @@
   }
 
   async function handleRequestPermission() {
-    const result = await Notification.requestPermission()
-    permissionState = result
+    isLoading = true
+    notificationStatus = null
+    const result = await requestNotificationPermission()
+    permissionState = result.permission
+    if (result.error) notificationStatus = { type: 'error', text: result.error }
+    isLoading = false
   }
 
   async function handleSubscribe() {
     isLoading = true
-    statusMessage = null
+    notificationStatus = null
 
     try {
       const result = await subscribeToDMNotifications()
       if (result.success) {
-        statusMessage = { type: 'success', text: 'Subscribed to notifications' }
+        notificationStatus = { type: 'success', text: 'Subscribed to notifications' }
       } else {
-        statusMessage = { type: 'error', text: result.error || 'Failed to subscribe' }
+        notificationStatus = { type: 'error', text: result.error || 'Failed to subscribe' }
       }
     } catch (error) {
-      statusMessage = { type: 'error', text: String(error) }
+      notificationStatus = { type: 'error', text: String(error) }
     }
 
     isLoading = false
@@ -421,7 +429,7 @@
 
   async function handleSendTestNotification() {
     isLoading = true
-    statusMessage = null
+    notificationStatus = null
 
     try {
       if (permissionState === 'granted') {
@@ -437,12 +445,12 @@
             icon: appLogoUrl
           })
         }
-        statusMessage = { type: 'success', text: 'Test notification sent' }
+        notificationStatus = { type: 'success', text: 'Test notification sent' }
       } else {
-        statusMessage = { type: 'error', text: 'Permission not granted' }
+        notificationStatus = { type: 'error', text: 'Permission not granted' }
       }
     } catch (error) {
-      statusMessage = { type: 'error', text: String(error) }
+      notificationStatus = { type: 'error', text: String(error) }
     }
 
     isLoading = false
@@ -1137,7 +1145,7 @@
           <button
             class="w-12 h-6 rounded-full transition-colors relative {settings.enabled ? 'bg-primary' : 'bg-gray-600'} {isLoading ? 'opacity-50' : ''}"
             onclick={handleToggleNotifications}
-            disabled={isLoading}
+            disabled={isLoading || (!!notificationSupportError && !settings.enabled)}
             role="switch"
             aria-checked={settings.enabled}
             aria-label="Toggle DM notifications"
@@ -1147,6 +1155,15 @@
             ></span>
           </button>
         </div>
+
+        {#if notificationSupportError}
+          <p class="mt-3 text-sm text-gray-400">{notificationSupportError}</p>
+        {/if}
+        {#if notificationStatus}
+          <p class="mt-3 text-sm {notificationStatus.type === 'error' ? 'text-red-400' : 'text-green-500'}" role={notificationStatus.type === 'error' ? 'alert' : 'status'}>
+            {notificationStatus.text}
+          </p>
+        {/if}
 
         <!-- Status -->
         <div class="mt-4 pt-4 border-t border-surface-lighter space-y-3">
@@ -1166,7 +1183,9 @@
           <div class="flex items-center justify-between text-sm">
             <span class="text-gray-400">Permission</span>
             <span class="flex items-center gap-2">
-              {#if permissionState === 'granted'}
+              {#if notificationSupportError}
+                <span class="text-gray-400">Unavailable</span>
+              {:else if permissionState === 'granted'}
                 <span class="i-carbon-checkmark-filled text-green-500"></span>
                 <span class="text-green-500">Granted</span>
               {:else if permissionState === 'denied'}
@@ -1175,7 +1194,7 @@
               {:else}
                 <span class="i-carbon-warning-filled text-yellow-500"></span>
                 <span class="text-yellow-500">Not Requested</span>
-                <button class="btn-primary text-xs py-1 px-2" onclick={handleRequestPermission}>
+                <button class="btn-primary text-xs py-1 px-2" onclick={handleRequestPermission} disabled={isLoading}>
                   Allow
                 </button>
               {/if}
@@ -1204,7 +1223,7 @@
               {:else}
                 <span class="i-carbon-close-filled text-red-500"></span>
                 <span class="text-red-500">Not Subscribed</span>
-                {#if serviceWorkerRunning && permissionState === 'granted'}
+                {#if !notificationSupportError && serviceWorkerRunning && permissionState === 'granted'}
                   <button
                     class="btn-primary text-xs py-1 px-2"
                     onclick={handleSubscribe}
@@ -1223,7 +1242,7 @@
           <button
             class="btn-secondary w-full flex items-center justify-center"
             onclick={handleSendTestNotification}
-            disabled={permissionState !== 'granted' || isLoading}
+            disabled={!!notificationSupportError || permissionState !== 'granted' || isLoading}
           >
             <span class="i-carbon-notification mr-2"></span>
             Send Test Notification
