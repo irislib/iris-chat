@@ -23,7 +23,8 @@
     "test:e2e": "env -u NO_COLOR playwright test",
     "smoke:portable": "node ./scripts/smoke-iris-chat-portable.mjs",
     "publish:iris": "node ./scripts/publish-iris-build.mjs",
-    "release:iris": "node ./scripts/release-site.mjs"
+    "release:iris": "node ./scripts/release-site.mjs",
+    "bench:calls": "node scripts/bench-call-bitrate.mjs"
   },
   "devDependencies": {
     "@iconify-json/carbon": "^1.2.24",

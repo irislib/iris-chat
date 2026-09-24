@@ -300,10 +300,23 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     await shape(Infinity, 100)
     await expect.poll(async () => Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(beforeLoss + 30)
     await shape(Infinity)
-    const beforeLimitedFrames = Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))
     await shape(50000) // 400 kbit/s on direct FIPS data channels, including encrypted overhead.
     await expect.poll(async () => { const sample = await senderStats(); bandwidth.push({ phase: 'limited', ...sample }); return sample.target }, { timeout: 40000 }).toBeLessThan(450000)
-    await expect.poll(async () => Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))).toBeGreaterThan(beforeLimitedFrames + 10)
+    // A falling target alone can pass while the codec overshoots and video freezes.
+    await b.waitForTimeout(6000)
+    const windowStart = await senderStats()
+    const videoStart = Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))
+    const audioStart = Number(await b.getByTestId('call-screen').getAttribute('data-audio-frames'))
+    await b.waitForTimeout(6000)
+    const windowEnd = await senderStats()
+    const seconds = (windowEnd.at - windowStart.at) / 1000
+    const decodedFps = (Number(await b.getByTestId('call-screen').getAttribute('data-video-frames')) - videoStart) / seconds
+    const audioFps = (Number(await b.getByTestId('call-screen').getAttribute('data-audio-frames')) - audioStart) / seconds
+    const payloadBps = (windowEnd.bytes - windowStart.bytes) * 8 / seconds
+    bandwidth.push({ phase: 'sustained-limited', decodedFps, audioFps, payloadBps })
+    expect(decodedFps).toBeGreaterThanOrEqual(8)
+    expect(audioFps).toBeGreaterThanOrEqual(30)
+    expect(payloadBps).toBeLessThan(400000)
     const constrained = await senderStats()
     await shape(Infinity)
     await expect.poll(async () => { const sample = await senderStats(); bandwidth.push({ phase: 'restored', ...sample }); return sample.target }, { timeout: 40000 }).toBeGreaterThan(Math.max(500000, constrained.target * 1.3))

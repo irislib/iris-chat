@@ -79,7 +79,21 @@ unanswered local STUN, and both bootstrap servers stopped during the call:
 ```sh
 pnpm test:e2e e2e/calls.spec.ts --workers=1 --retries=0
 node scripts/test-call-codecs.mjs # Chromium + WebKit codecs, 1080p, Opus loss concealment
+pnpm bench:calls # Sustained Chromium + WebKit bandwidth/latency/decoder benchmark
 ```
+
+The bitrate benchmark runs production `BrowserCallMedia` and `CallSession` with
+real H.264/Opus codecs and moving synthetic camera input. A bounded datagram
+link shares 256/400/800 kbps between audio, video, control packets, repairs,
+and an allowance for encryption/network overhead. It also checks asymmetric
+links, recovery, 1% packet loss, jitter, and missing feedback. The last five
+seconds of each phase must sustain at least 8 decoded fps and 30 audio frames
+per second, p95 frame age under 400 ms, and no freeze longer than 1.5 seconds.
+Recovery must exceed 500 kbps. JSON measurements go to `work/calls/bitrate-bench.json`.
+Use `pnpm bench:calls chromium` or `webkit` for one engine, on an otherwise idle
+host. The separate browser call check above exercises actual encrypted FIPS
+transport and measures sustained video/audio delivery during a bandwidth cap.
+These local synthetic tests do not measure physical camera/display or Wi-Fi latency.
 
 ## Tests
 

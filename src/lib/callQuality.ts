@@ -25,9 +25,14 @@ export function callEncoding(settings: CallQualitySettings) {
 }
 
 /** Preserve camera orientation and aspect ratio; never upscale the captured image. */
-export function callVideoSize(settings: CallQualitySettings, capture?: { width?: number; height?: number }) {
+export function callVideoFramerate(settings: CallQualitySettings, bitrate = Infinity) {
+  return Math.min(callEncoding(settings).maxFramerate, bitrate < 200_000 ? 10 : bitrate < 500_000 ? 15 : 30)
+}
+export function callVideoSize(settings: CallQualitySettings, capture?: { width?: number; height?: number }, bitrate = Infinity) {
   const quality = callEncoding(settings), width = capture?.width || quality.width, height = capture?.height || quality.height
+  const longEdge = Math.min(quality.width, bitrate < 200_000 ? 256 : bitrate < 500_000 ? 480 : bitrate < 1_000_000 ? 960 : quality.width)
+  const shortEdge = longEdge * quality.height / quality.width
   const portrait = height > width
-  const scale = Math.min(1, (portrait ? quality.height : quality.width) / width, (portrait ? quality.width : quality.height) / height)
+  const scale = Math.min(1, (portrait ? shortEdge : longEdge) / width, (portrait ? longEdge : shortEdge) / height)
   return { width: Math.max(2, Math.floor(width * scale / 2) * 2), height: Math.max(2, Math.floor(height * scale / 2) * 2) }
 }

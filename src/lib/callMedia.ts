@@ -1,4 +1,4 @@
-import { callEncoding, callVideoSize, type CallQualitySettings } from './callQuality'
+import { callEncoding, callVideoFramerate, callVideoSize, type CallQualitySettings } from './callQuality'
 import { CallAdaptation } from './callAdaptation'
 import { callAudioWorklet } from './callAudioWorklet'
 import { CallOpus } from './callOpus'
@@ -45,7 +45,6 @@ export class BrowserCallMedia {
   private epoch = 0
   private audioSeq = 0
   private videoSeq = 0
-  private videoAttempts = new Map<number, number>()
   private videoSending = false
   private lastKey = -Infinity
   private forceKey = true
@@ -131,7 +130,7 @@ export class BrowserCallMedia {
   private videoConfig(): VideoEncoderConfig {
     const quality = callEncoding(this.quality)
     const capture = this.stream?.getVideoTracks()[0]?.getSettings()
-    return { codec: quality.codec, ...callVideoSize(this.quality, capture), bitrate: this.adaptation.target, framerate: quality.maxFramerate, latencyMode: 'realtime', bitrateMode: 'variable', avc: { format: 'annexb' } }
+    return { codec: quality.codec, ...callVideoSize(this.quality, capture, this.adaptation.target), bitrate: this.adaptation.target, framerate: callVideoFramerate(this.quality, this.adaptation.target), latencyMode: 'realtime', bitrateMode: 'constant', avc: { format: 'annexb' } }
   }
   private openVideo(stream: MediaStream, token: number) {
     const video = document.createElement('video'); video.muted = true; video.playsInline = true; video.srcObject = stream; void video.play().catch(() => {})
@@ -140,8 +139,10 @@ export class BrowserCallMedia {
     this.encodeCanvas = document.createElement('canvas')
     this.callbacks.remoteVideo(this.canvas)
     this.videoEncoder = new VideoEncoder({ output: chunk => {
-      const seq = this.videoAttempts.get(chunk.timestamp); this.videoAttempts.delete(chunk.timestamp)
-      if (token !== this.generation || !this.active || !this.camera || seq === undefined) return
+      if (token !== this.generation || !this.active || !this.camera) return
+      // Number encoded output, not capture attempts: codecs may skip input.
+      const seq = this.videoSeq++ >>> 0
+      this.adaptation.sentFrame()
       if (this.videoSending || (performance.now() - this.epoch) * 1000 - chunk.timestamp > 150000) { this.stats.droppedVideoFrames++; this.forceKey = true; return }
       const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes)
       if (bytes.length > 262144) { this.forceKey = true; return }
@@ -167,14 +168,12 @@ export class BrowserCallMedia {
     }, error: () => { if (token === this.generation) { this.needKey = true; this.requestKey() } } }
     this.videoDecoder = new VideoDecoder(this.decoderInit)
     this.videoDecoder.configure({ codec: 'avc1.42e028', optimizeForLatency: true })
-    let last = 0
+    let nextCapture = 0
     this.captureTimer = setInterval(() => {
       if (!this.active || !this.camera || token !== this.generation || video.readyState < 2) return
-      const now = performance.now(), quality = callEncoding(this.quality)
-      if (now - last < 1000 / quality.maxFramerate - 2) return
-      last = now
-      const seq = this.videoSeq++ >>> 0
-      this.adaptation.sentFrame()
+      const now = performance.now()
+      if (now + 2 < nextCapture) return
+      nextCapture = Math.max(now, nextCapture + 1000 / callVideoFramerate(this.quality, this.adaptation.target))
       if (!this.videoEncoder || this.videoEncoder.state !== 'configured' || this.videoEncoder.encodeQueueSize > 1 || this.videoSending) { this.stats.droppedVideoFrames++; return }
       const canvas = this.encodeCanvas!
       const config = this.videoConfig()
@@ -185,7 +184,6 @@ export class BrowserCallMedia {
       const frame = new VideoFrame(canvas, { timestamp })
       const keyFrame = this.forceKey || now - this.lastKey >= 1000
       if (keyFrame) { this.forceKey = false; this.lastKey = now }
-      this.videoAttempts.set(timestamp, seq)
       this.videoEncoder.encode(frame, { keyFrame }); frame.close()
     }, 10)
   }
@@ -209,7 +207,7 @@ export class BrowserCallMedia {
       if (this.lastRemoteVideo !== undefined && ((frame.seq - this.lastRemoteVideo) >>> 0) >= 0x80000000) return
       this.videoQueue.push({ frame, arrived: now })
       this.videoQueue.sort((a, b) => a.frame.timestamp - b.frame.timestamp)
-      if (this.videoQueue.length > 3) { this.videoQueue.shift(); this.needKey = true; this.requestKey() }
+      if (this.videoQueue.length > 8) { this.videoQueue.shift(); this.needKey = true; this.requestKey() }
     }
   }
   private playout() {
@@ -226,6 +224,12 @@ export class BrowserCallMedia {
       }
     }
     while (this.videoQueue.length && now - this.videoQueue[0].arrived >= 50) {
+      // Fragment repair can take longer than the normal playout buffer. Keep
+      // dependent frames briefly so a repaired IDR is not rejected as obsolete.
+      const first = this.videoQueue[0]
+      const missingReference = this.lastRemoteVideo === undefined ? !first.frame.key :
+        first.frame.seq !== ((this.lastRemoteVideo + 1) >>> 0)
+      if (missingReference && now - first.arrived < 200) break
       const { frame } = this.videoQueue.shift()!
       const gap = this.lastRemoteVideo !== undefined && frame.seq !== ((this.lastRemoteVideo + 1) >>> 0)
       if (gap) { this.needKey = true; this.requestKey() }
@@ -303,6 +307,6 @@ export class BrowserCallMedia {
     this.stream?.getTracks().forEach(track => track.stop()); this.stream = null
     if (this.capture) { this.capture.pause(); this.capture.srcObject = null; this.capture = undefined }
     this.canvas = undefined; this.encodeCanvas = undefined
-    this.audioQueue.clear(); this.videoQueue = []; this.videoAttempts.clear()
+    this.audioQueue.clear(); this.videoQueue = []
   }
 }
