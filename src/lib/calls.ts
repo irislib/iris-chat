@@ -23,6 +23,7 @@ let session: CallSession | null = null
 let runtimeCleanup: (() => void) | undefined
 let connectedPeers: () => string[] = () => []
 let connectCallPeers: ((owner: string) => Promise<void>) | undefined
+let wakeCallPeers: ((state: CallState) => Promise<void>) | undefined
 let starting = false
 const answersInFlight = new Set<string>()
 let media: BrowserCallMedia | null = null
@@ -51,7 +52,7 @@ function stopMedia() {
 export function knownCallDevices(owner: string): string[] {
   try { return getNdrRuntime().getKnownAppKeysSnapshots().find(s => s.ownerPubkey === owner)?.appKeys.getAllDevices().map(d => d.identityPubkey).filter(p => callOwnerForPeer(`02${p}`) === owner).slice(0, 16) ?? [] } catch { return [] }
 }
-export function attachCalls(node: FipsNode, peers: () => string[], connect?: (owner: string) => Promise<void>) {
+export function attachCalls(node: FipsNode, peers: () => string[], connect?: (owner: string) => Promise<void>, wake?: (state: CallState) => Promise<void>) {
   detachCalls()
   window.addEventListener('pointerdown', ringtone.unlock)
   window.addEventListener('keydown', ringtone.unlock)
@@ -59,6 +60,7 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   window.addEventListener('pagehide', clearAlerts)
   connectedPeers = peers
   connectCallPeers = connect
+  wakeCallPeers = wake
   session = new CallSession(node, callOwnerForPeer, () => get(callSettings), (owner, id) =>
     // Chat hydration loads its complete message history before admission.
     Array.from(get(chats).values()).some(chat => chat.recipientPubkey === owner &&
@@ -100,7 +102,7 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
 export function detachCalls() {
   session?.dispose()
   runtimeCleanup?.(); runtimeCleanup = undefined
-  session = null; connectCallPeers = undefined; stopMedia(); callState.set(null)
+  session = null; connectCallPeers = undefined; wakeCallPeers = undefined; stopMedia(); callState.set(null)
 }
 async function openMedia(video: boolean, capturedSession: CallSession, callId: string) {
   const token = ++generation
@@ -149,6 +151,8 @@ export async function startCall(owner: string, video: boolean) {
     // Authenticated device identities are routable even without a direct link.
     current.start(owner, [...adjacent, ...knownCallDevices(owner).map(device => `02${device.toLowerCase()}`)], video)
     startedId = get(current.state)?.id
+    const wakeState = get(current.state)
+    if (wakeState) void wakeCallPeers?.(wakeState).catch(() => {})
     // NAT traversal must not delay or prevent an offer on the existing FIPS route.
     if (!adjacent.length) void connectCallPeers?.(owner).catch(() => {})
     await openMedia(video, current, startedId!)

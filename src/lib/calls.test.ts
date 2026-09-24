@@ -51,6 +51,17 @@ describe('answer capture ownership', () => {
     expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ dst: seed }))
     expect(connect).toHaveBeenCalledWith(owner)
   })
+  it('sends one wakeup without waiting for push delivery', async () => {
+    const wake = vi.fn(() => new Promise<void>(() => {}))
+    attachCalls({ registerService: () => () => {}, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode,
+      () => [peer], undefined, wake)
+    const starting = startCall(owner, false)
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(1))
+    expect(wake).toHaveBeenCalledTimes(1)
+    expect(wake).toHaveBeenCalledWith(expect.objectContaining({ peers: [peer], direction: 'outgoing', status: 'ringing' }))
+    fixture.media[0].finish()
+    await starting
+  })
   it('does not ring a persisted call again after the session is recreated', () => {
     const oldId = 'ab'.repeat(16), newId = 'cd'.repeat(16)
     offer(oldId)

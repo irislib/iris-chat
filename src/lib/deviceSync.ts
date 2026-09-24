@@ -13,7 +13,10 @@ import { callConnectionSettings } from './callConnectionSettings'
 import { AppKeys } from 'nostr-double-ratchet'
 import { chats, currentChat, type ChatMessage, type ChatSession } from './chat'
 import { devices, type DeviceState } from './devices'
-import { getPubkey } from './identity'
+import { getPubkey, ndk } from './identity'
+import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { notificationSettings } from './notificationStore'
+import { sendCallWakeups } from './callPush'
 import { getNdrRuntime } from './privateChats'
 import {
   groups,
@@ -744,7 +747,8 @@ async function reconcileRuntime(
       const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
       if (peer) await node.connect(peer.remoteAddr)
     }))
-  })
+  }, call => sendCallWakeups(secretKey, call.peers, call.id, call.video,
+    get(notificationSettings).serverUrl, event => new NDKEvent(get(ndk), event).publish()))
   await node.start()
   if (run !== generation) {
     await tcp.dispose()
