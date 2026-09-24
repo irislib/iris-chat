@@ -245,6 +245,42 @@ test.describe('iris chat', () => {
   })
 
   test.describe('Chat input', () => {
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      test(`keeps sequential keyboard input and selection at ${viewport.width}px`, async ({ page }) => {
+        await page.setViewportSize(viewport)
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Go' }).click()
+        await registerDevice(page)
+        await page.getByRole('button', { name: 'New Chat' }).click()
+        await page.getByPlaceholder('Paste invite link').fill(nip19.npubEncode('b'.repeat(64)))
+        const input = page.getByPlaceholder('Type a message...')
+        await expect(input).toBeVisible()
+        await input.click()
+        let expected = ''
+        for (const character of 'hello from keyboard') {
+          // Use the focused element; locator.fill/press would hide lost focus.
+          await page.keyboard.type(character)
+          expected += character
+          await expect(input).toBeFocused()
+          await expect(input).toHaveValue(expected)
+          await page.waitForTimeout(100)
+        }
+        await page.keyboard.press('Shift+ArrowLeft')
+        const selection = await input.evaluate((element: HTMLTextAreaElement) =>
+          [element.selectionStart, element.selectionEnd])
+        await page.waitForTimeout(1100)
+        await expect(input).toBeFocused()
+        expect(await input.evaluate((element: HTMLTextAreaElement) =>
+          [element.selectionStart, element.selectionEnd])).toEqual(selection)
+        await page.keyboard.type('!')
+        expected = expected.slice(0, -1) + '!'
+        await expect(input).toHaveValue(expected)
+        await page.getByRole('button', { name: 'Send', exact: true }).click()
+        await expect(input).toHaveValue('')
+        await expect(page.getByText(expected, { exact: true }).first()).toBeVisible()
+      })
+    }
+
     test('should focus input when opening or switching chat', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)
       const page1 = await context1.newPage()
