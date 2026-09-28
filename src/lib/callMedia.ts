@@ -18,9 +18,8 @@ export interface CallMediaCallbacks {
   stats?(stats: CallMediaStats): void
   error?(error: Error): void
 }
-const audioConfig: AudioEncoderConfig & { opus: OpusEncoderConfig & { application: 'voip' } } = { codec: 'opus', sampleRate: 48000, numberOfChannels: 1, bitrate: 32000, opus: { format: 'opus', application: 'voip', frameDuration: 20000, useinbandfec: true, usedtx: true, packetlossperc: 10 } }
 const unsupported = () => new Error('This browser cannot make video calls. Update your browser and try again.')
-/** Browser codecs only: every encoded packet is sent through the authenticated call session. */
+/** Opus audio and browser H.264 packets travel through the authenticated call session. */
 export class BrowserCallMedia {
   stream: MediaStream | null = null
   private generation = 0
@@ -31,7 +30,6 @@ export class BrowserCallMedia {
   private muted = false
   private audioContext?: AudioContext
   private audioNode?: AudioWorkletNode
-  private audioEncoder?: AudioEncoder
   private opus?: CallOpus
   private videoEncoder?: VideoEncoder
   private videoDecoder?: VideoDecoder
@@ -40,9 +38,10 @@ export class BrowserCallMedia {
   private canvas?: HTMLCanvasElement
   private encodeCanvas?: HTMLCanvasElement
   private captureTimer?: ReturnType<typeof setInterval>
-  private audioTimer?: ReturnType<typeof setInterval>
+  private videoTimer?: ReturnType<typeof setInterval>
   private statsTimer?: ReturnType<typeof setInterval>
   private epoch = 0
+  private audioEpoch = 0
   private audioSeq = 0
   private videoSeq = 0
   private videoSending = false
@@ -54,7 +53,7 @@ export class BrowserCallMedia {
   private lastLocalRequest = -Infinity
   private audioQueue = new Map<number, MediaFrame>()
   private audioNext?: number
-  private audioDue = 0
+  private audioStart = 0
   private lastAudioAt = 0
   private videoQueue: Array<{ frame: MediaFrame; arrived: number }> = []
   private playoutOffset?: number
@@ -97,32 +96,26 @@ export class BrowserCallMedia {
       this.audioNode = node
       context.createMediaStreamSource(stream).connect(node)
       node.connect(context.destination)
-      const browserOpus = globalThis.AudioEncoder && (await AudioEncoder.isConfigSupported(audioConfig)).supported
-      if (token !== this.generation) throw new Error('Call ended')
-      if (browserOpus) {
-        const encoder = new AudioEncoder({ output: chunk => {
-          if (token !== this.generation || !this.active) return
-          const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes)
-          this.send({ kind: 1, seq: this.audioSeq++ >>> 0, timestamp: Math.max(0, chunk.timestamp), key: true, bytes })
-        }, error: error => this.fail(error, token) })
-        encoder.configure(audioConfig)
-        this.audioEncoder = encoder
-      }
-      if (token !== this.generation) throw new Error('Call ended')
       node.port.onmessage = event => {
-        if (token !== this.generation || !this.active || this.muted) return
+        if (event.data.playout !== undefined) {
+          node.port.postMessage({ played: true })
+          // The audio device supplies the clock. Late main-thread callbacks must
+          // not burst old requests into a second wall-clock-paced playback queue.
+          if (token === this.generation && context.currentTime - event.data.playout < .1) this.playAudio()
+          return
+        }
+        node.port.postMessage({ captured: true })
+        if (token !== this.generation || !this.active || this.muted || context.currentTime - event.data.capturedAt > .1) return
         const pcm: Float32Array<ArrayBuffer> = event.data.pcm
-        const timestamp = Math.max(0, Math.round((performance.now() - this.epoch) * 1000) - 20000)
-        if (this.audioEncoder) {
-          if (this.audioEncoder.encodeQueueSize > 3) return
-          const data = new AudioData({ format: 'f32-planar', sampleRate: 48000, numberOfFrames: pcm.length, numberOfChannels: 1, timestamp, data: pcm })
-          this.audioEncoder.encode(data); data.close()
-        } else this.send({ kind: 1, seq: this.audioSeq++ >>> 0, timestamp, key: true, bytes: opus.encode(pcm) })
+        const timestamp = Math.max(0, Math.round((event.data.capturedAt - this.audioEpoch) * 1000000))
+        this.send({ kind: 1, seq: this.audioSeq++ >>> 0, timestamp, key: true, bytes: opus.encode(pcm) })
       }
-      if (video) this.openVideo(stream, token)
+      if (video) {
+        this.openVideo(stream, token)
+        this.videoTimer = setInterval(() => this.playVideo(), 10)
+      }
       this.epoch = performance.now()
       this.feedbackAt = this.epoch
-      this.audioTimer = setInterval(() => this.playout(), 10)
       this.statsTimer = setInterval(() => this.report(), 1000)
       await context.resume()
     } catch (error) { if (token === this.generation) this.stop(); throw error }
@@ -198,10 +191,13 @@ export class BrowserCallMedia {
     this.playoutOffset ??= now + 60 - frame.timestamp / 1000
     if (frame.kind === 1) {
       if (this.audioNext !== undefined && ((frame.seq - this.audioNext) >>> 0) >= 0x80000000) return
+      if (this.audioNext === undefined || now - this.lastAudioAt > 200) { this.audioQueue.clear(); this.audioNext = frame.seq; this.audioStart = now + 40 }
       this.audioQueue.set(frame.seq, frame)
-      if (this.audioNext === undefined || now - this.lastAudioAt > 200) { this.audioNext = frame.seq; this.audioDue = now + 40 }
       this.lastAudioAt = now
-      while (this.audioQueue.size > 16) this.audioQueue.delete(this.audioQueue.keys().next().value!)
+      while (this.audioQueue.size > 16) {
+        const oldest = [...this.audioQueue.keys()].reduce((a, b) => ((a - this.audioNext!) >>> 0) < ((b - this.audioNext!) >>> 0) ? a : b)
+        this.audioQueue.delete(oldest); this.audioNext = (oldest + 1) >>> 0
+      }
     } else {
       this.feedbackFrames++; this.feedbackBytes += frame.bytes.length
       if (this.lastRemoteVideo !== undefined && ((frame.seq - this.lastRemoteVideo) >>> 0) >= 0x80000000) return
@@ -210,19 +206,23 @@ export class BrowserCallMedia {
       if (this.videoQueue.length > 8) { this.videoQueue.shift(); this.needKey = true; this.requestKey() }
     }
   }
-  private playout() {
+  private playAudio() {
     if (!this.active) return
     const now = performance.now()
-    if (this.audioNext !== undefined && now >= this.audioDue && now - this.lastAudioAt < 200) {
+    if (this.audioNext !== undefined && now >= this.audioStart && now - this.lastAudioAt < 200) {
       const frame = this.audioQueue.get(this.audioNext), next = this.audioQueue.get((this.audioNext + 1) >>> 0)
       const pcm = this.opus?.decode(frame?.bytes ?? next?.bytes, !frame && !!next)
-      this.audioQueue.delete(this.audioNext); this.audioNext = (this.audioNext + 1) >>> 0; this.audioDue = Math.max(this.audioDue + 20, now - 20)
+      this.audioQueue.delete(this.audioNext); this.audioNext = (this.audioNext + 1) >>> 0
       if (pcm) {
         if (frame) { this.stats.receivedAudio++; this.stats.audioEnergy += pcm.reduce((sum, sample) => sum + sample * sample, 0) / 48000 }
         else this.stats.concealedAudio++
         this.audioNode?.port.postMessage({ pcm }, [pcm.buffer])
       }
     }
+  }
+  private playVideo() {
+    if (!this.active) return
+    const now = performance.now()
     while (this.videoQueue.length && now - this.videoQueue[0].arrived >= 50) {
       // Fragment repair can take longer than the normal playout buffer. Keep
       // dependent frames briefly so a repaired IDR is not rejected as obsolete.
@@ -269,7 +269,7 @@ export class BrowserCallMedia {
     this.callbacks.stats?.({ ...this.stats })
   }
   setState(active: boolean, muted: boolean, camera: boolean, videoAllowed: boolean) {
-    if (active && !this.active) { this.epoch = performance.now(); this.adaptation.begin(this.epoch) }
+    if (active && !this.active) { this.epoch = performance.now(); this.audioEpoch = this.audioContext?.currentTime ?? 0; this.adaptation.begin(this.epoch) }
     if (camera && !this.camera) this.forceKey = true
     this.active = active; this.muted = muted; this.camera = camera && videoAllowed
     this.stream?.getAudioTracks().forEach(track => { track.enabled = active && !muted })
@@ -294,15 +294,14 @@ export class BrowserCallMedia {
   private fail(error: Error, token: number) { if (token === this.generation) this.callbacks.error?.(error) }
   stop() {
     this.generation++; this.active = false
-    clearInterval(this.captureTimer); clearInterval(this.audioTimer); clearInterval(this.statsTimer)
+    clearInterval(this.captureTimer); clearInterval(this.videoTimer); clearInterval(this.statsTimer)
     for (const [timer, frame] of this.renderTimers) { clearTimeout(timer); frame.close() }
     this.renderTimers.clear()
     this.audioNode?.disconnect(); this.audioNode = undefined
     void this.audioContext?.close().catch(() => {}); this.audioContext = undefined
-    if (this.audioEncoder && this.audioEncoder.state !== 'closed') this.audioEncoder.close()
     if (this.videoEncoder && this.videoEncoder.state !== 'closed') this.videoEncoder.close()
     if (this.videoDecoder && this.videoDecoder.state !== 'closed') this.videoDecoder.close()
-    this.audioEncoder = undefined; this.videoEncoder = undefined; this.videoDecoder = undefined
+    this.videoEncoder = undefined; this.videoDecoder = undefined
     this.opus?.close(); this.opus = undefined
     this.stream?.getTracks().forEach(track => track.stop()); this.stream = null
     if (this.capture) { this.capture.pause(); this.capture.srcObject = null; this.capture = undefined }

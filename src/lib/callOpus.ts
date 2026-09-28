@@ -1,7 +1,7 @@
 import createOpus, { type OpusModule } from './opus/opus.js'
 import wasmData from './opus/opus.wasm?url&inline'
 let binary: ArrayBuffer | undefined
-/** Pinned upstream libopus supplies explicit PLC and in-band FEC missing from WebCodecs. */
+/** One pinned libopus path preserves 20 ms capture timing and supplies PLC/in-band FEC. */
 export class CallOpus {
   private closed = false
   private constructor(private module: OpusModule) {}

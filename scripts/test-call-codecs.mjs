@@ -23,9 +23,10 @@ try {
         const { CallMediaReceiver, encodeCallMedia } = await import('/src/lib/callProtocol.ts')
         const id = '12'.repeat(16), receivers = [new CallMediaReceiver(), new CallMediaReceiver()]
         const peers = [], stats = [], sources = [], errors = [], captured = [], keyframes = [], audioContexts = []
+        let maxAudioDelayMs = 0
         document.getElementById('resume').onclick = () => { audioContexts.forEach(audio => { void audio.resume() }); peers.forEach(peer => { void peer.audioContext?.resume() }) }
         let dropAudio = false
-        window.codecEvidence = { stats, errors, captured, keyframes, get debug() { return { getMedia: String(navigator.mediaDevices.getUserMedia).slice(0, 100), contexts: audioContexts.map(a => a.state), peers: peers.map(p => ({ active: p.active, opus: !!p.opus, stream: !!p.stream, context: p.audioContext?.state, node: !!p.audioNode })) } }, get sources() { return sources.map(s => s.stream.getTracks().map(t => t.getSettings())) }, set dropAudio(value) { dropAudio = value }, stop() { peers.forEach(p => p.stop()); sources.forEach(s => { clearInterval(s.timer); s.stream.getTracks().forEach(t => t.stop()); void s.audio.close() }) } }
+        window.codecEvidence = { stats, errors, captured, keyframes, get maxAudioDelayMs() { return maxAudioDelayMs }, get debug() { return { getMedia: String(navigator.mediaDevices.getUserMedia).slice(0, 100), contexts: audioContexts.map(a => a.state), peers: peers.map(p => ({ active: p.active, opus: !!p.opus, stream: !!p.stream, context: p.audioContext?.state, node: !!p.audioNode })) } }, get sources() { return sources.map(s => s.stream.getTracks().map(t => t.getSettings())) }, set dropAudio(value) { dropAudio = value }, stop() { peers.forEach(p => p.stop()); sources.forEach(s => { clearInterval(s.timer); s.stream.getTracks().forEach(t => t.stop()); void s.audio.close() }) } }
         const capture = async constraints => {
           const audio = new AudioContext({ sampleRate: 48000 }), oscillator = audio.createOscillator(), gain = audio.createGain(), sink = audio.createMediaStreamDestination()
           audioContexts.push(audio); oscillator.frequency.value = 440; gain.gain.value = .2; oscillator.connect(gain); gain.connect(sink); oscillator.start(); void audio.resume()
@@ -40,6 +41,7 @@ try {
           try {
             for (let i = 0; i < 2; i++) peers.push(new BrowserCallMedia({
               send: async frame => {
+                if (frame.kind === 1) maxAudioDelayMs = Math.max(maxAudioDelayMs, (performance.now() - peers[i].epoch) - frame.timestamp / 1000)
                 const nals = []
                 if (frame.kind === 2 && frame.key) for (let at = 0; at < frame.bytes.length - 4; at++) {
                   if (frame.bytes[at] || frame.bytes[at + 1]) continue
@@ -68,6 +70,14 @@ try {
         assert.equal(stats.videoWidth, 1920); assert.equal(stats.videoHeight, 1080)
         assert.ok(stats.audioEnergy > .001)
       }
+      const beforeStall = result.stats.map(s => ({ audio: s.receivedAudio, video: s.receivedVideo }))
+      // The hardware render thread continues while UI work blocks JavaScript.
+      await page.evaluate(() => { const until = performance.now() + 350; while (performance.now() < until) {} })
+      await page.waitForFunction(before => window.codecEvidence.stats.every((s, i) => s.receivedAudio > before[i].audio + 20 && s.receivedVideo > before[i].video + 5), beforeStall, { timeout: 10000 }).catch(async error => {
+        console.error(name, 'UI-stall recovery failed', JSON.stringify(await page.evaluate(() => ({ stats: window.codecEvidence.stats, errors: window.codecEvidence.errors, debug: window.codecEvidence.debug, maxAudioDelayMs: window.codecEvidence.maxAudioDelayMs }))))
+        throw error
+      })
+      assert.ok(await page.evaluate(() => window.codecEvidence.maxAudioDelayMs < 160), `${name} must not transmit stale audio after a UI stall`)
       await page.evaluate(() => { window.codecEvidence.dropAudio = true })
       await page.waitForFunction(() => window.codecEvidence.stats.every(s => s.concealedAudio >= 5), { timeout: 10000 })
       result = await page.evaluate(() => ({ ...window.codecEvidence, stop: undefined }))
@@ -75,7 +85,7 @@ try {
       assert.ok(result.keyframes.some(nals => [5, 7, 8].every(nal => nals.includes(nal))), `${name} Annex B IDR includes SPS/PPS`)
       evidence.push({ name, ...result })
       await page.evaluate(() => window.codecEvidence.stop())
-      console.log(`${name}: bidirectional 1080p H.264 and Opus decode; loss concealment passed`)
+      console.log(`${name}: bidirectional 1080p H.264 and Opus decode; UI-stall recovery and loss concealment passed`)
     } finally { await browser.close() }
   }
 } finally { await server.close(); await mkdir('work/calls', { recursive: true }); await writeFile('work/calls/codecs.json', JSON.stringify(evidence, null, 2)) }
