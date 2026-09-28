@@ -1,213 +1,62 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { nativeAppPlatform, NATIVE_APP_DOWNLOAD_URL, NATIVE_APP_SUGGESTION_KEY, type NativeAppPlatform } from '../lib/nativeApp'
 
+  let { entryHref = null, compact = false }: { entryHref?: string | null; compact?: boolean } = $props()
+
+  let platform = $state<NativeAppPlatform | null>(null)
   let showPrompt = $state(false)
-  let isIOS = $state(false)
-  let isAndroid = $state(false)
-  let deferredPrompt = $state<BeforeInstallPromptEvent | null>(null)
+  let canOpenApp = $derived(platform === 'iPhone' || platform === 'iPad' || platform === 'Android' || platform === 'Mac')
 
-  interface BeforeInstallPromptEvent extends Event {
-    prompt(): Promise<void>
-    userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
-  }
-
-  const DISMISS_KEY = 'pwa-install-dismissed'
-
-  function isStandalone(): boolean {
-    return window.matchMedia('(display-mode: standalone)').matches ||
-           (window.navigator as Navigator & { standalone?: boolean }).standalone === true
-  }
-
-  function isMobile(): boolean {
-    return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-  }
-
-  function detectPlatform() {
-    const ua = navigator.userAgent
-    isIOS = /iPhone|iPad|iPod/i.test(ua) && !(window as Window & { MSStream?: unknown }).MSStream
-    isAndroid = /Android/i.test(ua)
+  function remember(value: 'seen' | 'dismissed' | 'opened') {
+    try { localStorage.setItem(NATIVE_APP_SUGGESTION_KEY, value) } catch { /* Storage may be unavailable. */ }
   }
 
   function dismiss() {
-    localStorage.setItem(DISMISS_KEY, Date.now().toString())
+    remember('dismissed')
     showPrompt = false
   }
 
-  async function handleInstallClick() {
-    if (!deferredPrompt) return
-
-    await deferredPrompt.prompt()
-    const { outcome } = await deferredPrompt.userChoice
-
-    if (outcome === 'accepted') {
-      dismiss()
-    }
-    deferredPrompt = null
+  function download() {
+    remember('opened')
+    showPrompt = false
   }
 
   onMount(() => {
-    // Don't show if already in standalone mode
-    if (isStandalone()) return
-
-    // Don't show on desktop
-    if (!isMobile()) return
-
-    // Check if previously dismissed (within last 7 days)
-    const dismissedAt = localStorage.getItem(DISMISS_KEY)
-    if (dismissedAt) {
-      const daysSinceDismiss = (Date.now() - parseInt(dismissedAt)) / (1000 * 60 * 60 * 24)
-      if (daysSinceDismiss < 7) return
-    }
-
-    detectPlatform()
-
-    // On iOS, just show the prompt with instructions
-    if (isIOS) {
-      // Only show on Safari (other iOS browsers can't install PWAs)
-      const isSafari = /Safari/i.test(navigator.userAgent) && !/CriOS|FxiOS|OPiOS/i.test(navigator.userAgent)
-      if (isSafari) {
-        showPrompt = true
-      }
-      return
-    }
-
-    // On Android, listen for beforeinstallprompt
-    if (isAndroid) {
-      const handler = (e: Event) => {
-        e.preventDefault()
-        deferredPrompt = e as BeforeInstallPromptEvent
-        showPrompt = true
-      }
-      window.addEventListener('beforeinstallprompt', handler)
-
-      // Also show manual instructions if no prompt after delay
-      const timeout = setTimeout(() => {
-        if (!deferredPrompt) {
-          showPrompt = true
-        }
-      }, 2000)
-
-      return () => {
-        window.removeEventListener('beforeinstallprompt', handler)
-        clearTimeout(timeout)
-      }
-    }
+    platform = nativeAppPlatform(navigator.userAgent, navigator.maxTouchPoints)
+    if (!platform) return
+    if (entryHref) { remember('seen'); return }
+    if (window.matchMedia('(display-mode: standalone)').matches ||
+        (navigator as Navigator & { standalone?: boolean }).standalone) return
+    if (compact) return
+    try { if (localStorage.getItem(NATIVE_APP_SUGGESTION_KEY)) return } catch { /* Keep onboarding usable. */ }
+    showPrompt = true
+    remember('seen')
   })
 </script>
 
-{#if showPrompt}
-  <div class="fixed inset-0 z-[100] bg-app text-apptext flex flex-col overflow-y-auto">
-    <!-- Content -->
-    <div class="flex-1 flex flex-col items-center justify-center px-6 text-center">
-      <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="Iris" class="w-20 h-20 mb-6" draggable="false" />
-
-      <h1 class="text-2xl font-bold mb-2">
-        Install <span class="text-primary">iris</span> chat
-      </h1>
-
-      <p class="text-gray-400 mb-8 max-w-xs">
-        Add to your home screen for push notifications and a better experience
-      </p>
-
-      {#if isIOS}
-        <!-- iOS Instructions -->
-        <div class="bg-surface rounded-2xl p-6 w-full max-w-sm">
-          <div class="flex items-start gap-4 mb-4">
-            <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-              <span class="text-primary font-bold">1</span>
-            </div>
-            <div class="text-left">
-              <p class="text-white">Tap the menu button</p>
-              <p class="text-gray-500 text-sm mt-1">
-                <span class="i-carbon-overflow-menu-horizontal text-primary"></span> then tap Share <span class="i-carbon-share text-primary"></span>
-              </p>
-            </div>
-          </div>
-
-          <div class="flex items-start gap-4 mb-4">
-            <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-              <span class="text-primary font-bold">2</span>
-            </div>
-            <div class="text-left">
-              <p class="text-white">Scroll down and tap</p>
-              <p class="text-gray-500 text-sm mt-1">
-                <span class="i-carbon-add-alt text-primary"></span> "Add to Home Screen"
-              </p>
-            </div>
-          </div>
-
-          <div class="flex items-start gap-4">
-            <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-              <span class="text-primary font-bold">3</span>
-            </div>
-            <div class="text-left">
-              <p class="text-white">Tap "Add"</p>
-              <p class="text-gray-500 text-sm mt-1">in the top right corner</p>
-            </div>
-          </div>
+{#if platform && (entryHref || (!compact && showPrompt))}
+  <aside aria-label="Iris app" class="flex items-center gap-3 text-sm shrink-0 {compact ? 'w-full px-4 py-2 bg-surface' : 'w-full max-w-md mt-4 px-2'}">
+    <span class="i-carbon-download text-primary text-xl shrink-0" aria-hidden="true"></span>
+    {#if entryHref && canOpenApp}
+      <div class="min-w-0 flex-1 py-1">
+        <div class="flex items-center flex-wrap gap-x-5 gap-y-1">
+          <a href={entryHref} class="inline-flex items-center min-h-11 text-primary font-medium hover:underline">Open in app</a>
+          <a href={NATIVE_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
+            class="inline-flex items-center min-h-11 text-primary hover:underline" onclick={download}>Get Iris for {platform}</a>
         </div>
-
-      {:else if isAndroid}
-        <!-- Android Instructions -->
-        {#if deferredPrompt}
-          <!-- Native install available -->
-          <button
-            class="btn-primary px-8 py-4 text-lg rounded-xl mb-4"
-            onclick={handleInstallClick}
-          >
-            <span class="i-carbon-download mr-2"></span>
-            Install App
-          </button>
-          <p class="text-gray-500 text-sm">
-            Tap to add iris chat to your home screen
-          </p>
-        {:else}
-          <!-- Manual instructions -->
-          <div class="bg-surface rounded-2xl p-6 w-full max-w-sm">
-            <div class="flex items-start gap-4 mb-4">
-              <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                <span class="text-primary font-bold">1</span>
-              </div>
-              <div class="text-left">
-                <p class="text-white">Tap the menu button</p>
-                <p class="text-gray-500 text-sm mt-1">
-                  <span class="i-carbon-overflow-menu-vertical text-primary"></span> in the top right of Chrome
-                </p>
-              </div>
-            </div>
-
-            <div class="flex items-start gap-4 mb-4">
-              <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                <span class="text-primary font-bold">2</span>
-              </div>
-              <div class="text-left">
-                <p class="text-white">Tap "Install app"</p>
-                <p class="text-gray-500 text-sm mt-1">or "Add to Home screen"</p>
-              </div>
-            </div>
-
-            <div class="flex items-start gap-4">
-              <div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                <span class="text-primary font-bold">3</span>
-              </div>
-              <div class="text-left">
-                <p class="text-white">Confirm installation</p>
-                <p class="text-gray-500 text-sm mt-1">Tap "Install" in the popup</p>
-              </div>
-            </div>
-          </div>
-        {/if}
+        <p class="text-xs text-muted">After installing, return here to open this chat.</p>
+      </div>
+    {:else}
+      <a href={NATIVE_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
+        class="flex-1 py-3 text-primary font-medium hover:underline" onclick={download}>
+        Get Iris for {platform}
+      </a>
+      {#if !entryHref}
+        <button aria-label="Dismiss app suggestion" class="w-11 h-11 rounded-full text-muted hover:bg-surface flex items-center justify-center shrink-0" onclick={dismiss}>
+          <span class="i-carbon-close text-xl" aria-hidden="true"></span>
+        </button>
       {/if}
-    </div>
-
-    <!-- Footer -->
-    <div class="p-6 text-center">
-      <button
-        class="text-gray-500 hover:text-gray-300 text-sm"
-        onclick={dismiss}
-      >
-        Maybe later
-      </button>
-    </div>
-  </div>
+    {/if}
+  </aside>
 {/if}

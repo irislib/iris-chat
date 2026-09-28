@@ -35,6 +35,7 @@
   } from '../lib/privateChats'
   import { parseCompactDeviceLinkRequest } from 'nostr-double-ratchet'
   import { getErrorMessage } from '../lib/utils'
+  import { NATIVE_APP_DOWNLOAD_URL } from '../lib/nativeApp'
 
   interface Props {
     onBack: () => void
@@ -1378,6 +1379,10 @@
       <div class="bg-surface rounded-lg p-4">
         <h2 class="font-medium mb-3">About iris chat</h2>
         <div class="text-sm text-gray-400 space-y-3">
+          <a href={NATIVE_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" class="inline-flex items-center gap-2 text-primary hover:underline">
+            <span class="i-carbon-download" aria-hidden="true"></span>
+            Get the native app
+          </a>
           <p>
             Encrypted chat powered by the
             <a href="https://en.wikipedia.org/wiki/Double_Ratchet_Algorithm" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">double ratchet algorithm</a>

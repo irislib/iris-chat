@@ -8,8 +8,9 @@
   import ProfileView from './components/ProfileView.svelte'
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import InstallPrompt from './components/InstallPrompt.svelte'
+  import { nativeAppChatHref } from './lib/nativeApp'
   import { identity, autoLogin, logout } from './lib/identity'
-  import { parseInviteFromHash, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
+  import { parseInviteFromHash, isLinkInvite, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToNdrRuntime } from './lib/disappearingMessages'
   import type { ChatSession } from './lib/chat'
@@ -36,6 +37,17 @@
   // View routing
   type View = 'chat' | 'settings' | 'profile' | 'createGroup' | 'groupDetails'
 
+  // Retain the original chat destination while web onboarding consumes its hash.
+  // Never persist the private invite or pass it to the downloads site.
+  function currentNativeEntryHref() {
+    const invite = parseInviteFromHash()
+    return invite && !isLinkInvite(invite) ? nativeAppChatHref(window.location.href) : null
+  }
+  let nativeEntryHref = $state(currentNativeEntryHref())
+  function clearNativeEntry() {
+    if (nativeEntryHref) setHashSilently('')
+    nativeEntryHref = null
+  }
   let loggedIn = $state(false)
   let initializing = $state(true)
   let selectedChat = $state<ChatSession | null>(null)
@@ -92,6 +104,7 @@
 
   // Navigate to a view with history
   function navigateTo(view: View, push = true, pubkey?: string, groupId?: string) {
+    clearNativeEntry()
     currentView = view
     if (view === 'profile' && pubkey) {
       profilePubkey = pubkey
@@ -417,6 +430,7 @@
   }
 
   function handleSelectChat(chat: ChatSession) {
+    clearNativeEntry()
     selectedChat = chat
     currentChat.set(chat)
     selectedGroupId = null
@@ -431,6 +445,9 @@
   }
 
   function handleChatJoined(event: CustomEvent<{ chat: ChatSession }>) {
+    // Keep the shared destination in this tab after web onboarding, including
+    // if the browser reloads the tab while the user is installing the app.
+    if (nativeEntryHref) setHashSilently(new URL(nativeEntryHref).hash)
     selectedChat = event.detail.chat
     currentChat.set(event.detail.chat)
     if (currentView !== 'chat') {
@@ -444,6 +461,7 @@
   }
 
   function handleNewChat() {
+    clearNativeEntry()
     selectedChat = null
     currentChat.set(null)
     selectedGroupId = null
@@ -454,6 +472,7 @@
   }
 
   function handleBack() {
+    clearNativeEntry()
     selectedChat = null
     currentChat.set(null)
     selectedGroupId = null
@@ -536,6 +555,8 @@
   }
 </script>
 
+<svelte:window onhashchange={() => nativeEntryHref = currentNativeEntryHref()} />
+
 <main class="min-h-[100dvh] h-[100dvh] bg-app text-apptext overflow-hidden">
   {#if initializing}
     <div class="h-full flex items-center justify-center">
@@ -565,10 +586,12 @@
           <p class="text-gray-400 mt-2">Secure, private messaging</p>
         </div>
         <LoginView onlogin={handleLogin} />
+        <InstallPrompt entryHref={nativeEntryHref} />
       </div>
     </div>
   {:else}
     <div class="h-full flex flex-col">
+      <InstallPrompt entryHref={nativeEntryHref} compact />
       <!-- Notification prompt -->
       <NotificationPrompt />
 
@@ -637,8 +660,6 @@
     </div>
   {/if}
 
-  <!-- PWA Install Prompt -->
-  <InstallPrompt />
 </main>
 
 <CallView />
