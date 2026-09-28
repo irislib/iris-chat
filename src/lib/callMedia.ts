@@ -41,7 +41,6 @@ export class BrowserCallMedia {
   private videoTimer?: ReturnType<typeof setInterval>
   private statsTimer?: ReturnType<typeof setInterval>
   private epoch = 0
-  private audioEpoch = 0
   private audioSeq = 0
   private videoSeq = 0
   private videoSending = false
@@ -55,6 +54,7 @@ export class BrowserCallMedia {
   private audioNext?: number
   private audioStart = 0
   private lastAudioAt = 0
+  private lastAudioSequence?: number
   private videoQueue: Array<{ frame: MediaFrame; arrived: number }> = []
   private playoutOffset?: number
   private renderTimers = new Map<ReturnType<typeof setTimeout>, VideoFrame>()
@@ -105,9 +105,12 @@ export class BrowserCallMedia {
           return
         }
         node.port.postMessage({ captured: true })
-        if (token !== this.generation || !this.active || this.muted || context.currentTime - event.data.capturedAt > .1) return
+        const captureAge = Math.max(0, context.currentTime - event.data.capturedAt)
+        if (token !== this.generation || !this.active || this.muted || captureAge > .1) return
         const pcm: Float32Array<ArrayBuffer> = event.data.pcm
-        const timestamp = Math.max(0, Math.round((event.data.capturedAt - this.audioEpoch) * 1000000))
+        // AudioContext time pauses during interruptions. Map sample age onto the
+        // same call clock as video instead of accumulating a permanent offset.
+        const timestamp = Math.max(0, Math.round((performance.now() - this.epoch) * 1000 - captureAge * 1000000))
         this.send({ kind: 1, seq: this.audioSeq++ >>> 0, timestamp, key: true, bytes: opus.encode(pcm) })
       }
       if (video) {
@@ -190,8 +193,14 @@ export class BrowserCallMedia {
     this.stats.receivedBytes += frame.bytes.length
     this.playoutOffset ??= now + 60 - frame.timestamp / 1000
     if (frame.kind === 1) {
-      if (this.audioNext !== undefined && ((frame.seq - this.audioNext) >>> 0) >= 0x80000000) return
-      if (this.audioNext === undefined || now - this.lastAudioAt > 200) { this.audioQueue.clear(); this.audioNext = frame.seq; this.audioStart = now + 40 }
+      const sinceReceived = this.lastAudioSequence === undefined ? 1 : (frame.seq - this.lastAudioSequence) >>> 0
+      if (this.audioNext === undefined || now - this.lastAudioAt > 200) {
+        // Concealment can advance beyond the sender's sequence while muted.
+        // Restart from fresh speech, but never from a delayed duplicate.
+        if (sinceReceived === 0 || sinceReceived >= 0x80000000) return
+        this.audioQueue.clear(); this.audioNext = frame.seq; this.audioStart = now + 40
+      } else if (((frame.seq - this.audioNext) >>> 0) >= 0x80000000) return
+      if (sinceReceived < 0x80000000) this.lastAudioSequence = frame.seq
       this.audioQueue.set(frame.seq, frame)
       this.lastAudioAt = now
       while (this.audioQueue.size > 16) {
@@ -269,7 +278,7 @@ export class BrowserCallMedia {
     this.callbacks.stats?.({ ...this.stats })
   }
   setState(active: boolean, muted: boolean, camera: boolean, videoAllowed: boolean) {
-    if (active && !this.active) { this.epoch = performance.now(); this.audioEpoch = this.audioContext?.currentTime ?? 0; this.adaptation.begin(this.epoch) }
+    if (active && !this.active) { this.epoch = performance.now(); this.adaptation.begin(this.epoch) }
     if (camera && !this.camera) this.forceKey = true
     this.active = active; this.muted = muted; this.camera = camera && videoAllowed
     this.stream?.getAudioTracks().forEach(track => { track.enabled = active && !muted })

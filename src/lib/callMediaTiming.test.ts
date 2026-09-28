@@ -12,16 +12,18 @@ vi.mock('./callOpus', () => ({ CallOpus: { open: async () => codec } }))
 let node: { port: { onmessage?: (event: { data: object }) => void; postMessage: ReturnType<typeof vi.fn> } }
 let media: BrowserCallMedia
 let send: ReturnType<typeof vi.fn>
+let audioClockLag = 0
 const audio = (seq: number): MediaFrame => ({ kind: 1, seq, timestamp: seq * 20000, key: true, bytes: new Uint8Array([seq]) })
 const event = (data: object) => node.port.onmessage!({ data })
 
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] })
   vi.clearAllMocks()
+  audioClockLag = 0
   const track = { enabled: false, stop: vi.fn() }
   vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [] }) } })
   vi.stubGlobal('AudioContext', class {
-    get currentTime() { return performance.now() / 1000 }
+    get currentTime() { return (performance.now() - audioClockLag) / 1000 }
     audioWorklet = { addModule: async () => {} }
     createMediaStreamSource = () => ({ connect: () => {} })
     resume = async () => {}
@@ -84,5 +86,40 @@ describe('device-paced browser call media', () => {
     expect(node.port.postMessage).toHaveBeenCalledWith({ played: true })
     event({ playout: .16 })
     expect(codec.decode).toHaveBeenCalledOnce()
+  })
+
+  it.each([0, 0xffffffff])('accepts the first speech after a mute even when concealment advanced sequence %i', (firstSeq: number) => {
+    media.receive({ ...audio(firstSeq), timestamp: 0 })
+    for (let time = 20; time <= 180; time += 20) {
+      vi.advanceTimersByTime(20)
+      event({ playout: time / 1000 })
+    }
+    vi.advanceTimersByTime(820)
+    codec.decode.mockClear()
+    const resumedSeq = (firstSeq + 1) >>> 0
+    media.receive({ ...audio(resumedSeq), timestamp: 1000000 })
+    vi.advanceTimersByTime(40)
+    event({ playout: 1.04 })
+    expect(codec.decode).toHaveBeenCalledExactlyOnceWith(new Uint8Array([resumedSeq]), false)
+  })
+
+  it('does not restart playout for an old duplicate after an idle gap', () => {
+    media.receive(audio(0))
+    vi.advanceTimersByTime(40)
+    event({ playout: .04 })
+    vi.advanceTimersByTime(960)
+    codec.decode.mockClear()
+    media.receive(audio(0))
+    vi.advanceTimersByTime(40)
+    event({ playout: 1.04 })
+    expect(codec.decode).not.toHaveBeenCalled()
+  })
+
+  it('keeps audio on the shared call timeline after the audio device clock pauses', () => {
+    audioClockLag = 1000
+    vi.advanceTimersByTime(1020)
+    event({ pcm: new Float32Array(960), capturedAt: 0 })
+    expect(send).toHaveBeenCalledOnce()
+    expect(send.mock.calls[0][0].timestamp).toBe(1000000)
   })
 })
