@@ -291,7 +291,7 @@ index b2b9f7d..3f05932 100644
  
      if (userRecord) {
 diff --git a/src/session-manager/SessionManagerRecords.ts b/src/session-manager/SessionManagerRecords.ts
-index 5fed8d8..7aebd35 100644
+index 5fed8d8..036a1c7 100644
 --- a/src/session-manager/SessionManagerRecords.ts
 +++ b/src/session-manager/SessionManagerRecords.ts
 @@ -13,6 +13,7 @@ import {
@@ -314,10 +314,21 @@ index 5fed8d8..7aebd35 100644
    protected getOrCreateUserRecord(userPubkey: string): UserRecordActor {
      let rec = this.userRecords.get(userPubkey);
      if (!rec) {
-@@ -180,16 +185,36 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
+@@ -180,16 +185,47 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
    }
  
    protected processDirectMessageEvent(event: VerifiedEvent): boolean {
++    // Shared ratchet authors can deliver another device's encrypted copy. The
++    // signed outer recipient is routing metadata; p-less legacy messages and
++    // owner-addressed copies still need the normal authenticated decrypt path.
++    const recipients = event.tags.filter((tag) => tag[0] === "p" && tag[1]);
++    if (recipients.length > 0 && !recipients.some((tag) =>
++      tag[1] === this.deviceId || tag[1] === this.ourPublicKey || tag[1] === this.ownerPublicKey,
++    )) {
++      this.pendingDirectMessages.delete(event.id);
++      return true;
++    }
++
 +    // Separate relay subscriptions can supply new objects for the same envelope.
 +    // Only successfully delivered plaintext is deduplicated; missing keys remain retryable.
 +    if (this.decryptedEventIds.has(event.id)) return true;
@@ -451,7 +462,7 @@ index 74d9834..567c9e4 100644
 +{"version":3,"file":"groupInternals.d.ts","sourceRoot":"","sources":["../../src/group/groupInternals.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,iBAAiB,CAAC;AAE7D,MAAM,WAAW,uBAAuB;IACtC,KAAK,EAAE,MAAM,CAAC;IACd,YAAY,EAAE,qBAAqB,CAAC;IACpC,UAAU,EAAE,MAAM,EAAE,CAAC;IACrB,oFAAoF;IACpF,iBAAiB,CAAC,EAAE,MAAM,EAAE,CAAC;CAC9B;AAED,wBAAgB,SAAS,IAAI,MAAM,CAIlC;AAED,wBAAgB,OAAO,CAAC,KAAK,EAAE,MAAM,GAAG,OAAO,CAE9C"}
 \ No newline at end of file
 diff --git a/dist/nostr-double-ratchet.es.js b/dist/nostr-double-ratchet.es.js
-index 8debad6..5338efe 100644
+index 8debad6..3085954 100644
 --- a/dist/nostr-double-ratchet.es.js
 +++ b/dist/nostr-double-ratchet.es.js
 @@ -1,122 +1,122 @@
@@ -9897,7 +9908,7 @@ index 8debad6..5338efe 100644
            }), this.notifyMessagePushAuthorsChanged();
          }
        },
-@@ -7609,170 +7628,181 @@ class Hy extends Gy {
+@@ -7609,170 +7628,186 @@ class Hy extends Gy {
        ourDeviceId: this.deviceId,
        ourOwnerPubkey: this.ownerPublicKey,
        identityKey: this.identityKey
@@ -10011,34 +10022,37 @@ index 8debad6..5338efe 100644
 -        r && this.pendingDirectMessages.delete(r);
 +        const n = this.pendingDirectMessages.keys().next().value;
 +        n && this.pendingDirectMessages.delete(n);
-+      }
-+      this.pendingDirectMessages.set(t.id, t);
-+    }
-+  }
-+  processDirectMessageEvent(t) {
-+    if (this.decryptedEventIds.has(t.id)) return !0;
-+    const n = [], i = [];
-+    for (const s of this.userRecords.values())
-+      for (const o of s.devices.values())
-+        ([o.activeSession, ...o.inactiveSessions].some(
-+          (u) => u && _a(u).includes(t.pubkey)
-+        ) ? n : i).push(o);
-+    for (const s of [...n, ...i])
-+      if (s.processReceivedEvent(t)) {
-+        if (this.decryptedEventIds.add(t.id), this.decryptedEventIds.size > Hy) {
-+          const o = this.decryptedEventIds.values().next().value;
-+          o && this.decryptedEventIds.delete(o);
-+        }
-+        return this.syncLegacyDirectMessageSubscription(), this.pendingDirectMessages.delete(t.id), !0;
        }
 -      this.pendingDirectMessages.set(e.id, e);
--    }
--  }
++      this.pendingDirectMessages.set(t.id, t);
+     }
+   }
 -  processDirectMessageEvent(e) {
 -    for (const r of this.userRecords.values())
 -      for (const n of r.devices.values())
 -        if (n.processReceivedEvent(e))
 -          return this.syncLegacyDirectMessageSubscription(), this.pendingDirectMessages.delete(e.id), !0;
++  processDirectMessageEvent(t) {
++    const n = t.tags.filter((o) => o[0] === "p" && o[1]);
++    if (n.length > 0 && !n.some(
++      (o) => o[1] === this.deviceId || o[1] === this.ourPublicKey || o[1] === this.ownerPublicKey
++    ))
++      return this.pendingDirectMessages.delete(t.id), !0;
++    if (this.decryptedEventIds.has(t.id)) return !0;
++    const i = [], s = [];
++    for (const o of this.userRecords.values())
++      for (const a of o.devices.values())
++        ([a.activeSession, ...a.inactiveSessions].some(
++          (d) => d && _a(d).includes(t.pubkey)
++        ) ? i : s).push(a);
++    for (const o of [...i, ...s])
++      if (o.processReceivedEvent(t)) {
++        if (this.decryptedEventIds.add(t.id), this.decryptedEventIds.size > Hy) {
++          const a = this.decryptedEventIds.values().next().value;
++          a && this.decryptedEventIds.delete(a);
++        }
++        return this.syncLegacyDirectMessageSubscription(), this.pendingDirectMessages.delete(t.id), !0;
++      }
      return !1;
    }
    retryPendingDirectMessages() {
@@ -10183,7 +10197,7 @@ index 8debad6..5338efe 100644
    /** Enable or disable adoption of incoming kind-10448 chat settings. */
    setAutoAdoptChatSettings(e) {
      this.autoAdoptChatSettings = e;
-@@ -7789,33 +7819,33 @@ class zy extends Hy {
+@@ -7789,33 +7824,33 @@ class zy extends Hy {
      ).map((e) => ({
        ownerPubkey: e.publicKey,
        appKeys: new _(
@@ -10227,7 +10241,7 @@ index 8debad6..5338efe 100644
      if (!n)
        return [];
      const i = /* @__PURE__ */ new Set();
-@@ -7832,7 +7862,7 @@ class zy extends Hy {
+@@ -7832,7 +7867,7 @@ class zy extends Hy {
      return this.processReceivedEvent(e);
    }
    processReceivedEvent(e) {
@@ -10236,7 +10250,7 @@ index 8debad6..5338efe 100644
        this.retryPendingDirectMessages();
      }), !0) : e.kind === nt ? (this.processInviteResponseEvent(e).then(() => {
        this.retryPendingDirectMessages();
-@@ -7842,7 +7872,7 @@ class zy extends Hy {
+@@ -7842,7 +7877,7 @@ class zy extends Hy {
      return this.getOrCreateUserRecord(e.pubkey).processAppKeysEvent(e);
    }
    async processInviteResponseEvent(e) {
@@ -10245,7 +10259,7 @@ index 8debad6..5338efe 100644
      if (this.processedInviteResponses.has(e.id) || this.pendingInviteResponses.has(e.id))
        return !1;
      try {
-@@ -7864,12 +7894,12 @@ class zy extends Hy {
+@@ -7864,12 +7899,12 @@ class zy extends Hy {
          inviteeSessionPublicKey: i.inviteeSessionPublicKey,
          ephemeralPrivateKey: n,
          sharedSecret: this.inviteKeys.sharedSecret
@@ -10260,7 +10274,7 @@ index 8debad6..5338efe 100644
        return this.installInviteResponseSession(o, c) || (this.queuePendingInviteResponse(o), await this.setupUser(s).catch(() => {
        })), !0;
      } catch {
-@@ -7877,19 +7907,19 @@ class zy extends Hy {
+@@ -7877,19 +7912,19 @@ class zy extends Hy {
      }
    }
    async processInviteEvent(e) {
@@ -10284,7 +10298,7 @@ index 8debad6..5338efe 100644
        }));
      }
      return i;
-@@ -7899,28 +7929,28 @@ class zy extends Hy {
+@@ -7899,28 +7934,28 @@ class zy extends Hy {
      await this.expirationSettings.setDefault(e);
    }
    /** Set, disable, or clear the expiration override for one peer. */
@@ -10321,7 +10335,7 @@ index 8debad6..5338efe 100644
      }));
    }
    async deleteChat(e) {
-@@ -7928,19 +7958,20 @@ class zy extends Hy {
+@@ -7928,19 +7963,20 @@ class zy extends Hy {
    }
    async deleteUser(e) {
      await this.init();
@@ -10348,7 +10362,7 @@ index 8debad6..5338efe 100644
    }
    async queuedMessageDiagnostics(e) {
      return await this.init(), Uy({
-@@ -7951,16 +7982,16 @@ class zy extends Hy {
+@@ -7951,16 +7987,16 @@ class zy extends Hy {
      });
    }
    async flushMessageQueue(e) {
@@ -10370,7 +10384,7 @@ index 8debad6..5338efe 100644
          if (!a)
            return;
          await this.emitPublish(a), ds(
-@@ -7972,11 +8003,11 @@ class zy extends Hy {
+@@ -7972,11 +8008,11 @@ class zy extends Hy {
        } catch {
        }
    }
@@ -10384,7 +10398,7 @@ index 8debad6..5338efe 100644
        ), [i] = n;
        if (!i)
          return;
-@@ -7989,15 +8020,15 @@ class zy extends Hy {
+@@ -7989,15 +8025,15 @@ class zy extends Hy {
      }
    }
  }
@@ -10403,7 +10417,7 @@ index 8debad6..5338efe 100644
        e.purpose || "chat",
        s,
        n,
-@@ -8006,7 +8037,7 @@ class Vy extends zy {
+@@ -8006,7 +8042,7 @@ class Vy extends zy {
      ].join(":"), a = this.inviteAcceptPromises.get(o);
      if (a)
        return a;
@@ -10412,7 +10426,7 @@ index 8debad6..5338efe 100644
        deviceId: n,
        explicitSameDeviceOwnerHint: i,
        claimedOwnerPublicKey: s
-@@ -8018,7 +8049,7 @@ class Vy extends zy {
+@@ -8018,7 +8054,7 @@ class Vy extends zy {
        this.inviteAcceptPromises.get(o) === c && this.inviteAcceptPromises.delete(o);
      }
    }
@@ -10421,7 +10435,7 @@ index 8debad6..5338efe 100644
      var U, G;
      const { deviceId: i, explicitSameDeviceOwnerHint: s, claimedOwnerPublicKey: o } = n;
      let a = o, c = null, u = !1;
-@@ -8026,10 +8057,10 @@ class Vy extends zy {
+@@ -8026,10 +8062,10 @@ class Vy extends zy {
        const R = ((U = this.userRecords.get(o)) == null ? void 0 : U.appKeys) || await this.fetchAppKeys(o, 50).catch(
          () => null
        ) || void 0;
@@ -10434,7 +10448,7 @@ index 8debad6..5338efe 100644
            devicePubkey: i,
            claimedOwnerPublicKey: o,
            invitePurpose: e.purpose,
-@@ -8052,20 +8083,20 @@ class Vy extends zy {
+@@ -8052,20 +8088,20 @@ class Vy extends zy {
      ];
      if (e.purpose === "link" && f.length > 0)
        return await h(), { ownerPublicKey: a, deviceId: i, session: f[0] };
@@ -10462,7 +10476,7 @@ index 8debad6..5338efe 100644
        (G = this.userRecords.get(this.ownerPublicKey)) == null ? void 0 : G.ownerProofForDevice(this.deviceId)
      ), Y = this.upsertDeviceRecord(d, i);
      return this.delegateToOwner.set(i, a), Y.installSession(O, !1, { preferActive: !0 }), await this.emitPublish(B), await this.sendInviteBootstrap(O, i), e.purpose === "link" && a === this.ownerPublicKey && await this.sendLinkBootstrap(a, i), await this.flushMessageQueue(i).catch(() => {
-@@ -8077,12 +8108,12 @@ class Vy extends zy {
+@@ -8077,12 +8113,12 @@ class Vy extends zy {
        return this.ownerPublicKey;
    }
  }
@@ -10478,7 +10492,7 @@ index 8debad6..5338efe 100644
        n,
        a,
        c,
-@@ -8092,64 +8123,63 @@ class mr extends Vy {
+@@ -8092,64 +8128,63 @@ class mr extends Vy {
      );
      return u.legacyNostrSubscribe = void 0, u.legacyNostrPublish = void 0, u;
    }
@@ -10584,7 +10598,7 @@ index 8debad6..5338efe 100644
        defaultExpiration: this.expirationSettings.default,
        peerExpiration: this.expirationSettings.peer(e),
        hasPeerExpiration: this.expirationSettings.hasPeer(e),
-@@ -8158,7 +8188,7 @@ class mr extends Vy {
+@@ -8158,7 +8193,7 @@ class mr extends Vy {
      });
      const u = St({
        kind: i,
@@ -10593,7 +10607,7 @@ index 8debad6..5338efe 100644
        tags: a,
        pubkey: this.ourPublicKey,
        nowMs: o,
-@@ -8169,11 +8199,11 @@ class mr extends Vy {
+@@ -8169,11 +8204,11 @@ class mr extends Vy {
    /**
     * Send an encrypted kind-10448 chat-settings event without an expiration tag.
     */
@@ -10607,7 +10621,7 @@ index 8debad6..5338efe 100644
      };
      return this.sendMessage(e, JSON.stringify(n), {
        kind: Nr,
-@@ -8183,14 +8213,14 @@ class mr extends Vy {
+@@ -8183,14 +8218,14 @@ class mr extends Vy {
    /**
     * Update a peer's disappearing-message TTL and notify it with chat settings.
     */
@@ -10628,7 +10642,7 @@ index 8debad6..5338efe 100644
          kind: ai,
          tags: n.map((i) => ["e", i])
        });
-@@ -8200,11 +8230,11 @@ class mr extends Vy {
+@@ -8200,11 +8235,11 @@ class mr extends Vy {
        kind: ci
      });
    }
@@ -10643,7 +10657,7 @@ index 8debad6..5338efe 100644
        this.ownerPublicKey
      );
      n && this.setExpirationForPeer(n.peerPubkey, n.options).catch(
-@@ -8213,13 +8243,13 @@ class mr extends Vy {
+@@ -8213,13 +8248,13 @@ class mr extends Vy {
      );
    }
    storeUserRecord(e) {
@@ -10662,7 +10676,7 @@ index 8debad6..5338efe 100644
          publicKey: e,
          getOrCreateUserRecord: (n) => this.getOrCreateUserRecord(n),
          rememberDelegate: (n, i) => {
-@@ -8228,19 +8258,19 @@ class mr extends Vy {
+@@ -8228,19 +8263,19 @@ class mr extends Vy {
          rememberProcessedInviteResponse: (n) => {
            this.processedInviteResponses.add(n);
          }
@@ -10685,7 +10699,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "nostrSubscribe");
      l(this, "nostrPublish");
-@@ -8262,10 +8292,10 @@ class jy {
+@@ -8262,10 +8297,10 @@ class jy {
      this.initialized = !0;
      const e = await this.storage.get(
        this.identityPublicKeyKey()
@@ -10698,7 +10712,7 @@ index 8debad6..5338efe 100644
        this.identityPrivateKeyKey(),
        Array.from(this.devicePrivateKey)
      ));
-@@ -8303,8 +8333,8 @@ class jy {
+@@ -8303,8 +8338,8 @@ class jy {
    async publishInvite() {
      if (await this.init(), !this.invite)
        throw new Error("Invite not initialized");
@@ -10709,7 +10723,7 @@ index 8debad6..5338efe 100644
    }
    /**
     * Rotate this device's invite - generates new ephemeral keys and shared secret.
-@@ -8326,14 +8356,14 @@ class jy {
+@@ -8326,14 +8361,14 @@ class jy {
     * For delegate devices that don't know the owner ahead of time.
     */
    async waitForActivation(e = 6e4) {
@@ -10726,7 +10740,7 @@ index 8debad6..5338efe 100644
            } catch {
            }
          }
-@@ -8347,13 +8377,13 @@ class jy {
+@@ -8347,13 +8382,13 @@ class jy {
     * @param options.retries - Number of retry attempts (default 2)
     */
    async isRevoked(e = {}) {
@@ -10742,7 +10756,7 @@ index 8debad6..5338efe 100644
        );
        if (o)
          return !o.getDevice(this.devicePublicKey);
-@@ -8373,8 +8403,8 @@ class jy {
+@@ -8373,8 +8408,8 @@ class jy {
        throw new Error(
          "DelegateManager must be initialized before creating SessionManager"
        );
@@ -10753,7 +10767,7 @@ index 8debad6..5338efe 100644
        throw new Error(
          "Owner public key required for SessionManager - device must be activated first"
        );
-@@ -8391,7 +8421,7 @@ class jy {
+@@ -8391,7 +8426,7 @@ class jy {
        // Use identityPubkey as deviceId
        this.nostrSubscribe,
        this.nostrPublish,
@@ -10762,7 +10776,7 @@ index 8debad6..5338efe 100644
        { ephemeralKeypair: n, sharedSecret: i },
        e || this.storage
      );
-@@ -8401,8 +8431,8 @@ class jy {
+@@ -8401,8 +8436,8 @@ class jy {
        throw new Error(
          "DelegateManager must be initialized before creating SessionManager"
        );
@@ -10773,7 +10787,7 @@ index 8debad6..5338efe 100644
        throw new Error(
          "Owner public key required for SessionManager - device must be activated first"
        );
-@@ -8416,7 +8446,7 @@ class jy {
+@@ -8416,7 +8451,7 @@ class jy {
        this.devicePublicKey,
        this.devicePrivateKey,
        this.devicePublicKey,
@@ -10782,7 +10796,7 @@ index 8debad6..5338efe 100644
        { ephemeralKeypair: n, sharedSecret: i },
        e || this.storage
      );
-@@ -8446,7 +8476,7 @@ class jy {
+@@ -8446,7 +8481,7 @@ class jy {
      return `${this.versionPrefix}/device-manager/identity-private-key`;
    }
  }
@@ -10791,7 +10805,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "nostrPublish");
      l(this, "storage");
-@@ -8458,12 +8488,12 @@ class Wy {
+@@ -8458,12 +8493,12 @@ class Wy {
      l(this, "initialized", !1);
      l(this, "storageVersion", "3");
      this.nostrPublish = Pt(e.nostrPublish, e), this.storage = e.storage || new it(), this.ownerIdentityKey = e.ownerIdentityKey;
@@ -10807,7 +10821,7 @@ index 8debad6..5338efe 100644
    }
    get versionPrefix() {
      return `v${this.storageVersion}`;
-@@ -8485,23 +8515,23 @@ class Wy {
+@@ -8485,23 +8520,23 @@ class Wy {
     */
    addDevice(e) {
      this.appKeys || (this.appKeys = new _());
@@ -10837,7 +10851,7 @@ index 8debad6..5338efe 100644
    }
    /**
     * Revoke a device from the AppKeys.
-@@ -8520,16 +8550,16 @@ class Wy {
+@@ -8520,16 +8555,16 @@ class Wy {
      const e = this.ownerPubkey;
      if (!e)
        throw new Error("Owner pubkey is required to publish AppKeys");
@@ -10857,7 +10871,7 @@ index 8debad6..5338efe 100644
    }
    /**
     * Replace the local AppKeys with the given list and save to storage.
-@@ -8551,11 +8581,11 @@ class Wy {
+@@ -8551,11 +8586,11 @@ class Wy {
    }
    async ensureAppKeysProfileId(e) {
      if (this.appKeysProfileId) return this.appKeysProfileId;
@@ -10871,7 +10885,7 @@ index 8debad6..5338efe 100644
    }
    async loadAppKeys() {
      const e = await this.storage.get(this.appKeysKey());
-@@ -8570,7 +8600,7 @@ class Wy {
+@@ -8570,7 +8605,7 @@ class Wy {
      await this.storage.put(this.appKeysKey(), e.serialize());
    }
  }
@@ -10880,7 +10894,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "publicKey");
      l(this, "secretKey");
-@@ -8582,7 +8612,7 @@ class vv {
+@@ -8582,7 +8617,7 @@ class vv {
    }
    /** Encrypt a Rumor and return a signed outer event ready for publishing */
    createEvent(e) {
@@ -10889,7 +10903,7 @@ index 8debad6..5338efe 100644
      return ie(
        {
          kind: Zi,
-@@ -8605,8 +8635,8 @@ class vv {
+@@ -8605,8 +8640,8 @@ class vv {
        created_at: e.created_at
      }))
        throw new Error("Invalid shared channel event");
@@ -10900,7 +10914,7 @@ index 8debad6..5338efe 100644
    }
    /** Check if an event belongs to this channel */
    isChannelEvent(e) {
-@@ -8620,69 +8650,69 @@ const en = [
+@@ -8620,69 +8655,69 @@ const en = [
    3600,
    21600
  ];
@@ -11005,7 +11019,7 @@ index 8debad6..5338efe 100644
      }),
      created_at: i,
      tags: s,
-@@ -8691,27 +8721,27 @@ function Yy(t, e, r) {
+@@ -8691,27 +8726,27 @@ function Yy(t, e, r) {
    };
    return o.id = ne(o), o;
  }
@@ -11042,7 +11056,7 @@ index 8debad6..5338efe 100644
    if (e.requiredRevision === void 0) {
      if (i !== void 0) return null;
    } else if (i !== String(Math.max(0, Math.floor(e.requiredRevision))))
-@@ -8725,65 +8755,65 @@ function La(t) {
+@@ -8725,65 +8760,65 @@ function La(t) {
      createdAt: Math.max(0, Math.floor(e.createdAt))
    };
  }
@@ -11134,7 +11148,7 @@ index 8debad6..5338efe 100644
    }
    chainKeyBytes() {
      return new Uint8Array(this.chainKey);
-@@ -8797,21 +8827,21 @@ class be {
+@@ -8797,21 +8832,21 @@ class be {
    encryptToBytes(e) {
      if (this.iteration === 4294967295)
        throw new Error("sender-key iteration overflow");
@@ -11162,7 +11176,7 @@ index 8debad6..5338efe 100644
        return this.skippedMessageKeys.delete(n), p;
      }
      if (n - this.iteration > tn)
-@@ -8824,7 +8854,7 @@ class be {
+@@ -8824,7 +8859,7 @@ class be {
        const [h, p] = er(s);
        s = h, a.set(o, p), o += 1;
      }
@@ -11171,7 +11185,7 @@ index 8debad6..5338efe 100644
      return this.chainKey = c, this.iteration = o + 1, this.skippedMessageKeys = a, this.pruneSkipped(), d;
    }
    planDecryptBlind(e) {
-@@ -8845,52 +8875,52 @@ class be {
+@@ -8845,52 +8880,52 @@ class be {
          };
        } catch {
        }
@@ -11241,7 +11255,7 @@ index 8debad6..5338efe 100644
      return {
        keyId: this.keyId,
        chainKey: ae(this.chainKey),
-@@ -8899,7 +8929,7 @@ class be {
+@@ -8899,7 +8934,7 @@ class be {
      };
    }
    static fromJSON(e) {
@@ -11250,7 +11264,7 @@ index 8debad6..5338efe 100644
        e.keyId,
        W(e.chainKey),
        e.iteration
-@@ -8909,9 +8939,9 @@ class be {
+@@ -8909,9 +8944,9 @@ class be {
          const s = Number.parseInt(n, 10);
          if (!Number.isFinite(s)) continue;
          const o = W(i);
@@ -11262,7 +11276,7 @@ index 8debad6..5338efe 100644
    }
    static fromDistribution(e) {
      return new be(
-@@ -8922,8 +8952,8 @@ class be {
+@@ -8922,8 +8957,8 @@ class be {
    }
    replaceWith(e) {
      this.chainKey = new Uint8Array(e.chainKey), this.iteration = e.iteration, this.skippedMessageKeys = new Map(
@@ -11273,7 +11287,7 @@ index 8debad6..5338efe 100644
          new Uint8Array(n)
        ])
      );
-@@ -8933,14 +8963,14 @@ class be {
+@@ -8933,14 +8968,14 @@ class be {
        return;
      const e = Array.from(this.skippedMessageKeys.keys()).sort(
        (n, i) => n - i
@@ -11292,7 +11306,7 @@ index 8debad6..5338efe 100644
    }
    isHiddenCounterMessage() {
      return this.encryptedHeader !== void 0;
-@@ -8960,25 +8990,25 @@ class Tr {
+@@ -8960,25 +8995,25 @@ class Tr {
    outerEventKind() {
      return this.outerKind;
    }
@@ -11326,7 +11340,7 @@ index 8debad6..5338efe 100644
      return new rn(i, s, o);
    }
    parseOuterEvent(e) {
-@@ -8988,31 +9018,31 @@ class Tr {
+@@ -8988,31 +9023,31 @@ class Tr {
        );
      if (!ge(e))
        throw new Error("invalid outer event signature");
@@ -11368,7 +11382,7 @@ index 8debad6..5338efe 100644
      e
    );
    return ma(
-@@ -9020,21 +9050,21 @@ function Xy(t) {
+@@ -9020,21 +9055,21 @@ function Xy(t) {
        v: 1,
        type: "sender-key-cover"
      }),
@@ -11399,7 +11413,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "data");
      l(this, "ourOwnerPubkey");
-@@ -9070,8 +9100,8 @@ class tg {
+@@ -9070,8 +9105,8 @@ class tg {
    async init() {
      if (this.initialized) return;
      this.initialized = !0;
@@ -11410,7 +11424,7 @@ index 8debad6..5338efe 100644
        if (n.endsWith("/sender-event-pubkey")) {
          const i = n.slice(e.length).split("/")[0], s = await this.storage.get(n);
          typeof s == "string" && Ie(s) && Ie(i) && this.setSenderEventMapping(i, s);
-@@ -9095,15 +9125,15 @@ class tg {
+@@ -9095,15 +9130,15 @@ class tg {
    latestKeyIdKey(e) {
      return `${this.groupSenderPrefix(e)}/latest-key-id`;
    }
@@ -11430,7 +11444,7 @@ index 8debad6..5338efe 100644
    }
    isMemberOwnerPubkey(e) {
      return this.memberOwnerPubkeys.includes(e);
-@@ -9111,15 +9141,15 @@ class tg {
+@@ -9111,15 +9146,15 @@ class tg {
    isSenderDeviceActive(e) {
      if (e === this.ourDevicePubkey)
        return this.isMemberOwnerPubkey(this.ourOwnerPubkey);
@@ -11452,7 +11466,7 @@ index 8debad6..5338efe 100644
      } else
        this.senderDeviceToEvent.delete(e);
      for (const [
-@@ -9141,19 +9171,19 @@ class tg {
+@@ -9141,19 +9176,19 @@ class tg {
        ...this.senderDeviceToOwner.keys(),
        ...this.senderEventToDevice.values()
      ]);
@@ -11480,7 +11494,7 @@ index 8debad6..5338efe 100644
        this.pendingKey(e)
      ], i = n.flatMap((a) => this.pendingOuter.get(a) || []);
      if (!i || i.length === 0) return [];
-@@ -9174,7 +9204,7 @@ class tg {
+@@ -9174,7 +9209,7 @@ class tg {
      return o;
    }
  }
@@ -11489,7 +11503,7 @@ index 8debad6..5338efe 100644
    async ensureOurSenderEventKeys() {
      await this.init();
      const e = await this.storage.get(
-@@ -9194,18 +9224,18 @@ class rg extends tg {
+@@ -9194,18 +9229,18 @@ class rg extends tg {
          };
        }
      }
@@ -11513,7 +11527,7 @@ index 8debad6..5338efe 100644
      );
      if (!n) return null;
      try {
-@@ -9215,7 +9245,7 @@ class rg extends tg {
+@@ -9215,7 +9250,7 @@ class rg extends tg {
      }
    }
    async loadSenderKeyStates(e) {
@@ -11522,7 +11536,7 @@ index 8debad6..5338efe 100644
      for (const s of n) {
        const o = await this.storage.get(s);
        if (o)
-@@ -9226,29 +9256,29 @@ class rg extends tg {
+@@ -9226,29 +9261,29 @@ class rg extends tg {
      }
      return i.sort((s, o) => o.keyId - s.keyId);
    }
@@ -11561,7 +11575,7 @@ index 8debad6..5338efe 100644
        this.ourDevicePubkey
      );
      i.some(
-@@ -9256,20 +9286,21 @@ class rg extends tg {
+@@ -9256,20 +9291,21 @@ class rg extends tg {
      ) || (i.push({
        keyId: e.keyId >>> 0,
        distribution: { ...e },
@@ -11589,7 +11603,7 @@ index 8debad6..5338efe 100644
        const a = s.sort(
          (c, u) => u.distribution.iteration - c.distribution.iteration
        )[0];
-@@ -9289,13 +9320,13 @@ class rg extends tg {
+@@ -9289,13 +9325,13 @@ class rg extends tg {
        const o = vs(), a = pe(), c = new be(o, a, 0);
        return await this.saveSenderKeyState(this.ourDevicePubkey, c), await this.storage.put(this.latestKeyIdKey(this.ourDevicePubkey), o), { state: c, created: !0 };
      }
@@ -11606,7 +11620,7 @@ index 8debad6..5338efe 100644
        );
        if (o)
          return { state: o, created: !1 };
-@@ -9303,28 +9334,28 @@ class rg extends tg {
+@@ -9303,28 +9339,28 @@ class rg extends tg {
      const n = vs(), i = pe(), s = new be(n, i, 0);
      return await this.saveSenderKeyState(this.ourDevicePubkey, s), await this.storage.put(this.latestKeyIdKey(this.ourDevicePubkey), n), { state: s, created: !0 };
    }
@@ -11640,7 +11654,7 @@ index 8debad6..5338efe 100644
      const i = {
        kind: Vt,
        content: JSON.stringify(n),
-@@ -9332,16 +9363,16 @@ class rg extends tg {
+@@ -9332,16 +9368,16 @@ class rg extends tg {
        tags: [
          ["l", this.groupId()],
          ["key", String(n.keyId >>> 0)],
@@ -11660,7 +11674,7 @@ index 8debad6..5338efe 100644
      const s = {
        kind: n.kind,
        content: n.content,
-@@ -9353,7 +9384,7 @@ class rg extends tg {
+@@ -9353,7 +9389,7 @@ class rg extends tg {
      return s.id = ne(s), s;
    }
  }
@@ -11669,7 +11683,7 @@ index 8debad6..5338efe 100644
    senderKeyRecipientOwnerPubkeys() {
      return Array.from(
        new Set(
-@@ -9364,47 +9395,56 @@ class ng extends rg {
+@@ -9364,47 +9400,56 @@ class ng extends rg {
      );
    }
    assertCurrentRecipients(e) {
@@ -11742,7 +11756,7 @@ index 8debad6..5338efe 100644
      const h = this.buildGroupInnerRumor(s, i, e), p = JSON.stringify(h), f = this.oneToMany.encryptToOuterEvent(
        o,
        u,
-@@ -9412,21 +9452,21 @@ class ng extends rg {
+@@ -9412,21 +9457,21 @@ class ng extends rg {
        s
      );
      return await this.saveSenderKeyState(this.ourDevicePubkey, u), this.assertCurrentRecipients(n), await Pt(
@@ -11768,7 +11782,7 @@ index 8debad6..5338efe 100644
      if (e.kind !== ue || !ge(e)) return null;
      try {
        const i = this.oneToMany.parseOuterEvent(e);
-@@ -9438,28 +9478,28 @@ class ng extends rg {
+@@ -9438,28 +9483,28 @@ class ng extends rg {
            messageNumber: i.messageNumber
          },
          ...n !== void 0 ? { requiredRevision: Math.max(0, Math.floor(n)) } : {},
@@ -11804,7 +11818,7 @@ index 8debad6..5338efe 100644
      );
      if (i.length === 0) return null;
      const s = n.nowMs ?? Date.now(), o = Math.floor(s / 1e3);
-@@ -9470,21 +9510,21 @@ class ng extends rg {
+@@ -9470,21 +9515,21 @@ class ng extends rg {
      return i[0];
    }
  }
@@ -11833,7 +11847,7 @@ index 8debad6..5338efe 100644
        if (!c || c.groupId !== this.groupId()) return [];
        const u = n;
        if (!u || !Ie(u)) return [];
-@@ -9493,7 +9533,7 @@ class Ki extends ng {
+@@ -9493,7 +9538,7 @@ class Ki extends ng {
        const d = Ft({
          ourOwnerPubkey: this.ourOwnerPubkey,
          ourDevicePubkey: this.ourDevicePubkey,
@@ -11842,7 +11856,7 @@ index 8debad6..5338efe 100644
          senderDevicePubkey: u
        });
        return [
-@@ -9501,7 +9541,7 @@ class Ki extends ng {
+@@ -9501,7 +9546,7 @@ class Ki extends ng {
            groupId: this.groupId(),
            senderEventPubkey: u,
            senderDevicePubkey: u,
@@ -11851,7 +11865,7 @@ index 8debad6..5338efe 100644
            origin: d,
            isSelf: $t(d),
            isCrossDeviceSelf: Gt(d),
-@@ -9520,9 +9560,9 @@ class Ki extends ng {
+@@ -9520,9 +9565,9 @@ class Ki extends ng {
      const o = n;
      if (!o || !Ie(o)) return [];
      if (Ie(e.pubkey) && e.pubkey !== o) return [];
@@ -11863,7 +11877,7 @@ index 8debad6..5338efe 100644
      ), s.senderEventPubkey && Ie(s.senderEventPubkey) && (this.setSenderEventMapping(o, s.senderEventPubkey), await this.storage.put(
        this.senderEventPubkeyKey(o),
        s.senderEventPubkey
-@@ -9540,9 +9580,9 @@ class Ki extends ng {
+@@ -9540,9 +9585,9 @@ class Ki extends ng {
     */
    async handleOuterEvent(e) {
      if (await this.init(), await this.purgeInactiveSenders(), e.kind !== ue || !ge(e)) return null;
@@ -11875,7 +11889,7 @@ index 8debad6..5338efe 100644
      } catch {
        return null;
      }
-@@ -9550,19 +9590,20 @@ class Ki extends ng {
+@@ -9550,19 +9595,20 @@ class Ki extends ng {
      if (!i)
        return this.queuePending(
          n,
@@ -11903,7 +11917,7 @@ index 8debad6..5338efe 100644
            break;
          } catch {
          }
-@@ -9572,15 +9613,15 @@ class Ki extends ng {
+@@ -9572,15 +9618,15 @@ class Ki extends ng {
      } else {
        const f = await this.loadSenderKeyState(
          i,
@@ -11923,7 +11937,7 @@ index 8debad6..5338efe 100644
          );
        } catch {
          return null;
-@@ -9627,7 +9668,7 @@ class Ki extends ng {
+@@ -9627,7 +9673,7 @@ class Ki extends ng {
      };
    }
  }
@@ -11932,7 +11946,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "ourOwnerPubkey");
      l(this, "ourDevicePubkey");
-@@ -9672,22 +9713,22 @@ class ig {
+@@ -9672,22 +9718,22 @@ class ig {
    }
    async upsertGroup(e) {
      await this.enqueueOperation(async () => {
@@ -11961,7 +11975,7 @@ index 8debad6..5338efe 100644
          this.senderEventToGroup.get(n) === e && this.senderEventToGroup.delete(n), this.pendingOuterBySenderEvent.delete(n);
      this.groupToSenderEvents.delete(e), this.syncOuterSubscription();
    }
-@@ -9700,34 +9741,34 @@ class ig {
+@@ -9700,34 +9746,34 @@ class ig {
      this.outerUnsubscribe = null, this.outerAuthorsKey = "", this.outerAuthors = [], this.clearOuterBackfills(), this.groups.clear(), this.senderEventToGroup.clear(), this.groupToSenderEvents.clear(), this.pendingOuterBySenderEvent.clear(), this.pendingSessionByGroup.clear(), this.seenOuterEventIds.clear(), this.seenOuterEventOrder.length = 0;
    }
  }
@@ -12012,7 +12026,7 @@ index 8debad6..5338efe 100644
        );
        let s = this.groups.get(i.id);
        if (s ? s.setData(i) : (s = new Ki({
-@@ -9751,7 +9792,7 @@ class cg extends ig {
+@@ -9751,7 +9797,7 @@ class cg extends ig {
            "sendPairwise is required when fanoutMetadata is enabled"
          );
        const a = n.nowMs ?? Date.now(), c = Math.floor(a / 1e3), u = {
@@ -12021,7 +12035,7 @@ index 8debad6..5338efe 100644
            {
              ...i,
              createdAt: Math.floor(i.createdAt / 1e3)
-@@ -9770,17 +9811,17 @@ class cg extends ig {
+@@ -9770,17 +9816,17 @@ class cg extends ig {
        };
        u.id = ne(u);
        const d = i.members, h = await Promise.allSettled(
@@ -12046,7 +12060,7 @@ index 8debad6..5338efe 100644
        }
        return {
          group: i,
-@@ -9794,49 +9835,49 @@ class cg extends ig {
+@@ -9794,49 +9840,49 @@ class cg extends ig {
        };
      });
    }
@@ -12104,7 +12118,7 @@ index 8debad6..5338efe 100644
        } catch (s) {
          throw this.reportError(s, {
            operation: "requestSenderKeyRepair",
-@@ -9845,14 +9886,14 @@ class cg extends ig {
+@@ -9845,14 +9891,14 @@ class cg extends ig {
        }
      });
    }
@@ -12121,7 +12135,7 @@ index 8debad6..5338efe 100644
            n,
            i
          );
-@@ -9865,32 +9906,32 @@ class cg extends ig {
+@@ -9865,32 +9911,32 @@ class cg extends ig {
        }
      });
    }
@@ -12162,7 +12176,7 @@ index 8debad6..5338efe 100644
        }
        if (!s) return [];
        try {
-@@ -9898,7 +9939,7 @@ class cg extends ig {
+@@ -9898,7 +9944,7 @@ class cg extends ig {
            const p = await this.handleIncomingMetadataEvent(
              s,
              e,
@@ -12171,7 +12185,7 @@ index 8debad6..5338efe 100644
              n,
              a,
              c
-@@ -9910,14 +9951,14 @@ class cg extends ig {
+@@ -9910,14 +9956,14 @@ class cg extends ig {
            return this.queuePendingSessionEvent(
              s,
              e,
@@ -12188,7 +12202,7 @@ index 8debad6..5338efe 100644
            n,
            o
          ), h = this.routeIncomingEvents(d);
-@@ -9941,12 +9982,12 @@ class cg extends ig {
+@@ -9941,12 +9987,12 @@ class cg extends ig {
        }
        if (this.hasSeenOuterEvent(e.id)) return null;
        this.rememberOuterEvent(e.id);
@@ -12204,7 +12218,7 @@ index 8debad6..5338efe 100644
        try {
          const s = await i.handleOuterEvent(e);
          return s && this.shouldDropLocalEcho(s) ? null : (s && this.emitDecryptedEvents([s]), s);
-@@ -9954,7 +9995,7 @@ class cg extends ig {
+@@ -9954,7 +10000,7 @@ class cg extends ig {
          return this.reportError(s, {
            operation: "handleOuterEvent",
            groupId: n,
@@ -12213,7 +12227,7 @@ index 8debad6..5338efe 100644
            eventId: e.id
          }), null;
        }
-@@ -9969,7 +10010,7 @@ class cg extends ig {
+@@ -9969,7 +10015,7 @@ class cg extends ig {
        e = e.filter((o) => !s.has(o));
      }
      e.sort();
@@ -12222,7 +12236,7 @@ index 8debad6..5338efe 100644
        (s) => !this.outerAuthors.includes(s)
      ), n = e.join(",");
      if (n !== this.outerAuthorsKey) {
-@@ -9979,7 +10020,7 @@ class cg extends ig {
+@@ -9979,7 +10025,7 @@ class cg extends ig {
        }
        if (this.outerUnsubscribe = null, this.outerAuthorsKey = n, this.outerAuthors = e, e.length !== 0) {
          if (!this.nostrSubscribe) {
@@ -12231,7 +12245,7 @@ index 8debad6..5338efe 100644
            return;
          }
          try {
-@@ -9997,7 +10038,7 @@ class cg extends ig {
+@@ -9997,7 +10043,7 @@ class cg extends ig {
                  });
                });
              }
@@ -12240,7 +12254,7 @@ index 8debad6..5338efe 100644
          } catch (s) {
            this.reportError(s, { operation: "syncOuterSubscription" });
          }
-@@ -10005,7 +10046,7 @@ class cg extends ig {
+@@ -10005,7 +10051,7 @@ class cg extends ig {
      }
    }
  }
@@ -12249,7 +12263,7 @@ index 8debad6..5338efe 100644
    managedGroupIds() {
      return Array.from(this.groups.keys()).sort();
    }
-@@ -10014,14 +10055,14 @@ class ug extends cg {
+@@ -10014,14 +10060,14 @@ class ug extends cg {
    }
    startOuterBackfill(e) {
      if (!(!this.nostrSubscribe && !this.nostrFetch || e.length === 0) && !(this.outerBackfillLookbackSeconds <= 0) && !(!this.nostrFetch && this.outerBackfillDurationMs <= 0))
@@ -12267,7 +12281,7 @@ index 8debad6..5338efe 100644
          this.outerBackfillTimers.add(n);
        }
    }
-@@ -10035,18 +10076,18 @@ class ug extends cg {
+@@ -10035,18 +10081,18 @@ class ug extends cg {
      ).sort();
    }
    async runOuterBackfillAttempt(e) {
@@ -12291,7 +12305,7 @@ index 8debad6..5338efe 100644
        0,
        Math.floor(Date.now() / 1e3) - this.outerBackfillLookbackSeconds
      );
-@@ -10054,7 +10095,7 @@ class ug extends cg {
+@@ -10054,7 +10100,7 @@ class ug extends cg {
        const n = await this.nostrFetch({
          kinds: [this.oneToMany.outerEventKind()],
          authors: e,
@@ -12300,7 +12314,7 @@ index 8debad6..5338efe 100644
        });
        for (const i of this.sortOuterEvents(n))
          await this.handleOuterEvent(i).catch((s) => {
-@@ -10070,7 +10111,7 @@ class ug extends cg {
+@@ -10070,7 +10116,7 @@ class ug extends cg {
    }
    openOuterBackfillSubscription(e) {
      if (!this.nostrSubscribe) return;
@@ -12309,7 +12323,7 @@ index 8debad6..5338efe 100644
        0,
        Math.floor(Date.now() / 1e3) - this.outerBackfillLookbackSeconds
      );
-@@ -10079,7 +10120,7 @@ class ug extends cg {
+@@ -10079,7 +10125,7 @@ class ug extends cg {
          {
            kinds: [this.oneToMany.outerEventKind()],
            authors: e,
@@ -12318,7 +12332,7 @@ index 8debad6..5338efe 100644
          },
          (s) => {
            this.handleOuterEvent(s).catch((o) => {
-@@ -10117,28 +10158,28 @@ class ug extends cg {
+@@ -10117,28 +10163,28 @@ class ug extends cg {
    }
    emitDecryptedEvents(e) {
      if (this.onDecryptedEvent)
@@ -12354,7 +12368,7 @@ index 8debad6..5338efe 100644
          u.data,
          a,
          n,
-@@ -10148,9 +10189,9 @@ class ug extends cg {
+@@ -10148,9 +10194,9 @@ class ug extends cg {
          return [];
        if (h === "removed")
          return this.removeGroup(e), [c];
@@ -12366,7 +12380,7 @@ index 8debad6..5338efe 100644
          return [];
        const h = new Ki({
          data: {
-@@ -10158,7 +10199,7 @@ class ug extends cg {
+@@ -10158,7 +10204,7 @@ class ug extends cg {
            name: a.name,
            members: a.members,
            admins: a.admins,
@@ -12375,7 +12389,7 @@ index 8debad6..5338efe 100644
            ...a.description ? { description: a.description } : {},
            ...a.picture ? { picture: a.picture } : {},
            accepted: !1
-@@ -10174,8 +10215,8 @@ class ug extends cg {
+@@ -10174,8 +10220,8 @@ class ug extends cg {
      const d = await this.drainPendingSessionEvents(e);
      return [c, ...d];
    }
@@ -12386,7 +12400,7 @@ index 8debad6..5338efe 100644
        ourOwnerPubkey: this.ourOwnerPubkey,
        ourDevicePubkey: this.ourDevicePubkey,
        senderOwnerPubkey: n,
-@@ -10189,23 +10230,23 @@ class ug extends cg {
+@@ -10189,23 +10235,23 @@ class ug extends cg {
        origin: o,
        isSelf: $t(o),
        isCrossDeviceSelf: Gt(o),
@@ -12416,7 +12430,7 @@ index 8debad6..5338efe 100644
        const o = s.event.kind === Vt ? Si(s.event.content) : null;
        i.push(
          ...await this.handleIncomingSessionEventForKnownGroup(
-@@ -10221,34 +10262,34 @@ class ug extends cg {
+@@ -10221,34 +10267,34 @@ class ug extends cg {
      return i;
    }
  }
@@ -12462,7 +12476,7 @@ index 8debad6..5338efe 100644
      } catch (o) {
        this.reportError(o, { operation: "upsertGroup", groupId: e });
        return;
-@@ -10262,11 +10303,11 @@ class dg extends ug {
+@@ -10262,11 +10308,11 @@ class dg extends ug {
        this.senderEventToGroup.set(o, e);
      this.groupToSenderEvents.set(e, i);
    }
@@ -12477,7 +12491,7 @@ index 8debad6..5338efe 100644
      const n = this.pendingOuterBySenderEvent.get(e);
      if (!n || n.length === 0) return [];
      this.pendingOuterBySenderEvent.delete(e);
-@@ -10279,26 +10320,26 @@ class dg extends ug {
+@@ -10279,26 +10325,26 @@ class dg extends ug {
        }
      }).sort((o, a) => o.messageNumber - a.messageNumber), s = [];
      for (const { outer: o } of i) {
@@ -12510,7 +12524,7 @@ index 8debad6..5338efe 100644
            this.ourDevicePubkey
          );
          n && e.add(n);
-@@ -10306,12 +10347,12 @@ class dg extends ug {
+@@ -10306,12 +10352,12 @@ class dg extends ug {
      ), e;
    }
    normalizeRetryDelays(e) {
@@ -12525,7 +12539,7 @@ index 8debad6..5338efe 100644
    }
    hasSeenOuterEvent(e) {
      return this.seenOuterEventIds.has(e);
-@@ -10319,17 +10360,17 @@ class dg extends ug {
+@@ -10319,17 +10365,17 @@ class dg extends ug {
    rememberOuterEvent(e) {
      if (!this.seenOuterEventIds.has(e))
        for (this.seenOuterEventIds.add(e), this.seenOuterEventOrder.push(e); this.seenOuterEventOrder.length > this.maxSeenOuterEventIds; ) {
@@ -12548,7 +12562,7 @@ index 8debad6..5338efe 100644
          try {
            const o = this.oneToMany.parseOuterEvent(n);
            i = o.keyId, s = o.messageNumber;
-@@ -10339,117 +10380,117 @@ class dg extends ug {
+@@ -10339,117 +10385,117 @@ class dg extends ug {
      }).sort((n, i) => n.event.pubkey !== i.event.pubkey ? n.event.pubkey.localeCompare(i.event.pubkey) : n.keyId !== i.keyId ? n.keyId - i.keyId : n.messageNumber !== i.messageNumber ? n.messageNumber - i.messageNumber : n.event.created_at !== i.event.created_at ? n.event.created_at - i.event.created_at : n.event.id.localeCompare(i.event.id)).map(({ event: n }) => n);
    }
  }
@@ -12717,7 +12731,7 @@ index 8debad6..5338efe 100644
    constructor() {
      l(this, "nextToken", 1);
      l(this, "appKeysAuthorsByToken", /* @__PURE__ */ new Map());
-@@ -10462,29 +10503,29 @@ class Kv {
+@@ -10462,29 +10508,29 @@ class Kv {
      l(this, "inviteResponseRecipientRefCounts", /* @__PURE__ */ new Map());
    }
    registerFilter(e) {
@@ -12757,7 +12771,7 @@ index 8debad6..5338efe 100644
        addedAppKeysAuthors: n,
        addedMessageAuthors: i,
        addedMessageRecipients: s,
-@@ -10492,19 +10533,19 @@ class Kv {
+@@ -10492,19 +10538,19 @@ class Kv {
      };
    }
    unregister(e) {
@@ -12781,7 +12795,7 @@ index 8debad6..5338efe 100644
        e,
        this.inviteResponseRecipientsByToken,
        this.inviteResponseRecipientRefCounts
-@@ -10523,63 +10564,63 @@ class Kv {
+@@ -10523,63 +10569,63 @@ class Kv {
      return Array.from(this.inviteResponseRecipientRefCounts.keys()).sort();
    }
  }
@@ -12878,7 +12892,7 @@ index 8debad6..5338efe 100644
    try {
      F(o);
    } catch {
-@@ -10587,22 +10628,22 @@ function Av(t) {
+@@ -10587,22 +10633,22 @@ function Av(t) {
    }
    return {
      requestPubkey: F(o),
@@ -12908,7 +12922,7 @@ index 8debad6..5338efe 100644
      i,
      1,
      [],
-@@ -10610,55 +10651,55 @@ function Pv(t) {
+@@ -10610,55 +10656,55 @@ function Pv(t) {
      "link"
    );
  }
@@ -12992,7 +13006,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "seed");
      l(this, "blockCounter", 0n);
-@@ -10669,48 +10710,48 @@ class Pg {
+@@ -10669,48 +10715,48 @@ class Pg {
    }
    nextSecretKey() {
      for (let e = 0; e < 16; e += 1) {
@@ -13056,7 +13070,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "nostrSubscribe");
      l(this, "nostrPublish");
-@@ -10736,12 +10777,12 @@ class Rg {
+@@ -10736,12 +10782,12 @@ class Rg {
    async waitForManager(e) {
      return this.groupManager ? this.groupManager : this.groupManagerInitPromise ? this.groupManagerInitPromise : (this.groupManagerInitPromise = (async () => {
        var o;
@@ -13071,7 +13085,7 @@ index 8debad6..5338efe 100644
          ourOwnerPubkey: n,
          ourDevicePubkey: i,
          storage: this.groupStorage,
-@@ -10751,7 +10792,7 @@ class Rg {
+@@ -10751,7 +10797,7 @@ class Rg {
            this.emitGroupEvent(a);
          }
        });
@@ -13080,7 +13094,7 @@ index 8debad6..5338efe 100644
      })().finally(() => {
        this.groupManagerInitPromise = null;
      }), this.groupManagerInitPromise);
-@@ -10764,15 +10805,15 @@ class Rg {
+@@ -10764,15 +10810,15 @@ class Rg {
        this.groupEventCallbacks.delete(e);
      };
    }
@@ -13100,7 +13114,7 @@ index 8debad6..5338efe 100644
      this.shouldEmitPairwiseGroupEvent(e, s) && this.emitGroupEvent(
        this.buildPairwiseGroupEvent(
          e,
-@@ -10785,73 +10826,73 @@ class Rg {
+@@ -10785,73 +10831,73 @@ class Rg {
        s
      );
    }
@@ -13195,7 +13209,7 @@ index 8debad6..5338efe 100644
        origin: s,
        isSelf: $t(s),
        isCrossDeviceSelf: Gt(s),
-@@ -10863,15 +10904,15 @@ class Rg {
+@@ -10863,15 +10909,15 @@ class Rg {
      };
    }
    emitGroupEvent(e) {
@@ -13217,7 +13231,7 @@ index 8debad6..5338efe 100644
    constructor(e) {
      l(this, "nostrSubscribe");
      l(this, "nostrPublish");
-@@ -10920,20 +10961,20 @@ class Og {
+@@ -10920,20 +10966,20 @@ class Og {
        requiresDeviceRegistration: !1,
        canSendPrivateMessages: !1
      });
@@ -13243,7 +13257,7 @@ index 8debad6..5338efe 100644
    }
    getState() {
      return {
-@@ -10976,9 +11017,9 @@ class Og {
+@@ -10976,9 +11022,9 @@ class Og {
        (((i = this.sessionManager) == null ? void 0 : i.getKnownAppKeysSnapshots()) ?? []).map(
          (o) => [o.ownerPubkey, o]
        )
@@ -13256,7 +13270,7 @@ index 8debad6..5338efe 100644
        appKeys: new _(
          n.getAllDevices().map((o) => ({ ...o }))
        ),
-@@ -10989,16 +11030,16 @@ class Og {
+@@ -10989,16 +11035,16 @@ class Og {
    }
    async applyTrustedAppKeysSnapshot(e) {
      var o;
@@ -13278,7 +13292,7 @@ index 8debad6..5338efe 100644
          appKeys: ht(a),
          createdAt: this.state.lastAppKeysCreatedAt
        });
-@@ -11010,12 +11051,12 @@ class Og {
+@@ -11010,12 +11056,12 @@ class Og {
      return await this.flushSessionManagerEvents(), this.syncDirectMessageSubscription(), s;
    }
    getSessionMessagePushAuthorPubkeys(e) {
@@ -13295,7 +13309,7 @@ index 8debad6..5338efe 100644
    }
    feedEvent(e) {
      return this.processReceivedEvent(e);
-@@ -11028,8 +11069,8 @@ class Og {
+@@ -11028,8 +11074,8 @@ class Og {
    }
    async initForOwner(e) {
      await this.initManagers();
@@ -13306,7 +13320,7 @@ index 8debad6..5338efe 100644
    }
    async waitForSessionManager(e) {
      if (this.sessionManager)
-@@ -11044,17 +11085,17 @@ class Og {
+@@ -11044,17 +11090,17 @@ class Og {
    async initAppKeysManager() {
      if (!this.appKeysManager)
        return this.appKeysInitPromise ? this.appKeysInitPromise : (this.appKeysInitPromise = (async () => {
@@ -13327,7 +13341,7 @@ index 8debad6..5338efe 100644
          });
        })().finally(() => {
          this.appKeysInitPromise = null;
-@@ -11063,7 +11104,7 @@ class Og {
+@@ -11063,7 +11109,7 @@ class Og {
    async initDelegateManager() {
      if (!this.delegateManager)
        return this.delegateInitPromise ? this.delegateInitPromise : (this.delegateInitPromise = (async () => {
@@ -13336,7 +13350,7 @@ index 8debad6..5338efe 100644
            nostrSubscribe: this.nostrSubscribe,
            nostrPublish: this.nostrPublish,
            storage: this.storage
-@@ -11090,22 +11131,22 @@ class Og {
+@@ -11090,22 +11136,22 @@ class Og {
        if (await this.initDelegateManager(), !this.delegateManager)
          throw new Error("DelegateManager not initialized");
        await this.delegateManager.activate(e);
@@ -13365,7 +13379,7 @@ index 8debad6..5338efe 100644
      }).finally(() => {
        this.sessionManagerInitPromise = null;
      }), this.sessionManagerInitPromise);
-@@ -11116,8 +11157,8 @@ class Og {
+@@ -11116,8 +11162,8 @@ class Og {
    onGroupEvent(e) {
      return this.groupController.onGroupEvent(e);
    }
@@ -13376,7 +13390,7 @@ index 8debad6..5338efe 100644
      e === n && await this.feedLocalAppKeysSnapshotToSessionManager(n);
      try {
        await i.setupUser(e);
-@@ -11126,72 +11167,72 @@ class Og {
+@@ -11126,72 +11172,72 @@ class Og {
      }
    }
  }
@@ -13474,7 +13488,7 @@ index 8debad6..5338efe 100644
      try {
        const o = await _.waitFor(
          e,
-@@ -11206,9 +11247,9 @@ class Ng extends Og {
+@@ -11206,9 +11252,9 @@ class Ng extends Og {
      const i = (s = this.appKeysManager) == null ? void 0 : s.getAppKeys();
      if (i && i.getAllDevices().length > 0)
        return ht(i);
@@ -13486,7 +13500,7 @@ index 8debad6..5338efe 100644
            e,
            this.nostrSubscribe,
            o,
-@@ -11223,14 +11264,14 @@ class Ng extends Og {
+@@ -11223,14 +11269,14 @@ class Ng extends Og {
    startAppKeysSubscription(e) {
      this.appKeysSubscriptionCleanup && this.appKeysSubscriptionOwnerPubkey === e || (this.stopAppKeysSubscription(), this.appKeysSubscriptionOwnerPubkey = e, this.appKeysSubscriptionCleanup = this.nostrSubscribe(
        vt(e),
@@ -13505,7 +13519,7 @@ index 8debad6..5338efe 100644
            } catch {
            }
        }
-@@ -11247,14 +11288,14 @@ class Ng extends Og {
+@@ -11247,14 +11293,14 @@ class Ng extends Og {
    }
    syncDirectMessageSubscription() {
      var u, d, h;
@@ -13523,7 +13537,7 @@ index 8debad6..5338efe 100644
        (p) => !i.includes(p)
      ), o = Date.now(), a = o - this.directMessageSubscriptionLastChangeMs;
      if (a < 1500 && s.length === 0) {
-@@ -11263,14 +11304,14 @@ class Ng extends Og {
+@@ -11263,14 +11309,14 @@ class Ng extends Og {
        }, 1500 - a));
        return;
      }
@@ -13541,7 +13555,7 @@ index 8debad6..5338efe 100644
          },
          (p) => {
            this.processReceivedEvent(p);
-@@ -11291,11 +11332,11 @@ class Ng extends Og {
+@@ -11291,11 +11337,11 @@ class Ng extends Og {
          p();
      };
    }
@@ -13555,7 +13569,7 @@ index 8debad6..5338efe 100644
        this.ownerIdentityKey
      );
      return n ? await this.applyIncomingAppKeys(
-@@ -11304,14 +11345,14 @@ class Ng extends Og {
+@@ -11304,14 +11350,14 @@ class Ng extends Og {
      ) !== "stale" : !1;
    }
  }
@@ -13573,7 +13587,7 @@ index 8debad6..5338efe 100644
        this.delegateManager,
        e
      );
-@@ -11322,16 +11363,16 @@ class Tg extends Ng {
+@@ -11322,16 +11368,16 @@ class Tg extends Ng {
        ownerPubkey: e.ownerPubkey,
        appKeys: n,
        devices: n.getAllDevices(),
@@ -13593,7 +13607,7 @@ index 8debad6..5338efe 100644
      return n.addDevice({
        identityPubkey: e.identityPubkey,
        createdAt: je()
-@@ -11339,14 +11380,14 @@ class Tg extends Ng {
+@@ -11339,14 +11385,14 @@ class Tg extends Ng {
        ownerPubkey: e.ownerPubkey,
        appKeys: n,
        devices: n.getAllDevices(),
@@ -13610,7 +13624,7 @@ index 8debad6..5338efe 100644
        currentDevicePubkey: this.state.currentDevicePubkey,
        registeredDevices: e.baseDevices,
        hasLocalAppKeys: e.baseDevices.length > 0,
-@@ -11362,14 +11403,14 @@ class Tg extends Ng {
+@@ -11362,14 +11408,14 @@ class Tg extends Ng {
        lastAppKeysCreatedAt: n.created_at ?? je()
      }), {
        createdAt: n.created_at ?? je(),
@@ -13628,7 +13642,7 @@ index 8debad6..5338efe 100644
      return n.removeDevice(e.identityPubkey), {
        ownerPubkey: e.ownerPubkey,
        appKeys: n,
-@@ -11380,21 +11421,21 @@ class Tg extends Ng {
+@@ -11380,21 +11426,21 @@ class Tg extends Ng {
    async publishPreparedRevocation(e) {
      var n;
      await this.initAppKeysManager();
@@ -13656,7 +13670,7 @@ index 8debad6..5338efe 100644
        e.timeoutMs || this.appKeysFetchTimeoutMs
      ), await this.refreshOwnAppKeysFromRelay(
        e.ownerPubkey,
-@@ -11406,10 +11447,10 @@ class Tg extends Ng {
+@@ -11406,10 +11452,10 @@ class Tg extends Ng {
      };
    }
    async registerDeviceIdentity(e) {
@@ -13669,7 +13683,7 @@ index 8debad6..5338efe 100644
        e.timeoutMs || this.appKeysFetchTimeoutMs
      ), await this.refreshOwnAppKeysFromRelay(
        e.ownerPubkey,
-@@ -11418,13 +11459,13 @@ class Tg extends Ng {
+@@ -11418,13 +11464,13 @@ class Tg extends Ng {
      })), n;
    }
    async revokeDevice(e) {
@@ -13687,7 +13701,7 @@ index 8debad6..5338efe 100644
      }), !0);
    }
    async republishInvite() {
-@@ -11440,47 +11481,47 @@ class Tg extends Ng {
+@@ -11440,47 +11486,47 @@ class Tg extends Ng {
    async createLinkInvite(e) {
      if (await this.initDelegateManager(), !this.delegateManager)
        throw new Error("DelegateManager not initialized");
@@ -13756,7 +13770,7 @@ index 8debad6..5338efe 100644
        ownerPubkey: null,
        currentDevicePubkey: null,
        registeredDevices: [],
-@@ -11507,14 +11548,14 @@ class xv extends Tg {
+@@ -11507,14 +11553,14 @@ class xv extends Tg {
      }
    }
    dispatchSessionManagerEvents() {
@@ -13773,7 +13787,7 @@ index 8debad6..5338efe 100644
      });
    }
    async handleSessionManagerEvent(e) {
-@@ -11538,26 +11579,26 @@ class xv extends Tg {
+@@ -11538,26 +11584,26 @@ class xv extends Tg {
        return;
      }
      (i = this.sessionManagerEmittedSubscriptions.get(e.subid)) == null || i();
@@ -13808,7 +13822,7 @@ index 8debad6..5338efe 100644
          ownerPrivateKey: this.ownerIdentityKey,
          ownerPubkey: e,
          profileId: n
-@@ -11569,40 +11610,40 @@ class xv extends Tg {
+@@ -11569,40 +11615,40 @@ class xv extends Tg {
    clearSessionManagerEvents() {
      var e;
      (e = this.sessionManagerEventsAvailableCleanup) == null || e.call(this), this.sessionManagerEventsAvailableCleanup = null;
@@ -13861,7 +13875,7 @@ index 8debad6..5338efe 100644
      });
      return n.decision === "stale" || (await ((s = this.appKeysManager) == null ? void 0 : s.setAppKeys(n.appKeys)), this.syncState({
        registeredDevices: n.appKeys.getAllDevices(),
-@@ -11611,223 +11652,223 @@ class xv extends Tg {
+@@ -11611,223 +11657,223 @@ class xv extends Tg {
      })), n.decision;
    }
    async ensureAppKeysProfileId(e) {
@@ -14236,11 +14250,11 @@ index b2c53de..a455cd8 100644
      protected handleDeviceRumor(ownerPubkey: string, deviceId: string, event: Rumor, outerEvent?: VerifiedEvent): void;
      protected upsertDeviceRecord(userRecord: UserRecordActor, deviceId: string): DeviceRecordActor;
 diff --git a/dist/session-manager/SessionManagerRecords.d.ts.map b/dist/session-manager/SessionManagerRecords.d.ts.map
-index 4275284..fd5a8c1 100644
+index 4275284..ba76bb4 100644
 --- a/dist/session-manager/SessionManagerRecords.d.ts.map
 +++ b/dist/session-manager/SessionManagerRecords.d.ts.map
 @@ -1 +1 @@
 -{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AACvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAE/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAgCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAclE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
 \ No newline at end of file
-+{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AAEvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAI/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,QAAQ,CAAC,iBAAiB,cAAqB;IAEzD,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAgCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAkClE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
++{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AAEvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAI/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,QAAQ,CAAC,iBAAiB,cAAqB;IAEzD,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAgCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IA6ClE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
 \ No newline at end of file
