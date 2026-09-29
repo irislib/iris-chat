@@ -52,25 +52,25 @@
       {#if $callState.status === 'ended'}
         <button class="done" onclick={dismissCall}>Done</button>
       {:else if $callState.direction === 'incoming' && $callState.status === 'ringing'}
-        <div><button class="round decline" aria-label="Decline call" onclick={endCall}><span class="i-carbon-phone-off-filled"></span></button><span>Decline</span></div>
+        <div><button class="round decline" title="Decline call" aria-label="Decline call" onclick={endCall}><span class="i-carbon-phone-off-filled"></span></button><span>Decline</span></div>
         {#if $callSettings.voice}
-          <div><button class="round answer" aria-label={$callState.video ? 'Answer with voice' : 'Answer call'} disabled={answering} onclick={() => answer(false)}><span class="i-carbon-phone-filled"></span></button><span>{$callState.video ? 'Voice' : 'Answer'}</span></div>
+          <div><button class="round answer" title={$callState.video ? 'Answer with voice' : 'Answer call'} aria-label={$callState.video ? 'Answer with voice' : 'Answer call'} disabled={answering} onclick={() => answer(false)}><span class="i-carbon-phone-filled"></span></button><span>{$callState.video ? 'Voice' : 'Answer'}</span></div>
         {/if}
         {#if $callState.video && $callSettings.video}
-          <div><button class="round answer" aria-label="Answer with video" disabled={answering} onclick={() => answer(true)}><span class="i-carbon-video-filled"></span></button><span>Video</span></div>
+          <div><button class="round answer" title="Answer with video" aria-label="Answer with video" disabled={answering} onclick={() => answer(true)}><span class="i-carbon-video-filled"></span></button><span>Video</span></div>
         {/if}
       {:else}
-        <div><button class:off={$callState.muted} class="round" aria-label={$callState.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={$callState.muted} onclick={toggleCallMute}><span class={$callState.muted ? 'i-carbon-microphone-off-filled' : 'i-carbon-microphone-filled'}></span></button><span>{$callState.muted ? 'Unmute' : 'Mute'}</span></div>
+        <div><button class:off={$callState.muted} class="round" title={$callState.muted ? 'Unmute microphone' : 'Mute microphone'} aria-label={$callState.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={$callState.muted} onclick={toggleCallMute}><span class={$callState.muted ? 'i-carbon-microphone-off-filled' : 'i-carbon-microphone-filled'}></span></button><span>{$callState.muted ? 'Unmute' : 'Mute'}</span></div>
         {#if $callState.video}
-          <div><button class:off={!$callState.camera} class="round" aria-label={$callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-pressed={!$callState.camera} onclick={toggleCallCamera}><span class={$callState.camera ? 'i-carbon-video-filled' : 'i-carbon-video-off-filled'}></span></button><span>Camera</span></div>
+          <div><button class:off={!$callState.camera} class="round" title={$callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-label={$callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-pressed={!$callState.camera} onclick={toggleCallCamera}><span class={$callState.camera ? 'i-carbon-video-filled' : 'i-carbon-video-off-filled'}></span></button><span>Camera</span></div>
         {/if}
-        <div><button class="round" aria-label="Call settings" aria-expanded={showQuality} onclick={() => showQuality = !showQuality}><span class="i-carbon-settings"></span></button><span>Settings</span></div>
-        <div><button class="round decline" aria-label="End call" onclick={endCall}><span class="i-carbon-phone-off-filled"></span></button><span>End</span></div>
+        <div><button class="round" title="Call settings" aria-label="Call settings" aria-expanded={showQuality} onclick={() => showQuality = !showQuality}><span class="i-carbon-settings"></span></button><span>Settings</span></div>
+        <div><button class="round decline" title="End call" aria-label="End call" onclick={endCall}><span class="i-carbon-phone-off-filled"></span></button><span>End</span></div>
       {/if}
     </div>
   </div>
 {:else if $callError}
-  <div class="call-toast" role="alert"><span>{$callError}</span><button aria-label="Dismiss call error" onclick={dismissCall}>×</button></div>
+  <div class="call-toast" role="alert"><span>{$callError}</span><button title="Dismiss call error" aria-label="Dismiss call error" onclick={dismissCall}>×</button></div>
 {/if}
 
 <style>
