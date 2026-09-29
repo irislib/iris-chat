@@ -6,6 +6,7 @@ import { getNdrRuntime, preparePeerNdrRuntime } from './privateChats'
 import { getMessageRequestPolicyContext, isChatRejected } from './messageRequestPolicy'
 import { messageRequests } from './messageRequests'
 import { callSettings } from './callSettings'
+import { callDevicePreferences, setCallDevicePreferences, type CallDeviceKind, type CallDeviceState } from './callDevices'
 import { CallSession, type CallState } from './callSession'
 import { BrowserCallMedia, type CallMediaStats } from './callMedia'
 import { CallRingtone } from './callRingtone'
@@ -29,6 +30,18 @@ let starting = false
 const answersInFlight = new Set<string>()
 let media: BrowserCallMedia | null = null
 let generation = 0
+export const callDevices = writable<CallDeviceState | null>(null)
+export const callDeviceError = writable('')
+
+export async function selectCallDevice(kind: CallDeviceKind, id: string) {
+  const current = media
+  if (!current) return
+  callDeviceError.set('')
+  try { await current.selectDevice(kind, id) }
+  catch (error) {
+    if (media === current) callDeviceError.set(error instanceof Error ? error.message : 'Could not change audio device')
+  }
+}
 
 export function callOwnerForPeer(peer: string): string | undefined {
   if (!/^(02|03)[0-9a-f]{64}$/.test(peer)) return
@@ -49,6 +62,8 @@ function stopMedia() {
   localCallStream.set(null)
   remoteCallVideo.set(null)
   callMediaStats.set(null)
+  callDevices.set(null)
+  callDeviceError.set('')
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none'
 }
 export function knownCallDevices(owner: string): string[] {
@@ -147,10 +162,13 @@ async function openMedia(video: boolean, capturedSession: CallSession, callId: s
     requestKeyframe: () => { if (isCurrent()) capturedSession.requestKeyframe() },
     stats: stats => { if (isCurrent()) { callMediaStats.set(stats); capturedSession.updateStats(stats.receivedAudio, stats.receivedVideo) } },
     error: fail,
+    devices: devices => { if (isCurrent()) { callDevices.set(devices); setCallDevicePreferences({ microphone: devices.microphone, speaker: devices.speaker }) } },
+    deviceError: message => { if (isCurrent()) callDeviceError.set(message) },
+    streamChanged: stream => { if (isCurrent()) localCallStream.set(stream) },
   })
   media = next
   try {
-    await next.open(video, get(callSettings))
+    await next.open(video, get(callSettings), get(callDevicePreferences))
     if (token !== generation || !isCurrent()) { next.stop(); throw new Error('Call ended') }
     capturedSession.markMediaReady()
     localCallStream.set(next.stream)

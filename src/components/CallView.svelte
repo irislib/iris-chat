@@ -3,6 +3,7 @@
   import { callState, callError, callMediaStats, localCallStream, remoteCallVideo, answerCall, endCall, dismissCall, toggleCallMute, toggleCallCamera } from '../lib/calls'
   import { callSettings } from '../lib/callSettings'
   import CallQualityControls from './CallQualityControls.svelte'
+  import CallDeviceControls from './CallDeviceControls.svelte'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   let localVideo = $state<HTMLVideoElement>()
@@ -42,7 +43,10 @@
       <video class="local-video" bind:this={localVideo} muted autoplay playsinline aria-label="Your camera"></video>
     {/if}
     {#if showQuality && $callState.status !== 'ended'}
-      <div class="quality-panel"><CallQualityControls /></div>
+      <div class="quality-panel" role="region" aria-label="Call settings">
+        <CallDeviceControls />
+        {#if $callState.video}<div class="quality-options"><CallQualityControls /></div>{/if}
+      </div>
     {/if}
     <div class="call-controls">
       {#if $callState.status === 'ended'}
@@ -59,8 +63,8 @@
         <div><button class:off={$callState.muted} class="round" aria-label={$callState.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={$callState.muted} onclick={toggleCallMute}><span class={$callState.muted ? 'i-carbon-microphone-off-filled' : 'i-carbon-microphone-filled'}></span></button><span>{$callState.muted ? 'Unmute' : 'Mute'}</span></div>
         {#if $callState.video}
           <div><button class:off={!$callState.camera} class="round" aria-label={$callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-pressed={!$callState.camera} onclick={toggleCallCamera}><span class={$callState.camera ? 'i-carbon-video-filled' : 'i-carbon-video-off-filled'}></span></button><span>Camera</span></div>
-          <div><button class="round" aria-label="Call quality" aria-expanded={showQuality} onclick={() => showQuality = !showQuality}><span class="i-carbon-settings"></span></button><span>Quality</span></div>
         {/if}
+        <div><button class="round" aria-label="Call settings" aria-expanded={showQuality} onclick={() => showQuality = !showQuality}><span class="i-carbon-settings"></span></button><span>Settings</span></div>
         <div><button class="round decline" aria-label="End call" onclick={endCall}><span class="i-carbon-phone-off-filled"></span></button><span>End</span></div>
       {/if}
     </div>
@@ -88,7 +92,8 @@
   .remote-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #101719; }
   .remote-video :global(canvas) { width: 100%; height: 100%; object-fit: contain; }
   .remote-video.audio-only { width: 1px; height: 1px; opacity: 0; }
-  .quality-panel { position: absolute; bottom: 170px; z-index: 3; width: min(340px, calc(100vw - 32px)); padding: 20px; border-radius: 18px; background: #172328ee; }
+  .quality-panel { position: absolute; bottom: 170px; z-index: 3; width: min(340px, calc(100vw - 32px)); max-height: calc(100dvh - 200px); overflow-y: auto; padding: 20px; border-radius: 18px; background: #172328f5; }
+  .quality-options { margin-top: 20px; }
   .local-video { position: absolute; top: 24px; right: 24px; width: min(28vw, 180px); border-radius: 14px; transform: scaleX(-1); box-shadow: 0 2px 20px #0005; }
   .done { background: #ffffff20; border-radius: 24px; padding: 12px 40px; }
   .call-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 100; display: flex; gap: 16px; align-items: center; background: #3f2020; color: white; padding: 16px 20px; border-radius: 16px; max-width: 90vw; }

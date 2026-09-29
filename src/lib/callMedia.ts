@@ -3,6 +3,7 @@ import { CallAdaptation } from './callAdaptation'
 import { callAudioWorklet } from './callAudioWorklet'
 import { CallOpus } from './callOpus'
 import type { CallControl, MediaFrame } from './callProtocol'
+import { deviceOptions, type CallDeviceKind, type CallDevicePreferences, type CallDeviceState, type RoutedAudioContext } from './callDevices'
 
 export interface CallMediaStats {
   receivedAudio: number; receivedVideo: number; sentBytes: number; receivedBytes: number
@@ -17,6 +18,9 @@ export interface CallMediaCallbacks {
   requestKeyframe(): void
   stats?(stats: CallMediaStats): void
   error?(error: Error): void
+  devices?(devices: CallDeviceState): void
+  deviceError?(message: string): void
+  streamChanged?(stream: MediaStream): void
 }
 const unsupported = () => new Error('This browser cannot make video calls. Update your browser and try again.')
 /** Opus audio and browser H.264 packets travel through the authenticated call session. */
@@ -30,6 +34,12 @@ export class BrowserCallMedia {
   private muted = false
   private audioContext?: AudioContext
   private audioNode?: AudioWorkletNode
+  private microphoneSource?: MediaStreamAudioSourceNode
+  private deviceSelection: CallDevicePreferences = { microphone: '', speaker: '' }
+  private switchingDevice = false
+  private devicesRevision = 0
+  private deviceLists: Pick<CallDeviceState, 'microphones' | 'speakers'> = { microphones: [], speakers: [] }
+  private devicesChanged = () => { void this.refreshDevices().catch(() => this.callbacks.deviceError?.('Could not refresh audio devices')) }
   private opus?: CallOpus
   private videoEncoder?: VideoEncoder
   private videoDecoder?: VideoDecoder
@@ -67,10 +77,11 @@ export class BrowserCallMedia {
   private stats: CallMediaStats = { receivedAudio: 0, receivedVideo: 0, sentBytes: 0, receivedBytes: 0, audioEnergy: 0, concealedAudio: 0, videoWidth: 0, videoHeight: 0, targetBitrate: 0, sentVideoFrames: 0, droppedVideoFrames: 0 }
   constructor(private callbacks: CallMediaCallbacks) {}
 
-  async open(video: boolean, quality: CallQualitySettings = {}) {
+  async open(video: boolean, quality: CallQualitySettings = {}, devices: CallDevicePreferences = { microphone: '', speaker: '' }) {
     this.stop()
     const token = this.generation
     this.quality = quality
+    this.deviceSelection = { ...devices }
     this.adaptation = new CallAdaptation(callEncoding(quality).maxBitrate)
     if (!navigator.mediaDevices?.getUserMedia || !globalThis.AudioWorkletNode) throw new Error('Microphone unavailable. Open Iris in a secure, up-to-date browser.')
     if (video) {
@@ -83,7 +94,7 @@ export class BrowserCallMedia {
     this.opus = opus
     try {
       const size = callEncoding(quality)
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000 }, video: video ? { width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: size.maxFramerate, max: 30 } } : false })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: this.microphoneConstraints(), video: video ? { width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: size.maxFramerate, max: 30 } } : false })
       if (token !== this.generation) { stream.getTracks().forEach(track => track.stop()); throw new Error('Call ended') }
       this.stream = stream
       stream.getTracks().forEach(track => { track.enabled = false })
@@ -94,7 +105,8 @@ export class BrowserCallMedia {
       if (token !== this.generation) throw new Error('Call ended')
       const node = new AudioWorkletNode(context, 'iris-call-audio', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
       this.audioNode = node
-      context.createMediaStreamSource(stream).connect(node)
+      this.microphoneSource = context.createMediaStreamSource(stream)
+      this.microphoneSource.connect(node)
       node.connect(context.destination)
       node.port.onmessage = event => {
         if (event.data.playout !== undefined) {
@@ -121,7 +133,89 @@ export class BrowserCallMedia {
       this.feedbackAt = this.epoch
       this.statsTimer = setInterval(() => this.report(), 1000)
       await context.resume()
+      const routed = context as RoutedAudioContext
+      if (this.deviceSelection.speaker && routed.setSinkId) {
+        try { await routed.setSinkId(this.deviceSelection.speaker) }
+        catch { this.deviceSelection.speaker = ''; this.callbacks.deviceError?.('Selected speaker unavailable. Using the system default.') }
+      } else this.deviceSelection.speaker = ''
+      if (token !== this.generation) throw new Error('Call ended')
+      navigator.mediaDevices.addEventListener?.('devicechange', this.devicesChanged)
+      await this.refreshDevices().catch(() => this.callbacks.deviceError?.('Could not list audio devices'))
     } catch (error) { if (token === this.generation) this.stop(); throw error }
+  }
+  private microphoneConstraints(): MediaTrackConstraints {
+    const id = this.deviceSelection.microphone
+    return { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000,
+      ...(id ? { deviceId: { ideal: id } } : {}) }
+  }
+  async selectDevice(kind: CallDeviceKind, id: string) {
+    if (this.switchingDevice) throw new Error('An audio device is already changing')
+    const context = this.audioContext as RoutedAudioContext | undefined, node = this.audioNode, token = this.generation
+    if (!context || !node || !this.stream) throw new Error('Call ended')
+    this.switchingDevice = true
+    this.devicesRevision++
+    try {
+      if (kind === 'speaker') {
+        if (!context.setSinkId) throw new Error('Choose the speaker in your system sound settings')
+        await context.setSinkId(id)
+        if (token !== this.generation) return
+        this.deviceSelection.speaker = id
+      } else {
+        const constraints = { ...this.microphoneConstraints(), deviceId: id ? { exact: id } : undefined }
+        const replacement = await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false })
+        if (token !== this.generation) { replacement.getTracks().forEach(track => track.stop()); return }
+        const track = replacement.getAudioTracks()[0]
+        if (!track) { replacement.getTracks().forEach(track => track.stop()); throw new Error('Microphone unavailable') }
+        track.enabled = this.active && !this.muted
+        let source: MediaStreamAudioSourceNode
+        try { source = context.createMediaStreamSource(replacement); source.connect(node) }
+        catch (error) { replacement.getTracks().forEach(track => track.stop()); throw error }
+        const previous = this.stream!.getAudioTracks()
+        this.microphoneSource?.disconnect()
+        this.microphoneSource = source
+        for (const old of previous) { this.stream!.removeTrack(old); old.stop() }
+        this.stream!.addTrack(track)
+        this.deviceSelection.microphone = id
+        this.callbacks.streamChanged?.(this.stream!)
+      }
+    } finally { this.switchingDevice = false }
+    if (token !== this.generation) return
+    this.devicesRevision++
+    this.publishDevices()
+    await this.refreshDevices().catch(() => {
+      if (token === this.generation) this.callbacks.deviceError?.('Could not refresh audio devices')
+    })
+  }
+  async refreshDevices() {
+    const token = this.generation
+    if (!this.audioContext || !navigator.mediaDevices?.enumerateDevices) return
+    const revision = ++this.devicesRevision
+    let devices: MediaDeviceInfo[]
+    try { devices = await navigator.mediaDevices.enumerateDevices() }
+    catch (error) {
+      if (token === this.generation && revision === this.devicesRevision) throw error
+      return
+    }
+    if (token !== this.generation || revision !== this.devicesRevision) return
+    const microphones = deviceOptions(devices, 'audioinput'), speakers = deviceOptions(devices, 'audiooutput')
+    this.deviceLists = { microphones, speakers }
+    if (!this.switchingDevice) {
+      const track = this.stream?.getAudioTracks()[0]
+      const selected = this.deviceSelection.microphone
+      if (track?.readyState === 'ended' || (selected && !microphones.some(d => d.id === selected))) {
+        // A removed headset must not leave the call permanently without a mic.
+        await this.selectDevice('microphone', '')
+        return
+      }
+      if (this.deviceSelection.speaker && !speakers.some(d => d.id === this.deviceSelection.speaker)) {
+        await this.selectDevice('speaker', '')
+        return
+      }
+    }
+    this.publishDevices()
+  }
+  private publishDevices() {
+    this.callbacks.devices?.({ ...this.deviceSelection, ...this.deviceLists, canSelectSpeaker: typeof (this.audioContext as RoutedAudioContext)?.setSinkId === 'function' })
   }
   private videoConfig(): VideoEncoderConfig {
     const quality = callEncoding(this.quality)
@@ -303,6 +397,9 @@ export class BrowserCallMedia {
   private fail(error: Error, token: number) { if (token === this.generation) this.callbacks.error?.(error) }
   stop() {
     this.generation++; this.active = false
+    this.deviceLists = { microphones: [], speakers: [] }
+    navigator.mediaDevices?.removeEventListener?.('devicechange', this.devicesChanged)
+    this.microphoneSource?.disconnect(); this.microphoneSource = undefined
     clearInterval(this.captureTimer); clearInterval(this.videoTimer); clearInterval(this.statsTimer)
     for (const [timer, frame] of this.renderTimers) { clearTimeout(timer); frame.close() }
     this.renderTimers.clear()

@@ -25,7 +25,7 @@ beforeEach(async () => {
   vi.stubGlobal('AudioContext', class {
     get currentTime() { return (performance.now() - audioClockLag) / 1000 }
     audioWorklet = { addModule: async () => {} }
-    createMediaStreamSource = () => ({ connect: () => {} })
+    createMediaStreamSource = () => ({ connect: () => {}, disconnect: () => {} })
     resume = async () => {}
     close = async () => {}
   })
