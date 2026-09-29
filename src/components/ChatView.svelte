@@ -25,6 +25,9 @@
   import CallHistoryRow from './CallHistoryRow.svelte'
   import MediaModal from './MediaModal.svelte'
   import VoiceRecorder from './VoiceRecorder.svelte'
+  import ChatMuteModal from './ChatMuteModal.svelte'
+  import { chatMutes } from '../lib/chatMuteStore'
+  import { isChatMuted } from '../lib/chatMutePolicy'
   import DisappearingMessagesModal from './DisappearingMessagesModal.svelte'
   import EmojiPicker from './EmojiPicker.svelte'
 
@@ -45,6 +48,7 @@
   let inputRef = $state<HTMLTextAreaElement | null>(null)
   let fileInputRef = $state<HTMLInputElement | null>(null)
   let showMenu = $state(false)
+  let showMuteModal = $state(false)
   const attachmentContext = () => `${$identity?.pubkey || ''}:chat:${chat.id}`
   const attachmentDraft = createAttachmentDraft({
     context: attachmentContext,
@@ -406,6 +410,10 @@
 
       {#if showMenu}
         <div class="absolute right-0 top-full mt-1 w-56 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50">
+          <button class="btn-ghost w-full text-left flex items-center gap-2" onclick={() => { showMenu = false; showMuteModal = true }}>
+            <span class="i-carbon-notification-off"></span>
+            {isChatMuted($chatMutes, chat.id) ? 'Muted notifications' : 'Mute notifications'}
+          </button>
           <button
             class="btn-ghost w-full text-left flex items-center gap-2"
             onclick={() => { showMenu = false; showDisappearingModal = true }}
@@ -762,3 +770,7 @@
     }
   }
 </style>
+
+{#if showMuteModal}
+  <ChatMuteModal chatId={chat.id} onclose={() => showMuteModal = false} />
+{/if}

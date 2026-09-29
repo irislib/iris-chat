@@ -2,6 +2,8 @@
 import { get } from 'svelte/store'
 import { identity, ndk } from './identity'
 import { notificationSettings } from './notificationStore'
+import { chatMutes, loadChatMutes } from './chatMuteStore'
+import { mutedMessageFilters } from './chatMutePolicy'
 import { getNotificationSupportError, requestNotificationPermission } from './notificationPermission'
 import { getInviteEphemeralPubkeys } from './chat'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
@@ -28,8 +30,11 @@ export interface NotificationSubscription {
     authors?: string[]
     kinds?: number[]
     search?: string
+    since?: number
+    until?: number
     '#p'?: string[]
   }
+  filters?: NotificationSubscription['filter'][]
   subscriber: string
 }
 
@@ -39,6 +44,7 @@ export interface NotificationSubscriptionResponse {
 
 export class NotificationService {
   private baseUrl: string
+  private readonly owner = get(identity)?.pubkey
 
   constructor(baseUrl?: string) {
     const settings = get(notificationSettings)
@@ -50,7 +56,7 @@ export class NotificationService {
     this.baseUrl = url
   }
 
-  async getInfo(): Promise<{ vapid_public_key: string }> {
+  async getInfo(): Promise<{ vapid_public_key: string; supports_timed_filters?: boolean }> {
     return this.getJson('info')
   }
 
@@ -60,12 +66,13 @@ export class NotificationService {
 
   async registerPushNotifications(
     web_push_subscriptions: WebPushSubscription[],
-    filter: NotificationSubscription['filter']
+    filter: NotificationSubscription['filter'],
+    filters?: NotificationSubscription['filter'][]
   ): Promise<{ id: string; status: string }> {
     return this.getJsonAuthd('subscriptions', 'POST', {
       web_push_subscriptions,
       webhooks: [],
-      filter
+      filter, ...(filters ? { filters } : {})
     })
   }
 
@@ -88,7 +95,7 @@ export class NotificationService {
     const currentIdentity = get(identity)
     const ndkInstance = get(ndk)
 
-    if (!currentIdentity || !ndkInstance.signer) {
+    if (!currentIdentity || !ndkInstance.signer || currentIdentity.pubkey !== this.owner) {
       throw new Error('Not logged in')
     }
 
@@ -106,6 +113,7 @@ export class NotificationService {
     await event.sign()
     const nostrEvent = await event.toNostrEvent()
     const encodedEvent = btoa(JSON.stringify(nostrEvent))
+    if (get(identity)?.pubkey !== this.owner) throw new Error('Profile changed')
 
     return this.getJson(path, method, body, {
       authorization: `Nostr ${encodedEvent}`
@@ -159,7 +167,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 let subscriptionPromise: Promise<PushSubscription | null> | null = null
 
 // Cache for last synced authors - avoids unnecessary API calls
-let lastSyncedAuthors: string[] = []
+let lastSyncedMessageInput = ''
 let lastSyncedInviteRecipients: string[] = []
 
 // Get or create push subscription
@@ -218,16 +226,17 @@ export async function getOrCreatePushSubscription(): Promise<PushSubscription | 
 }
 
 // Extract session pubkeys from active chats
-function getSessionAuthors(): string[] {
+function getSessionAuthorsByChat(): Map<string, string[]> {
   const currentIdentity = get(identity)
-  if (!currentIdentity) return []
+  if (!currentIdentity) return new Map()
 
-  const authors: string[] = []
+  const byChat = new Map<string, string[]>()
 
   const userRecords = getNdrRuntime().getSessionUserRecords()
   for (const [userPubkey, record] of userRecords.entries()) {
     // Skip self-sessions (our own devices) to avoid notifications for our own messages
     if (userPubkey === currentIdentity.pubkey) continue
+    const authors: string[] = []
     for (const device of record.devices?.values() ?? []) {
       const sessions = [
         ...(device.activeSession ? [device.activeSession] : []),
@@ -236,6 +245,8 @@ function getSessionAuthors(): string[] {
       for (const session of sessions) {
         const state = session?.state
         if (!state) continue
+        if ('skippedKeys' in state && state.skippedKeys && typeof state.skippedKeys === 'object')
+          authors.push(...Object.keys(state.skippedKeys))
         if (state.theirCurrentNostrPublicKey) {
           authors.push(state.theirCurrentNostrPublicKey)
         }
@@ -244,9 +255,10 @@ function getSessionAuthors(): string[] {
         }
       }
     }
+    byChat.set(userPubkey, [...new Set(authors)].sort())
   }
 
-  return [...new Set(authors)]
+  return byChat
 }
 
 // Get invite ephemeral pubkeys for notification subscription
@@ -255,11 +267,20 @@ function getInviteRecipients(): string[] {
 }
 
 // Subscribe to DM notifications
-export async function subscribeToDMNotifications(): Promise<{ success: boolean; error?: string }> {
-  try {
-    const permission = await requestNotificationPermission()
-    if (permission.error) return { success: false, error: permission.error }
+type SubscriptionResult = { success: boolean; error?: string }
+let syncQueue: Promise<unknown> = Promise.resolve()
+export async function subscribeToDMNotifications(): Promise<SubscriptionResult> {
+  // Keep the native permission request in the initiating user gesture.
+  const permission = await requestNotificationPermission()
+  if (permission.error) return { success: false, error: permission.error }
+  // Serialize writes; each run reads the latest profile and mute deadlines.
+  const sync = syncQueue.then(syncDMNotifications, syncDMNotifications)
+  syncQueue = sync.catch(() => {})
+  return sync
+}
 
+async function syncDMNotifications(): Promise<SubscriptionResult> {
+  try {
     // Get push subscription
     const pushSubscription = await getOrCreatePushSubscription()
     if (!pushSubscription) {
@@ -272,16 +293,15 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
     }
 
     // Get session authors for DM notifications
-    const sessionAuthors = getSessionAuthors()
+    await loadChatMutes(currentIdentity.pubkey)
+    if (get(identity)?.pubkey !== currentIdentity.pubkey) return { success: false, error: 'Profile changed' }
+    const mutes = get(chatMutes)
+    const authorsByChat = getSessionAuthorsByChat()
+    const desiredFilters = mutedMessageFilters(authorsByChat, mutes, MESSAGE_EVENT_KIND, true)
+    const messageInput = currentIdentity.pubkey + ':' + JSON.stringify(desiredFilters)
 
     // Get invite recipients for invite response notifications
     const inviteRecipients = getInviteRecipients()
-
-    if (sessionAuthors.length === 0 && inviteRecipients.length === 0) {
-      // No active sessions or invites, but we can still enable notifications for future
-      notificationSettings.setEnabled(true)
-      return { success: true }
-    }
 
     // Prepare web push data
     const webPushData: WebPushSubscription = {
@@ -296,42 +316,27 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
     // Get current subscriptions
     const currentSubscriptions = await api.getNotificationSubscriptions()
 
-    // Handle DM message subscription
-    if (sessionAuthors.length > 0) {
-      const messageFilter = {
-        kinds: [MESSAGE_EVENT_KIND],
-        authors: sessionAuthors
+    // Time bounds must be supported by the server: workers cannot reliably hide
+    // every userVisibleOnly push. Old servers conservatively exclude muted authors.
+    const needsTimed = desiredFilters.some(filter => filter.since !== undefined)
+    const supportsTimed = !needsTimed || await api.getInfo().then(info => info.supports_timed_filters === true).catch(() => false)
+    const filters = mutedMessageFilters(authorsByChat, mutes, MESSAGE_EVENT_KIND, supportsTimed)
+    if (get(identity)?.pubkey !== currentIdentity.pubkey) return { success: false, error: 'Profile changed' }
+    const existingMessageSub = Object.entries(currentSubscriptions).find(([, sub]) =>
+      sub.filter.kinds?.length === 1 && sub.filter.kinds[0] === MESSAGE_EVENT_KIND && sub.filter.authors &&
+      sub.web_push_subscriptions?.some(item => item.endpoint === webPushData.endpoint))
+    if (existingMessageSub) {
+      const [id, sub] = existingMessageSub
+      if (!sameMessageFilters([sub.filter], [filters[0]]) || !sameMessageFilters(sub.filters ?? [sub.filter], filters)) {
+        await api.updateNotificationSubscription(id, {
+          filter: filters[0], filters, web_push_subscriptions: [webPushData], webhooks: [], subscriber: sub.subscriber,
+        })
       }
-
-      // Find existing subscription for DM messages
-      const existingMessageSub = Object.entries(currentSubscriptions).find(
-        ([, sub]) =>
-          sub.filter.kinds?.length === 1 &&
-          sub.filter.kinds[0] === MESSAGE_EVENT_KIND &&
-          sub.filter.authors &&
-          sub.web_push_subscriptions?.some(s => s.endpoint === webPushData.endpoint)
-      )
-
-      if (existingMessageSub) {
-        const [id, sub] = existingMessageSub
-        const existingAuthors = sub.filter.authors || []
-
-        // Update if authors changed
-        if (!arraysEqual(existingAuthors, sessionAuthors)) {
-          await api.updateNotificationSubscription(id, {
-            filter: messageFilter,
-            web_push_subscriptions: [webPushData],
-            webhooks: [],
-            subscriber: sub.subscriber
-          })
-        }
-      } else {
-        // Create new subscription
-        await api.registerPushNotifications([webPushData], messageFilter)
-      }
-
-      lastSyncedAuthors = sessionAuthors
+    } else if (filters.some(filter => filter.authors.length)) {
+      await api.registerPushNotifications([webPushData], filters[0], filters)
     }
+    if (get(identity)?.pubkey !== currentIdentity.pubkey) return { success: false, error: 'Profile changed' }
+    lastSyncedMessageInput = messageInput
 
     // Handle invite response subscription
     if (inviteRecipients.length > 0) {
@@ -389,6 +394,7 @@ export async function subscribeToDMNotifications(): Promise<{ success: boolean; 
       lastSyncedInviteRecipients = []
     }
 
+    if (get(identity)?.pubkey !== currentIdentity.pubkey) return { success: false, error: 'Profile changed' }
     notificationSettings.setEnabled(true)
     return { success: true }
   } catch (error) {
@@ -435,7 +441,7 @@ export async function unsubscribeFromDMNotifications(): Promise<{ success: boole
     // Unsubscribe from push notifications at browser level
     await pushSubscription.unsubscribe()
     subscriptionPromise = null
-    lastSyncedAuthors = []
+    lastSyncedMessageInput = ''
     lastSyncedInviteRecipients = []
 
     notificationSettings.setEnabled(false)
@@ -453,23 +459,24 @@ function arraysEqual(a: string[], b: string[]): boolean {
   return sortedA.every((val, idx) => sortedB[idx] === val)
 }
 
-// Update subscription when sessions or invites change
+function sameMessageFilters(a: NotificationSubscription['filter'][], b: NotificationSubscription['filter'][]): boolean {
+  const canonical = (filters: NotificationSubscription['filter'][]) => JSON.stringify(filters.map(filter => ({
+    kinds: filter.kinds ?? [], authors: [...(filter.authors ?? [])].sort(), since: filter.since ?? null,
+  })))
+  return canonical(a) === canonical(b)
+}
+
+// Update subscription when sessions, mutes or invites change. Never prompt from a timer.
 export async function updateDMSubscription(): Promise<void> {
-  const settings = get(notificationSettings)
-  if (!settings.enabled) return
-
-  // Check if authors have changed
-  const currentAuthors = getSessionAuthors()
-  const currentInviteRecipients = getInviteRecipients()
-
-  const authorsChanged = !arraysEqual(currentAuthors, lastSyncedAuthors)
-  const inviteRecipientsChanged = !arraysEqual(currentInviteRecipients, lastSyncedInviteRecipients)
-
-  if (!authorsChanged && !inviteRecipientsChanged) return
-
-  try {
-    await subscribeToDMNotifications()
-  } catch {
-    // Ignore subscription errors
-  }
+  if (!get(notificationSettings).enabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  const account = get(identity)?.pubkey
+  if (!account) return
+  await loadChatMutes(account)
+  if (get(identity)?.pubkey !== account) return
+  let currentMessageInput: string
+  try { currentMessageInput = account + ':' + JSON.stringify(mutedMessageFilters(getSessionAuthorsByChat(), get(chatMutes), MESSAGE_EVENT_KIND, true)) }
+  catch { return } // The messaging runtime may still be restoring.
+  const recipients = getInviteRecipients()
+  if (currentMessageInput === lastSyncedMessageInput && arraysEqual(recipients, lastSyncedInviteRecipients)) return
+  await subscribeToDMNotifications()
 }

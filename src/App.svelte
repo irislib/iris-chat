@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadChatMutes, clearChatMutes } from './lib/chatMuteStore'
   import { onMount } from 'svelte'
   import LoginView from './components/LoginView.svelte'
   import CallView from './components/CallView.svelte'
@@ -546,10 +547,13 @@
     mobileView = 'main'
   }
 
+  $effect(() => { void loadChatMutes($identity?.pubkey ?? null) })
+
   async function handleLogout() {
     const owner = get(identity)?.pubkey
     pendingNotification = null
     stopMessageExpirationCleanup()
+    await clearChatMutes()
     await stopDeviceSync()
     leaveChat()
     clearGroupData()

@@ -8,6 +8,7 @@ import {
   INVITE_RESPONSE_KIND,
   CHAT_MESSAGE_KIND,
 } from 'nostr-double-ratchet'
+import { chatMutesKey, normalizeChatMutes, isChatMuted } from './lib/chatMutePolicy'
 import { renderRumor } from './lib/pushRumorRender'
 import {
   extractPushNostrEvent,
@@ -272,11 +273,9 @@ async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: stri
   return { name: getAnimalName(pubkey), icon: fallbackIcon }
 }
 
-// Web push cannot be suppressed server-side, so the SW must decrypt and
-// classify every incoming inner-rumor kind, then render an appropriate
-// notification. Suppressing showNotification when the app isn't engaged
-// would leave Chrome to surface a generic "site updated in the background"
-// placeholder; the user prefers to see what was actually received.
+// Server filters silence muted chats before a userVisibleOnly push is sent.
+// This worker also checks saved deadlines for already in-flight pushes and
+// classifies the remaining decrypted rumors before displaying them.
 
 interface DecryptResult {
   success: boolean
@@ -530,6 +529,12 @@ self.addEventListener('push', (event) => {
           if (engagement.anyVisible) return
           await showFallbackNotification()
           return
+        }
+
+        const owner = await getOwnerPubkeyFromSessionManager()
+        if (owner) {
+          const record = await db.sessionManager.get(chatMutesKey(owner))
+          if (isChatMuted(normalizeChatMutes(record?.value), result.chatId)) return
         }
 
         // User is already looking at this exact conversation — silent push
