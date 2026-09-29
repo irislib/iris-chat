@@ -11,7 +11,7 @@ export interface CallMediaStats {
   targetBitrate: number; sentVideoFrames: number; droppedVideoFrames: number
 }
 export interface CallMediaCallbacks {
-  send(frame: MediaFrame): Promise<void>
+  send(frame: MediaFrame, allowed?: () => boolean): Promise<void>
   remoteVideo(canvas: HTMLCanvasElement): void
   feedback(feedback: Pick<CallControl, 'feedback_seq' | 'video_seq' | 'received_frames' | 'received_bytes' | 'interval_ms'>): void
   highestVideo(): number | undefined
@@ -21,6 +21,8 @@ export interface CallMediaCallbacks {
   devices?(devices: CallDeviceState): void
   deviceError?(message: string): void
   streamChanged?(stream: MediaStream): void
+  screenSharing?(sharing: boolean, camera: boolean): void
+  screenError?(message: string): void
 }
 const unsupported = () => new Error('This browser cannot make video calls. Update your browser and try again.')
 /** Opus audio and browser H.264 packets travel through the authenticated call session. */
@@ -31,6 +33,13 @@ export class BrowserCallMedia {
   private qualityRevision = 0
   private active = false
   private camera = false
+  private videoAllowed = false
+  private displayStream?: MediaStream
+  private cameraBeforeSharing = false
+  private screenRequest = 0
+  private selectingScreen = false
+  private videoSource = 0
+  private screenEnded = () => this.stopScreenSharing()
   private muted = false
   private audioContext?: AudioContext
   private audioNode?: AudioWorkletNode
@@ -176,7 +185,7 @@ export class BrowserCallMedia {
         for (const old of previous) { this.stream!.removeTrack(old); old.stop() }
         this.stream!.addTrack(track)
         this.deviceSelection.microphone = id
-        this.callbacks.streamChanged?.(this.stream!)
+        this.callbacks.streamChanged?.(this.displayStream ?? this.stream!)
       }
     } finally { this.switchingDevice = false }
     if (token !== this.generation) return
@@ -217,19 +226,15 @@ export class BrowserCallMedia {
   private publishDevices() {
     this.callbacks.devices?.({ ...this.deviceSelection, ...this.deviceLists, canSelectSpeaker: typeof (this.audioContext as RoutedAudioContext)?.setSinkId === 'function' })
   }
-  private videoConfig(): VideoEncoderConfig {
+  private videoConfig(stream = this.displayStream ?? this.stream): VideoEncoderConfig {
     const quality = callEncoding(this.quality)
-    const capture = this.stream?.getVideoTracks()[0]?.getSettings()
+    const capture = stream?.getVideoTracks()[0]?.getSettings()
     return { codec: quality.codec, ...callVideoSize(this.quality, capture, this.adaptation.target), bitrate: this.adaptation.target, framerate: callVideoFramerate(this.quality, this.adaptation.target), latencyMode: 'realtime', bitrateMode: 'constant', avc: { format: 'annexb' } }
   }
-  private openVideo(stream: MediaStream, token: number) {
-    const video = document.createElement('video'); video.muted = true; video.playsInline = true; video.srcObject = stream; void video.play().catch(() => {})
-    this.capture = video
-    this.canvas = document.createElement('canvas')
-    this.encodeCanvas = document.createElement('canvas')
-    this.callbacks.remoteVideo(this.canvas)
-    this.videoEncoder = new VideoEncoder({ output: chunk => {
-      if (token !== this.generation || !this.active || !this.camera) return
+  private createVideoEncoder(stream: MediaStream, token: number, source: number) {
+    const allowed = () => token === this.generation && source === this.videoSource && this.active && this.camera
+    const encoder = new VideoEncoder({ output: chunk => {
+      if (!allowed()) return
       // Number encoded output, not capture attempts: codecs may skip input.
       const seq = this.videoSeq++ >>> 0
       this.adaptation.sentFrame()
@@ -238,9 +243,82 @@ export class BrowserCallMedia {
       if (bytes.length > 262144) { this.forceKey = true; return }
       this.videoSending = true
       this.stats.sentVideoFrames++
-      void this.send({ kind: 2, seq, timestamp: chunk.timestamp, key: chunk.type === 'key', bytes }).finally(() => { if (token === this.generation) this.videoSending = false })
-    }, error: error => this.fail(error, token) })
-    this.videoEncoder.configure(this.videoConfig()); this.configuredBitrate = this.adaptation.target
+      void this.send({ kind: 2, seq, timestamp: chunk.timestamp, key: chunk.type === 'key', bytes }, allowed).finally(() => { if (token === this.generation && source === this.videoSource) this.videoSending = false })
+    }, error: error => {
+      if (token !== this.generation || source !== this.videoSource) return
+      if (this.displayStream) { this.stopScreenSharing(); this.callbacks.screenError?.('Screen sharing stopped. Try again.') }
+      else this.fail(error, token)
+    } })
+    try { encoder.configure(this.videoConfig(stream)) } catch (error) { encoder.close(); throw error }
+    return encoder
+  }
+  private replaceVideoSource(stream: MediaStream) {
+    const source = this.videoSource + 1
+    const encoder = this.createVideoEncoder(stream, this.generation, source)
+    // Invalidate queued output and fragmented sends before changing the source.
+    this.videoSource = source
+    if (this.videoEncoder?.state !== 'closed') this.videoEncoder?.close()
+    this.videoEncoder = encoder
+    this.configuredBitrate = this.adaptation.target
+    this.videoSending = false; this.forceKey = true
+    this.capture!.srcObject = stream
+    void this.capture!.play().catch(() => {})
+  }
+  async startScreenSharing(): Promise<boolean> {
+    if (this.displayStream || this.selectingScreen || !this.active || !this.videoAllowed || !this.videoEncoder || !navigator.mediaDevices?.getDisplayMedia) return false
+    const request = ++this.screenRequest, token = this.generation, previousCamera = this.camera
+    this.selectingScreen = true
+    let selected: MediaStream | undefined
+    try {
+      // Called directly from the Share screen button: the browser owns source
+      // selection and permission. Never capture system audio over the call mic.
+      selected = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 15 } }, audio: false })
+      if (token !== this.generation || request !== this.screenRequest || !this.active || !this.videoAllowed) { selected.getTracks().forEach(track => track.stop()); return false }
+      const track = selected.getVideoTracks()[0]
+      if (!track || track.readyState === 'ended') throw new Error('The selected screen is unavailable')
+      selected.getAudioTracks().forEach(track => { selected!.removeTrack(track); track.stop() })
+      this.replaceVideoSource(selected)
+      this.displayStream = selected
+      this.cameraBeforeSharing = previousCamera
+      track.addEventListener('ended', this.screenEnded, { once: true })
+      this.setState(this.active, this.muted, true, true)
+      this.callbacks.streamChanged?.(selected)
+      this.callbacks.screenSharing?.(true, true)
+      return true
+    } catch (error) {
+      selected?.getTracks().forEach(track => track.stop())
+      if (token !== this.generation || request !== this.screenRequest) return false
+      if (error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'AbortError')) return false
+      throw error
+    } finally { if (request === this.screenRequest) this.selectingScreen = false }
+  }
+  stopScreenSharing() {
+    this.screenRequest++; this.selectingScreen = false
+    const screen = this.displayStream
+    if (!screen) return
+    this.displayStream = undefined
+    screen.getVideoTracks().forEach(track => track.removeEventListener('ended', this.screenEnded))
+    screen.getTracks().forEach(track => track.stop())
+    let camera = this.cameraBeforeSharing
+    try { if (this.stream && this.capture) this.replaceVideoSource(this.stream) }
+    catch {
+      // A camera restore failure must never stop the microphone or transport.
+      this.videoSource++; camera = false
+      if (this.videoEncoder?.state !== 'closed') this.videoEncoder?.close()
+      this.callbacks.screenError?.('Could not restore the camera')
+    }
+    this.setState(this.active, this.muted, camera, this.videoAllowed)
+    if (this.stream) this.callbacks.streamChanged?.(this.stream)
+    this.callbacks.screenSharing?.(false, camera)
+  }
+  private openVideo(stream: MediaStream, token: number) {
+    const video = document.createElement('video'); video.muted = true; video.playsInline = true; video.srcObject = stream; void video.play().catch(() => {})
+    this.capture = video
+    this.canvas = document.createElement('canvas')
+    this.encodeCanvas = document.createElement('canvas')
+    this.callbacks.remoteVideo(this.canvas)
+    this.videoEncoder = this.createVideoEncoder(stream, token, this.videoSource)
+    this.configuredBitrate = this.adaptation.target
     this.decoderInit = { output: frame => {
       if (token !== this.generation || !this.active || !this.canvas) { frame.close(); return }
       const draw = () => {
@@ -277,9 +355,9 @@ export class BrowserCallMedia {
       this.videoEncoder.encode(frame, { keyFrame }); frame.close()
     }, 10)
   }
-  private async send(frame: MediaFrame) {
+  private async send(frame: MediaFrame, allowed?: () => boolean) {
     this.stats.sentBytes += frame.bytes.length
-    try { await this.callbacks.send(frame) } catch { /* Loss is recovered by codec concealment/keyframe feedback. */ }
+    try { await this.callbacks.send(frame, allowed) } catch { /* Loss is recovered by codec concealment/keyframe feedback. */ }
   }
   receive(frame: MediaFrame) {
     if (!this.active) return
@@ -374,9 +452,9 @@ export class BrowserCallMedia {
   setState(active: boolean, muted: boolean, camera: boolean, videoAllowed: boolean) {
     if (active && !this.active) { this.epoch = performance.now(); this.adaptation.begin(this.epoch) }
     if (camera && !this.camera) this.forceKey = true
-    this.active = active; this.muted = muted; this.camera = camera && videoAllowed
+    this.active = active; this.muted = muted; this.camera = camera && videoAllowed; this.videoAllowed = videoAllowed
     this.stream?.getAudioTracks().forEach(track => { track.enabled = active && !muted })
-    this.stream?.getVideoTracks().forEach(track => { if (!videoAllowed) track.stop(); else track.enabled = active && camera })
+    this.stream?.getVideoTracks().forEach(track => { if (!videoAllowed) track.stop(); else track.enabled = active && camera && !this.displayStream })
     this.audioNode?.port.postMessage({ active: active && !muted })
   }
   async setQuality(quality: CallQualitySettings) {
@@ -397,6 +475,9 @@ export class BrowserCallMedia {
   private fail(error: Error, token: number) { if (token === this.generation) this.callbacks.error?.(error) }
   stop() {
     this.generation++; this.active = false
+    this.screenRequest++; this.selectingScreen = false; this.videoSource++
+    this.displayStream?.getVideoTracks().forEach(track => track.removeEventListener('ended', this.screenEnded))
+    this.displayStream?.getTracks().forEach(track => track.stop()); this.displayStream = undefined
     this.deviceLists = { microphones: [], speakers: [] }
     navigator.mediaDevices?.removeEventListener?.('devicechange', this.devicesChanged)
     this.microphoneSource?.disconnect(); this.microphoneSource = undefined

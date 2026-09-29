@@ -27,7 +27,7 @@ export class CallSession {
   private dispositions = new Map<string, { owner: string; peers: string[]; packet: CallControl }>()
   private lastHeard = 0
   private mediaReady = false
-  private retransmitCache = new Map<number, { at: number; packets: Uint8Array[]; bytes: number }>()
+  private retransmitCache = new Map<number, { at: number; packets: Uint8Array[]; bytes: number; allowed: () => boolean }>()
   private retransmitWindow = 0
   private retransmitCount = 0
   private recoveryTimer: ReturnType<typeof setInterval>
@@ -113,19 +113,20 @@ export class CallSession {
   }
   get highestVideo() { return this.receiver.highestVideo }
   requestKeyframe() { if (get(this.state)?.status === 'active') this.broadcast('keyframe') }
-  async sendMedia(frame: MediaFrame) {
+  // A stopped screen must also revoke fragments and repair packets already queued.
+  async sendMedia(frame: MediaFrame, allowed: () => boolean = () => true) {
     const s = get(this.state)
-    if (!s?.peer || s.status !== 'active' || (frame.kind === 1 && s.muted) || (frame.kind === 2 && (!s.video || !s.camera))) return
+    if (!allowed() || !s?.peer || s.status !== 'active' || (frame.kind === 1 && s.muted) || (frame.kind === 2 && (!s.video || !s.camera))) return
     const began = performance.now()
     const packets = encodeCallMedia(s.id, frame)
     if (frame.kind === 2) {
       for (const [seq, cached] of this.retransmitCache) if (began - cached.at > 300) this.retransmitCache.delete(seq)
-      this.retransmitCache.set(frame.seq, { at: began, packets, bytes: packets.reduce((n, p) => n + p.length, 0) })
+      this.retransmitCache.set(frame.seq, { at: began, packets, allowed, bytes: packets.reduce((n, p) => n + p.length, 0) })
       while (this.retransmitCache.size > 8 || [...this.retransmitCache.values()].reduce((n, entry) => n + entry.bytes, 0) > 1048576) this.retransmitCache.delete(this.retransmitCache.keys().next().value!)
     }
     for (const payload of packets) {
       const current = get(this.state)
-      if (!current || current.status !== 'active' || (frame.kind === 1 && current.muted) || (frame.kind === 2 && (!current.video || !current.camera)) || current.id !== s.id || current.peer !== s.peer || this.ownerForPeer(s.peer) !== s.owner || performance.now() - began > 150) return
+      if (!allowed() || !current || current.status !== 'active' || (frame.kind === 1 && current.muted) || (frame.kind === 2 && (!current.video || !current.camera)) || current.id !== s.id || current.peer !== s.peer || this.ownerForPeer(s.peer) !== s.owner || performance.now() - began > 150) return
       await this.endpoint.sendDatagram({ dst: s.peer, srcPort: CALL_PORT, dstPort: CALL_PORT, payload })
     }
   }
@@ -224,11 +225,11 @@ export class CallSession {
   }
   private async retransmit(s: CallState, control: CallControl) {
     const now = performance.now(), cached = this.retransmitCache.get(control.frame_seq!)
-    if (!cached || now - cached.at > 300 || !s.peer) return
+    if (!cached || !cached.allowed() || now - cached.at > 300 || !s.peer) return
     if (now - this.retransmitWindow >= 1000) { this.retransmitWindow = now; this.retransmitCount = 0 }
     for (const index of new Set(control.missing)) {
       const current = get(this.state), payload = cached.packets[index]
-      if (this.retransmitCount >= 128 || !current || current.id !== s.id || current.status !== 'active' || !current.camera || current.peer !== s.peer || this.ownerForPeer(s.peer) !== s.owner) return
+      if (!cached.allowed() || this.retransmitCount >= 128 || !current || current.id !== s.id || current.status !== 'active' || !current.camera || current.peer !== s.peer || this.ownerForPeer(s.peer) !== s.owner) return
       if (!payload) continue
       this.retransmitCount++
       try { await this.endpoint.sendDatagram({ dst: s.peer, srcPort: CALL_PORT, dstPort: CALL_PORT, payload }) } catch { return }

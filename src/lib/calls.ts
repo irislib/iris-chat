@@ -19,6 +19,7 @@ const callNotification = new CallNotification()
 
 export const callState = writable<CallState | null>(null)
 export const callError = writable('')
+export const callScreenSharing = writable({ active: false, pending: false })
 export const callMediaStats = writable<CallMediaStats | null>(null)
 export const localCallStream = writable<MediaStream | null>(null)
 export const remoteCallVideo = writable<HTMLCanvasElement | null>(null)
@@ -60,6 +61,7 @@ function stopMedia() {
   callNotification.clear()
   generation++
   media?.stop(); media = null
+  callScreenSharing.set({ active: false, pending: false })
   localCallStream.set(null)
   remoteCallVideo.set(null)
   callMediaStats.set(null)
@@ -156,7 +158,7 @@ async function openMedia(video: boolean, capturedSession: CallSession, callId: s
   const isCurrent = () => session === capturedSession && get(capturedSession.state)?.id === callId && get(capturedSession.state)?.status !== 'ended'
   const fail = (error: Error) => { if (isCurrent()) { capturedSession.end('Call could not connect'); callError.set(error.message) } }
   const next = new BrowserCallMedia({
-    send: frame => isCurrent() ? capturedSession.sendMedia(frame) : Promise.resolve(),
+    send: (frame, allowed) => isCurrent() ? capturedSession.sendMedia(frame, allowed) : Promise.resolve(),
     remoteVideo: canvas => { if (isCurrent()) remoteCallVideo.set(canvas) },
     feedback: feedback => { if (isCurrent()) capturedSession.sendFeedback(feedback) },
     highestVideo: () => isCurrent() ? capturedSession.highestVideo : undefined,
@@ -166,6 +168,13 @@ async function openMedia(video: boolean, capturedSession: CallSession, callId: s
     devices: devices => { if (isCurrent()) { callDevices.set(devices); setCallDevicePreferences({ microphone: devices.microphone, speaker: devices.speaker }) } },
     deviceError: message => { if (isCurrent()) callDeviceError.set(message) },
     streamChanged: stream => { if (isCurrent()) localCallStream.set(stream) },
+    screenSharing: (active, camera) => {
+      if (!isCurrent()) return
+      callScreenSharing.set({ active, pending: false })
+      const state = get(capturedSession.state)
+      if (state?.status === 'active') capturedSession.setMedia(state.muted, camera)
+    },
+    screenError: message => { if (isCurrent()) callError.set(message) },
   })
   media = next
   try {
@@ -246,4 +255,15 @@ export function endCall() {
 }
 export function dismissCall() { session?.clear(); callError.set('') }
 export function toggleCallMute() { const s = get(callState); if (s) session?.setMedia(!s.muted, s.camera) }
-export function toggleCallCamera() { const s = get(callState); if (s?.video) session?.setMedia(s.muted, !s.camera) }
+export function toggleCallCamera() { const s = get(callState); if (s?.video && !get(callScreenSharing).active && !get(callScreenSharing).pending) session?.setMedia(s.muted, !s.camera) }
+
+export async function toggleCallScreenShare() {
+  const current = media, state = get(callState)
+  if (!current || state?.status !== 'active' || !state.video || get(callScreenSharing).pending) return
+  callError.set('')
+  if (get(callScreenSharing).active) { current.stopScreenSharing(); return }
+  callScreenSharing.set({ active: false, pending: true })
+  try { await current.startScreenSharing() }
+  catch (error) { if (media === current) callError.set(error instanceof Error ? error.message : 'Could not share the screen') }
+  finally { if (media === current) callScreenSharing.update(value => ({ ...value, pending: false })) }
+}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { callState, callError, callMediaStats, localCallStream, remoteCallVideo, answerCall, endCall, dismissCall, toggleCallMute, toggleCallCamera } from '../lib/calls'
+  import { callState, callError, callMediaStats, localCallStream, remoteCallVideo, answerCall, endCall, dismissCall, toggleCallMute, toggleCallCamera, callScreenSharing, toggleCallScreenShare } from '../lib/calls'
   import { callSettings } from '../lib/callSettings'
   import CallQualityControls from './CallQualityControls.svelte'
   import CallDeviceControls from './CallDeviceControls.svelte'
@@ -12,6 +12,7 @@
   let qualityCallId = ''
   let now = $state(Date.now())
   let answering = $state(false)
+  const canShareScreen = typeof navigator.mediaDevices?.getDisplayMedia === 'function'
   const timer = setInterval(() => { now = Date.now() }, 1000)
   onDestroy(() => clearInterval(timer))
   $effect(() => { if (localVideo) { localVideo.srcObject = $localCallStream; void localVideo.play().catch(() => {}) } })
@@ -37,10 +38,11 @@
         {:else if $callState.direction === 'incoming'}Incoming {$callState.video ? 'video' : 'voice'} call
         {:else}Calling…{/if}
       </p>
+      {#if $callScreenSharing.active}<p class="sharing-status" role="status">Sharing your screen</p>{/if}
       {#if $callError}<p class="call-error" role="alert">{$callError}</p>{/if}
     </div>
     {#if $callState.camera && $localCallStream && $callState.status !== 'ended'}
-      <video class="local-video" bind:this={localVideo} muted autoplay playsinline aria-label="Your camera"></video>
+      <video class="local-video" class:screen-preview={$callScreenSharing.active} bind:this={localVideo} muted autoplay playsinline aria-label={$callScreenSharing.active ? 'Your screen' : 'Your camera'}></video>
     {/if}
     {#if showQuality && $callState.status !== 'ended'}
       <div class="quality-panel" role="region" aria-label="Call settings">
@@ -62,7 +64,10 @@
       {:else}
         <div><button class:off={$callState.muted} class="round" title={$callState.muted ? 'Unmute microphone' : 'Mute microphone'} aria-label={$callState.muted ? 'Unmute microphone' : 'Mute microphone'} aria-pressed={$callState.muted} onclick={toggleCallMute}><span class={$callState.muted ? 'i-carbon-microphone-off-filled' : 'i-carbon-microphone-filled'}></span></button><span>{$callState.muted ? 'Unmute' : 'Mute'}</span></div>
         {#if $callState.video}
-          <div><button class:off={!$callState.camera} class="round" title={$callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-label={$callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-pressed={!$callState.camera} onclick={toggleCallCamera}><span class={$callState.camera ? 'i-carbon-video-filled' : 'i-carbon-video-off-filled'}></span></button><span>Camera</span></div>
+          <div><button disabled={$callScreenSharing.active || $callScreenSharing.pending} class:off={!$callState.camera || $callScreenSharing.active} class="round" title={$callScreenSharing.active ? 'Stop sharing to use the camera' : $callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-label={$callScreenSharing.active ? 'Stop sharing to use the camera' : $callState.camera ? 'Turn camera off' : 'Turn camera on'} aria-pressed={!$callState.camera || $callScreenSharing.active} onclick={toggleCallCamera}><span class={$callState.camera && !$callScreenSharing.active ? 'i-carbon-video-filled' : 'i-carbon-video-off-filled'}></span></button><span>Camera</span></div>
+        {/if}
+        {#if canShareScreen && $callState.video && $callState.status === 'active'}
+          <div><button class="round" class:off={$callScreenSharing.active} title={$callScreenSharing.active ? 'Stop sharing' : 'Share screen'} aria-label={$callScreenSharing.active ? 'Stop sharing' : 'Share screen'} aria-pressed={$callScreenSharing.active} disabled={$callScreenSharing.pending} onclick={toggleCallScreenShare}><span class="i-carbon-screen"></span></button><span>{$callScreenSharing.active ? 'Stop sharing' : $callScreenSharing.pending ? 'Choose screen…' : 'Share screen'}</span></div>
         {/if}
         <div><button class="round" title="Call settings" aria-label="Call settings" aria-expanded={showQuality} onclick={() => showQuality = !showQuality}><span class="i-carbon-settings"></span></button><span>Settings</span></div>
         <div><button class="round decline" title="End call" aria-label="End call" onclick={endCall}><span class="i-carbon-phone-off-filled"></span></button><span>End</span></div>
@@ -79,7 +84,8 @@
   h1 { font-size: 28px; font-weight: 600; }
   p { color: #d2dde2; }
   .call-error { max-width: 360px; color: #ffd0cc; font-size: 14px; }
-  .call-controls { display: flex; align-items: center; justify-content: center; gap: 28px; z-index: 2; }
+  .sharing-status { padding: 6px 12px; border-radius: 20px; background: #172328dd; color: white; font-size: 14px; }
+  .call-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 28px; z-index: 2; }
   .call-controls > div { display: flex; flex-direction: column; align-items: center; gap: 9px; font-size: 13px; }
   .round { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: #ffffff25; color: white; }
   .round > span { font-size: 26px; }
@@ -95,6 +101,7 @@
   .quality-panel { position: absolute; bottom: 170px; z-index: 3; width: min(340px, calc(100vw - 32px)); max-height: calc(100dvh - 200px); overflow-y: auto; padding: 20px; border-radius: 18px; background: #172328f5; }
   .quality-options { margin-top: 20px; }
   .local-video { position: absolute; top: 24px; right: 24px; width: min(28vw, 180px); border-radius: 14px; transform: scaleX(-1); box-shadow: 0 2px 20px #0005; }
+  .local-video.screen-preview { transform: none; width: min(36vw, 240px); }
   .done { background: #ffffff20; border-radius: 24px; padding: 12px 40px; }
   .call-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 100; display: flex; gap: 16px; align-items: center; background: #3f2020; color: white; padding: 16px 20px; border-radius: 16px; max-width: 90vw; }
   @media (max-width: 500px) { .call-person { margin-top: 15vh; } .call-controls { gap: 16px; } .round { width: 56px; height: 56px; } }

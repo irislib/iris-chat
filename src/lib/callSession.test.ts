@@ -274,6 +274,19 @@ describe('FIPS calls', () => {
     await vi.advanceTimersByTimeAsync(150)
     expect(ea.sent.filter(bytes => bytes[0] === 73)).toHaveLength(1)
   })
+  it('revokes source fragments and retransmits even when outgoing video stays enabled', async () => {
+    a.start('Bob', ['b'], true); b.accept(true)
+    let release!: () => void, sourceIsCurrent = true
+    ea.gate = new Promise<void>(resolve => { release = resolve })
+    const pending = a.sendMedia({ kind: 2, seq: 1, timestamp: 0, key: true, bytes: packet(5000) }, () => sourceIsCurrent)
+    sourceIsCurrent = false // Stop sharing and restore an enabled camera.
+    release(); await pending
+    expect(get(a.state)?.camera).toBe(true)
+    expect(ea.sent.filter(bytes => bytes[0] === 73)).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(150)
+    expect(eb.sent.map(parseCallControl).some(p => p?.type === 'nack')).toBe(true)
+    expect(ea.sent.filter(bytes => bytes[0] === 73)).toHaveLength(1)
+  })
   it('keeps rejected offers rejected after preferences are enabled', () => {
     b.dispose()
     let enabled = false
