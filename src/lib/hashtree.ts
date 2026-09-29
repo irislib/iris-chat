@@ -90,7 +90,7 @@ export async function uploadFile(
   const totalBytes = file.size
 
   // Use streaming upload for progress tracking
-  const stream = tree.createStream()
+  const stream = tree.createStream({ unencrypted: false })
   const reader = file.stream().getReader()
   let bytesRead = 0
 
@@ -106,9 +106,8 @@ export async function uploadFile(
   const result = await stream.finalize()
 
   // Construct CID from result
-  const cid = result.key
-    ? { hash: result.hash, key: result.key }
-    : { hash: result.hash }
+  if (!result.key) throw new Error('Attachment encryption failed')
+  const cid = { hash: result.hash, key: result.key }
 
   const nhash = nhashEncode(cid)
 
