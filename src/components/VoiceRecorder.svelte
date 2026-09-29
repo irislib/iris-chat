@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { createMediaCaptureLease } from '../lib/mediaCaptureLease'
 
   interface Props {
     onrecorded: (file: File) => void
@@ -13,6 +14,7 @@
   let audioChunks: Blob[] = $state([])
   let isRecording = $state(false)
   let recordingTime = $state(0)
+  const capture = createMediaCaptureLease()
   let timerInterval: ReturnType<typeof setInterval> | null = null
 
   // Auto-start recording on mount
@@ -25,19 +27,22 @@
   })
 
   function cleanup() {
+    capture.close()
     if (timerInterval) {
       clearInterval(timerInterval)
       timerInterval = null
     }
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stream.getTracks().forEach(track => track.stop())
-      mediaRecorder.stop()
+    if (mediaRecorder) {
+      mediaRecorder.onstop = null
+      mediaRecorder.ondataavailable = null
+      if (mediaRecorder.state !== 'inactive') mediaRecorder.stop()
     }
   }
 
   async function startRecording() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await capture.acquire(() => navigator.mediaDevices.getUserMedia({ audio: true }))
+      if (!stream || !capture.active) return
 
       // Choose best supported format
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -51,7 +56,7 @@
       recordingTime = 0
 
       mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
+        if (capture.active && e.data.size > 0) {
           audioChunks.push(e.data)
         }
       }
@@ -64,6 +69,8 @@
         recordingTime++
       }, 1000)
     } catch (e) {
+      if (!capture.active) return
+      cleanup()
       console.error('Failed to start recording:', e)
       alert('Could not access microphone. Please check permissions.')
       oncancel()
@@ -71,17 +78,19 @@
   }
 
   function stopAndSend() {
-    if (!mediaRecorder || mediaRecorder.state !== 'recording') return
+    const recorder = mediaRecorder
+    if (!capture.active || !recorder || recorder.state !== 'recording') return
 
-    mediaRecorder.onstop = () => {
-      mediaRecorder!.stream.getTracks().forEach(track => track.stop())
+    recorder.onstop = () => {
+      if (!capture.active) return
+      capture.close()
       if (timerInterval) {
         clearInterval(timerInterval)
         timerInterval = null
       }
 
       // Create File from recorded chunks
-      const mimeType = mediaRecorder!.mimeType
+      const mimeType = recorder.mimeType
       const ext = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'm4a' : 'ogg'
       const blob = new Blob(audioChunks, { type: mimeType })
       const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mimeType })
@@ -89,7 +98,7 @@
       onrecorded(file)
     }
 
-    mediaRecorder.stop()
+    recorder.stop()
   }
 
   function cancel() {
