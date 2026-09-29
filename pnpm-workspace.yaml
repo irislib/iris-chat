@@ -9,6 +9,6 @@ overrides:
 onlyBuiltDependencies:
   - esbuild
 
-# Group delivery fixes from nostr-double-ratchet through 93b34a8; remove after upgrading.
+# Group delivery fixes from nostr-double-ratchet through 0bebd8a; remove after upgrading.
 patchedDependencies:
   nostr-double-ratchet@0.0.172: patches/nostr-double-ratchet@0.0.172.patch
