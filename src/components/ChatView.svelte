@@ -379,7 +379,7 @@
     >
       <Avatar pubkey={chat.recipientPubkey} size={40} />
       <div class="flex-1 min-w-0 text-left">
-        <p class="font-medium">
+        <p class="font-medium truncate">
           <Name pubkey={chat.recipientPubkey} />
         </p>
       </div>
