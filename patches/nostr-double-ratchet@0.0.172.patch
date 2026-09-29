@@ -93,7 +93,7 @@ index 74d9834..567c9e4 100644
 +{"version":3,"file":"groupInternals.d.ts","sourceRoot":"","sources":["../../src/group/groupInternals.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,iBAAiB,CAAC;AAE7D,MAAM,WAAW,uBAAuB;IACtC,KAAK,EAAE,MAAM,CAAC;IACd,YAAY,EAAE,qBAAqB,CAAC;IACpC,UAAU,EAAE,MAAM,EAAE,CAAC;IACrB,oFAAoF;IACpF,iBAAiB,CAAC,EAAE,MAAM,EAAE,CAAC;CAC9B;AAED,wBAAgB,SAAS,IAAI,MAAM,CAIlC;AAED,wBAAgB,OAAO,CAAC,KAAK,EAAE,MAAM,GAAG,OAAO,CAE9C"}
 \ No newline at end of file
 diff --git a/dist/nostr-double-ratchet.es.js b/dist/nostr-double-ratchet.es.js
-index 8debad6..154e4cb 100644
+index 8debad6..3ade0be 100644
 --- a/dist/nostr-double-ratchet.es.js
 +++ b/dist/nostr-double-ratchet.es.js
 @@ -1,122 +1,122 @@
@@ -9570,7 +9570,7 @@ index 8debad6..154e4cb 100644
          }
        },
        nostr: this.nostrFacade,
-@@ -7609,170 +7631,186 @@ class Hy extends Gy {
+@@ -7609,170 +7631,187 @@ class Hy extends Gy {
        ourDeviceId: this.deviceId,
        ourOwnerPubkey: this.ownerPublicKey,
        identityKey: this.identityKey
@@ -9726,6 +9726,7 @@ index 8debad6..154e4cb 100644
 -  installInviteResponseSession(e, r) {
 -    if (!(e.deviceId === e.ownerPublicKey || ((r == null ? void 0 : r.getAllDevices().some((c) => c.identityPubkey === e.deviceId)) ?? !1)))
 +  installInviteResponseSession(t, n) {
++    if (this.processedInviteResponses.has(t.eventId)) return !0;
 +    if (!(t.deviceId === t.ownerPublicKey || ((n == null ? void 0 : n.getAllDevices().some((u) => u.identityPubkey === t.deviceId)) ?? !1)))
        return !1;
 -    const s = this.getOrCreateUserRecord(e.ownerPublicKey), o = this.upsertDeviceRecord(s, e.deviceId), a = wn({
@@ -9859,7 +9860,7 @@ index 8debad6..154e4cb 100644
    /** Enable or disable adoption of incoming kind-10448 chat settings. */
    setAutoAdoptChatSettings(e) {
      this.autoAdoptChatSettings = e;
-@@ -7789,33 +7827,33 @@ class zy extends Hy {
+@@ -7789,33 +7828,33 @@ class zy extends Hy {
      ).map((e) => ({
        ownerPubkey: e.publicKey,
        appKeys: new _(
@@ -9903,7 +9904,7 @@ index 8debad6..154e4cb 100644
      if (!n)
        return [];
      const i = /* @__PURE__ */ new Set();
-@@ -7832,7 +7870,7 @@ class zy extends Hy {
+@@ -7832,7 +7871,7 @@ class zy extends Hy {
      return this.processReceivedEvent(e);
    }
    processReceivedEvent(e) {
@@ -9912,7 +9913,7 @@ index 8debad6..154e4cb 100644
        this.retryPendingDirectMessages();
      }), !0) : e.kind === nt ? (this.processInviteResponseEvent(e).then(() => {
        this.retryPendingDirectMessages();
-@@ -7842,7 +7880,7 @@ class zy extends Hy {
+@@ -7842,7 +7881,7 @@ class zy extends Hy {
      return this.getOrCreateUserRecord(e.pubkey).processAppKeysEvent(e);
    }
    async processInviteResponseEvent(e) {
@@ -9921,7 +9922,7 @@ index 8debad6..154e4cb 100644
      if (this.processedInviteResponses.has(e.id) || this.pendingInviteResponses.has(e.id))
        return !1;
      try {
-@@ -7864,12 +7902,12 @@ class zy extends Hy {
+@@ -7864,12 +7903,12 @@ class zy extends Hy {
          inviteeSessionPublicKey: i.inviteeSessionPublicKey,
          ephemeralPrivateKey: n,
          sharedSecret: this.inviteKeys.sharedSecret
@@ -9936,7 +9937,7 @@ index 8debad6..154e4cb 100644
        return this.installInviteResponseSession(o, c) || (this.queuePendingInviteResponse(o), await this.setupUser(s).catch(() => {
        })), !0;
      } catch {
-@@ -7877,19 +7915,19 @@ class zy extends Hy {
+@@ -7877,19 +7916,19 @@ class zy extends Hy {
      }
    }
    async processInviteEvent(e) {
@@ -9960,7 +9961,7 @@ index 8debad6..154e4cb 100644
        }));
      }
      return i;
-@@ -7899,28 +7937,28 @@ class zy extends Hy {
+@@ -7899,28 +7938,28 @@ class zy extends Hy {
      await this.expirationSettings.setDefault(e);
    }
    /** Set, disable, or clear the expiration override for one peer. */
@@ -9997,7 +9998,7 @@ index 8debad6..154e4cb 100644
      }));
    }
    async deleteChat(e) {
-@@ -7928,19 +7966,20 @@ class zy extends Hy {
+@@ -7928,19 +7967,20 @@ class zy extends Hy {
    }
    async deleteUser(e) {
      await this.init();
@@ -10024,7 +10025,7 @@ index 8debad6..154e4cb 100644
    }
    async queuedMessageDiagnostics(e) {
      return await this.init(), Uy({
-@@ -7951,16 +7990,16 @@ class zy extends Hy {
+@@ -7951,16 +7991,16 @@ class zy extends Hy {
      });
    }
    async flushMessageQueue(e) {
@@ -10046,7 +10047,7 @@ index 8debad6..154e4cb 100644
          if (!a)
            return;
          await this.emitPublish(a), ds(
-@@ -7972,11 +8011,11 @@ class zy extends Hy {
+@@ -7972,11 +8012,11 @@ class zy extends Hy {
        } catch {
        }
    }
@@ -10060,7 +10061,7 @@ index 8debad6..154e4cb 100644
        ), [i] = n;
        if (!i)
          return;
-@@ -7989,15 +8028,15 @@ class zy extends Hy {
+@@ -7989,15 +8029,15 @@ class zy extends Hy {
      }
    }
  }
@@ -10079,7 +10080,7 @@ index 8debad6..154e4cb 100644
        e.purpose || "chat",
        s,
        n,
-@@ -8006,7 +8045,7 @@ class Vy extends zy {
+@@ -8006,7 +8046,7 @@ class Vy extends zy {
      ].join(":"), a = this.inviteAcceptPromises.get(o);
      if (a)
        return a;
@@ -10088,7 +10089,7 @@ index 8debad6..154e4cb 100644
        deviceId: n,
        explicitSameDeviceOwnerHint: i,
        claimedOwnerPublicKey: s
-@@ -8018,7 +8057,7 @@ class Vy extends zy {
+@@ -8018,7 +8058,7 @@ class Vy extends zy {
        this.inviteAcceptPromises.get(o) === c && this.inviteAcceptPromises.delete(o);
      }
    }
@@ -10097,7 +10098,7 @@ index 8debad6..154e4cb 100644
      var U, G;
      const { deviceId: i, explicitSameDeviceOwnerHint: s, claimedOwnerPublicKey: o } = n;
      let a = o, c = null, u = !1;
-@@ -8026,10 +8065,10 @@ class Vy extends zy {
+@@ -8026,10 +8066,10 @@ class Vy extends zy {
        const R = ((U = this.userRecords.get(o)) == null ? void 0 : U.appKeys) || await this.fetchAppKeys(o, 50).catch(
          () => null
        ) || void 0;
@@ -10110,7 +10111,7 @@ index 8debad6..154e4cb 100644
            devicePubkey: i,
            claimedOwnerPublicKey: o,
            invitePurpose: e.purpose,
-@@ -8052,20 +8091,20 @@ class Vy extends zy {
+@@ -8052,20 +8092,20 @@ class Vy extends zy {
      ];
      if (e.purpose === "link" && f.length > 0)
        return await h(), { ownerPublicKey: a, deviceId: i, session: f[0] };
@@ -10138,7 +10139,7 @@ index 8debad6..154e4cb 100644
        (G = this.userRecords.get(this.ownerPublicKey)) == null ? void 0 : G.ownerProofForDevice(this.deviceId)
      ), Y = this.upsertDeviceRecord(d, i);
      return this.delegateToOwner.set(i, a), Y.installSession(O, !1, { preferActive: !0 }), await this.emitPublish(B), await this.sendInviteBootstrap(O, i), e.purpose === "link" && a === this.ownerPublicKey && await this.sendLinkBootstrap(a, i), await this.flushMessageQueue(i).catch(() => {
-@@ -8077,12 +8116,12 @@ class Vy extends zy {
+@@ -8077,12 +8117,12 @@ class Vy extends zy {
        return this.ownerPublicKey;
    }
  }
@@ -10154,7 +10155,7 @@ index 8debad6..154e4cb 100644
        n,
        a,
        c,
-@@ -8092,64 +8131,63 @@ class mr extends Vy {
+@@ -8092,64 +8132,62 @@ class mr extends Vy {
      );
      return u.legacyNostrSubscribe = void 0, u.legacyNostrPublish = void 0, u;
    }
@@ -10224,8 +10225,7 @@ index 8debad6..154e4cb 100644
 +      const y = p.prepareOutboundEvent(s);
 +      y && (u.push(y), d.push(p.deviceId));
 +    }
-+    return await Promise.all(Array.from(i, (p) => this.storeUserRecord(p).catch(() => {
-+    }))), await Promise.allSettled(
++    return await Promise.all(Array.from(i, (p) => this.storeUserRecord(p))), await Promise.allSettled(
 +      u.map(
 +        (p, f) => this.emitPublish(p, t.id).then(() => {
 +          const y = d[f];
@@ -13915,13 +13915,13 @@ index b2c53de..a455cd8 100644
      protected handleDeviceRumor(ownerPubkey: string, deviceId: string, event: Rumor, outerEvent?: VerifiedEvent): void;
      protected upsertDeviceRecord(userRecord: UserRecordActor, deviceId: string): DeviceRecordActor;
 diff --git a/dist/session-manager/SessionManagerRecords.d.ts.map b/dist/session-manager/SessionManagerRecords.d.ts.map
-index 4275284..a436810 100644
+index 4275284..0323168 100644
 --- a/dist/session-manager/SessionManagerRecords.d.ts.map
 +++ b/dist/session-manager/SessionManagerRecords.d.ts.map
 @@ -1 +1 @@
 -{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AACvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAE/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAgCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAclE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
 \ No newline at end of file
-+{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AAEvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAI/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,QAAQ,CAAC,iBAAiB,cAAqB;IAEzD,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAiCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IA6ClE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
++{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AAEvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAI/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,QAAQ,CAAC,iBAAiB,cAAqB;IAEzD,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAiCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IA6ClE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAqCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
 \ No newline at end of file
 diff --git a/dist/session-manager/UserRecordActor.d.ts b/dist/session-manager/UserRecordActor.d.ts
 index 77e4e68..21b6bbf 100644
@@ -14033,7 +14033,7 @@ index 843ede4..c64f237 100644
        publishOuter: this.nostrPublish,
      });
 diff --git a/src/SessionManager.ts b/src/SessionManager.ts
-index d8b616c..71c553d 100644
+index d8b616c..5798d1b 100644
 --- a/src/SessionManager.ts
 +++ b/src/SessionManager.ts
 @@ -82,17 +82,17 @@ export class SessionManager extends SessionManagerInvites {
@@ -14092,8 +14092,8 @@ index d8b616c..71c553d 100644
 -    if (this.ownerPublicKey !== recipientIdentityKey) {
 -      await this.storeUserRecord(this.ownerPublicKey).catch(() => {});
 -    }
-+    // Persist each target's ratchet state before publishing (best-effort).
-+    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target).catch(() => {})));
++    // Keep queued messages unpublished if saving their sending keys fails.
++    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target)));
  
      await Promise.allSettled(
        toPublish.map((evt, i) =>
@@ -14352,7 +14352,7 @@ index b2b9f7d..3f05932 100644
  
      if (userRecord) {
 diff --git a/src/session-manager/SessionManagerRecords.ts b/src/session-manager/SessionManagerRecords.ts
-index 5fed8d8..5e7e91b 100644
+index 5fed8d8..f674f85 100644
 --- a/src/session-manager/SessionManagerRecords.ts
 +++ b/src/session-manager/SessionManagerRecords.ts
 @@ -13,6 +13,7 @@ import {
@@ -14439,6 +14439,17 @@ index 5fed8d8..5e7e91b 100644
      return false;
    }
  
+@@ -203,6 +240,10 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
+     response: PendingInviteResponse,
+     appKeys?: AppKeys | null,
+   ): boolean {
++    // Duplicate relay deliveries can pass the caller's check before its awaits.
++    // Never replace an established ratchet with the same handshake's initial state.
++    if (this.processedInviteResponses.has(response.eventId)) return true;
++
+     const isSingleDevice = response.deviceId === response.ownerPublicKey;
+     const isAuthorized =
+       isSingleDevice ||
 diff --git a/src/session-manager/UserRecordActor.ts b/src/session-manager/UserRecordActor.ts
 index 86bb80d..997e082 100644
 --- a/src/session-manager/UserRecordActor.ts
