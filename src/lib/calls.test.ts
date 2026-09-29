@@ -11,7 +11,9 @@ const peer = `02${'b'.repeat(64)}`
 const owner = 'c'.repeat(64)
 vi.mock('./chat', () => ({ recordCallHistory: vi.fn(), chats: writable(new Map([['contact', { recipientPubkey: 'c'.repeat(64), messages: [] }]])) }))
 vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getKnownAppKeysSnapshots: () => [{ ownerPubkey: 'c'.repeat(64), appKeys: { getAllDevices: () => [{ identityPubkey: 'b'.repeat(64) }] } }] }) }))
-vi.mock('./messageRequestPolicy', () => ({ getMessageRequestPolicyContext: () => ({ myPubkey: 'a'.repeat(64) }), isChatAccepted: () => true, isChatRejected: () => false }))
+vi.mock('./identity', () => ({ getPubkey: () => 'a'.repeat(64) }))
+vi.mock('./following', () => ({ following: writable(new Set<string>()) }))
+vi.mock('./profile', () => ({ createProfileStore: () => writable(undefined), getProfileName: () => undefined }))
 vi.mock('./callMedia', () => ({ BrowserCallMedia: class {
   stream = {} as MediaStream
   stop = vi.fn()
@@ -23,10 +25,16 @@ import { chats, recordCallHistory } from './chat'
 import { callHistoryLabel, type CallHistory } from './callHistory'
 import { attachCalls, detachCalls, answerCall, startCall, callState } from './calls'
 import { callSettings } from './callSettings'
+import { following } from './following'
+import { messageRequests, acceptChat, rejectChat } from './messageRequests'
+import { messageRequestSettings } from './messageRequestSettings'
 
 describe('answer capture ownership', () => {
   beforeEach(() => {
     fixture.media.length = 0
+    following.set(new Set())
+    messageRequests.set({ acceptedChats: { [owner]: true }, rejectedChats: {} })
+    messageRequestSettings.set({ receiveMessageRequests: true })
     chats.set(new Map([['contact', { id: 'contact', recipientPubkey: owner, mode: 'manager', messages: [] }]]))
     vi.mocked(recordCallHistory).mockClear()
     callSettings.set({ voice: true, video: true })
@@ -34,6 +42,64 @@ describe('answer capture ownership', () => {
   })
   afterEach(() => detachCalls())
   const offer = (id: string) => fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'offer', call_id: id, video: true }) })
+  it.each([false, true])('requires chat acceptance even for followed users (message requests enabled: %s)', (receiveMessageRequests: boolean) => {
+    messageRequests.set({ acceptedChats: {}, rejectedChats: {} })
+    following.set(new Set([owner]))
+    messageRequestSettings.set({ receiveMessageRequests })
+    for (const video of [false, true]) {
+      for (const inboundMessage of [false, true]) {
+        chats.set(new Map([['contact', { id: 'contact', recipientPubkey: owner, mode: 'manager',
+          messages: inboundMessage ? [{ id: 'request', content: 'Hello', timestamp: 1, isMine: false }] : [] }]]))
+        fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'offer', call_id: 'ab'.repeat(16), video }) })
+        expect(get(callState)).toBeNull()
+      }
+    }
+    expect(recordCallHistory).not.toHaveBeenCalled()
+    acceptChat(owner)
+    offer('cd'.repeat(16))
+    expect(get(callState)?.status).toBe('ringing')
+    rejectChat(owner)
+    expect(get(callState)?.status).toBe('ended')
+    offer('ef'.repeat(16))
+    expect(get(callState)?.id).toBe('cd'.repeat(16))
+  })
+  it('accepts a conversation we initiated, while rejection overrides outgoing history', () => {
+    messageRequests.set({ acceptedChats: {}, rejectedChats: {} })
+    chats.set(new Map([['contact', { id: 'contact', recipientPubkey: owner, mode: 'manager',
+      messages: [{ id: 'sent', content: 'Hello', timestamp: 1, isMine: true }] }]]))
+    offer('ab'.repeat(16))
+    expect(get(callState)?.status).toBe('ringing')
+    rejectChat(owner)
+    expect(get(callState)?.status).toBe('ended')
+    offer('cd'.repeat(16))
+    expect(get(callState)?.id).toBe('ab'.repeat(16))
+  })
+  it('ends capture immediately when the caller is rejected during microphone permission', async () => {
+    offer('ab'.repeat(16))
+    const answer = answerCall(true)
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(1))
+    rejectChat(owner)
+    expect(get(callState)?.status).toBe('ended')
+    expect(fixture.media[0].stop).toHaveBeenCalled()
+    fixture.media[0].finish()
+    await answer
+    expect(get(callState)?.status).toBe('ended')
+    expect(recordCallHistory).not.toHaveBeenCalledWith(owner, expect.objectContaining({ outcome: 'answered' }))
+  })
+  it('ends an active call immediately on rejection but not when another contact is rejected', async () => {
+    offer('ab'.repeat(16))
+    const answer = answerCall(false)
+    await vi.waitFor(() => expect(fixture.media).toHaveLength(1))
+    fixture.media[0].finish()
+    await answer
+    expect(get(callState)?.status).toBe('active')
+    rejectChat('d'.repeat(64))
+    expect(get(callState)?.status).toBe('active')
+    expect(fixture.media[0].stop).not.toHaveBeenCalled()
+    rejectChat(owner)
+    expect(get(callState)?.status).toBe('ended')
+    expect(fixture.media[0].stop).toHaveBeenCalled()
+  })
   it.each(['stalled', 'failed'])('starts a routed call to a verified device when direct connection setup is %s', async (state: string) => {
     const seed = `02${'e'.repeat(64)}`
     const send = vi.fn(async () => {})

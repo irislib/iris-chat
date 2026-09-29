@@ -30,6 +30,17 @@ describe('FIPS calls', () => {
     b = new CallSession(eb, peer => peer === 'a' ? 'Alice' : undefined)
   })
   afterEach(() => { a.dispose(); b.dispose(); vi.useRealTimers() })
+  it('rechecks caller authorization before answering without waiting for a timer', () => {
+    b.dispose()
+    let allowed = true
+    b = new CallSession(eb, peer => allowed && peer === 'a' ? 'Alice' : undefined)
+    a.start('Bob', ['b'], false)
+    expect(get(b.state)?.status).toBe('ringing')
+    allowed = false
+    b.accept(false)
+    expect(get(b.state)?.status).toBe('ended')
+    expect(eb.sent.some(packet => parseCallControl(packet)?.type === 'answer')).toBe(false)
+  })
   it('matches authenticated device addresses across compressed key parity after an upgrade', async () => {
     a.dispose()
     const x = 'a1'.repeat(32), advertised = `02${x}`, authenticated = `03${x}`

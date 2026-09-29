@@ -3,7 +3,8 @@ import type { FipsNode } from '@fips/core'
 import { chats, recordCallHistory } from './chat'
 import { callHistoryFromState } from './callHistory'
 import { getNdrRuntime, preparePeerNdrRuntime } from './privateChats'
-import { getMessageRequestPolicyContext, isChatAccepted, isChatRejected } from './messageRequestPolicy'
+import { getMessageRequestPolicyContext, isChatRejected } from './messageRequestPolicy'
+import { messageRequests } from './messageRequests'
 import { callSettings } from './callSettings'
 import { CallSession, type CallState } from './callSession'
 import { BrowserCallMedia, type CallMediaStats } from './callMedia'
@@ -36,7 +37,8 @@ export function callOwnerForPeer(peer: string): string | undefined {
     const snapshot = getNdrRuntime().getKnownAppKeysSnapshots().find(s => s.appKeys.getAllDevices().some(d => d.identityPubkey.toLowerCase() === peer.slice(2)))
     if (!snapshot || snapshot.ownerPubkey === context.myPubkey || isChatRejected(snapshot.ownerPubkey, context)) return
     const chat = Array.from(get(chats).values()).find(c => c.recipientPubkey === snapshot.ownerPubkey)
-    if (chat && isChatAccepted(chat, context)) return snapshot.ownerPubkey
+    // Following someone's posts does not grant permission to ring us.
+    if (chat && (context.acceptedChats[snapshot.ownerPubkey] || chat.messages.some(message => message.isMine))) return snapshot.ownerPubkey
   } catch { /* Account has not finished loading. */ }
 }
 function stopMedia() {
@@ -91,8 +93,11 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
     void media?.setQuality(settings).catch(() => callError.set('Could not change call quality'))
     if (state && state.status !== 'ended' && !(state.video ? settings.video || (state.status === 'ringing' && state.direction === 'incoming' && settings.voice) : settings.voice)) session?.end('Calls disabled')
   })
+  const checkContact = () => { session?.checkContact() }
+  const decisionsUnsubscribe = messageRequests.subscribe(checkContact)
+  const chatsUnsubscribe = chats.subscribe(checkContact)
   runtimeCleanup = () => {
-    unsubscribe(); settingsUnsubscribe()
+    unsubscribe(); settingsUnsubscribe(); decisionsUnsubscribe(); chatsUnsubscribe()
     window.removeEventListener('pointerdown', ringtone.unlock)
     window.removeEventListener('keydown', ringtone.unlock)
     window.removeEventListener('pagehide', clearAlerts)
@@ -168,6 +173,7 @@ export async function answerCall(video: boolean) {
   callError.set('')
   const current = session, state = get(callState)
   if (!current || state?.direction !== 'incoming' || state.status !== 'ringing' || answersInFlight.has(state.id)) return
+  if (!current.checkContact()) return
   const withVideo = video && state.video && get(callSettings).video
   if (!withVideo && !get(callSettings).voice) return
   answersInFlight.add(state.id)

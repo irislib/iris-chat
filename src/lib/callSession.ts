@@ -73,6 +73,7 @@ export class CallSession {
   accept(video = false) {
     const s = get(this.state)
     if (!s || s.status !== 'ringing' || s.direction !== 'incoming') return
+    if (!this.checkContact()) return
     this.lastHeard = Date.now()
     const withVideo = s.video && video && this.settings().video
     if (!withVideo && !this.settings().voice) return
@@ -233,10 +234,18 @@ export class CallSession {
       try { await this.endpoint.sendDatagram({ dst: s.peer, srcPort: CALL_PORT, dstPort: CALL_PORT, payload }) } catch { return }
     }
   }
+  checkContact(): boolean {
+    const s = get(this.state)
+    if (!s || s.status === 'ended') return false
+    if (s.peers.some(p => this.ownerForPeer(p) !== s.owner)) {
+      this.end('Call ended')
+      return false
+    }
+    return true
+  }
   private tick() {
     const s = get(this.state)
-    if (!s || s.status === 'ended') return
-    if (s.peers.some(p => this.ownerForPeer(p) !== s.owner)) { this.end('Call ended'); return }
+    if (!s || !this.checkContact()) return
     if (s.status === 'ringing') {
       if (s.direction === 'incoming' && Date.now() - this.lastHeard > 10000) this.end('Connection lost')
       else if (Date.now() - s.started > 30000) this.end('No answer')
