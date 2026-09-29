@@ -11,7 +11,7 @@ overrides:
 
 patchedDependencies:
   nostr-double-ratchet@0.0.172:
-    hash: dd37ad6a23d10a6efa305143d76d42c49500ae5bcdbe2657a7b4d6591a5e583c
+    hash: 590e1c5a52746bf78911b9f510f84c811d07d2bb8981745630f26eea7188c930
     path: patches/nostr-double-ratchet@0.0.172.patch
 
 importers:
@@ -59,7 +59,7 @@ importers:
         version: 4.2.1
       nostr-double-ratchet:
         specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz
-        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(patch_hash=dd37ad6a23d10a6efa305143d76d42c49500ae5bcdbe2657a7b4d6591a5e583c)(typescript@5.9.3)
+        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(patch_hash=590e1c5a52746bf78911b9f510f84c811d07d2bb8981745630f26eea7188c930)(typescript@5.9.3)
       nostr-pubsub:
         specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz
         version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz(nostr-tools@2.23.12(typescript@5.9.3))
@@ -5513,7 +5513,7 @@ snapshots:
 
   node-releases@2.0.51: {}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(patch_hash=dd37ad6a23d10a6efa305143d76d42c49500ae5bcdbe2657a7b4d6591a5e583c)(typescript@5.9.3):
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(patch_hash=590e1c5a52746bf78911b9f510f84c811d07d2bb8981745630f26eea7188c930)(typescript@5.9.3):
     dependencies:
       '@noble/curves': 2.0.1
       nostr-tools: 2.23.12(typescript@5.9.3)

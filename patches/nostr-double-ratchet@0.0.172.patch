@@ -1,372 +1,3 @@
-diff --git a/src/GroupChannel.ts b/src/GroupChannel.ts
-index b522256..e5df488 100644
---- a/src/GroupChannel.ts
-+++ b/src/GroupChannel.ts
-@@ -201,6 +201,9 @@ export class Group extends GroupSending {
-       );
-       return null;
-     }
-+    // The local sending chain has already advanced past its own relay echoes.
-+    if (senderDevicePubkey === this.ourDevicePubkey &&
-+        await this.storage.get(this.senderEventSecretKeyKey(senderDevicePubkey))) return null;
-     if (!this.isSenderDeviceActive(senderDevicePubkey)) {
-       await this.removeSenderDeviceState(senderDevicePubkey);
-       return null;
-diff --git a/src/MessageQueue.ts b/src/MessageQueue.ts
-index ec2e085..fb95aea 100644
---- a/src/MessageQueue.ts
-+++ b/src/MessageQueue.ts
-@@ -28,6 +28,7 @@ export class MessageQueue {
-     const keys = await this.storage.list(this.prefix)
-     const entries: QueueEntry[] = []
-     for (const key of keys) {
-+      if (!key.endsWith(`/${targetKey}`)) continue
-       const entry = await this.storage.get<QueueEntry>(key)
-       if (entry && entry.targetKey === targetKey) {
-         entries.push(entry)
-@@ -52,6 +53,7 @@ export class MessageQueue {
-   async removeForTarget(targetKey: string): Promise<void> {
-     const keys = await this.storage.list(this.prefix)
-     for (const key of keys) {
-+      if (!key.endsWith(`/${targetKey}`)) continue
-       const entry = await this.storage.get<QueueEntry>(key)
-       if (entry && entry.targetKey === targetKey) {
-         await this.storage.del(key)
-diff --git a/src/RuntimeGroupController.ts b/src/RuntimeGroupController.ts
-index 843ede4..c64f237 100644
---- a/src/RuntimeGroupController.ts
-+++ b/src/RuntimeGroupController.ts
-@@ -229,7 +229,7 @@ export class SessionGroupRuntime {
-       nowMs: opts.nowMs,
-       sendPairwise: async (recipientOwnerPubkey, rumor) => {
-         const manager = await this.waitForSessionManagerFn();
--        await manager.sendEvent(recipientOwnerPubkey, rumor);
-+        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
-       },
-     });
-   }
-@@ -244,7 +244,7 @@ export class SessionGroupRuntime {
-       nowMs: opts.nowMs,
-       sendPairwise: async (recipientOwnerPubkey, rumor) => {
-         const manager = await this.waitForSessionManagerFn();
--        await manager.sendEvent(recipientOwnerPubkey, rumor);
-+        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
-       },
-       publishOuter: this.nostrPublish,
-     });
-diff --git a/src/SessionManager.ts b/src/SessionManager.ts
-index d8b616c..71c553d 100644
---- a/src/SessionManager.ts
-+++ b/src/SessionManager.ts
-@@ -82,17 +82,17 @@ export class SessionManager extends SessionManagerInvites {
-   async sendEvent(
-     recipientIdentityKey: string,
-     event: Partial<Rumor>,
-+    options: { includeLocalSiblings?: boolean } = {},
-   ): Promise<Rumor | undefined> {
-     await this.init();
- 
--    await Promise.allSettled([
--      this.setupUser(recipientIdentityKey),
--      this.setupUser(this.ownerPublicKey),
--    ]);
-+    const targets = new Set([recipientIdentityKey]);
-+    // Group fanout includes our owner explicitly, so it needs only one self-copy.
-+    if (options.includeLocalSiblings !== false) targets.add(this.ownerPublicKey);
-+    await Promise.allSettled(Array.from(targets, (target) => this.setupUser(target)));
- 
-     // Queue event for devices that don't have sessions yet
-     const completeEvent = event as Rumor;
--    const targets = new Set([recipientIdentityKey, this.ownerPublicKey]);
-     const queuedDeviceIds = new Set<string>();
-     for (const target of targets) {
-       const userRecord = this.userRecords.get(target);
-@@ -122,20 +122,10 @@ export class SessionManager extends SessionManagerInvites {
-       }
-     }
- 
--    const userRecord = this.getOrCreateUserRecord(recipientIdentityKey);
--    // Use ownerPublicKey to find sibling devices (important for delegates)
--    const ourUserRecord = this.getOrCreateUserRecord(this.ownerPublicKey);
--
--    const recipientDevices = Array.from(userRecord.devices.values());
--    const ownDevices = Array.from(ourUserRecord.devices.values());
--
--    // Merge and deduplicate by deviceId, excluding our own sending device
--    // This fixes the self-message bug where sending to yourself would duplicate devices
-     const deviceMap = new Map<string, DeviceRecord>();
--    for (const d of [...recipientDevices, ...ownDevices]) {
--      if (d.deviceId !== this.deviceId) {
--        // Exclude sender's own device
--        deviceMap.set(d.deviceId, d);
-+    for (const target of targets) {
-+      for (const device of this.getOrCreateUserRecord(target).devices.values()) {
-+        if (device.deviceId !== this.deviceId) deviceMap.set(device.deviceId, device);
-       }
-     }
-     const devices = Array.from(deviceMap.values());
-@@ -165,11 +155,8 @@ export class SessionManager extends SessionManagerInvites {
-       sentDeviceIds.push(device.deviceId);
-     }
- 
--    // Persist recipient + owner records before publishing (best-effort).
--    await this.storeUserRecord(recipientIdentityKey).catch(() => {});
--    if (this.ownerPublicKey !== recipientIdentityKey) {
--      await this.storeUserRecord(this.ownerPublicKey).catch(() => {});
--    }
-+    // Persist each target's ratchet state before publishing (best-effort).
-+    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target).catch(() => {})));
- 
-     await Promise.allSettled(
-       toPublish.map((evt, i) =>
-@@ -321,6 +308,8 @@ export class SessionManager extends SessionManagerInvites {
-       .loadUserRecord(publicKey)
-       .then((data) => {
-         if (!data) return;
-+        // A restored ratchet may need an envelope accepted by its previous state.
-+        this.decryptedEventIds.clear();
-         hydrateUserRecord({
-           data,
-           publicKey,
-diff --git a/src/group/GroupSenderKeys.ts b/src/group/GroupSenderKeys.ts
-index 9287c45..74226fa 100644
---- a/src/group/GroupSenderKeys.ts
-+++ b/src/group/GroupSenderKeys.ts
-@@ -152,6 +152,7 @@ export abstract class GroupSenderKeys extends GroupState {
-       keyId: dist.keyId >>> 0,
-       distribution: { ...dist },
-       recipients: uniqueRecipients,
-+      pendingRecipients: uniqueRecipients,
-     });
-     await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
-   }
-diff --git a/src/group/GroupSending.ts b/src/group/GroupSending.ts
-index e92b57a..a05bef8 100644
---- a/src/group/GroupSending.ts
-+++ b/src/group/GroupSending.ts
-@@ -30,6 +30,26 @@ export abstract class GroupSending extends GroupSenderKeys {
-     }
-   }
- 
-+  private async flushSenderKeyDistributions(sendPairwise: PairwiseSend): Promise<void> {
-+    const snapshots = (await this.loadSenderKeyRepairSnapshots(this.ourDevicePubkey))
-+      .map((snapshot) => ({ ...snapshot }));
-+    let changed = false;
-+    for (const snapshot of snapshots) {
-+      // Older snapshots did not track handoff success; retry their original recipients once.
-+      const pending = snapshot.pendingRecipients ?? snapshot.recipients;
-+      if (!pending.length) continue;
-+      const recipients = pending.filter((recipient) =>
-+        snapshot.recipients.includes(recipient) && this.isMemberOwnerPubkey(recipient),
-+      );
-+      const dist = snapshot.distribution;
-+      const rumor = this.buildDistributionRumor(dist.createdAt, dist.createdAt * 1000, dist);
-+      const results = await Promise.allSettled(recipients.map((recipient) => sendPairwise(recipient, rumor)));
-+      snapshot.pendingRecipients = recipients.filter((_, index) => results[index].status === "rejected");
-+      changed = true;
-+    }
-+    if (changed) await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
-+  }
-+
-   /**
-    * Rotate our sender key (new keyId + chain key) and distribute it to group members.
-    */
-@@ -48,15 +68,12 @@ export abstract class GroupSending extends GroupSenderKeys {
-     const { state } = await this.ensureOurSenderKeyState(true);
- 
-     const dist = this.buildDistribution(nowSeconds, senderEventPubkey, state);
--    const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
- 
-     // Include our owner so sibling devices on the same account can decrypt
-     // subsequent outer messages in self-only and multi-device group chats.
-     await this.recordSenderKeyRepairSnapshot(dist, recipients);
-     this.assertCurrentRecipients(recipients);
--    await Promise.allSettled(
--      recipients.map((pk) => opts.sendPairwise(pk, rumor)),
--    );
-+    await this.flushSenderKeyDistributions(opts.sendPairwise);
-     this.assertCurrentRecipients(recipients);
- 
-     return dist;
-@@ -100,14 +117,11 @@ export abstract class GroupSending extends GroupSenderKeys {
-         senderEventPubkey,
-         senderKey,
-       );
--      const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
-       await this.recordSenderKeyRepairSnapshot(dist, recipients);
--      this.assertCurrentRecipients(recipients);
--      await Promise.allSettled(
--        recipients.map((pk) => opts.sendPairwise(pk, rumor)),
--      );
-     }
- 
-+    this.assertCurrentRecipients(recipients);
-+    await this.flushSenderKeyDistributions(opts.sendPairwise);
-     this.assertCurrentRecipients(recipients);
-     const inner = this.buildGroupInnerRumor(nowSeconds, nowMs, event);
-     const innerJson = JSON.stringify(inner);
-diff --git a/src/group/groupInternals.ts b/src/group/groupInternals.ts
-index 3b7bd81..7a4ea99 100644
---- a/src/group/groupInternals.ts
-+++ b/src/group/groupInternals.ts
-@@ -4,6 +4,8 @@ export interface SenderKeyRepairSnapshot {
-   keyId: number;
-   distribution: SenderKeyDistribution;
-   recipients: string[];
-+  /** Recipients whose key distribution has not reached the durable pairwise queue. */
-+  pendingRecipients?: string[];
- }
- 
- export function randomU32(): number {
-diff --git a/src/session-manager/DeviceRecordActor.ts b/src/session-manager/DeviceRecordActor.ts
-index 190b249..2f3c72e 100644
---- a/src/session-manager/DeviceRecordActor.ts
-+++ b/src/session-manager/DeviceRecordActor.ts
-@@ -29,6 +29,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
-   private ensurePromise?: Promise<void>
-   private inviteSubscription?: Unsubscribe
-   private inviteAcceptancePromise?: Promise<Session>
-+  private failedReceiveAttempts = new WeakMap<VerifiedEvent, WeakMap<Session, string>>()
- 
-   constructor(
-     public readonly deviceId: string,
-@@ -316,18 +317,39 @@ export class DeviceRecordActor implements DeviceRecordShape {
-     sessions.push(...this.inactiveSessions)
- 
-     const seenSessionNames = new Set<string>()
-+    let failedSessions = this.failedReceiveAttempts.get(event)
-+    if (!failedSessions) {
-+      failedSessions = new WeakMap()
-+      this.failedReceiveAttempts.set(event, failedSessions)
-+    }
-     for (const session of sessions) {
-       if (seenSessionNames.has(session.name)) {
-         continue
-       }
-       seenSessionNames.add(session.name)
- 
-+      // Startup replays pending envelopes after many independent roster/storage
-+      // callbacks. A rejected envelope cannot decrypt with unchanged receive
-+      // keys. Keep weak references so removing pending events or sessions also
-+      // removes this memo; new sessions and ratchet advances are retried.
-+      const state = session.state
-+      const receiveState = [
-+        state.ourCurrentNostrKey?.publicKey,
-+        state.ourNextNostrKey.publicKey,
-+        state.theirCurrentNostrPublicKey,
-+        state.theirNextNostrPublicKey,
-+        state.receivingChainMessageNumber,
-+      ].join(":")
-+      if (failedSessions.get(session) === receiveState) continue
-+
-       let rumor: Rumor | undefined
-       try {
-         rumor = session.receiveEvent(event)
-       } catch {
-+        failedSessions.set(session, receiveState)
-         continue
-       }
-+      if (!rumor) failedSessions.set(session, receiveState)
-       if (rumor && this.handleSessionRumor(session, rumor, event)) {
-         return true
-       }
-diff --git a/src/session-manager/SessionManagerLifecycle.ts b/src/session-manager/SessionManagerLifecycle.ts
-index b2b9f7d..3f05932 100644
---- a/src/session-manager/SessionManagerLifecycle.ts
-+++ b/src/session-manager/SessionManagerLifecycle.ts
-@@ -290,6 +290,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
-     this.legacyDirectMessageSubscription = null;
-     this.legacyDirectMessageAuthors = [];
-     this.pendingDirectMessages.clear();
-+    this.decryptedEventIds.clear();
-     for (const unsubscribe of this.legacyRuntimeSubscriptions.values()) {
-       unsubscribe();
-     }
-@@ -313,6 +314,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
-     const ownerPubkey = this.resolveToOwner(userPubkey);
-     if (ownerPubkey === this.ownerPublicKey) return;
- 
-+    this.decryptedEventIds.clear();
-     const userRecord = this.userRecords.get(ownerPubkey);
- 
-     if (userRecord) {
-diff --git a/src/session-manager/SessionManagerRecords.ts b/src/session-manager/SessionManagerRecords.ts
-index 5fed8d8..036a1c7 100644
---- a/src/session-manager/SessionManagerRecords.ts
-+++ b/src/session-manager/SessionManagerRecords.ts
-@@ -13,6 +13,7 @@ import {
- } from "../MessageOrigin.js";
- import { DeviceRecordActor } from "./DeviceRecordActor.js";
- import { UserRecordActor } from "./UserRecordActor.js";
-+import { sessionMessageAuthorPubkeys } from "./messageAuthors.js";
- import type { OnEventCallback, OnEventMeta } from "./types.js";
- import { SessionManagerCore } from "./SessionManagerCore.js";
- import {
-@@ -20,7 +21,11 @@ import {
-   type PendingInviteResponse,
- } from "./managerInternals.js";
- 
-+const MAX_DECRYPTED_EVENT_IDS = 4096;
-+
- export abstract class SessionManagerRecords extends SessionManagerCore {
-+  protected readonly decryptedEventIds = new Set<string>();
-+
-   protected getOrCreateUserRecord(userPubkey: string): UserRecordActor {
-     let rec = this.userRecords.get(userPubkey);
-     if (!rec) {
-@@ -180,16 +185,47 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
-   }
- 
-   protected processDirectMessageEvent(event: VerifiedEvent): boolean {
-+    // Shared ratchet authors can deliver another device's encrypted copy. The
-+    // signed outer recipient is routing metadata; p-less legacy messages and
-+    // owner-addressed copies still need the normal authenticated decrypt path.
-+    const recipients = event.tags.filter((tag) => tag[0] === "p" && tag[1]);
-+    if (recipients.length > 0 && !recipients.some((tag) =>
-+      tag[1] === this.deviceId || tag[1] === this.ourPublicKey || tag[1] === this.ownerPublicKey,
-+    )) {
-+      this.pendingDirectMessages.delete(event.id);
-+      return true;
-+    }
-+
-+    // Separate relay subscriptions can supply new objects for the same envelope.
-+    // Only successfully delivered plaintext is deduplicated; missing keys remain retryable.
-+    if (this.decryptedEventIds.has(event.id)) return true;
-+
-+    const knownAuthors: DeviceRecordActor[] = [];
-+    const otherDevices: DeviceRecordActor[] = [];
-     for (const userRecord of this.userRecords.values()) {
-       for (const device of userRecord.devices.values()) {
--        if (device.processReceivedEvent(event)) {
--          this.syncLegacyDirectMessageSubscription();
--          this.pendingDirectMessages.delete(event.id);
--          return true;
--        }
-+        const sessions = [device.activeSession, ...device.inactiveSessions];
-+        const knowsAuthor = sessions.some((session) =>
-+          session && sessionMessageAuthorPubkeys(session).includes(event.pubkey),
-+        );
-+        (knowsAuthor ? knownAuthors : otherDevices).push(device);
-       }
-     }
- 
-+    // Cold handshakes can attempt header decryption for any author. Try known
-+    // ratchet authors first, retaining the full fallback for new peer keys.
-+    for (const device of [...knownAuthors, ...otherDevices]) {
-+      if (device.processReceivedEvent(event)) {
-+        this.decryptedEventIds.add(event.id);
-+        if (this.decryptedEventIds.size > MAX_DECRYPTED_EVENT_IDS) {
-+          const oldest = this.decryptedEventIds.values().next().value;
-+          if (oldest) this.decryptedEventIds.delete(oldest);
-+        }
-+        this.syncLegacyDirectMessageSubscription();
-+        this.pendingDirectMessages.delete(event.id);
-+        return true;
-+      }
-+    }
-     return false;
-   }
- 
 diff --git a/dist/GroupChannel.d.ts.map b/dist/GroupChannel.d.ts.map
 index d2f2c5d..7e329de 100644
 --- a/dist/GroupChannel.d.ts.map
@@ -462,7 +93,7 @@ index 74d9834..567c9e4 100644
 +{"version":3,"file":"groupInternals.d.ts","sourceRoot":"","sources":["../../src/group/groupInternals.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,iBAAiB,CAAC;AAE7D,MAAM,WAAW,uBAAuB;IACtC,KAAK,EAAE,MAAM,CAAC;IACd,YAAY,EAAE,qBAAqB,CAAC;IACpC,UAAU,EAAE,MAAM,EAAE,CAAC;IACrB,oFAAoF;IACpF,iBAAiB,CAAC,EAAE,MAAM,EAAE,CAAC;CAC9B;AAED,wBAAgB,SAAS,IAAI,MAAM,CAIlC;AAED,wBAAgB,OAAO,CAAC,KAAK,EAAE,MAAM,GAAG,OAAO,CAE9C"}
 \ No newline at end of file
 diff --git a/dist/nostr-double-ratchet.es.js b/dist/nostr-double-ratchet.es.js
-index 8debad6..3085954 100644
+index 8debad6..154e4cb 100644
 --- a/dist/nostr-double-ratchet.es.js
 +++ b/dist/nostr-double-ratchet.es.js
 @@ -1,122 +1,122 @@
@@ -9137,7 +8768,7 @@ index 8debad6..3085954 100644
      l(this, "activeSession");
      l(this, "inactiveSessions", []);
      l(this, "state", "new");
-@@ -6712,7 +6712,8 @@ const Tt = class Tt {
+@@ -6712,23 +6712,28 @@ const Tt = class Tt {
      l(this, "ensurePromise");
      l(this, "inviteSubscription");
      l(this, "inviteAcceptancePromise");
@@ -9147,7 +8778,13 @@ index 8debad6..3085954 100644
    }
    detachSession(e) {
      e.close();
-@@ -6722,13 +6723,13 @@ const Tt = class Tt {
+   }
++  markDirty() {
++    Promise.resolve(this.deps.user.onDeviceDirty()).catch(() => {
++    });
++  }
+   pruneDuplicateSessions(e) {
+     if (this.activeSession && this.activeSession !== e && this.activeSession.name === e.name) {
        const n = this.activeSession;
        this.activeSession = void 0, this.detachSession(n);
      }
@@ -9163,7 +8800,7 @@ index 8debad6..3085954 100644
        this.detachSession(n);
    }
    hasEstablishedActiveSession() {
-@@ -6763,8 +6764,8 @@ const Tt = class Tt {
+@@ -6763,8 +6768,8 @@ const Tt = class Tt {
        },
        (e) => {
          try {
@@ -9174,7 +8811,7 @@ index 8debad6..3085954 100644
            });
          } catch {
          }
-@@ -6777,14 +6778,14 @@ const Tt = class Tt {
+@@ -6777,34 +6782,34 @@ const Tt = class Tt {
      }), this.inviteAcceptancePromise);
    }
    async doAcceptInvite(e) {
@@ -9189,9 +8826,11 @@ index 8debad6..3085954 100644
 -        (n = (r = this.deps).localOwnerProof) == null ? void 0 : n.call(r)
 +        (n = (t = this.deps).localOwnerProof) == null ? void 0 : n.call(t)
        );
-       return this.installSession(o, !1, { preferActive: !0 }), await this.deps.nostr.publish(a), await this.publishInviteBootstrap(o), this.state = "session-ready", await this.flushMessageQueue(), o;
+-      return this.installSession(o, !1, { preferActive: !0 }), await this.deps.nostr.publish(a), await this.publishInviteBootstrap(o), this.state = "session-ready", await this.flushMessageQueue(), o;
++      return this.installSession(o, !1, { preferActive: !0, persist: !1 }), await this.deps.user.onDeviceDirty(), await this.deps.nostr.publish(a), await this.publishInviteBootstrap(o), this.state = "session-ready", await this.flushMessageQueue(), o;
      } catch (i) {
-@@ -6793,18 +6794,18 @@ const Tt = class Tt {
+       throw this.state = "waiting-for-invite", i;
+     }
    }
    async publishInviteBootstrap(e) {
      try {
@@ -9203,7 +8842,7 @@ index 8debad6..3085954 100644
          [["p", this.deviceId]]
        );
 -      await this.deps.nostr.publish(r);
-+      await this.deps.nostr.publish(t);
++      await this.deps.user.onDeviceDirty(), await this.deps.nostr.publish(t);
      } catch {
      }
    }
@@ -9214,7 +8853,7 @@ index 8debad6..3085954 100644
      if (s === e || (s == null ? void 0 : s.name) === e.name) {
        this.activeSession = e, this.inactiveSessions = this.inactiveSessions.filter(
          (a) => a !== e && a.name !== e.name
-@@ -6823,13 +6824,13 @@ const Tt = class Tt {
+@@ -6823,13 +6828,13 @@ const Tt = class Tt {
      ) >= 0 ? (this.inactiveSessions.unshift(e), this.activeSession = s) : (s && this.inactiveSessions.unshift(s), this.activeSession = e), this.trimInactiveSessions();
    }
    sendEventWithBestSession(e) {
@@ -9231,7 +8870,7 @@ index 8debad6..3085954 100644
        } catch {
        }
    }
-@@ -6837,34 +6838,46 @@ const Tt = class Tt {
+@@ -6837,70 +6842,80 @@ const Tt = class Tt {
      if (this.state !== "revoked")
        return this.sendEventWithBestSession(e);
    }
@@ -9240,8 +8879,9 @@ index 8debad6..3085954 100644
      var a;
      const i = this.deps.ownerPubkey, s = ((a = this.activeSession) == null ? void 0 : a.name) === e.name || this.inactiveSessions.some((c) => c === e || c.name === e.name);
 -    return i === this.deviceId || this.deps.user.isDeviceAuthorized(this.deviceId) || s ? (this.promoteToActive(e, { force: !0 }), this.deps.user.onDeviceRumor(this.deviceId, r, n), this.state = "session-ready", this.flushMessageQueue().catch(() => {
+-    }), this.deps.user.onDeviceDirty(), !0) : !1;
 +    return i === this.deviceId || this.deps.user.isDeviceAuthorized(this.deviceId) || s ? (this.promoteToActive(e, { force: !0 }), this.deps.user.onDeviceRumor(this.deviceId, t, n), this.state = "session-ready", this.flushMessageQueue().catch(() => {
-     }), this.deps.user.onDeviceDirty(), !0) : !1;
++    }), this.markDirty(), !0) : !1;
    }
    processReceivedEvent(e) {
 -    const r = [];
@@ -9288,9 +8928,10 @@ index 8debad6..3085954 100644
 -    this.pruneDuplicateSessions(e), r ? this.inactiveSessions.some(
 +    this.pruneDuplicateSessions(e), t ? this.inactiveSessions.some(
        (a) => a === e || a.name === e.name
-     ) || (this.inactiveSessions.unshift(e), this.trimInactiveSessions()) : this.promoteToActive(e, { preferActive: s }), this.activeSession && (this.state = "session-ready"), i && this.deps.user.onDeviceDirty();
+-    ) || (this.inactiveSessions.unshift(e), this.trimInactiveSessions()) : this.promoteToActive(e, { preferActive: s }), this.activeSession && (this.state = "session-ready"), i && this.deps.user.onDeviceDirty();
++    ) || (this.inactiveSessions.unshift(e), this.trimInactiveSessions()) : this.promoteToActive(e, { preferActive: s }), this.activeSession && (this.state = "session-ready"), i && this.markDirty();
    }
-@@ -6872,19 +6885,19 @@ const Tt = class Tt {
+   trimInactiveSessions() {
      if (this.inactiveSessions.length <= Tt.MAX_INACTIVE_SESSIONS)
        return;
      const e = this.inactiveSessions.splice(Tt.MAX_INACTIVE_SESSIONS);
@@ -9303,20 +8944,30 @@ index 8debad6..3085954 100644
      if (this.state === "revoked")
        return;
      const e = await this.deps.messageQueue.getForTarget(this.deviceId);
-     if (e.length !== 0) {
+-    if (e.length !== 0) {
 -      for (const r of e) {
 -        const n = this.prepareOutboundEvent(r.event);
++    if (e.length !== 0)
 +      for (const t of e) {
 +        const n = this.prepareOutboundEvent(t.event);
          if (n)
            try {
 -            await this.deps.nostr.publish(n), await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, r.event.id);
-+            await this.deps.nostr.publish(n), await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, t.event.id);
++            await this.deps.user.onDeviceDirty(), await this.deps.nostr.publish(n), await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, t.event.id);
            } catch {
            }
        }
-@@ -6899,8 +6912,8 @@ const Tt = class Tt {
-     }), this.deps.user.onDeviceDirty();
+-      this.deps.user.onDeviceDirty();
+-    }
+   }
+   deactivateCurrentSession() {
+-    this.activeSession && (this.inactiveSessions.push(this.activeSession), this.activeSession = void 0, this.state = "waiting-for-invite", this.deps.user.onDeviceDirty());
++    this.activeSession && (this.inactiveSessions.push(this.activeSession), this.activeSession = void 0, this.state = "waiting-for-invite", this.markDirty());
+   }
+   async revoke() {
+     this.state = "revoked", this.close(), this.activeSession = void 0, this.inactiveSessions = [], await this.deps.messageQueue.removeForTarget(this.deviceId).catch(() => {
+-    }), this.deps.user.onDeviceDirty();
++    }), this.markDirty();
    }
    close() {
 -    var r;
@@ -9326,7 +8977,7 @@ index 8debad6..3085954 100644
      const e = /* @__PURE__ */ new Set();
      this.activeSession && e.add(this.activeSession);
      for (const n of this.inactiveSessions)
-@@ -6912,7 +6925,7 @@ const Tt = class Tt {
+@@ -6912,7 +6927,7 @@ const Tt = class Tt {
  l(Tt, "MAX_INACTIVE_SESSIONS", 10);
  let Sn = Tt;
  const Sr = class Sr {
@@ -9335,7 +8986,7 @@ index 8debad6..3085954 100644
      l(this, "appKeys");
      l(this, "appKeysEvent");
      l(this, "state", "new");
-@@ -6920,12 +6933,12 @@ const Sr = class Sr {
+@@ -6920,12 +6935,12 @@ const Sr = class Sr {
      l(this, "setupPromise");
      l(this, "appKeysSubscription");
      l(this, "latestAppKeysCreatedAt", 0);
@@ -9350,7 +9001,7 @@ index 8debad6..3085954 100644
      if (!e)
        throw new Error("Device record must include a deviceId");
      const n = this.devices.get(e);
-@@ -6939,7 +6952,7 @@ const Sr = class Sr {
+@@ -6939,7 +6954,7 @@ const Sr = class Sr {
        ourDeviceId: this.deps.ourDeviceId,
        ourOwnerPubkey: this.deps.ourOwnerPubkey,
        identityKey: this.deps.identityKey,
@@ -9359,7 +9010,7 @@ index 8debad6..3085954 100644
        localOwnerProof: () => {
          var s, o;
          return (o = (s = this.deps.manager).localOwnerProof) == null ? void 0 : o.call(s);
-@@ -6950,26 +6963,26 @@ const Sr = class Sr {
+@@ -6950,26 +6965,26 @@ const Sr = class Sr {
    get appKeysCreatedAt() {
      return this.latestAppKeysCreatedAt;
    }
@@ -9394,7 +9045,7 @@ index 8debad6..3085954 100644
        await this.deps.messageQueue.add(n, e);
    }
    ensureSetup() {
-@@ -6994,8 +7007,8 @@ const Sr = class Sr {
+@@ -6994,8 +7009,8 @@ const Sr = class Sr {
        });
      this.setState("ready");
    }
@@ -9405,7 +9056,7 @@ index 8debad6..3085954 100644
      const i = new Set(
        e.getAllDevices().map((o) => o.identityPubkey).filter(Boolean)
      ), s = [...i].filter(
-@@ -7003,7 +7016,7 @@ const Sr = class Sr {
+@@ -7003,7 +7018,7 @@ const Sr = class Sr {
      );
      for (const [o, a] of this.devices)
        if (!i.has(o)) {
@@ -9414,9 +9065,13 @@ index 8debad6..3085954 100644
          if (c || u)
            continue;
          await this.migrateQueuedMessagesFromDevice(o, s), await a.revoke(), this.devices.delete(o), this.deps.manager.removeDelegateMapping(o);
-@@ -7020,16 +7033,16 @@ const Sr = class Sr {
+@@ -7018,18 +7033,19 @@ const Sr = class Sr {
+           });
+         }
        )
-     ), this.setState("ready"), this.onDeviceDirty();
+-    ), this.setState("ready"), this.onDeviceDirty();
++    ), this.setState("ready"), this.onDeviceDirty().catch(() => {
++    });
    }
 -  async migrateQueuedMessagesFromDevice(e, r) {
 +  async migrateQueuedMessagesFromDevice(e, t) {
@@ -9434,7 +9089,7 @@ index 8debad6..3085954 100644
            await this.deps.messageQueue.add(s, i.event);
      }
    }
-@@ -7043,7 +7056,7 @@ const Sr = class Sr {
+@@ -7043,7 +7059,7 @@ const Sr = class Sr {
        }
      ));
    }
@@ -9443,7 +9098,7 @@ index 8debad6..3085954 100644
      if (e.pubkey !== this.publicKey) return !1;
      try {
        const n = _.fromEvent(e), i = mi({
-@@ -7052,7 +7065,7 @@ const Sr = class Sr {
+@@ -7052,7 +7068,7 @@ const Sr = class Sr {
          incomingAppKeys: n,
          incomingCreatedAt: e.created_at
        });
@@ -9452,7 +9107,7 @@ index 8debad6..3085954 100644
      } catch {
        return !1;
      }
-@@ -7061,11 +7074,11 @@ const Sr = class Sr {
+@@ -7061,11 +7077,11 @@ const Sr = class Sr {
      const e = await this.deps.discoveryQueue.getForTarget(this.publicKey);
      if (e.length === 0)
        return;
@@ -9467,7 +9122,7 @@ index 8debad6..3085954 100644
            try {
              await this.deps.messageQueue.add(s, n.event);
            } catch {
-@@ -7081,10 +7094,10 @@ const Sr = class Sr {
+@@ -7081,13 +7097,13 @@ const Sr = class Sr {
      ) : [];
    }
    isDeviceAuthorized(e) {
@@ -9479,9 +9134,14 @@ index 8debad6..3085954 100644
 +  onDeviceRumor(e, t, n) {
 +    this.deps.manager.handleDeviceRumor(this.publicKey, e, t, n);
    }
-   onDeviceDirty() {
-     this.deps.manager.persistUserRecord(this.publicKey);
-@@ -7096,8 +7109,8 @@ const Sr = class Sr {
+-  onDeviceDirty() {
+-    this.deps.manager.persistUserRecord(this.publicKey);
++  async onDeviceDirty() {
++    await this.deps.manager.persistUserRecord(this.publicKey);
+   }
+   deactivateCurrentSessions() {
+     for (const e of this.devices.values())
+@@ -7096,8 +7112,8 @@ const Sr = class Sr {
    close() {
      var e;
      (e = this.appKeysSubscription) == null || e.call(this), this.appKeysSubscription = void 0;
@@ -9492,7 +9152,7 @@ index 8debad6..3085954 100644
    }
  };
  l(Sr, "RECENT_OWN_DEVICE_SESSION_GRACE_MS", 300 * 1e3);
-@@ -7109,20 +7122,20 @@ class it {
+@@ -7109,20 +7125,20 @@ class it {
    async get(e) {
      return this.store.get(e);
    }
@@ -9519,7 +9179,7 @@ index 8debad6..3085954 100644
    constructor(e = "session_") {
      l(this, "keyPrefix");
      this.keyPrefix = e;
-@@ -7132,15 +7145,15 @@ class gv {
+@@ -7132,15 +7148,15 @@ class gv {
    }
    async get(e) {
      try {
@@ -9539,7 +9199,7 @@ index 8debad6..3085954 100644
      } catch (n) {
        throw n instanceof Error ? n : new Error(String(n));
      }
-@@ -7152,63 +7165,65 @@ class gv {
+@@ -7152,63 +7168,65 @@ class gv {
      }
    }
    async list(e = "") {
@@ -9623,7 +9283,7 @@ index 8debad6..3085954 100644
    }
    get default() {
      return this.defaultExpiration;
-@@ -7232,10 +7247,10 @@ class Fy {
+@@ -7232,10 +7250,10 @@ class Fy {
          this.validate(e), this.defaultExpiration = e;
        } catch {
        }
@@ -9637,7 +9297,7 @@ index 8debad6..3085954 100644
        if (i !== void 0) {
          if (i === null) {
            this.peerExpiration.set(n, null);
-@@ -7247,8 +7262,8 @@ class Fy {
+@@ -7247,8 +7265,8 @@ class Fy {
          }
        }
      }
@@ -9648,7 +9308,7 @@ index 8debad6..3085954 100644
        if (!n) continue;
        let i;
        try {
-@@ -7256,7 +7271,7 @@ class Fy {
+@@ -7256,7 +7274,7 @@ class Fy {
        } catch {
          continue;
        }
@@ -9657,7 +9317,7 @@ index 8debad6..3085954 100644
        if (s !== void 0) {
          if (s === null) {
            this.groupExpiration.set(i, null);
-@@ -7278,22 +7293,22 @@ class Fy {
+@@ -7278,22 +7296,22 @@ class Fy {
      await this.storage.put(this.defaultKey(), e).catch(() => {
      });
    }
@@ -9686,7 +9346,7 @@ index 8debad6..3085954 100644
      });
    }
    defaultKey() {
-@@ -7316,15 +7331,15 @@ class Fy {
+@@ -7316,15 +7334,15 @@ class Fy {
    }
  }
  class $y {
@@ -9707,7 +9367,7 @@ index 8debad6..3085954 100644
      }), s = {
        publicKey: e,
        devices: n.map(([, d]) => ({
-@@ -7333,9 +7348,9 @@ class $y {
+@@ -7333,9 +7351,9 @@ class $y {
          inactiveSessions: d.inactiveSessions.map(i),
          createdAt: d.createdAt
        })),
@@ -9720,7 +9380,7 @@ index 8debad6..3085954 100644
      }, o = this.userRecordKey(e), c = (this.writeChain.get(o) || Promise.resolve()).catch(() => {
      }).then(() => this.storage.put(o, s));
      return this.writeChain.set(o, c), c;
-@@ -7381,7 +7396,7 @@ class $y {
+@@ -7381,7 +7399,7 @@ class $y {
      ), e = "1", await this.storage.put(this.versionKey(), e);
    }
    async deleteUserSessions(e) {
@@ -9729,7 +9389,7 @@ index 8debad6..3085954 100644
      await Promise.all(n.map((i) => this.storage.del(i)));
    }
    sessionKeyPrefix(e) {
-@@ -7398,16 +7413,16 @@ class $y {
+@@ -7398,16 +7416,16 @@ class $y {
    }
  }
  const ls = /* @__PURE__ */ new WeakSet();
@@ -9750,7 +9410,7 @@ index 8debad6..3085954 100644
      const o = (a) => {
        var c;
        try {
-@@ -7421,16 +7436,16 @@ function Pt(t, e = {}) {
+@@ -7421,16 +7439,16 @@ function Pt(t, e = {}) {
        throw o(a), a;
      }
      try {
@@ -9770,7 +9430,7 @@ index 8debad6..3085954 100644
      l(this, "storageVersion", "1");
      l(this, "versionPrefix");
      l(this, "deviceId");
-@@ -7464,7 +7479,7 @@ class Gy {
+@@ -7464,7 +7482,7 @@ class Gy {
      l(this, "eventsAvailableCallbacks", /* @__PURE__ */ new Set());
      l(this, "emittedEvents", []);
      l(this, "initialized", !1);
@@ -9779,7 +9439,7 @@ index 8debad6..3085954 100644
        this.storage,
        this.versionPrefix
      ), this.userRecordStorage = new $y(
-@@ -7489,7 +7504,7 @@ class Gy {
+@@ -7489,7 +7507,7 @@ class Gy {
    }
    async emitEvent(e) {
      this.emittedEvents.push(e);
@@ -9788,7 +9448,7 @@ index 8debad6..3085954 100644
      for (const i of this.eventsAvailableCallbacks)
        try {
          const s = i();
-@@ -7501,7 +7516,7 @@ class Gy {
+@@ -7501,7 +7519,7 @@ class Gy {
      await Promise.all(n);
    }
    handleLegacyEmittedEvent(e) {
@@ -9797,7 +9457,7 @@ index 8debad6..3085954 100644
      if (e.type === "decryptedMessage") {
        for (const i of this.internalSubscriptions)
          i(e.event, e.sender, e.meta);
-@@ -7509,7 +7524,7 @@ class Gy {
+@@ -7509,7 +7527,7 @@ class Gy {
      }
      if (e.type === "subscribe") {
        if (!this.legacyNostrSubscribe) return;
@@ -9806,7 +9466,7 @@ index 8debad6..3085954 100644
        const i = this.legacyNostrSubscribe(
          e.filter,
          (s) => {
-@@ -7527,22 +7542,22 @@ class Gy {
+@@ -7527,22 +7545,22 @@ class Gy {
        return this.legacyNostrPublish(e.event, e.innerEventId).then(() => {
        });
    }
@@ -9835,7 +9495,7 @@ index 8debad6..3085954 100644
    }
    async init() {
      if (this.initialized) return;
-@@ -7552,7 +7567,7 @@ class Gy {
+@@ -7552,7 +7570,7 @@ class Gy {
      });
      const e = this.getOrCreateUserRecord(this.ownerPublicKey);
      this.upsertDeviceRecord(e, this.deviceId), this.startInviteResponseListener(), Array.from(this.userRecords.keys()).forEach(
@@ -9844,7 +9504,7 @@ index 8debad6..3085954 100644
      );
    }
    /** Start listening for responses addressed to our ephemeral invite key. */
-@@ -7566,40 +7581,44 @@ class Gy {
+@@ -7566,41 +7584,45 @@ class Gy {
        }
      );
    }
@@ -9903,12 +9563,14 @@ index 8debad6..3085954 100644
          },
 -        persistUserRecord: (n) => {
 -          this.storeUserRecord(n).catch(() => {
+-          }), this.notifyMessagePushAuthorsChanged();
 +        persistUserRecord: (i) => {
-+          this.storeUserRecord(i).catch(() => {
-           }), this.notifyMessagePushAuthorsChanged();
++          const s = this.storeUserRecord(i);
++          return this.notifyMessagePushAuthorsChanged(), s;
          }
        },
-@@ -7609,170 +7628,186 @@ class Hy extends Gy {
+       nostr: this.nostrFacade,
+@@ -7609,170 +7631,186 @@ class Hy extends Gy {
        ourDeviceId: this.deviceId,
        ourOwnerPubkey: this.ownerPublicKey,
        identityKey: this.identityKey
@@ -10197,7 +9859,7 @@ index 8debad6..3085954 100644
    /** Enable or disable adoption of incoming kind-10448 chat settings. */
    setAutoAdoptChatSettings(e) {
      this.autoAdoptChatSettings = e;
-@@ -7789,33 +7824,33 @@ class zy extends Hy {
+@@ -7789,33 +7827,33 @@ class zy extends Hy {
      ).map((e) => ({
        ownerPubkey: e.publicKey,
        appKeys: new _(
@@ -10241,7 +9903,7 @@ index 8debad6..3085954 100644
      if (!n)
        return [];
      const i = /* @__PURE__ */ new Set();
-@@ -7832,7 +7867,7 @@ class zy extends Hy {
+@@ -7832,7 +7870,7 @@ class zy extends Hy {
      return this.processReceivedEvent(e);
    }
    processReceivedEvent(e) {
@@ -10250,7 +9912,7 @@ index 8debad6..3085954 100644
        this.retryPendingDirectMessages();
      }), !0) : e.kind === nt ? (this.processInviteResponseEvent(e).then(() => {
        this.retryPendingDirectMessages();
-@@ -7842,7 +7877,7 @@ class zy extends Hy {
+@@ -7842,7 +7880,7 @@ class zy extends Hy {
      return this.getOrCreateUserRecord(e.pubkey).processAppKeysEvent(e);
    }
    async processInviteResponseEvent(e) {
@@ -10259,7 +9921,7 @@ index 8debad6..3085954 100644
      if (this.processedInviteResponses.has(e.id) || this.pendingInviteResponses.has(e.id))
        return !1;
      try {
-@@ -7864,12 +7899,12 @@ class zy extends Hy {
+@@ -7864,12 +7902,12 @@ class zy extends Hy {
          inviteeSessionPublicKey: i.inviteeSessionPublicKey,
          ephemeralPrivateKey: n,
          sharedSecret: this.inviteKeys.sharedSecret
@@ -10274,7 +9936,7 @@ index 8debad6..3085954 100644
        return this.installInviteResponseSession(o, c) || (this.queuePendingInviteResponse(o), await this.setupUser(s).catch(() => {
        })), !0;
      } catch {
-@@ -7877,19 +7912,19 @@ class zy extends Hy {
+@@ -7877,19 +7915,19 @@ class zy extends Hy {
      }
    }
    async processInviteEvent(e) {
@@ -10298,7 +9960,7 @@ index 8debad6..3085954 100644
        }));
      }
      return i;
-@@ -7899,28 +7934,28 @@ class zy extends Hy {
+@@ -7899,28 +7937,28 @@ class zy extends Hy {
      await this.expirationSettings.setDefault(e);
    }
    /** Set, disable, or clear the expiration override for one peer. */
@@ -10335,7 +9997,7 @@ index 8debad6..3085954 100644
      }));
    }
    async deleteChat(e) {
-@@ -7928,19 +7963,20 @@ class zy extends Hy {
+@@ -7928,19 +7966,20 @@ class zy extends Hy {
    }
    async deleteUser(e) {
      await this.init();
@@ -10362,7 +10024,7 @@ index 8debad6..3085954 100644
    }
    async queuedMessageDiagnostics(e) {
      return await this.init(), Uy({
-@@ -7951,16 +7987,16 @@ class zy extends Hy {
+@@ -7951,16 +7990,16 @@ class zy extends Hy {
      });
    }
    async flushMessageQueue(e) {
@@ -10384,7 +10046,7 @@ index 8debad6..3085954 100644
          if (!a)
            return;
          await this.emitPublish(a), ds(
-@@ -7972,11 +8008,11 @@ class zy extends Hy {
+@@ -7972,11 +8011,11 @@ class zy extends Hy {
        } catch {
        }
    }
@@ -10398,7 +10060,7 @@ index 8debad6..3085954 100644
        ), [i] = n;
        if (!i)
          return;
-@@ -7989,15 +8025,15 @@ class zy extends Hy {
+@@ -7989,15 +8028,15 @@ class zy extends Hy {
      }
    }
  }
@@ -10417,7 +10079,7 @@ index 8debad6..3085954 100644
        e.purpose || "chat",
        s,
        n,
-@@ -8006,7 +8042,7 @@ class Vy extends zy {
+@@ -8006,7 +8045,7 @@ class Vy extends zy {
      ].join(":"), a = this.inviteAcceptPromises.get(o);
      if (a)
        return a;
@@ -10426,7 +10088,7 @@ index 8debad6..3085954 100644
        deviceId: n,
        explicitSameDeviceOwnerHint: i,
        claimedOwnerPublicKey: s
-@@ -8018,7 +8054,7 @@ class Vy extends zy {
+@@ -8018,7 +8057,7 @@ class Vy extends zy {
        this.inviteAcceptPromises.get(o) === c && this.inviteAcceptPromises.delete(o);
      }
    }
@@ -10435,7 +10097,7 @@ index 8debad6..3085954 100644
      var U, G;
      const { deviceId: i, explicitSameDeviceOwnerHint: s, claimedOwnerPublicKey: o } = n;
      let a = o, c = null, u = !1;
-@@ -8026,10 +8062,10 @@ class Vy extends zy {
+@@ -8026,10 +8065,10 @@ class Vy extends zy {
        const R = ((U = this.userRecords.get(o)) == null ? void 0 : U.appKeys) || await this.fetchAppKeys(o, 50).catch(
          () => null
        ) || void 0;
@@ -10448,7 +10110,7 @@ index 8debad6..3085954 100644
            devicePubkey: i,
            claimedOwnerPublicKey: o,
            invitePurpose: e.purpose,
-@@ -8052,20 +8088,20 @@ class Vy extends zy {
+@@ -8052,20 +8091,20 @@ class Vy extends zy {
      ];
      if (e.purpose === "link" && f.length > 0)
        return await h(), { ownerPublicKey: a, deviceId: i, session: f[0] };
@@ -10476,7 +10138,7 @@ index 8debad6..3085954 100644
        (G = this.userRecords.get(this.ownerPublicKey)) == null ? void 0 : G.ownerProofForDevice(this.deviceId)
      ), Y = this.upsertDeviceRecord(d, i);
      return this.delegateToOwner.set(i, a), Y.installSession(O, !1, { preferActive: !0 }), await this.emitPublish(B), await this.sendInviteBootstrap(O, i), e.purpose === "link" && a === this.ownerPublicKey && await this.sendLinkBootstrap(a, i), await this.flushMessageQueue(i).catch(() => {
-@@ -8077,12 +8113,12 @@ class Vy extends zy {
+@@ -8077,12 +8116,12 @@ class Vy extends zy {
        return this.ownerPublicKey;
    }
  }
@@ -10492,7 +10154,7 @@ index 8debad6..3085954 100644
        n,
        a,
        c,
-@@ -8092,64 +8128,63 @@ class mr extends Vy {
+@@ -8092,64 +8131,63 @@ class mr extends Vy {
      );
      return u.legacyNostrSubscribe = void 0, u.legacyNostrPublish = void 0, u;
    }
@@ -10598,7 +10260,7 @@ index 8debad6..3085954 100644
        defaultExpiration: this.expirationSettings.default,
        peerExpiration: this.expirationSettings.peer(e),
        hasPeerExpiration: this.expirationSettings.hasPeer(e),
-@@ -8158,7 +8193,7 @@ class mr extends Vy {
+@@ -8158,7 +8196,7 @@ class mr extends Vy {
      });
      const u = St({
        kind: i,
@@ -10607,7 +10269,7 @@ index 8debad6..3085954 100644
        tags: a,
        pubkey: this.ourPublicKey,
        nowMs: o,
-@@ -8169,11 +8204,11 @@ class mr extends Vy {
+@@ -8169,11 +8207,11 @@ class mr extends Vy {
    /**
     * Send an encrypted kind-10448 chat-settings event without an expiration tag.
     */
@@ -10621,7 +10283,7 @@ index 8debad6..3085954 100644
      };
      return this.sendMessage(e, JSON.stringify(n), {
        kind: Nr,
-@@ -8183,14 +8218,14 @@ class mr extends Vy {
+@@ -8183,14 +8221,14 @@ class mr extends Vy {
    /**
     * Update a peer's disappearing-message TTL and notify it with chat settings.
     */
@@ -10642,7 +10304,7 @@ index 8debad6..3085954 100644
          kind: ai,
          tags: n.map((i) => ["e", i])
        });
-@@ -8200,11 +8235,11 @@ class mr extends Vy {
+@@ -8200,11 +8238,11 @@ class mr extends Vy {
        kind: ci
      });
    }
@@ -10657,7 +10319,7 @@ index 8debad6..3085954 100644
        this.ownerPublicKey
      );
      n && this.setExpirationForPeer(n.peerPubkey, n.options).catch(
-@@ -8213,13 +8248,13 @@ class mr extends Vy {
+@@ -8213,13 +8251,13 @@ class mr extends Vy {
      );
    }
    storeUserRecord(e) {
@@ -10676,7 +10338,7 @@ index 8debad6..3085954 100644
          publicKey: e,
          getOrCreateUserRecord: (n) => this.getOrCreateUserRecord(n),
          rememberDelegate: (n, i) => {
-@@ -8228,19 +8263,19 @@ class mr extends Vy {
+@@ -8228,19 +8266,19 @@ class mr extends Vy {
          rememberProcessedInviteResponse: (n) => {
            this.processedInviteResponses.add(n);
          }
@@ -10699,7 +10361,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "nostrSubscribe");
      l(this, "nostrPublish");
-@@ -8262,10 +8297,10 @@ class jy {
+@@ -8262,10 +8300,10 @@ class jy {
      this.initialized = !0;
      const e = await this.storage.get(
        this.identityPublicKeyKey()
@@ -10712,7 +10374,7 @@ index 8debad6..3085954 100644
        this.identityPrivateKeyKey(),
        Array.from(this.devicePrivateKey)
      ));
-@@ -8303,8 +8338,8 @@ class jy {
+@@ -8303,8 +8341,8 @@ class jy {
    async publishInvite() {
      if (await this.init(), !this.invite)
        throw new Error("Invite not initialized");
@@ -10723,7 +10385,7 @@ index 8debad6..3085954 100644
    }
    /**
     * Rotate this device's invite - generates new ephemeral keys and shared secret.
-@@ -8326,14 +8361,14 @@ class jy {
+@@ -8326,14 +8364,14 @@ class jy {
     * For delegate devices that don't know the owner ahead of time.
     */
    async waitForActivation(e = 6e4) {
@@ -10740,7 +10402,7 @@ index 8debad6..3085954 100644
            } catch {
            }
          }
-@@ -8347,13 +8382,13 @@ class jy {
+@@ -8347,13 +8385,13 @@ class jy {
     * @param options.retries - Number of retry attempts (default 2)
     */
    async isRevoked(e = {}) {
@@ -10756,7 +10418,7 @@ index 8debad6..3085954 100644
        );
        if (o)
          return !o.getDevice(this.devicePublicKey);
-@@ -8373,8 +8408,8 @@ class jy {
+@@ -8373,8 +8411,8 @@ class jy {
        throw new Error(
          "DelegateManager must be initialized before creating SessionManager"
        );
@@ -10767,7 +10429,7 @@ index 8debad6..3085954 100644
        throw new Error(
          "Owner public key required for SessionManager - device must be activated first"
        );
-@@ -8391,7 +8426,7 @@ class jy {
+@@ -8391,7 +8429,7 @@ class jy {
        // Use identityPubkey as deviceId
        this.nostrSubscribe,
        this.nostrPublish,
@@ -10776,7 +10438,7 @@ index 8debad6..3085954 100644
        { ephemeralKeypair: n, sharedSecret: i },
        e || this.storage
      );
-@@ -8401,8 +8436,8 @@ class jy {
+@@ -8401,8 +8439,8 @@ class jy {
        throw new Error(
          "DelegateManager must be initialized before creating SessionManager"
        );
@@ -10787,7 +10449,7 @@ index 8debad6..3085954 100644
        throw new Error(
          "Owner public key required for SessionManager - device must be activated first"
        );
-@@ -8416,7 +8451,7 @@ class jy {
+@@ -8416,7 +8454,7 @@ class jy {
        this.devicePublicKey,
        this.devicePrivateKey,
        this.devicePublicKey,
@@ -10796,7 +10458,7 @@ index 8debad6..3085954 100644
        { ephemeralKeypair: n, sharedSecret: i },
        e || this.storage
      );
-@@ -8446,7 +8481,7 @@ class jy {
+@@ -8446,7 +8484,7 @@ class jy {
      return `${this.versionPrefix}/device-manager/identity-private-key`;
    }
  }
@@ -10805,7 +10467,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "nostrPublish");
      l(this, "storage");
-@@ -8458,12 +8493,12 @@ class Wy {
+@@ -8458,12 +8496,12 @@ class Wy {
      l(this, "initialized", !1);
      l(this, "storageVersion", "3");
      this.nostrPublish = Pt(e.nostrPublish, e), this.storage = e.storage || new it(), this.ownerIdentityKey = e.ownerIdentityKey;
@@ -10821,7 +10483,7 @@ index 8debad6..3085954 100644
    }
    get versionPrefix() {
      return `v${this.storageVersion}`;
-@@ -8485,23 +8520,23 @@ class Wy {
+@@ -8485,23 +8523,23 @@ class Wy {
     */
    addDevice(e) {
      this.appKeys || (this.appKeys = new _());
@@ -10851,7 +10513,7 @@ index 8debad6..3085954 100644
    }
    /**
     * Revoke a device from the AppKeys.
-@@ -8520,16 +8555,16 @@ class Wy {
+@@ -8520,16 +8558,16 @@ class Wy {
      const e = this.ownerPubkey;
      if (!e)
        throw new Error("Owner pubkey is required to publish AppKeys");
@@ -10871,7 +10533,7 @@ index 8debad6..3085954 100644
    }
    /**
     * Replace the local AppKeys with the given list and save to storage.
-@@ -8551,11 +8586,11 @@ class Wy {
+@@ -8551,11 +8589,11 @@ class Wy {
    }
    async ensureAppKeysProfileId(e) {
      if (this.appKeysProfileId) return this.appKeysProfileId;
@@ -10885,7 +10547,7 @@ index 8debad6..3085954 100644
    }
    async loadAppKeys() {
      const e = await this.storage.get(this.appKeysKey());
-@@ -8570,7 +8605,7 @@ class Wy {
+@@ -8570,7 +8608,7 @@ class Wy {
      await this.storage.put(this.appKeysKey(), e.serialize());
    }
  }
@@ -10894,7 +10556,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "publicKey");
      l(this, "secretKey");
-@@ -8582,7 +8617,7 @@ class vv {
+@@ -8582,7 +8620,7 @@ class vv {
    }
    /** Encrypt a Rumor and return a signed outer event ready for publishing */
    createEvent(e) {
@@ -10903,7 +10565,7 @@ index 8debad6..3085954 100644
      return ie(
        {
          kind: Zi,
-@@ -8605,8 +8640,8 @@ class vv {
+@@ -8605,8 +8643,8 @@ class vv {
        created_at: e.created_at
      }))
        throw new Error("Invalid shared channel event");
@@ -10914,7 +10576,7 @@ index 8debad6..3085954 100644
    }
    /** Check if an event belongs to this channel */
    isChannelEvent(e) {
-@@ -8620,69 +8655,69 @@ const en = [
+@@ -8620,69 +8658,69 @@ const en = [
    3600,
    21600
  ];
@@ -11019,7 +10681,7 @@ index 8debad6..3085954 100644
      }),
      created_at: i,
      tags: s,
-@@ -8691,27 +8726,27 @@ function Yy(t, e, r) {
+@@ -8691,27 +8729,27 @@ function Yy(t, e, r) {
    };
    return o.id = ne(o), o;
  }
@@ -11056,7 +10718,7 @@ index 8debad6..3085954 100644
    if (e.requiredRevision === void 0) {
      if (i !== void 0) return null;
    } else if (i !== String(Math.max(0, Math.floor(e.requiredRevision))))
-@@ -8725,65 +8760,65 @@ function La(t) {
+@@ -8725,65 +8763,65 @@ function La(t) {
      createdAt: Math.max(0, Math.floor(e.createdAt))
    };
  }
@@ -11148,7 +10810,7 @@ index 8debad6..3085954 100644
    }
    chainKeyBytes() {
      return new Uint8Array(this.chainKey);
-@@ -8797,21 +8832,21 @@ class be {
+@@ -8797,21 +8835,21 @@ class be {
    encryptToBytes(e) {
      if (this.iteration === 4294967295)
        throw new Error("sender-key iteration overflow");
@@ -11176,7 +10838,7 @@ index 8debad6..3085954 100644
        return this.skippedMessageKeys.delete(n), p;
      }
      if (n - this.iteration > tn)
-@@ -8824,7 +8859,7 @@ class be {
+@@ -8824,7 +8862,7 @@ class be {
        const [h, p] = er(s);
        s = h, a.set(o, p), o += 1;
      }
@@ -11185,7 +10847,7 @@ index 8debad6..3085954 100644
      return this.chainKey = c, this.iteration = o + 1, this.skippedMessageKeys = a, this.pruneSkipped(), d;
    }
    planDecryptBlind(e) {
-@@ -8845,52 +8880,52 @@ class be {
+@@ -8845,52 +8883,52 @@ class be {
          };
        } catch {
        }
@@ -11255,7 +10917,7 @@ index 8debad6..3085954 100644
      return {
        keyId: this.keyId,
        chainKey: ae(this.chainKey),
-@@ -8899,7 +8934,7 @@ class be {
+@@ -8899,7 +8937,7 @@ class be {
      };
    }
    static fromJSON(e) {
@@ -11264,7 +10926,7 @@ index 8debad6..3085954 100644
        e.keyId,
        W(e.chainKey),
        e.iteration
-@@ -8909,9 +8944,9 @@ class be {
+@@ -8909,9 +8947,9 @@ class be {
          const s = Number.parseInt(n, 10);
          if (!Number.isFinite(s)) continue;
          const o = W(i);
@@ -11276,7 +10938,7 @@ index 8debad6..3085954 100644
    }
    static fromDistribution(e) {
      return new be(
-@@ -8922,8 +8957,8 @@ class be {
+@@ -8922,8 +8960,8 @@ class be {
    }
    replaceWith(e) {
      this.chainKey = new Uint8Array(e.chainKey), this.iteration = e.iteration, this.skippedMessageKeys = new Map(
@@ -11287,7 +10949,7 @@ index 8debad6..3085954 100644
          new Uint8Array(n)
        ])
      );
-@@ -8933,14 +8968,14 @@ class be {
+@@ -8933,14 +8971,14 @@ class be {
        return;
      const e = Array.from(this.skippedMessageKeys.keys()).sort(
        (n, i) => n - i
@@ -11306,7 +10968,7 @@ index 8debad6..3085954 100644
    }
    isHiddenCounterMessage() {
      return this.encryptedHeader !== void 0;
-@@ -8960,25 +8995,25 @@ class Tr {
+@@ -8960,25 +8998,25 @@ class Tr {
    outerEventKind() {
      return this.outerKind;
    }
@@ -11340,7 +11002,7 @@ index 8debad6..3085954 100644
      return new rn(i, s, o);
    }
    parseOuterEvent(e) {
-@@ -8988,31 +9023,31 @@ class Tr {
+@@ -8988,31 +9026,31 @@ class Tr {
        );
      if (!ge(e))
        throw new Error("invalid outer event signature");
@@ -11382,7 +11044,7 @@ index 8debad6..3085954 100644
      e
    );
    return ma(
-@@ -9020,21 +9055,21 @@ function Xy(t) {
+@@ -9020,21 +9058,21 @@ function Xy(t) {
        v: 1,
        type: "sender-key-cover"
      }),
@@ -11413,7 +11075,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "data");
      l(this, "ourOwnerPubkey");
-@@ -9070,8 +9105,8 @@ class tg {
+@@ -9070,8 +9108,8 @@ class tg {
    async init() {
      if (this.initialized) return;
      this.initialized = !0;
@@ -11424,7 +11086,7 @@ index 8debad6..3085954 100644
        if (n.endsWith("/sender-event-pubkey")) {
          const i = n.slice(e.length).split("/")[0], s = await this.storage.get(n);
          typeof s == "string" && Ie(s) && Ie(i) && this.setSenderEventMapping(i, s);
-@@ -9095,15 +9130,15 @@ class tg {
+@@ -9095,15 +9133,15 @@ class tg {
    latestKeyIdKey(e) {
      return `${this.groupSenderPrefix(e)}/latest-key-id`;
    }
@@ -11444,7 +11106,7 @@ index 8debad6..3085954 100644
    }
    isMemberOwnerPubkey(e) {
      return this.memberOwnerPubkeys.includes(e);
-@@ -9111,15 +9146,15 @@ class tg {
+@@ -9111,15 +9149,15 @@ class tg {
    isSenderDeviceActive(e) {
      if (e === this.ourDevicePubkey)
        return this.isMemberOwnerPubkey(this.ourOwnerPubkey);
@@ -11466,7 +11128,7 @@ index 8debad6..3085954 100644
      } else
        this.senderDeviceToEvent.delete(e);
      for (const [
-@@ -9141,19 +9176,19 @@ class tg {
+@@ -9141,19 +9179,19 @@ class tg {
        ...this.senderDeviceToOwner.keys(),
        ...this.senderEventToDevice.values()
      ]);
@@ -11494,7 +11156,7 @@ index 8debad6..3085954 100644
        this.pendingKey(e)
      ], i = n.flatMap((a) => this.pendingOuter.get(a) || []);
      if (!i || i.length === 0) return [];
-@@ -9174,7 +9209,7 @@ class tg {
+@@ -9174,7 +9212,7 @@ class tg {
      return o;
    }
  }
@@ -11503,7 +11165,7 @@ index 8debad6..3085954 100644
    async ensureOurSenderEventKeys() {
      await this.init();
      const e = await this.storage.get(
-@@ -9194,18 +9229,18 @@ class rg extends tg {
+@@ -9194,18 +9232,18 @@ class rg extends tg {
          };
        }
      }
@@ -11527,7 +11189,7 @@ index 8debad6..3085954 100644
      );
      if (!n) return null;
      try {
-@@ -9215,7 +9250,7 @@ class rg extends tg {
+@@ -9215,7 +9253,7 @@ class rg extends tg {
      }
    }
    async loadSenderKeyStates(e) {
@@ -11536,7 +11198,7 @@ index 8debad6..3085954 100644
      for (const s of n) {
        const o = await this.storage.get(s);
        if (o)
-@@ -9226,29 +9261,29 @@ class rg extends tg {
+@@ -9226,29 +9264,29 @@ class rg extends tg {
      }
      return i.sort((s, o) => o.keyId - s.keyId);
    }
@@ -11575,7 +11237,7 @@ index 8debad6..3085954 100644
        this.ourDevicePubkey
      );
      i.some(
-@@ -9256,20 +9291,21 @@ class rg extends tg {
+@@ -9256,20 +9294,21 @@ class rg extends tg {
      ) || (i.push({
        keyId: e.keyId >>> 0,
        distribution: { ...e },
@@ -11603,7 +11265,7 @@ index 8debad6..3085954 100644
        const a = s.sort(
          (c, u) => u.distribution.iteration - c.distribution.iteration
        )[0];
-@@ -9289,13 +9325,13 @@ class rg extends tg {
+@@ -9289,13 +9328,13 @@ class rg extends tg {
        const o = vs(), a = pe(), c = new be(o, a, 0);
        return await this.saveSenderKeyState(this.ourDevicePubkey, c), await this.storage.put(this.latestKeyIdKey(this.ourDevicePubkey), o), { state: c, created: !0 };
      }
@@ -11620,7 +11282,7 @@ index 8debad6..3085954 100644
        );
        if (o)
          return { state: o, created: !1 };
-@@ -9303,28 +9339,28 @@ class rg extends tg {
+@@ -9303,28 +9342,28 @@ class rg extends tg {
      const n = vs(), i = pe(), s = new be(n, i, 0);
      return await this.saveSenderKeyState(this.ourDevicePubkey, s), await this.storage.put(this.latestKeyIdKey(this.ourDevicePubkey), n), { state: s, created: !0 };
    }
@@ -11654,7 +11316,7 @@ index 8debad6..3085954 100644
      const i = {
        kind: Vt,
        content: JSON.stringify(n),
-@@ -9332,16 +9368,16 @@ class rg extends tg {
+@@ -9332,16 +9371,16 @@ class rg extends tg {
        tags: [
          ["l", this.groupId()],
          ["key", String(n.keyId >>> 0)],
@@ -11674,7 +11336,7 @@ index 8debad6..3085954 100644
      const s = {
        kind: n.kind,
        content: n.content,
-@@ -9353,7 +9389,7 @@ class rg extends tg {
+@@ -9353,7 +9392,7 @@ class rg extends tg {
      return s.id = ne(s), s;
    }
  }
@@ -11683,7 +11345,7 @@ index 8debad6..3085954 100644
    senderKeyRecipientOwnerPubkeys() {
      return Array.from(
        new Set(
-@@ -9364,47 +9400,56 @@ class ng extends rg {
+@@ -9364,47 +9403,56 @@ class ng extends rg {
      );
    }
    assertCurrentRecipients(e) {
@@ -11756,7 +11418,7 @@ index 8debad6..3085954 100644
      const h = this.buildGroupInnerRumor(s, i, e), p = JSON.stringify(h), f = this.oneToMany.encryptToOuterEvent(
        o,
        u,
-@@ -9412,21 +9457,21 @@ class ng extends rg {
+@@ -9412,21 +9460,21 @@ class ng extends rg {
        s
      );
      return await this.saveSenderKeyState(this.ourDevicePubkey, u), this.assertCurrentRecipients(n), await Pt(
@@ -11782,7 +11444,7 @@ index 8debad6..3085954 100644
      if (e.kind !== ue || !ge(e)) return null;
      try {
        const i = this.oneToMany.parseOuterEvent(e);
-@@ -9438,28 +9483,28 @@ class ng extends rg {
+@@ -9438,28 +9486,28 @@ class ng extends rg {
            messageNumber: i.messageNumber
          },
          ...n !== void 0 ? { requiredRevision: Math.max(0, Math.floor(n)) } : {},
@@ -11818,7 +11480,7 @@ index 8debad6..3085954 100644
      );
      if (i.length === 0) return null;
      const s = n.nowMs ?? Date.now(), o = Math.floor(s / 1e3);
-@@ -9470,21 +9515,21 @@ class ng extends rg {
+@@ -9470,21 +9518,21 @@ class ng extends rg {
      return i[0];
    }
  }
@@ -11847,7 +11509,7 @@ index 8debad6..3085954 100644
        if (!c || c.groupId !== this.groupId()) return [];
        const u = n;
        if (!u || !Ie(u)) return [];
-@@ -9493,7 +9538,7 @@ class Ki extends ng {
+@@ -9493,7 +9541,7 @@ class Ki extends ng {
        const d = Ft({
          ourOwnerPubkey: this.ourOwnerPubkey,
          ourDevicePubkey: this.ourDevicePubkey,
@@ -11856,7 +11518,7 @@ index 8debad6..3085954 100644
          senderDevicePubkey: u
        });
        return [
-@@ -9501,7 +9546,7 @@ class Ki extends ng {
+@@ -9501,7 +9549,7 @@ class Ki extends ng {
            groupId: this.groupId(),
            senderEventPubkey: u,
            senderDevicePubkey: u,
@@ -11865,7 +11527,7 @@ index 8debad6..3085954 100644
            origin: d,
            isSelf: $t(d),
            isCrossDeviceSelf: Gt(d),
-@@ -9520,9 +9565,9 @@ class Ki extends ng {
+@@ -9520,9 +9568,9 @@ class Ki extends ng {
      const o = n;
      if (!o || !Ie(o)) return [];
      if (Ie(e.pubkey) && e.pubkey !== o) return [];
@@ -11877,7 +11539,7 @@ index 8debad6..3085954 100644
      ), s.senderEventPubkey && Ie(s.senderEventPubkey) && (this.setSenderEventMapping(o, s.senderEventPubkey), await this.storage.put(
        this.senderEventPubkeyKey(o),
        s.senderEventPubkey
-@@ -9540,9 +9585,9 @@ class Ki extends ng {
+@@ -9540,9 +9588,9 @@ class Ki extends ng {
     */
    async handleOuterEvent(e) {
      if (await this.init(), await this.purgeInactiveSenders(), e.kind !== ue || !ge(e)) return null;
@@ -11889,7 +11551,7 @@ index 8debad6..3085954 100644
      } catch {
        return null;
      }
-@@ -9550,19 +9595,20 @@ class Ki extends ng {
+@@ -9550,19 +9598,20 @@ class Ki extends ng {
      if (!i)
        return this.queuePending(
          n,
@@ -11917,7 +11579,7 @@ index 8debad6..3085954 100644
            break;
          } catch {
          }
-@@ -9572,15 +9618,15 @@ class Ki extends ng {
+@@ -9572,15 +9621,15 @@ class Ki extends ng {
      } else {
        const f = await this.loadSenderKeyState(
          i,
@@ -11937,7 +11599,7 @@ index 8debad6..3085954 100644
          );
        } catch {
          return null;
-@@ -9627,7 +9673,7 @@ class Ki extends ng {
+@@ -9627,7 +9676,7 @@ class Ki extends ng {
      };
    }
  }
@@ -11946,7 +11608,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "ourOwnerPubkey");
      l(this, "ourDevicePubkey");
-@@ -9672,22 +9718,22 @@ class ig {
+@@ -9672,22 +9721,22 @@ class ig {
    }
    async upsertGroup(e) {
      await this.enqueueOperation(async () => {
@@ -11975,7 +11637,7 @@ index 8debad6..3085954 100644
          this.senderEventToGroup.get(n) === e && this.senderEventToGroup.delete(n), this.pendingOuterBySenderEvent.delete(n);
      this.groupToSenderEvents.delete(e), this.syncOuterSubscription();
    }
-@@ -9700,34 +9746,34 @@ class ig {
+@@ -9700,34 +9749,34 @@ class ig {
      this.outerUnsubscribe = null, this.outerAuthorsKey = "", this.outerAuthors = [], this.clearOuterBackfills(), this.groups.clear(), this.senderEventToGroup.clear(), this.groupToSenderEvents.clear(), this.pendingOuterBySenderEvent.clear(), this.pendingSessionByGroup.clear(), this.seenOuterEventIds.clear(), this.seenOuterEventOrder.length = 0;
    }
  }
@@ -12026,7 +11688,7 @@ index 8debad6..3085954 100644
        );
        let s = this.groups.get(i.id);
        if (s ? s.setData(i) : (s = new Ki({
-@@ -9751,7 +9797,7 @@ class cg extends ig {
+@@ -9751,7 +9800,7 @@ class cg extends ig {
            "sendPairwise is required when fanoutMetadata is enabled"
          );
        const a = n.nowMs ?? Date.now(), c = Math.floor(a / 1e3), u = {
@@ -12035,7 +11697,7 @@ index 8debad6..3085954 100644
            {
              ...i,
              createdAt: Math.floor(i.createdAt / 1e3)
-@@ -9770,17 +9816,17 @@ class cg extends ig {
+@@ -9770,17 +9819,17 @@ class cg extends ig {
        };
        u.id = ne(u);
        const d = i.members, h = await Promise.allSettled(
@@ -12060,7 +11722,7 @@ index 8debad6..3085954 100644
        }
        return {
          group: i,
-@@ -9794,49 +9840,49 @@ class cg extends ig {
+@@ -9794,49 +9843,49 @@ class cg extends ig {
        };
      });
    }
@@ -12118,7 +11780,7 @@ index 8debad6..3085954 100644
        } catch (s) {
          throw this.reportError(s, {
            operation: "requestSenderKeyRepair",
-@@ -9845,14 +9891,14 @@ class cg extends ig {
+@@ -9845,14 +9894,14 @@ class cg extends ig {
        }
      });
    }
@@ -12135,7 +11797,7 @@ index 8debad6..3085954 100644
            n,
            i
          );
-@@ -9865,32 +9911,32 @@ class cg extends ig {
+@@ -9865,32 +9914,32 @@ class cg extends ig {
        }
      });
    }
@@ -12176,7 +11838,7 @@ index 8debad6..3085954 100644
        }
        if (!s) return [];
        try {
-@@ -9898,7 +9944,7 @@ class cg extends ig {
+@@ -9898,7 +9947,7 @@ class cg extends ig {
            const p = await this.handleIncomingMetadataEvent(
              s,
              e,
@@ -12185,7 +11847,7 @@ index 8debad6..3085954 100644
              n,
              a,
              c
-@@ -9910,14 +9956,14 @@ class cg extends ig {
+@@ -9910,14 +9959,14 @@ class cg extends ig {
            return this.queuePendingSessionEvent(
              s,
              e,
@@ -12202,7 +11864,7 @@ index 8debad6..3085954 100644
            n,
            o
          ), h = this.routeIncomingEvents(d);
-@@ -9941,12 +9987,12 @@ class cg extends ig {
+@@ -9941,12 +9990,12 @@ class cg extends ig {
        }
        if (this.hasSeenOuterEvent(e.id)) return null;
        this.rememberOuterEvent(e.id);
@@ -12218,7 +11880,7 @@ index 8debad6..3085954 100644
        try {
          const s = await i.handleOuterEvent(e);
          return s && this.shouldDropLocalEcho(s) ? null : (s && this.emitDecryptedEvents([s]), s);
-@@ -9954,7 +10000,7 @@ class cg extends ig {
+@@ -9954,7 +10003,7 @@ class cg extends ig {
          return this.reportError(s, {
            operation: "handleOuterEvent",
            groupId: n,
@@ -12227,7 +11889,7 @@ index 8debad6..3085954 100644
            eventId: e.id
          }), null;
        }
-@@ -9969,7 +10015,7 @@ class cg extends ig {
+@@ -9969,7 +10018,7 @@ class cg extends ig {
        e = e.filter((o) => !s.has(o));
      }
      e.sort();
@@ -12236,7 +11898,7 @@ index 8debad6..3085954 100644
        (s) => !this.outerAuthors.includes(s)
      ), n = e.join(",");
      if (n !== this.outerAuthorsKey) {
-@@ -9979,7 +10025,7 @@ class cg extends ig {
+@@ -9979,7 +10028,7 @@ class cg extends ig {
        }
        if (this.outerUnsubscribe = null, this.outerAuthorsKey = n, this.outerAuthors = e, e.length !== 0) {
          if (!this.nostrSubscribe) {
@@ -12245,7 +11907,7 @@ index 8debad6..3085954 100644
            return;
          }
          try {
-@@ -9997,7 +10043,7 @@ class cg extends ig {
+@@ -9997,7 +10046,7 @@ class cg extends ig {
                  });
                });
              }
@@ -12254,7 +11916,7 @@ index 8debad6..3085954 100644
          } catch (s) {
            this.reportError(s, { operation: "syncOuterSubscription" });
          }
-@@ -10005,7 +10051,7 @@ class cg extends ig {
+@@ -10005,7 +10054,7 @@ class cg extends ig {
      }
    }
  }
@@ -12263,7 +11925,7 @@ index 8debad6..3085954 100644
    managedGroupIds() {
      return Array.from(this.groups.keys()).sort();
    }
-@@ -10014,14 +10060,14 @@ class ug extends cg {
+@@ -10014,14 +10063,14 @@ class ug extends cg {
    }
    startOuterBackfill(e) {
      if (!(!this.nostrSubscribe && !this.nostrFetch || e.length === 0) && !(this.outerBackfillLookbackSeconds <= 0) && !(!this.nostrFetch && this.outerBackfillDurationMs <= 0))
@@ -12281,7 +11943,7 @@ index 8debad6..3085954 100644
          this.outerBackfillTimers.add(n);
        }
    }
-@@ -10035,18 +10081,18 @@ class ug extends cg {
+@@ -10035,18 +10084,18 @@ class ug extends cg {
      ).sort();
    }
    async runOuterBackfillAttempt(e) {
@@ -12305,7 +11967,7 @@ index 8debad6..3085954 100644
        0,
        Math.floor(Date.now() / 1e3) - this.outerBackfillLookbackSeconds
      );
-@@ -10054,7 +10100,7 @@ class ug extends cg {
+@@ -10054,7 +10103,7 @@ class ug extends cg {
        const n = await this.nostrFetch({
          kinds: [this.oneToMany.outerEventKind()],
          authors: e,
@@ -12314,7 +11976,7 @@ index 8debad6..3085954 100644
        });
        for (const i of this.sortOuterEvents(n))
          await this.handleOuterEvent(i).catch((s) => {
-@@ -10070,7 +10116,7 @@ class ug extends cg {
+@@ -10070,7 +10119,7 @@ class ug extends cg {
    }
    openOuterBackfillSubscription(e) {
      if (!this.nostrSubscribe) return;
@@ -12323,7 +11985,7 @@ index 8debad6..3085954 100644
        0,
        Math.floor(Date.now() / 1e3) - this.outerBackfillLookbackSeconds
      );
-@@ -10079,7 +10125,7 @@ class ug extends cg {
+@@ -10079,7 +10128,7 @@ class ug extends cg {
          {
            kinds: [this.oneToMany.outerEventKind()],
            authors: e,
@@ -12332,7 +11994,7 @@ index 8debad6..3085954 100644
          },
          (s) => {
            this.handleOuterEvent(s).catch((o) => {
-@@ -10117,28 +10163,28 @@ class ug extends cg {
+@@ -10117,28 +10166,28 @@ class ug extends cg {
    }
    emitDecryptedEvents(e) {
      if (this.onDecryptedEvent)
@@ -12368,7 +12030,7 @@ index 8debad6..3085954 100644
          u.data,
          a,
          n,
-@@ -10148,9 +10194,9 @@ class ug extends cg {
+@@ -10148,9 +10197,9 @@ class ug extends cg {
          return [];
        if (h === "removed")
          return this.removeGroup(e), [c];
@@ -12380,7 +12042,7 @@ index 8debad6..3085954 100644
          return [];
        const h = new Ki({
          data: {
-@@ -10158,7 +10204,7 @@ class ug extends cg {
+@@ -10158,7 +10207,7 @@ class ug extends cg {
            name: a.name,
            members: a.members,
            admins: a.admins,
@@ -12389,7 +12051,7 @@ index 8debad6..3085954 100644
            ...a.description ? { description: a.description } : {},
            ...a.picture ? { picture: a.picture } : {},
            accepted: !1
-@@ -10174,8 +10220,8 @@ class ug extends cg {
+@@ -10174,8 +10223,8 @@ class ug extends cg {
      const d = await this.drainPendingSessionEvents(e);
      return [c, ...d];
    }
@@ -12400,7 +12062,7 @@ index 8debad6..3085954 100644
        ourOwnerPubkey: this.ourOwnerPubkey,
        ourDevicePubkey: this.ourDevicePubkey,
        senderOwnerPubkey: n,
-@@ -10189,23 +10235,23 @@ class ug extends cg {
+@@ -10189,23 +10238,23 @@ class ug extends cg {
        origin: o,
        isSelf: $t(o),
        isCrossDeviceSelf: Gt(o),
@@ -12430,7 +12092,7 @@ index 8debad6..3085954 100644
        const o = s.event.kind === Vt ? Si(s.event.content) : null;
        i.push(
          ...await this.handleIncomingSessionEventForKnownGroup(
-@@ -10221,34 +10267,34 @@ class ug extends cg {
+@@ -10221,34 +10270,34 @@ class ug extends cg {
      return i;
    }
  }
@@ -12476,7 +12138,7 @@ index 8debad6..3085954 100644
      } catch (o) {
        this.reportError(o, { operation: "upsertGroup", groupId: e });
        return;
-@@ -10262,11 +10308,11 @@ class dg extends ug {
+@@ -10262,11 +10311,11 @@ class dg extends ug {
        this.senderEventToGroup.set(o, e);
      this.groupToSenderEvents.set(e, i);
    }
@@ -12491,7 +12153,7 @@ index 8debad6..3085954 100644
      const n = this.pendingOuterBySenderEvent.get(e);
      if (!n || n.length === 0) return [];
      this.pendingOuterBySenderEvent.delete(e);
-@@ -10279,26 +10325,26 @@ class dg extends ug {
+@@ -10279,26 +10328,26 @@ class dg extends ug {
        }
      }).sort((o, a) => o.messageNumber - a.messageNumber), s = [];
      for (const { outer: o } of i) {
@@ -12524,7 +12186,7 @@ index 8debad6..3085954 100644
            this.ourDevicePubkey
          );
          n && e.add(n);
-@@ -10306,12 +10352,12 @@ class dg extends ug {
+@@ -10306,12 +10355,12 @@ class dg extends ug {
      ), e;
    }
    normalizeRetryDelays(e) {
@@ -12539,7 +12201,7 @@ index 8debad6..3085954 100644
    }
    hasSeenOuterEvent(e) {
      return this.seenOuterEventIds.has(e);
-@@ -10319,17 +10365,17 @@ class dg extends ug {
+@@ -10319,17 +10368,17 @@ class dg extends ug {
    rememberOuterEvent(e) {
      if (!this.seenOuterEventIds.has(e))
        for (this.seenOuterEventIds.add(e), this.seenOuterEventOrder.push(e); this.seenOuterEventOrder.length > this.maxSeenOuterEventIds; ) {
@@ -12562,7 +12224,7 @@ index 8debad6..3085954 100644
          try {
            const o = this.oneToMany.parseOuterEvent(n);
            i = o.keyId, s = o.messageNumber;
-@@ -10339,117 +10385,117 @@ class dg extends ug {
+@@ -10339,117 +10388,117 @@ class dg extends ug {
      }).sort((n, i) => n.event.pubkey !== i.event.pubkey ? n.event.pubkey.localeCompare(i.event.pubkey) : n.keyId !== i.keyId ? n.keyId - i.keyId : n.messageNumber !== i.messageNumber ? n.messageNumber - i.messageNumber : n.event.created_at !== i.event.created_at ? n.event.created_at - i.event.created_at : n.event.id.localeCompare(i.event.id)).map(({ event: n }) => n);
    }
  }
@@ -12731,7 +12393,7 @@ index 8debad6..3085954 100644
    constructor() {
      l(this, "nextToken", 1);
      l(this, "appKeysAuthorsByToken", /* @__PURE__ */ new Map());
-@@ -10462,29 +10508,29 @@ class Kv {
+@@ -10462,29 +10511,29 @@ class Kv {
      l(this, "inviteResponseRecipientRefCounts", /* @__PURE__ */ new Map());
    }
    registerFilter(e) {
@@ -12771,7 +12433,7 @@ index 8debad6..3085954 100644
        addedAppKeysAuthors: n,
        addedMessageAuthors: i,
        addedMessageRecipients: s,
-@@ -10492,19 +10538,19 @@ class Kv {
+@@ -10492,19 +10541,19 @@ class Kv {
      };
    }
    unregister(e) {
@@ -12795,7 +12457,7 @@ index 8debad6..3085954 100644
        e,
        this.inviteResponseRecipientsByToken,
        this.inviteResponseRecipientRefCounts
-@@ -10523,63 +10569,63 @@ class Kv {
+@@ -10523,63 +10572,63 @@ class Kv {
      return Array.from(this.inviteResponseRecipientRefCounts.keys()).sort();
    }
  }
@@ -12892,7 +12554,7 @@ index 8debad6..3085954 100644
    try {
      F(o);
    } catch {
-@@ -10587,22 +10633,22 @@ function Av(t) {
+@@ -10587,22 +10636,22 @@ function Av(t) {
    }
    return {
      requestPubkey: F(o),
@@ -12922,7 +12584,7 @@ index 8debad6..3085954 100644
      i,
      1,
      [],
-@@ -10610,55 +10656,55 @@ function Pv(t) {
+@@ -10610,55 +10659,55 @@ function Pv(t) {
      "link"
    );
  }
@@ -13006,7 +12668,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "seed");
      l(this, "blockCounter", 0n);
-@@ -10669,48 +10715,48 @@ class Pg {
+@@ -10669,48 +10718,48 @@ class Pg {
    }
    nextSecretKey() {
      for (let e = 0; e < 16; e += 1) {
@@ -13070,7 +12732,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "nostrSubscribe");
      l(this, "nostrPublish");
-@@ -10736,12 +10782,12 @@ class Rg {
+@@ -10736,12 +10785,12 @@ class Rg {
    async waitForManager(e) {
      return this.groupManager ? this.groupManager : this.groupManagerInitPromise ? this.groupManagerInitPromise : (this.groupManagerInitPromise = (async () => {
        var o;
@@ -13085,7 +12747,7 @@ index 8debad6..3085954 100644
          ourOwnerPubkey: n,
          ourDevicePubkey: i,
          storage: this.groupStorage,
-@@ -10751,7 +10797,7 @@ class Rg {
+@@ -10751,7 +10800,7 @@ class Rg {
            this.emitGroupEvent(a);
          }
        });
@@ -13094,7 +12756,7 @@ index 8debad6..3085954 100644
      })().finally(() => {
        this.groupManagerInitPromise = null;
      }), this.groupManagerInitPromise);
-@@ -10764,15 +10810,15 @@ class Rg {
+@@ -10764,15 +10813,15 @@ class Rg {
        this.groupEventCallbacks.delete(e);
      };
    }
@@ -13114,7 +12776,7 @@ index 8debad6..3085954 100644
      this.shouldEmitPairwiseGroupEvent(e, s) && this.emitGroupEvent(
        this.buildPairwiseGroupEvent(
          e,
-@@ -10785,73 +10831,73 @@ class Rg {
+@@ -10785,73 +10834,73 @@ class Rg {
        s
      );
    }
@@ -13209,7 +12871,7 @@ index 8debad6..3085954 100644
        origin: s,
        isSelf: $t(s),
        isCrossDeviceSelf: Gt(s),
-@@ -10863,15 +10909,15 @@ class Rg {
+@@ -10863,15 +10912,15 @@ class Rg {
      };
    }
    emitGroupEvent(e) {
@@ -13231,7 +12893,7 @@ index 8debad6..3085954 100644
    constructor(e) {
      l(this, "nostrSubscribe");
      l(this, "nostrPublish");
-@@ -10920,20 +10966,20 @@ class Og {
+@@ -10920,20 +10969,20 @@ class Og {
        requiresDeviceRegistration: !1,
        canSendPrivateMessages: !1
      });
@@ -13257,7 +12919,7 @@ index 8debad6..3085954 100644
    }
    getState() {
      return {
-@@ -10976,9 +11022,9 @@ class Og {
+@@ -10976,9 +11025,9 @@ class Og {
        (((i = this.sessionManager) == null ? void 0 : i.getKnownAppKeysSnapshots()) ?? []).map(
          (o) => [o.ownerPubkey, o]
        )
@@ -13270,7 +12932,7 @@ index 8debad6..3085954 100644
        appKeys: new _(
          n.getAllDevices().map((o) => ({ ...o }))
        ),
-@@ -10989,16 +11035,16 @@ class Og {
+@@ -10989,16 +11038,16 @@ class Og {
    }
    async applyTrustedAppKeysSnapshot(e) {
      var o;
@@ -13292,7 +12954,7 @@ index 8debad6..3085954 100644
          appKeys: ht(a),
          createdAt: this.state.lastAppKeysCreatedAt
        });
-@@ -11010,12 +11056,12 @@ class Og {
+@@ -11010,12 +11059,12 @@ class Og {
      return await this.flushSessionManagerEvents(), this.syncDirectMessageSubscription(), s;
    }
    getSessionMessagePushAuthorPubkeys(e) {
@@ -13309,7 +12971,7 @@ index 8debad6..3085954 100644
    }
    feedEvent(e) {
      return this.processReceivedEvent(e);
-@@ -11028,8 +11074,8 @@ class Og {
+@@ -11028,8 +11077,8 @@ class Og {
    }
    async initForOwner(e) {
      await this.initManagers();
@@ -13320,7 +12982,7 @@ index 8debad6..3085954 100644
    }
    async waitForSessionManager(e) {
      if (this.sessionManager)
-@@ -11044,17 +11090,17 @@ class Og {
+@@ -11044,17 +11093,17 @@ class Og {
    async initAppKeysManager() {
      if (!this.appKeysManager)
        return this.appKeysInitPromise ? this.appKeysInitPromise : (this.appKeysInitPromise = (async () => {
@@ -13341,7 +13003,7 @@ index 8debad6..3085954 100644
          });
        })().finally(() => {
          this.appKeysInitPromise = null;
-@@ -11063,7 +11109,7 @@ class Og {
+@@ -11063,7 +11112,7 @@ class Og {
    async initDelegateManager() {
      if (!this.delegateManager)
        return this.delegateInitPromise ? this.delegateInitPromise : (this.delegateInitPromise = (async () => {
@@ -13350,7 +13012,7 @@ index 8debad6..3085954 100644
            nostrSubscribe: this.nostrSubscribe,
            nostrPublish: this.nostrPublish,
            storage: this.storage
-@@ -11090,22 +11136,22 @@ class Og {
+@@ -11090,22 +11139,22 @@ class Og {
        if (await this.initDelegateManager(), !this.delegateManager)
          throw new Error("DelegateManager not initialized");
        await this.delegateManager.activate(e);
@@ -13379,7 +13041,7 @@ index 8debad6..3085954 100644
      }).finally(() => {
        this.sessionManagerInitPromise = null;
      }), this.sessionManagerInitPromise);
-@@ -11116,8 +11162,8 @@ class Og {
+@@ -11116,8 +11165,8 @@ class Og {
    onGroupEvent(e) {
      return this.groupController.onGroupEvent(e);
    }
@@ -13390,7 +13052,7 @@ index 8debad6..3085954 100644
      e === n && await this.feedLocalAppKeysSnapshotToSessionManager(n);
      try {
        await i.setupUser(e);
-@@ -11126,72 +11172,72 @@ class Og {
+@@ -11126,72 +11175,72 @@ class Og {
      }
    }
  }
@@ -13488,7 +13150,7 @@ index 8debad6..3085954 100644
      try {
        const o = await _.waitFor(
          e,
-@@ -11206,9 +11252,9 @@ class Ng extends Og {
+@@ -11206,9 +11255,9 @@ class Ng extends Og {
      const i = (s = this.appKeysManager) == null ? void 0 : s.getAppKeys();
      if (i && i.getAllDevices().length > 0)
        return ht(i);
@@ -13500,7 +13162,7 @@ index 8debad6..3085954 100644
            e,
            this.nostrSubscribe,
            o,
-@@ -11223,14 +11269,14 @@ class Ng extends Og {
+@@ -11223,14 +11272,14 @@ class Ng extends Og {
    startAppKeysSubscription(e) {
      this.appKeysSubscriptionCleanup && this.appKeysSubscriptionOwnerPubkey === e || (this.stopAppKeysSubscription(), this.appKeysSubscriptionOwnerPubkey = e, this.appKeysSubscriptionCleanup = this.nostrSubscribe(
        vt(e),
@@ -13519,7 +13181,7 @@ index 8debad6..3085954 100644
            } catch {
            }
        }
-@@ -11247,14 +11293,14 @@ class Ng extends Og {
+@@ -11247,14 +11296,14 @@ class Ng extends Og {
    }
    syncDirectMessageSubscription() {
      var u, d, h;
@@ -13537,7 +13199,7 @@ index 8debad6..3085954 100644
        (p) => !i.includes(p)
      ), o = Date.now(), a = o - this.directMessageSubscriptionLastChangeMs;
      if (a < 1500 && s.length === 0) {
-@@ -11263,14 +11309,14 @@ class Ng extends Og {
+@@ -11263,14 +11312,14 @@ class Ng extends Og {
        }, 1500 - a));
        return;
      }
@@ -13555,7 +13217,7 @@ index 8debad6..3085954 100644
          },
          (p) => {
            this.processReceivedEvent(p);
-@@ -11291,11 +11337,11 @@ class Ng extends Og {
+@@ -11291,11 +11340,11 @@ class Ng extends Og {
          p();
      };
    }
@@ -13569,7 +13231,7 @@ index 8debad6..3085954 100644
        this.ownerIdentityKey
      );
      return n ? await this.applyIncomingAppKeys(
-@@ -11304,14 +11350,14 @@ class Ng extends Og {
+@@ -11304,14 +11353,14 @@ class Ng extends Og {
      ) !== "stale" : !1;
    }
  }
@@ -13587,7 +13249,7 @@ index 8debad6..3085954 100644
        this.delegateManager,
        e
      );
-@@ -11322,16 +11368,16 @@ class Tg extends Ng {
+@@ -11322,16 +11371,16 @@ class Tg extends Ng {
        ownerPubkey: e.ownerPubkey,
        appKeys: n,
        devices: n.getAllDevices(),
@@ -13607,7 +13269,7 @@ index 8debad6..3085954 100644
      return n.addDevice({
        identityPubkey: e.identityPubkey,
        createdAt: je()
-@@ -11339,14 +11385,14 @@ class Tg extends Ng {
+@@ -11339,14 +11388,14 @@ class Tg extends Ng {
        ownerPubkey: e.ownerPubkey,
        appKeys: n,
        devices: n.getAllDevices(),
@@ -13624,7 +13286,7 @@ index 8debad6..3085954 100644
        currentDevicePubkey: this.state.currentDevicePubkey,
        registeredDevices: e.baseDevices,
        hasLocalAppKeys: e.baseDevices.length > 0,
-@@ -11362,14 +11408,14 @@ class Tg extends Ng {
+@@ -11362,14 +11411,14 @@ class Tg extends Ng {
        lastAppKeysCreatedAt: n.created_at ?? je()
      }), {
        createdAt: n.created_at ?? je(),
@@ -13642,7 +13304,7 @@ index 8debad6..3085954 100644
      return n.removeDevice(e.identityPubkey), {
        ownerPubkey: e.ownerPubkey,
        appKeys: n,
-@@ -11380,21 +11426,21 @@ class Tg extends Ng {
+@@ -11380,21 +11429,21 @@ class Tg extends Ng {
    async publishPreparedRevocation(e) {
      var n;
      await this.initAppKeysManager();
@@ -13670,7 +13332,7 @@ index 8debad6..3085954 100644
        e.timeoutMs || this.appKeysFetchTimeoutMs
      ), await this.refreshOwnAppKeysFromRelay(
        e.ownerPubkey,
-@@ -11406,10 +11452,10 @@ class Tg extends Ng {
+@@ -11406,10 +11455,10 @@ class Tg extends Ng {
      };
    }
    async registerDeviceIdentity(e) {
@@ -13683,7 +13345,7 @@ index 8debad6..3085954 100644
        e.timeoutMs || this.appKeysFetchTimeoutMs
      ), await this.refreshOwnAppKeysFromRelay(
        e.ownerPubkey,
-@@ -11418,13 +11464,13 @@ class Tg extends Ng {
+@@ -11418,13 +11467,13 @@ class Tg extends Ng {
      })), n;
    }
    async revokeDevice(e) {
@@ -13701,7 +13363,7 @@ index 8debad6..3085954 100644
      }), !0);
    }
    async republishInvite() {
-@@ -11440,47 +11486,47 @@ class Tg extends Ng {
+@@ -11440,47 +11489,47 @@ class Tg extends Ng {
    async createLinkInvite(e) {
      if (await this.initDelegateManager(), !this.delegateManager)
        throw new Error("DelegateManager not initialized");
@@ -13770,7 +13432,7 @@ index 8debad6..3085954 100644
        ownerPubkey: null,
        currentDevicePubkey: null,
        registeredDevices: [],
-@@ -11507,14 +11553,14 @@ class xv extends Tg {
+@@ -11507,14 +11556,14 @@ class xv extends Tg {
      }
    }
    dispatchSessionManagerEvents() {
@@ -13787,7 +13449,7 @@ index 8debad6..3085954 100644
      });
    }
    async handleSessionManagerEvent(e) {
-@@ -11538,26 +11584,26 @@ class xv extends Tg {
+@@ -11538,26 +11587,26 @@ class xv extends Tg {
        return;
      }
      (i = this.sessionManagerEmittedSubscriptions.get(e.subid)) == null || i();
@@ -13822,7 +13484,7 @@ index 8debad6..3085954 100644
          ownerPrivateKey: this.ownerIdentityKey,
          ownerPubkey: e,
          profileId: n
-@@ -11569,40 +11615,40 @@ class xv extends Tg {
+@@ -11569,40 +11618,40 @@ class xv extends Tg {
    clearSessionManagerEvents() {
      var e;
      (e = this.sessionManagerEventsAvailableCleanup) == null || e.call(this), this.sessionManagerEventsAvailableCleanup = null;
@@ -13875,7 +13537,7 @@ index 8debad6..3085954 100644
      });
      return n.decision === "stale" || (await ((s = this.appKeysManager) == null ? void 0 : s.setAppKeys(n.appKeys)), this.syncState({
        registeredDevices: n.appKeys.getAllDevices(),
-@@ -11611,223 +11657,223 @@ class xv extends Tg {
+@@ -11611,223 +11660,223 @@ class xv extends Tg {
      })), n.decision;
    }
    async ensureAppKeysProfileId(e) {
@@ -14208,25 +13870,28 @@ index 8debad6..3085954 100644
 +  gy as validateMetadataUpdate
  };
 diff --git a/dist/session-manager/DeviceRecordActor.d.ts b/dist/session-manager/DeviceRecordActor.d.ts
-index 7e7b4df..2cae7ce 100644
+index 7e7b4df..4bf82ed 100644
 --- a/dist/session-manager/DeviceRecordActor.d.ts
 +++ b/dist/session-manager/DeviceRecordActor.d.ts
-@@ -14,6 +14,7 @@ export declare class DeviceRecordActor implements DeviceRecordShape {
+@@ -14,8 +14,10 @@ export declare class DeviceRecordActor implements DeviceRecordShape {
      private ensurePromise?;
      private inviteSubscription?;
      private inviteAcceptancePromise?;
 +    private failedReceiveAttempts;
      constructor(deviceId: string, deps: DeviceRecordDeps);
      private detachSession;
++    private markDirty;
      private pruneDuplicateSessions;
+     hasEstablishedActiveSession(): boolean;
+     ensureSetup(): Promise<void>;
 diff --git a/dist/session-manager/DeviceRecordActor.d.ts.map b/dist/session-manager/DeviceRecordActor.d.ts.map
-index 32ca910..16e9688 100644
+index 32ca910..4f77da8 100644
 --- a/dist/session-manager/DeviceRecordActor.d.ts.map
 +++ b/dist/session-manager/DeviceRecordActor.d.ts.map
 @@ -1 +1 @@
 -{"version":3,"file":"DeviceRecordActor.d.ts","sourceRoot":"","sources":["../../src/session-manager/DeviceRecordActor.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAE,MAAM,cAAc,CAAA;AACrC,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAA;AACvC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAEhD,OAAO,EAAqB,KAAK,KAAK,EAAE,MAAM,aAAa,CAAA;AAS3D,OAAO,KAAK,EACV,YAAY,IAAI,iBAAiB,EACjC,gBAAgB,EAChB,gBAAgB,EAEjB,MAAM,YAAY,CAAA;AAEnB,qBAAa,iBAAkB,YAAW,iBAAiB;aAavC,QAAQ,EAAE,MAAM;IAChC,OAAO,CAAC,QAAQ,CAAC,IAAI;IAbvB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAAC,qBAAqB,CAAK;IAE3C,aAAa,CAAC,EAAE,OAAO,CAAA;IACvB,gBAAgB,EAAE,OAAO,EAAE,CAAK;IAChC,KAAK,EAAE,gBAAgB,CAAQ;IAC/B,SAAS,EAAE,MAAM,CAAA;IAExB,OAAO,CAAC,aAAa,CAAC,CAAe;IACrC,OAAO,CAAC,kBAAkB,CAAC,CAAa;IACxC,OAAO,CAAC,uBAAuB,CAAC,CAAkB;gBAGhC,QAAQ,EAAE,MAAM,EACf,IAAI,EAAE,gBAAgB;IAKzC,OAAO,CAAC,aAAa;IAIrB,OAAO,CAAC,sBAAsB;IAmB9B,2BAA2B,IAAI,OAAO;IActC,WAAW,IAAI,OAAO,CAAC,IAAI,CAAC;YAiBd,aAAa;IAuB3B,OAAO,CAAC,wBAAwB;IAuBhC,YAAY,CAAC,MAAM,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;YAyBhC,cAAc;YAyBd,sBAAsB;IAepC,OAAO,CAAC,eAAe;IAqDvB,OAAO,CAAC,wBAAwB;IAmBhC,oBAAoB,CAAC,KAAK,EAAE,KAAK,GAAG,aAAa,GAAG,SAAS;IAO7D,OAAO,CAAC,kBAAkB;IA2B1B,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IA4BnD,cAAc,CACZ,OAAO,EAAE,OAAO,EAChB,QAAQ,UAAQ,EAChB,OAAO,GAAE;QAAE,OAAO,CAAC,EAAE,OAAO,CAAC;QAAC,YAAY,CAAC,EAAE,OAAO,CAAA;KAAO,GAC1D,IAAI;IAyBP,OAAO,CAAC,oBAAoB;IAUtB,iBAAiB,IAAI,OAAO,CAAC,IAAI,CAAC;IA0BxC,wBAAwB,IAAI,IAAI;IAQ1B,MAAM,IAAI,OAAO,CAAC,IAAI,CAAC;IAS7B,KAAK,IAAI,IAAI;CAed"}
 \ No newline at end of file
-+{"version":3,"file":"DeviceRecordActor.d.ts","sourceRoot":"","sources":["../../src/session-manager/DeviceRecordActor.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAE,MAAM,cAAc,CAAA;AACrC,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAA;AACvC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAEhD,OAAO,EAAqB,KAAK,KAAK,EAAE,MAAM,aAAa,CAAA;AAS3D,OAAO,KAAK,EACV,YAAY,IAAI,iBAAiB,EACjC,gBAAgB,EAChB,gBAAgB,EAEjB,MAAM,YAAY,CAAA;AAEnB,qBAAa,iBAAkB,YAAW,iBAAiB;aAcvC,QAAQ,EAAE,MAAM;IAChC,OAAO,CAAC,QAAQ,CAAC,IAAI;IAdvB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAAC,qBAAqB,CAAK;IAE3C,aAAa,CAAC,EAAE,OAAO,CAAA;IACvB,gBAAgB,EAAE,OAAO,EAAE,CAAK;IAChC,KAAK,EAAE,gBAAgB,CAAQ;IAC/B,SAAS,EAAE,MAAM,CAAA;IAExB,OAAO,CAAC,aAAa,CAAC,CAAe;IACrC,OAAO,CAAC,kBAAkB,CAAC,CAAa;IACxC,OAAO,CAAC,uBAAuB,CAAC,CAAkB;IAClD,OAAO,CAAC,qBAAqB,CAAyD;gBAGpE,QAAQ,EAAE,MAAM,EACf,IAAI,EAAE,gBAAgB;IAKzC,OAAO,CAAC,aAAa;IAIrB,OAAO,CAAC,sBAAsB;IAmB9B,2BAA2B,IAAI,OAAO;IActC,WAAW,IAAI,OAAO,CAAC,IAAI,CAAC;YAiBd,aAAa;IAuB3B,OAAO,CAAC,wBAAwB;IAuBhC,YAAY,CAAC,MAAM,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;YAyBhC,cAAc;YAyBd,sBAAsB;IAepC,OAAO,CAAC,eAAe;IAqDvB,OAAO,CAAC,wBAAwB;IAmBhC,oBAAoB,CAAC,KAAK,EAAE,KAAK,GAAG,aAAa,GAAG,SAAS;IAO7D,OAAO,CAAC,kBAAkB;IA2B1B,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAiDnD,cAAc,CACZ,OAAO,EAAE,OAAO,EAChB,QAAQ,UAAQ,EAChB,OAAO,GAAE;QAAE,OAAO,CAAC,EAAE,OAAO,CAAC;QAAC,YAAY,CAAC,EAAE,OAAO,CAAA;KAAO,GAC1D,IAAI;IAyBP,OAAO,CAAC,oBAAoB;IAUtB,iBAAiB,IAAI,OAAO,CAAC,IAAI,CAAC;IA0BxC,wBAAwB,IAAI,IAAI;IAQ1B,MAAM,IAAI,OAAO,CAAC,IAAI,CAAC;IAS7B,KAAK,IAAI,IAAI;CAed"}
++{"version":3,"file":"DeviceRecordActor.d.ts","sourceRoot":"","sources":["../../src/session-manager/DeviceRecordActor.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAE,MAAM,cAAc,CAAA;AACrC,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAA;AACvC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAEhD,OAAO,EAAqB,KAAK,KAAK,EAAE,MAAM,aAAa,CAAA;AAS3D,OAAO,KAAK,EACV,YAAY,IAAI,iBAAiB,EACjC,gBAAgB,EAChB,gBAAgB,EAEjB,MAAM,YAAY,CAAA;AAEnB,qBAAa,iBAAkB,YAAW,iBAAiB;aAcvC,QAAQ,EAAE,MAAM;IAChC,OAAO,CAAC,QAAQ,CAAC,IAAI;IAdvB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAAC,qBAAqB,CAAK;IAE3C,aAAa,CAAC,EAAE,OAAO,CAAA;IACvB,gBAAgB,EAAE,OAAO,EAAE,CAAK;IAChC,KAAK,EAAE,gBAAgB,CAAQ;IAC/B,SAAS,EAAE,MAAM,CAAA;IAExB,OAAO,CAAC,aAAa,CAAC,CAAe;IACrC,OAAO,CAAC,kBAAkB,CAAC,CAAa;IACxC,OAAO,CAAC,uBAAuB,CAAC,CAAkB;IAClD,OAAO,CAAC,qBAAqB,CAAyD;gBAGpE,QAAQ,EAAE,MAAM,EACf,IAAI,EAAE,gBAAgB;IAKzC,OAAO,CAAC,aAAa;IAIrB,OAAO,CAAC,SAAS;IAIjB,OAAO,CAAC,sBAAsB;IAmB9B,2BAA2B,IAAI,OAAO;IActC,WAAW,IAAI,OAAO,CAAC,IAAI,CAAC;YAiBd,aAAa;IAuB3B,OAAO,CAAC,wBAAwB;IAuBhC,YAAY,CAAC,MAAM,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;YAyBhC,cAAc;YA0Bd,sBAAsB;IAgBpC,OAAO,CAAC,eAAe;IAqDvB,OAAO,CAAC,wBAAwB;IAmBhC,oBAAoB,CAAC,KAAK,EAAE,KAAK,GAAG,aAAa,GAAG,SAAS;IAO7D,OAAO,CAAC,kBAAkB;IA2B1B,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAiDnD,cAAc,CACZ,OAAO,EAAE,OAAO,EAChB,QAAQ,UAAQ,EAChB,OAAO,GAAE;QAAE,OAAO,CAAC,EAAE,OAAO,CAAC;QAAC,YAAY,CAAC,EAAE,OAAO,CAAA;KAAO,GAC1D,IAAI;IAyBP,OAAO,CAAC,oBAAoB;IAUtB,iBAAiB,IAAI,OAAO,CAAC,IAAI,CAAC;IA4BxC,wBAAwB,IAAI,IAAI;IAQ1B,MAAM,IAAI,OAAO,CAAC,IAAI,CAAC;IAS7B,KAAK,IAAI,IAAI;CAed"}
 \ No newline at end of file
 diff --git a/dist/session-manager/SessionManagerLifecycle.d.ts.map b/dist/session-manager/SessionManagerLifecycle.d.ts.map
 index 9ca23a5..bd55071 100644
@@ -14250,11 +13915,573 @@ index b2c53de..a455cd8 100644
      protected handleDeviceRumor(ownerPubkey: string, deviceId: string, event: Rumor, outerEvent?: VerifiedEvent): void;
      protected upsertDeviceRecord(userRecord: UserRecordActor, deviceId: string): DeviceRecordActor;
 diff --git a/dist/session-manager/SessionManagerRecords.d.ts.map b/dist/session-manager/SessionManagerRecords.d.ts.map
-index 4275284..ba76bb4 100644
+index 4275284..a436810 100644
 --- a/dist/session-manager/SessionManagerRecords.d.ts.map
 +++ b/dist/session-manager/SessionManagerRecords.d.ts.map
 @@ -1 +1 @@
 -{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AACvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAE/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAgCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAclE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
 \ No newline at end of file
-+{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AAEvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAI/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,QAAQ,CAAC,iBAAiB,cAAqB;IAEzD,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAgCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IA6ClE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
++{"version":3,"file":"SessionManagerRecords.d.ts","sourceRoot":"","sources":["../../src/session-manager/SessionManagerRecords.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,WAAW,EAAsB,MAAM,aAAa,CAAC;AACrE,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAC;AACxC,OAAO,EACL,KAAK,uBAAuB,EAC5B,KAAK,oBAAoB,EAC1B,MAAM,mBAAmB,CAAC;AAE3B,OAAO,EAAE,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAMjD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAC;AAC3D,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AAEvD,OAAO,KAAK,EAAE,eAAe,EAAe,MAAM,YAAY,CAAC;AAC/D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAC7D,OAAO,EAEL,KAAK,qBAAqB,EAC3B,MAAM,uBAAuB,CAAC;AAI/B,8BAAsB,qBAAsB,SAAQ,kBAAkB;IACpE,SAAS,CAAC,QAAQ,CAAC,iBAAiB,cAAqB;IAEzD,SAAS,CAAC,qBAAqB,CAAC,UAAU,EAAE,MAAM,GAAG,eAAe;IAiCpE,SAAS,CAAC,iBAAiB,CACzB,WAAW,EAAE,MAAM,EACnB,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IA4CP,SAAS,CAAC,kBAAkB,CAC1B,UAAU,EAAE,eAAe,EAC3B,QAAQ,EAAE,MAAM,GACf,iBAAiB;IAIpB,mEAAmE;IACnE,SAAS,CAAC,cAAc,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM;IAIhD,8EAA8E;IAC9E,SAAS,CAAC,qBAAqB,CAAC,WAAW,EAAE,MAAM,EAAE,OAAO,EAAE,OAAO,GAAG,IAAI;IAkC5E,SAAS,CAAC,0BAA0B,CAAC,QAAQ,EAAE,qBAAqB,GAAG,IAAI;IAe3E,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,IAAI;IAe/D,SAAS,CAAC,yBAAyB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IA6ClE,SAAS,CAAC,0BAA0B,IAAI,IAAI;IAM5C,SAAS,CAAC,4BAA4B,CACpC,QAAQ,EAAE,qBAAqB,EAC/B,OAAO,CAAC,EAAE,OAAO,GAAG,IAAI,GACvB,OAAO;IAiCV,SAAS,CAAC,2BAA2B,CACnC,WAAW,EAAE,MAAM,EACnB,OAAO,CAAC,EAAE,OAAO,GAChB,IAAI;IAUP,4EAA4E;IAC5E,SAAS,CAAC,kBAAkB,CAAC,WAAW,EAAE,MAAM,EAAE,QAAQ,EAAE,MAAM,GAAG,OAAO;IAMtE,SAAS,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;cAelC,WAAW,CAAC,UAAU,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IA8B9D,OAAO,CAAC,QAAQ,EAAE,eAAe;IAQjC,2BAA2B,CAAC,QAAQ,EAAE,MAAM,IAAI,GAAG,WAAW;IAQ9D,SAAS,CAAC,+BAA+B,IAAI,IAAI;IAOjD,SAAS,CAAC,mCAAmC,IAAI,IAAI;IA8BrD,QAAQ,CAAC,2BAA2B,CAClC,QAAQ,EAAE,oBAAoB,GAC7B,OAAO,CAAC,uBAAuB,CAAC;IAEnC,QAAQ,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAEnD,QAAQ,CAAC,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAE5D,SAAS,CAAC,QAAQ,CAAC,0BAA0B,CAC3C,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAEP,SAAS,CAAC,QAAQ,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CACrE"}
 \ No newline at end of file
+diff --git a/dist/session-manager/UserRecordActor.d.ts b/dist/session-manager/UserRecordActor.d.ts
+index 77e4e68..21b6bbf 100644
+--- a/dist/session-manager/UserRecordActor.d.ts
++++ b/dist/session-manager/UserRecordActor.d.ts
+@@ -31,7 +31,7 @@ export declare class UserRecordActor implements UserRecordShape {
+     private getTargetDeviceIds;
+     isDeviceAuthorized(deviceId: string): boolean;
+     onDeviceRumor(deviceId: string, rumor: Rumor, outerEvent?: VerifiedEvent): void;
+-    onDeviceDirty(): void;
++    onDeviceDirty(): Promise<void>;
+     deactivateCurrentSessions(): void;
+     close(): void;
+ }
+diff --git a/dist/session-manager/UserRecordActor.d.ts.map b/dist/session-manager/UserRecordActor.d.ts.map
+index fe5a92d..14c5945 100644
+--- a/dist/session-manager/UserRecordActor.d.ts.map
++++ b/dist/session-manager/UserRecordActor.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"UserRecordActor.d.ts","sourceRoot":"","sources":["../../src/session-manager/UserRecordActor.ts"],"names":[],"mappings":"AACA,OAAO,EACL,OAAO,EAGR,MAAM,eAAe,CAAA;AACtB,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,aAAa,CAAA;AACxC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAChD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAA;AAC1D,OAAO,KAAK,EAEV,UAAU,IAAI,eAAe,EAC7B,cAAc,EACd,cAAc,EACf,MAAM,YAAY,CAAA;AAEnB,qBAAa,eAAgB,YAAW,eAAe;aAanC,SAAS,EAAE,MAAM;IACjC,OAAO,CAAC,QAAQ,CAAC,IAAI;IAbvB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAAC,kCAAkC,CAAgB;IAEnE,OAAO,CAAC,EAAE,OAAO,CAAA;IACjB,YAAY,CAAC,EAAE,aAAa,CAAA;IAC5B,KAAK,EAAE,cAAc,CAAQ;IAC7B,OAAO,EAAE,GAAG,CAAC,MAAM,EAAE,iBAAiB,CAAC,CAAY;IACnD,YAAY,CAAC,EAAE,OAAO,CAAC,IAAI,CAAC,CAAA;IAEnC,OAAO,CAAC,mBAAmB,CAAC,CAAa;IACzC,OAAO,CAAC,sBAAsB,CAAI;gBAGhB,SAAS,EAAE,MAAM,EAChB,IAAI,EAAE,cAAc;IAGvC,OAAO,CAAC,QAAQ;IAIhB,YAAY,CAAC,QAAQ,EAAE,MAAM,EAAE,SAAS,CAAC,EAAE,MAAM,GAAG,iBAAiB;IAuBrE,IAAI,gBAAgB,IAAI,MAAM,CAE7B;IAED,UAAU,CACR,OAAO,EAAE,OAAO,GAAG,SAAS,EAC5B,SAAS,SAA8B,GACtC,IAAI;IAKP,mBAAmB,CAAC,QAAQ,EAAE,MAAM,GAAG,aAAa,GAAG,SAAS;IAQ1D,oBAAoB,CAAC,KAAK,EAAE,KAAK,GAAG,OAAO,CAAC,IAAI,CAAC;IAiBvD,WAAW,IAAI,OAAO,CAAC,IAAI,CAAC;YAiBd,aAAa;IAmBrB,SAAS,CAAC,OAAO,EAAE,OAAO,EAAE,SAAS,SAAI,EAAE,iBAAiB,CAAC,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;YAoD7E,+BAA+B;IAuB7C,OAAO,CAAC,yBAAyB;IAc3B,mBAAmB,CAAC,KAAK,EAAE,aAAa,EAAE,iBAAiB,CAAC,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;YAqB/E,oBAAoB;IA2BlC,OAAO,CAAC,kBAAkB;IAW1B,kBAAkB,CAAC,QAAQ,EAAE,MAAM,GAAG,OAAO;IAQ7C,aAAa,CACX,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IAIP,aAAa,IAAI,IAAI;IAIrB,yBAAyB,IAAI,IAAI;IAMjC,KAAK,IAAI,IAAI;CAOd"}
+\ No newline at end of file
++{"version":3,"file":"UserRecordActor.d.ts","sourceRoot":"","sources":["../../src/session-manager/UserRecordActor.ts"],"names":[],"mappings":"AACA,OAAO,EACL,OAAO,EAGR,MAAM,eAAe,CAAA;AACtB,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,aAAa,CAAA;AACxC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAChD,OAAO,EAAE,iBAAiB,EAAE,MAAM,wBAAwB,CAAA;AAC1D,OAAO,KAAK,EAEV,UAAU,IAAI,eAAe,EAC7B,cAAc,EACd,cAAc,EACf,MAAM,YAAY,CAAA;AAEnB,qBAAa,eAAgB,YAAW,eAAe;aAanC,SAAS,EAAE,MAAM;IACjC,OAAO,CAAC,QAAQ,CAAC,IAAI;IAbvB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAAC,kCAAkC,CAAgB;IAEnE,OAAO,CAAC,EAAE,OAAO,CAAA;IACjB,YAAY,CAAC,EAAE,aAAa,CAAA;IAC5B,KAAK,EAAE,cAAc,CAAQ;IAC7B,OAAO,EAAE,GAAG,CAAC,MAAM,EAAE,iBAAiB,CAAC,CAAY;IACnD,YAAY,CAAC,EAAE,OAAO,CAAC,IAAI,CAAC,CAAA;IAEnC,OAAO,CAAC,mBAAmB,CAAC,CAAa;IACzC,OAAO,CAAC,sBAAsB,CAAI;gBAGhB,SAAS,EAAE,MAAM,EAChB,IAAI,EAAE,cAAc;IAGvC,OAAO,CAAC,QAAQ;IAIhB,YAAY,CAAC,QAAQ,EAAE,MAAM,EAAE,SAAS,CAAC,EAAE,MAAM,GAAG,iBAAiB;IAuBrE,IAAI,gBAAgB,IAAI,MAAM,CAE7B;IAED,UAAU,CACR,OAAO,EAAE,OAAO,GAAG,SAAS,EAC5B,SAAS,SAA8B,GACtC,IAAI;IAKP,mBAAmB,CAAC,QAAQ,EAAE,MAAM,GAAG,aAAa,GAAG,SAAS;IAQ1D,oBAAoB,CAAC,KAAK,EAAE,KAAK,GAAG,OAAO,CAAC,IAAI,CAAC;IAiBvD,WAAW,IAAI,OAAO,CAAC,IAAI,CAAC;YAiBd,aAAa;IAmBrB,SAAS,CAAC,OAAO,EAAE,OAAO,EAAE,SAAS,SAAI,EAAE,iBAAiB,CAAC,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;YAoD7E,+BAA+B;IAuB7C,OAAO,CAAC,yBAAyB;IAc3B,mBAAmB,CAAC,KAAK,EAAE,aAAa,EAAE,iBAAiB,CAAC,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;YAqB/E,oBAAoB;IA2BlC,OAAO,CAAC,kBAAkB;IAW1B,kBAAkB,CAAC,QAAQ,EAAE,MAAM,GAAG,OAAO;IAQ7C,aAAa,CACX,QAAQ,EAAE,MAAM,EAChB,KAAK,EAAE,KAAK,EACZ,UAAU,CAAC,EAAE,aAAa,GACzB,IAAI;IAID,aAAa,IAAI,OAAO,CAAC,IAAI,CAAC;IAIpC,yBAAyB,IAAI,IAAI;IAMjC,KAAK,IAAI,IAAI;CAOd"}
+\ No newline at end of file
+diff --git a/dist/session-manager/types.d.ts b/dist/session-manager/types.d.ts
+index da079c2..74fd505 100644
+--- a/dist/session-manager/types.d.ts
++++ b/dist/session-manager/types.d.ts
+@@ -87,7 +87,7 @@ export interface NostrFacade {
+ export interface DeviceRecordUserHooks {
+     isDeviceAuthorized(deviceId: string): boolean;
+     onDeviceRumor(deviceId: string, rumor: Rumor, outerEvent?: VerifiedEvent): void;
+-    onDeviceDirty(): void;
++    onDeviceDirty(): void | Promise<void>;
+ }
+ export interface DeviceRecordDeps {
+     localOwnerProof?(): VerifiedEvent | undefined;
+@@ -105,7 +105,7 @@ export interface UserRecordManagerHooks {
+     updateDelegateMapping(ownerPubkey: string, appKeys: AppKeys): void;
+     removeDelegateMapping(deviceId: string): void;
+     handleDeviceRumor(ownerPubkey: string, deviceId: string, rumor: Rumor, outerEvent?: VerifiedEvent): void;
+-    persistUserRecord(ownerPubkey: string): void;
++    persistUserRecord(ownerPubkey: string): void | Promise<void>;
+ }
+ export interface UserRecordDeps {
+     manager: UserRecordManagerHooks;
+diff --git a/dist/session-manager/types.d.ts.map b/dist/session-manager/types.d.ts.map
+index 28f482d..42cb66c 100644
+--- a/dist/session-manager/types.d.ts.map
++++ b/dist/session-manager/types.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"types.d.ts","sourceRoot":"","sources":["../../src/session-manager/types.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"types.d.ts","sourceRoot":"","sources":["../../src/session-manager/types.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
+diff --git a/src/GroupChannel.ts b/src/GroupChannel.ts
+index b522256..e5df488 100644
+--- a/src/GroupChannel.ts
++++ b/src/GroupChannel.ts
+@@ -201,6 +201,9 @@ export class Group extends GroupSending {
+       );
+       return null;
+     }
++    // The local sending chain has already advanced past its own relay echoes.
++    if (senderDevicePubkey === this.ourDevicePubkey &&
++        await this.storage.get(this.senderEventSecretKeyKey(senderDevicePubkey))) return null;
+     if (!this.isSenderDeviceActive(senderDevicePubkey)) {
+       await this.removeSenderDeviceState(senderDevicePubkey);
+       return null;
+diff --git a/src/MessageQueue.ts b/src/MessageQueue.ts
+index ec2e085..fb95aea 100644
+--- a/src/MessageQueue.ts
++++ b/src/MessageQueue.ts
+@@ -28,6 +28,7 @@ export class MessageQueue {
+     const keys = await this.storage.list(this.prefix)
+     const entries: QueueEntry[] = []
+     for (const key of keys) {
++      if (!key.endsWith(`/${targetKey}`)) continue
+       const entry = await this.storage.get<QueueEntry>(key)
+       if (entry && entry.targetKey === targetKey) {
+         entries.push(entry)
+@@ -52,6 +53,7 @@ export class MessageQueue {
+   async removeForTarget(targetKey: string): Promise<void> {
+     const keys = await this.storage.list(this.prefix)
+     for (const key of keys) {
++      if (!key.endsWith(`/${targetKey}`)) continue
+       const entry = await this.storage.get<QueueEntry>(key)
+       if (entry && entry.targetKey === targetKey) {
+         await this.storage.del(key)
+diff --git a/src/RuntimeGroupController.ts b/src/RuntimeGroupController.ts
+index 843ede4..c64f237 100644
+--- a/src/RuntimeGroupController.ts
++++ b/src/RuntimeGroupController.ts
+@@ -229,7 +229,7 @@ export class SessionGroupRuntime {
+       nowMs: opts.nowMs,
+       sendPairwise: async (recipientOwnerPubkey, rumor) => {
+         const manager = await this.waitForSessionManagerFn();
+-        await manager.sendEvent(recipientOwnerPubkey, rumor);
++        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
+       },
+     });
+   }
+@@ -244,7 +244,7 @@ export class SessionGroupRuntime {
+       nowMs: opts.nowMs,
+       sendPairwise: async (recipientOwnerPubkey, rumor) => {
+         const manager = await this.waitForSessionManagerFn();
+-        await manager.sendEvent(recipientOwnerPubkey, rumor);
++        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
+       },
+       publishOuter: this.nostrPublish,
+     });
+diff --git a/src/SessionManager.ts b/src/SessionManager.ts
+index d8b616c..71c553d 100644
+--- a/src/SessionManager.ts
++++ b/src/SessionManager.ts
+@@ -82,17 +82,17 @@ export class SessionManager extends SessionManagerInvites {
+   async sendEvent(
+     recipientIdentityKey: string,
+     event: Partial<Rumor>,
++    options: { includeLocalSiblings?: boolean } = {},
+   ): Promise<Rumor | undefined> {
+     await this.init();
+ 
+-    await Promise.allSettled([
+-      this.setupUser(recipientIdentityKey),
+-      this.setupUser(this.ownerPublicKey),
+-    ]);
++    const targets = new Set([recipientIdentityKey]);
++    // Group fanout includes our owner explicitly, so it needs only one self-copy.
++    if (options.includeLocalSiblings !== false) targets.add(this.ownerPublicKey);
++    await Promise.allSettled(Array.from(targets, (target) => this.setupUser(target)));
+ 
+     // Queue event for devices that don't have sessions yet
+     const completeEvent = event as Rumor;
+-    const targets = new Set([recipientIdentityKey, this.ownerPublicKey]);
+     const queuedDeviceIds = new Set<string>();
+     for (const target of targets) {
+       const userRecord = this.userRecords.get(target);
+@@ -122,20 +122,10 @@ export class SessionManager extends SessionManagerInvites {
+       }
+     }
+ 
+-    const userRecord = this.getOrCreateUserRecord(recipientIdentityKey);
+-    // Use ownerPublicKey to find sibling devices (important for delegates)
+-    const ourUserRecord = this.getOrCreateUserRecord(this.ownerPublicKey);
+-
+-    const recipientDevices = Array.from(userRecord.devices.values());
+-    const ownDevices = Array.from(ourUserRecord.devices.values());
+-
+-    // Merge and deduplicate by deviceId, excluding our own sending device
+-    // This fixes the self-message bug where sending to yourself would duplicate devices
+     const deviceMap = new Map<string, DeviceRecord>();
+-    for (const d of [...recipientDevices, ...ownDevices]) {
+-      if (d.deviceId !== this.deviceId) {
+-        // Exclude sender's own device
+-        deviceMap.set(d.deviceId, d);
++    for (const target of targets) {
++      for (const device of this.getOrCreateUserRecord(target).devices.values()) {
++        if (device.deviceId !== this.deviceId) deviceMap.set(device.deviceId, device);
+       }
+     }
+     const devices = Array.from(deviceMap.values());
+@@ -165,11 +155,8 @@ export class SessionManager extends SessionManagerInvites {
+       sentDeviceIds.push(device.deviceId);
+     }
+ 
+-    // Persist recipient + owner records before publishing (best-effort).
+-    await this.storeUserRecord(recipientIdentityKey).catch(() => {});
+-    if (this.ownerPublicKey !== recipientIdentityKey) {
+-      await this.storeUserRecord(this.ownerPublicKey).catch(() => {});
+-    }
++    // Persist each target's ratchet state before publishing (best-effort).
++    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target).catch(() => {})));
+ 
+     await Promise.allSettled(
+       toPublish.map((evt, i) =>
+@@ -321,6 +308,8 @@ export class SessionManager extends SessionManagerInvites {
+       .loadUserRecord(publicKey)
+       .then((data) => {
+         if (!data) return;
++        // A restored ratchet may need an envelope accepted by its previous state.
++        this.decryptedEventIds.clear();
+         hydrateUserRecord({
+           data,
+           publicKey,
+diff --git a/src/group/GroupSenderKeys.ts b/src/group/GroupSenderKeys.ts
+index 9287c45..74226fa 100644
+--- a/src/group/GroupSenderKeys.ts
++++ b/src/group/GroupSenderKeys.ts
+@@ -152,6 +152,7 @@ export abstract class GroupSenderKeys extends GroupState {
+       keyId: dist.keyId >>> 0,
+       distribution: { ...dist },
+       recipients: uniqueRecipients,
++      pendingRecipients: uniqueRecipients,
+     });
+     await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
+   }
+diff --git a/src/group/GroupSending.ts b/src/group/GroupSending.ts
+index e92b57a..a05bef8 100644
+--- a/src/group/GroupSending.ts
++++ b/src/group/GroupSending.ts
+@@ -30,6 +30,26 @@ export abstract class GroupSending extends GroupSenderKeys {
+     }
+   }
+ 
++  private async flushSenderKeyDistributions(sendPairwise: PairwiseSend): Promise<void> {
++    const snapshots = (await this.loadSenderKeyRepairSnapshots(this.ourDevicePubkey))
++      .map((snapshot) => ({ ...snapshot }));
++    let changed = false;
++    for (const snapshot of snapshots) {
++      // Older snapshots did not track handoff success; retry their original recipients once.
++      const pending = snapshot.pendingRecipients ?? snapshot.recipients;
++      if (!pending.length) continue;
++      const recipients = pending.filter((recipient) =>
++        snapshot.recipients.includes(recipient) && this.isMemberOwnerPubkey(recipient),
++      );
++      const dist = snapshot.distribution;
++      const rumor = this.buildDistributionRumor(dist.createdAt, dist.createdAt * 1000, dist);
++      const results = await Promise.allSettled(recipients.map((recipient) => sendPairwise(recipient, rumor)));
++      snapshot.pendingRecipients = recipients.filter((_, index) => results[index].status === "rejected");
++      changed = true;
++    }
++    if (changed) await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
++  }
++
+   /**
+    * Rotate our sender key (new keyId + chain key) and distribute it to group members.
+    */
+@@ -48,15 +68,12 @@ export abstract class GroupSending extends GroupSenderKeys {
+     const { state } = await this.ensureOurSenderKeyState(true);
+ 
+     const dist = this.buildDistribution(nowSeconds, senderEventPubkey, state);
+-    const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
+ 
+     // Include our owner so sibling devices on the same account can decrypt
+     // subsequent outer messages in self-only and multi-device group chats.
+     await this.recordSenderKeyRepairSnapshot(dist, recipients);
+     this.assertCurrentRecipients(recipients);
+-    await Promise.allSettled(
+-      recipients.map((pk) => opts.sendPairwise(pk, rumor)),
+-    );
++    await this.flushSenderKeyDistributions(opts.sendPairwise);
+     this.assertCurrentRecipients(recipients);
+ 
+     return dist;
+@@ -100,14 +117,11 @@ export abstract class GroupSending extends GroupSenderKeys {
+         senderEventPubkey,
+         senderKey,
+       );
+-      const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
+       await this.recordSenderKeyRepairSnapshot(dist, recipients);
+-      this.assertCurrentRecipients(recipients);
+-      await Promise.allSettled(
+-        recipients.map((pk) => opts.sendPairwise(pk, rumor)),
+-      );
+     }
+ 
++    this.assertCurrentRecipients(recipients);
++    await this.flushSenderKeyDistributions(opts.sendPairwise);
+     this.assertCurrentRecipients(recipients);
+     const inner = this.buildGroupInnerRumor(nowSeconds, nowMs, event);
+     const innerJson = JSON.stringify(inner);
+diff --git a/src/group/groupInternals.ts b/src/group/groupInternals.ts
+index 3b7bd81..7a4ea99 100644
+--- a/src/group/groupInternals.ts
++++ b/src/group/groupInternals.ts
+@@ -4,6 +4,8 @@ export interface SenderKeyRepairSnapshot {
+   keyId: number;
+   distribution: SenderKeyDistribution;
+   recipients: string[];
++  /** Recipients whose key distribution has not reached the durable pairwise queue. */
++  pendingRecipients?: string[];
+ }
+ 
+ export function randomU32(): number {
+diff --git a/src/session-manager/DeviceRecordActor.ts b/src/session-manager/DeviceRecordActor.ts
+index 190b249..d2a632c 100644
+--- a/src/session-manager/DeviceRecordActor.ts
++++ b/src/session-manager/DeviceRecordActor.ts
+@@ -29,6 +29,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
+   private ensurePromise?: Promise<void>
+   private inviteSubscription?: Unsubscribe
+   private inviteAcceptancePromise?: Promise<Session>
++  private failedReceiveAttempts = new WeakMap<VerifiedEvent, WeakMap<Session, string>>()
+ 
+   constructor(
+     public readonly deviceId: string,
+@@ -41,6 +42,10 @@ export class DeviceRecordActor implements DeviceRecordShape {
+     session.close()
+   }
+ 
++  private markDirty(): void {
++    void Promise.resolve(this.deps.user.onDeviceDirty()).catch(() => {})
++  }
++
+   private pruneDuplicateSessions(session: Session): void {
+     if (this.activeSession && this.activeSession !== session && this.activeSession.name === session.name) {
+       const staleActive = this.activeSession
+@@ -175,7 +180,8 @@ export class DeviceRecordActor implements DeviceRecordShape {
+         this.deps.ourOwnerPubkey,
+         this.deps.localOwnerProof?.()
+       )
+-      this.installSession(session, false, { preferActive: true })
++      this.installSession(session, false, { preferActive: true, persist: false })
++      await this.deps.user.onDeviceDirty()
+       await this.deps.nostr.publish(event)
+       await this.publishInviteBootstrap(session)
+       this.state = "session-ready"
+@@ -195,6 +201,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
+         }),
+         [["p", this.deviceId]],
+       )
++      await this.deps.user.onDeviceDirty()
+       await this.deps.nostr.publish(event)
+     } catch {
+       // Invite acceptance itself already established the session. If the bootstrap
+@@ -304,7 +311,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
+     this.deps.user.onDeviceRumor(this.deviceId, event, outerEvent)
+     this.state = "session-ready"
+     this.flushMessageQueue().catch(() => {})
+-    this.deps.user.onDeviceDirty()
++    this.markDirty()
+     return true
+   }
+ 
+@@ -316,18 +323,39 @@ export class DeviceRecordActor implements DeviceRecordShape {
+     sessions.push(...this.inactiveSessions)
+ 
+     const seenSessionNames = new Set<string>()
++    let failedSessions = this.failedReceiveAttempts.get(event)
++    if (!failedSessions) {
++      failedSessions = new WeakMap()
++      this.failedReceiveAttempts.set(event, failedSessions)
++    }
+     for (const session of sessions) {
+       if (seenSessionNames.has(session.name)) {
+         continue
+       }
+       seenSessionNames.add(session.name)
+ 
++      // Startup replays pending envelopes after many independent roster/storage
++      // callbacks. A rejected envelope cannot decrypt with unchanged receive
++      // keys. Keep weak references so removing pending events or sessions also
++      // removes this memo; new sessions and ratchet advances are retried.
++      const state = session.state
++      const receiveState = [
++        state.ourCurrentNostrKey?.publicKey,
++        state.ourNextNostrKey.publicKey,
++        state.theirCurrentNostrPublicKey,
++        state.theirNextNostrPublicKey,
++        state.receivingChainMessageNumber,
++      ].join(":")
++      if (failedSessions.get(session) === receiveState) continue
++
+       let rumor: Rumor | undefined
+       try {
+         rumor = session.receiveEvent(event)
+       } catch {
++        failedSessions.set(session, receiveState)
+         continue
+       }
++      if (!rumor) failedSessions.set(session, receiveState)
+       if (rumor && this.handleSessionRumor(session, rumor, event)) {
+         return true
+       }
+@@ -361,7 +389,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
+     }
+ 
+     if (persist) {
+-      this.deps.user.onDeviceDirty()
++      this.markDirty()
+     }
+   }
+ 
+@@ -391,6 +419,9 @@ export class DeviceRecordActor implements DeviceRecordShape {
+         continue
+       }
+       try {
++        // A restart after publication must never restore the sending key that
++        // the peer just consumed. Keep the queue entry if persistence fails.
++        await this.deps.user.onDeviceDirty()
+         await this.deps.nostr.publish(event)
+         await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, entry.event.id)
+       } catch {
+@@ -398,7 +429,6 @@ export class DeviceRecordActor implements DeviceRecordShape {
+       }
+     }
+ 
+-    this.deps.user.onDeviceDirty()
+   }
+ 
+   deactivateCurrentSession(): void {
+@@ -406,7 +436,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
+     this.inactiveSessions.push(this.activeSession)
+     this.activeSession = undefined
+     this.state = "waiting-for-invite"
+-    this.deps.user.onDeviceDirty()
++    this.markDirty()
+   }
+ 
+   async revoke(): Promise<void> {
+@@ -415,7 +445,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
+     this.activeSession = undefined
+     this.inactiveSessions = []
+     await this.deps.messageQueue.removeForTarget(this.deviceId).catch(() => {})
+-    this.deps.user.onDeviceDirty()
++    this.markDirty()
+   }
+ 
+   close(): void {
+diff --git a/src/session-manager/SessionManagerLifecycle.ts b/src/session-manager/SessionManagerLifecycle.ts
+index b2b9f7d..3f05932 100644
+--- a/src/session-manager/SessionManagerLifecycle.ts
++++ b/src/session-manager/SessionManagerLifecycle.ts
+@@ -290,6 +290,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
+     this.legacyDirectMessageSubscription = null;
+     this.legacyDirectMessageAuthors = [];
+     this.pendingDirectMessages.clear();
++    this.decryptedEventIds.clear();
+     for (const unsubscribe of this.legacyRuntimeSubscriptions.values()) {
+       unsubscribe();
+     }
+@@ -313,6 +314,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
+     const ownerPubkey = this.resolveToOwner(userPubkey);
+     if (ownerPubkey === this.ownerPublicKey) return;
+ 
++    this.decryptedEventIds.clear();
+     const userRecord = this.userRecords.get(ownerPubkey);
+ 
+     if (userRecord) {
+diff --git a/src/session-manager/SessionManagerRecords.ts b/src/session-manager/SessionManagerRecords.ts
+index 5fed8d8..5e7e91b 100644
+--- a/src/session-manager/SessionManagerRecords.ts
++++ b/src/session-manager/SessionManagerRecords.ts
+@@ -13,6 +13,7 @@ import {
+ } from "../MessageOrigin.js";
+ import { DeviceRecordActor } from "./DeviceRecordActor.js";
+ import { UserRecordActor } from "./UserRecordActor.js";
++import { sessionMessageAuthorPubkeys } from "./messageAuthors.js";
+ import type { OnEventCallback, OnEventMeta } from "./types.js";
+ import { SessionManagerCore } from "./SessionManagerCore.js";
+ import {
+@@ -20,7 +21,11 @@ import {
+   type PendingInviteResponse,
+ } from "./managerInternals.js";
+ 
++const MAX_DECRYPTED_EVENT_IDS = 4096;
++
+ export abstract class SessionManagerRecords extends SessionManagerCore {
++  protected readonly decryptedEventIds = new Set<string>();
++
+   protected getOrCreateUserRecord(userPubkey: string): UserRecordActor {
+     let rec = this.userRecords.get(userPubkey);
+     if (!rec) {
+@@ -37,8 +42,9 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
+             this.handleDeviceRumor(ownerPubkey, deviceId, rumor, outerEvent);
+           },
+           persistUserRecord: (ownerPubkey) => {
+-            this.storeUserRecord(ownerPubkey).catch(() => {});
++            const persisted = this.storeUserRecord(ownerPubkey);
+             this.notifyMessagePushAuthorsChanged();
++            return persisted;
+           },
+         },
+         nostr: this.nostrFacade,
+@@ -180,16 +186,47 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
+   }
+ 
+   protected processDirectMessageEvent(event: VerifiedEvent): boolean {
++    // Shared ratchet authors can deliver another device's encrypted copy. The
++    // signed outer recipient is routing metadata; p-less legacy messages and
++    // owner-addressed copies still need the normal authenticated decrypt path.
++    const recipients = event.tags.filter((tag) => tag[0] === "p" && tag[1]);
++    if (recipients.length > 0 && !recipients.some((tag) =>
++      tag[1] === this.deviceId || tag[1] === this.ourPublicKey || tag[1] === this.ownerPublicKey,
++    )) {
++      this.pendingDirectMessages.delete(event.id);
++      return true;
++    }
++
++    // Separate relay subscriptions can supply new objects for the same envelope.
++    // Only successfully delivered plaintext is deduplicated; missing keys remain retryable.
++    if (this.decryptedEventIds.has(event.id)) return true;
++
++    const knownAuthors: DeviceRecordActor[] = [];
++    const otherDevices: DeviceRecordActor[] = [];
+     for (const userRecord of this.userRecords.values()) {
+       for (const device of userRecord.devices.values()) {
+-        if (device.processReceivedEvent(event)) {
+-          this.syncLegacyDirectMessageSubscription();
+-          this.pendingDirectMessages.delete(event.id);
+-          return true;
+-        }
++        const sessions = [device.activeSession, ...device.inactiveSessions];
++        const knowsAuthor = sessions.some((session) =>
++          session && sessionMessageAuthorPubkeys(session).includes(event.pubkey),
++        );
++        (knowsAuthor ? knownAuthors : otherDevices).push(device);
+       }
+     }
+ 
++    // Cold handshakes can attempt header decryption for any author. Try known
++    // ratchet authors first, retaining the full fallback for new peer keys.
++    for (const device of [...knownAuthors, ...otherDevices]) {
++      if (device.processReceivedEvent(event)) {
++        this.decryptedEventIds.add(event.id);
++        if (this.decryptedEventIds.size > MAX_DECRYPTED_EVENT_IDS) {
++          const oldest = this.decryptedEventIds.values().next().value;
++          if (oldest) this.decryptedEventIds.delete(oldest);
++        }
++        this.syncLegacyDirectMessageSubscription();
++        this.pendingDirectMessages.delete(event.id);
++        return true;
++      }
++    }
+     return false;
+   }
+ 
+diff --git a/src/session-manager/UserRecordActor.ts b/src/session-manager/UserRecordActor.ts
+index 86bb80d..997e082 100644
+--- a/src/session-manager/UserRecordActor.ts
++++ b/src/session-manager/UserRecordActor.ts
+@@ -180,7 +180,7 @@ export class UserRecordActor implements UserRecordShape {
+     )
+ 
+     this.setState("ready")
+-    this.onDeviceDirty()
++    void this.onDeviceDirty().catch(() => {})
+   }
+ 
+   private async migrateQueuedMessagesFromDevice(
+@@ -295,8 +295,8 @@ export class UserRecordActor implements UserRecordShape {
+     this.deps.manager.handleDeviceRumor(this.publicKey, deviceId, rumor, outerEvent)
+   }
+ 
+-  onDeviceDirty(): void {
+-    this.deps.manager.persistUserRecord(this.publicKey)
++  async onDeviceDirty(): Promise<void> {
++    await this.deps.manager.persistUserRecord(this.publicKey)
+   }
+ 
+   deactivateCurrentSessions(): void {
+diff --git a/src/session-manager/types.ts b/src/session-manager/types.ts
+index fc16023..157a04b 100644
+--- a/src/session-manager/types.ts
++++ b/src/session-manager/types.ts
+@@ -123,7 +123,7 @@ export interface NostrFacade {
+ export interface DeviceRecordUserHooks {
+   isDeviceAuthorized(deviceId: string): boolean
+   onDeviceRumor(deviceId: string, rumor: Rumor, outerEvent?: VerifiedEvent): void
+-  onDeviceDirty(): void
++  onDeviceDirty(): void | Promise<void>
+ }
+ 
+ export interface DeviceRecordDeps {
+@@ -148,7 +148,7 @@ export interface UserRecordManagerHooks {
+     rumor: Rumor,
+     outerEvent?: VerifiedEvent,
+   ): void
+-  persistUserRecord(ownerPubkey: string): void
++  persistUserRecord(ownerPubkey: string): void | Promise<void>
+ }
+ 
+ export interface UserRecordDeps {
