@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
+  import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
   import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, isAdmin, type Group, type GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
-  import { getErrorMessage, formatDayLabel, isDifferentDay } from '../lib/utils'
+  import { formatDayLabel, isDifferentDay } from '../lib/utils'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
-  import { getPubkey } from '../lib/identity'
+  import { getPubkey, identity } from '../lib/identity'
   import { deleteMessage as deleteMessageFromDb } from '../lib/storage'
   import { expirationStore } from '../lib/expirationStore'
   import { setGroupDisappearingMessages } from '../lib/disappearingMessages'
@@ -32,14 +33,6 @@
   let showEmojiPicker = $state(false)
   const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 
-  interface PendingAttachment {
-    file: File
-    previewUrl: string | null
-    nhash: string | null
-    uploading: boolean
-    progress: number
-    error: string | null
-  }
 
   // svelte-ignore state_referenced_locally
   let messageText = $state(getDraft(`group:${group.id}`))
@@ -47,12 +40,32 @@
   let inputRef = $state<HTMLTextAreaElement | null>(null)
   let fileInputRef = $state<HTMLInputElement | null>(null)
   let showMenu = $state(false)
-  let pendingAttachment = $state<PendingAttachment | null>(null)
+  const attachmentContext = () => `${$identity?.pubkey || ''}:group:${group.id}`
+  const attachmentDraft = createAttachmentDraft({
+    context: attachmentContext,
+    upload: uploadFile,
+    canPreview: file => file.size < 10 * 1024 * 1024 && (isImageFile(file.name) || isVideoFile(file.name)),
+  })
+  let isFileDrag = $state(false)
+  let attachmentError = $state<string | null>(null)
+  let uploadingAttachments = $derived($attachmentDraft.some(item => item.uploading))
+  $effect(() => { attachmentDraft.setContext(attachmentContext()) })
   let isRecordingVoice = $state(false)
+  let recordingContext: string | null = null
   // svelte-ignore state_referenced_locally
   let activeGroupId = $state(group.id)
   let replyingTo = $state<GroupMessage | null>(null)
   let showDisappearingModal = $state(false)
+  let attachmentAllowed = $derived(!!$identity && group.accepted !== false)
+  let canAttach = $derived(attachmentAllowed && !isRecordingVoice)
+  $effect(() => {
+    if (!attachmentAllowed) {
+      attachmentDraft.clear()
+      isRecordingVoice = false
+      recordingContext = null
+      isFileDrag = false
+    }
+  })
 
   let currentTtl = $derived($expirationStore.expirations[group.id])
   let disappearingNotice = $state<string | null>(null)
@@ -88,6 +101,11 @@
     if (newId !== activeGroupId) {
       setDraft(`group:${activeGroupId}`, messageText)
       messageText = getDraft(`group:${newId}`)
+      isRecordingVoice = false
+      recordingContext = null
+      replyingTo = null
+      isFileDrag = false
+      attachmentError = null
       activeGroupId = newId
     }
   })
@@ -96,7 +114,6 @@
     setDraft(`group:${activeGroupId}`, messageText)
   })
 
-  const MAX_PREVIEW_SIZE = 10 * 1024 * 1024
 
   function handleDelete() {
     deleteGroup(group.id)
@@ -104,10 +121,12 @@
   }
 
   function handleSend() {
+    if (!canSend) return
     let text = messageText.trim()
 
-    if (pendingAttachment?.nhash) {
-      const link = formatFileLink(pendingAttachment.nhash, pendingAttachment.file.name)
+    for (const attachment of $attachmentDraft) {
+      if (!attachment.nhash) continue
+      const link = formatFileLink(attachment.nhash, attachment.file.name)
       text = text ? `${text}\n${link}` : link
     }
 
@@ -161,166 +180,85 @@
   }
 
   function clearAttachment() {
-    if (pendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(pendingAttachment.previewUrl)
-    }
-    pendingAttachment = null
+    attachmentDraft.clear()
+    attachmentError = null
+  }
+
+  function startVoiceRecording() {
+    if (!canAttach) return
+    recordingContext = attachmentContext()
+    isRecordingVoice = true
   }
 
   async function handleVoiceRecorded(file: File) {
+    if (recordingContext !== attachmentContext() || !attachmentAllowed) return
+    recordingContext = null
     isRecordingVoice = false
     clearAttachment()
-
-    pendingAttachment = {
-      file,
-      previewUrl: null,
-      nhash: null,
-      uploading: true,
-      progress: 0,
-      error: null,
-    }
-
-    try {
-      const { nhash } = await uploadFile(file, (bytesUploaded, totalBytes) => {
-        if (pendingAttachment) {
-          pendingAttachment = {
-            ...pendingAttachment,
-            progress: Math.round((bytesUploaded / totalBytes) * 100),
-          }
-        }
-      })
-
-      if (pendingAttachment) {
-        pendingAttachment = {
-          ...pendingAttachment,
-          nhash,
-          uploading: false,
-          progress: 100,
-        }
-      }
-
-      handleSend()
-    } catch (e) {
-      console.error('Failed to upload voice message:', e)
-      if (pendingAttachment) {
-        pendingAttachment = {
-          ...pendingAttachment,
-          uploading: false,
-          error: getErrorMessage(e, 'Upload failed'),
-        }
-      }
-    }
+    const context = attachmentContext()
+    const completed = await attachmentDraft.add([file])
+    // Keep the existing voice-send flow, but never send a removed recording,
+    // another selection, or a draft opened while this recording was uploading.
+    if (context === attachmentContext() && completed.length === 1 &&
+        $attachmentDraft.length === 1 && $attachmentDraft[0].id === completed[0]) handleSend()
   }
 
-  function handleVoiceCancel() {
-    isRecordingVoice = false
+  function handleVoiceCancel() { isRecordingVoice = false; recordingContext = null }
+
+  function attachFiles(files: File[]) {
+    if (!canAttach || files.length === 0) return
+    attachmentError = null
+    void attachmentDraft.add(files)
+    inputRef?.focus()
   }
 
-  function hasFileData(dataTransfer: DataTransfer | null): boolean {
-    if (!dataTransfer) return false
-    return dataTransfer.files.length > 0 || Array.from(dataTransfer.types || []).includes('Files')
-  }
-
-  function getFirstFile(dataTransfer: DataTransfer | null): File | null {
-    if (!dataTransfer) return null
-    if (dataTransfer.files.length > 0) return dataTransfer.files[0]
-
-    for (const item of Array.from(dataTransfer.items || [])) {
-      if (item.kind !== 'file') continue
-      const file = item.getAsFile()
-      if (file) return file
-    }
-
-    return null
-  }
-
-  async function attachFile(file: File) {
-    if (!file) return
-
-    clearAttachment()
-
-    let previewUrl: string | null = null
-    const canPreview = file.size < MAX_PREVIEW_SIZE &&
-      (isImageFile(file.name) || isVideoFile(file.name))
-
-    if (canPreview) {
-      previewUrl = URL.createObjectURL(file)
-    }
-
-    pendingAttachment = {
-      file,
-      previewUrl,
-      nhash: null,
-      uploading: true,
-      progress: 0,
-      error: null,
-    }
-
-    try {
-      const { nhash } = await uploadFile(file, (bytesUploaded, totalBytes) => {
-        if (pendingAttachment) {
-          pendingAttachment = {
-            ...pendingAttachment,
-            progress: Math.round((bytesUploaded / totalBytes) * 100),
-          }
-        }
-      })
-
-      if (pendingAttachment) {
-        pendingAttachment = {
-          ...pendingAttachment,
-          nhash,
-          uploading: false,
-          progress: 100,
-        }
-      }
-
-      requestAnimationFrame(() => inputRef?.focus())
-    } catch (e) {
-      console.error('Failed to upload file:', e)
-      if (pendingAttachment) {
-        pendingAttachment = {
-          ...pendingAttachment,
-          uploading: false,
-          error: getErrorMessage(e, 'Upload failed'),
-        }
-      }
-    }
-  }
-
-  async function handleFileSelect(e: Event) {
+  function handleFileSelect(e: Event) {
     const input = e.target as HTMLInputElement
-    const file = input.files?.[0]
-    if (!file) return
-
+    const files = Array.from(input.files || [])
     input.value = ''
-    await attachFile(file)
+    attachFiles(files)
   }
 
   function handleDrop(e: DragEvent) {
-    const file = getFirstFile(e.dataTransfer)
-    if (!file) return
+    isFileDrag = false
+    if (!hasFileData(e.dataTransfer)) {
+      // Do not let a dragged web link navigate away from the unsent draft.
+      if (Array.from(e.dataTransfer?.types || []).includes('text/uri-list')) e.preventDefault()
+      return
+    }
     e.preventDefault()
     e.stopPropagation()
-    void attachFile(file)
+    if (!canAttach) return
+    const files = filesFromTransfer(e.dataTransfer)
+    if (!files) { attachmentError = 'Choose files, not folders'; return }
+    attachFiles(files)
   }
 
   function handleDragOver(e: DragEvent) {
-    if (!hasFileData(e.dataTransfer)) return
+    if (!hasFileData(e.dataTransfer)) {
+      // Do not let a dragged web link navigate away from the unsent draft.
+      if (Array.from(e.dataTransfer?.types || []).includes('text/uri-list')) e.preventDefault()
+      return
+    }
     e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = canAttach ? 'copy' : 'none'
+    isFileDrag = canAttach
+  }
+
+  function handleDragLeave(e: DragEvent) {
+    if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) isFileDrag = false
   }
 
   function handlePaste(e: ClipboardEvent) {
-    const file = getFirstFile(e.clipboardData)
-    if (!file) return
+    const files = filesFromTransfer(e.clipboardData)
+    if (!files || !canAttach) return
     e.preventDefault()
-    void attachFile(file)
+    attachFiles(files)
   }
 
   onDestroy(() => {
-    if (pendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(pendingAttachment.previewUrl)
-    }
+    recordingContext = null
+    attachmentDraft.clear()
     if (disappearingNoticeTimer) {
       clearTimeout(disappearingNoticeTimer)
       disappearingNoticeTimer = null
@@ -388,12 +326,19 @@
   let myPubkey = $derived(getPubkey())
 
   let canSend = $derived(
-    (messageText.trim() || pendingAttachment?.nhash) &&
-    !pendingAttachment?.uploading
+    !!$identity && group.accepted !== false &&
+    ($attachmentDraft.length === 0 || attachmentAllowed) &&
+    !!(messageText.trim() || $attachmentDraft.length) &&
+    $attachmentDraft.every(item => !!item.nhash && !item.uploading && !item.error)
   )
 </script>
 
-<div class="flex-1 flex flex-col min-h-0">
+<div class="flex-1 flex flex-col min-h-0 relative" role="presentation"
+  data-testid="chat-file-drop-area"
+  ondragover={handleDragOver} ondragleave={handleDragLeave} ondrop={handleDrop}>
+  {#if isFileDrag}
+    <div data-testid="file-drop-highlight" class="absolute inset-1 z-40 rounded-xl border-2 border-solid border-primary pointer-events-none"></div>
+  {/if}
   <!-- Header -->
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-panel">
     {#if showBackButton}
@@ -601,9 +546,10 @@
     {/if}
 
     <!-- Attachment preview -->
-    {#if pendingAttachment}
-      <div class="px-4 pt-3 pb-2">
-        <div class="relative inline-block">
+    {#if $attachmentDraft.length}
+      <div class="px-4 pt-3 pb-2 flex gap-4 overflow-x-auto">
+        {#each $attachmentDraft as pendingAttachment (pendingAttachment.id)}
+        <div class="relative inline-block flex-shrink-0" data-testid="attachment-preview">
           {#if pendingAttachment.previewUrl && isImageFile(pendingAttachment.file.name)}
             <img
               src={pendingAttachment.previewUrl}
@@ -645,25 +591,29 @@
 
           <button
             class="absolute -top-2 -right-2 w-6 h-6 bg-surface border border-surface-lighter rounded-full flex items-center justify-center text-gray-400 hover:text-white hover:bg-red-600 hover:border-red-600 transition-colors"
-            onclick={clearAttachment}
+            onclick={() => attachmentDraft.remove(pendingAttachment.id)}
             aria-label="Remove attachment"
           >
             <span class="i-carbon-close text-sm"></span>
           </button>
         </div>
+        {/each}
       </div>
     {/if}
 
     <!-- Input row -->
+    {#if attachmentError}
+      <p role="status" class="px-4 pt-2 text-sm text-red-400">{attachmentError}</p>
+    {/if}
+
     <div
       class="p-4 pt-2 pb-[max(1rem,env(safe-area-inset-bottom))] flex gap-2 items-end"
       role="presentation"
-      ondragover={handleDragOver}
-      ondrop={handleDrop}
     >
       <input
         bind:this={fileInputRef}
         type="file"
+        multiple
         class="hidden"
         onchange={handleFileSelect}
         accept="image/*,video/*,audio/*,.pdf,.txt,.json,.md"
@@ -697,7 +647,7 @@
         <button
           class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
           onclick={() => fileInputRef?.click()}
-          disabled={pendingAttachment?.uploading}
+          disabled={!canAttach || uploadingAttachments}
           aria-label="Attach file"
         >
           <span class="i-carbon-attachment text-xl"></span>
@@ -708,8 +658,6 @@
           bind:this={inputRef}
           bind:value={messageText}
           onkeydown={handleKeydown}
-          ondragover={handleDragOver}
-          ondrop={handleDrop}
           onpaste={handlePaste}
           oninput={handleTypingInput}
           placeholder="Type a message..."
@@ -718,7 +666,7 @@
           autofocus
         ></textarea>
 
-        {#if messageText.trim() || pendingAttachment?.nhash}
+        {#if messageText.trim() || $attachmentDraft.length}
           <button
             class="btn-primary w-11 h-11 p-0 flex items-center justify-center flex-shrink-0"
             onclick={handleSend}
@@ -730,8 +678,8 @@
         {:else}
           <button
             class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
-            onclick={() => isRecordingVoice = true}
-            disabled={pendingAttachment?.uploading}
+            onclick={startVoiceRecording}
+            disabled={!canAttach || uploadingAttachments}
             aria-label="Record voice message"
           >
             <span class="i-carbon-microphone text-xl"></span>
