@@ -88,6 +88,7 @@ async function login(page: import('@playwright/test').Page) {
 
 async function registerDevice(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
   await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 30000 })
   const registerButton = page.getByRole('button', { name: 'Register this device' })
   const hasRegisteredDevice = async () => (await page.locator('body').innerText()).includes('This device')
@@ -112,6 +113,8 @@ async function registerDevice(page: import('@playwright/test').Page) {
     })
   }
   await expect.poll(hasRegisteredDevice, { timeout: 90000 }).toBe(true)
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
 }
 

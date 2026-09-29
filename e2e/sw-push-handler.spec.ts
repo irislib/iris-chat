@@ -37,6 +37,7 @@ async function registerDevice(page: Page) {
     return
   }
   await settingsButton.click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
   await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
   const registerButton = page.getByRole('button', { name: 'Register this device' })
   const thisDeviceLabel = page.getByText('This device').first()
@@ -53,6 +54,8 @@ async function registerDevice(page: Page) {
     await registerButton.click({ timeout: 10000 })
     await expect.poll(async () => thisDeviceLabel.isVisible().catch(() => false), { timeout: 25000 }).toBe(true)
   }
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
 }
 

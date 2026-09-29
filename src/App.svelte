@@ -5,6 +5,7 @@
   import Sidebar from './components/Sidebar.svelte'
   import MainContent from './components/MainContent.svelte'
   import SettingsView from './components/SettingsView.svelte'
+  import { parseSettingsRoute, settingsHref, type SettingsPage } from './lib/settingsNavigation'
   import ProfileView from './components/ProfileView.svelte'
   import NotificationPrompt from './components/NotificationPrompt.svelte'
   import InstallPrompt from './components/InstallPrompt.svelte'
@@ -54,6 +55,7 @@
   let selectedChat = $state<ChatSession | null>(null)
   let selectedGroupId = $state<string | null>(null)
   let currentView = $state<View>('chat')
+  let settingsPage = $state<SettingsPage | null>(null)
   let profilePubkey = $state<string | null>(null)
   // Mobile: which panel to show - 'sidebar' or 'main'
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
@@ -80,9 +82,10 @@
   })
 
   // Parse view from URL hash
-  function getViewFromHash(): { view: View; profilePubkey?: string; groupId?: string } {
+  function getViewFromHash(): { view: View; profilePubkey?: string; groupId?: string; settingsPage?: SettingsPage | null } {
     const hash = window.location.hash
-    if (hash === '#settings') return { view: 'settings' }
+    const settingsRoute = parseSettingsRoute(hash)
+    if (settingsRoute) return { view: 'settings', settingsPage: settingsRoute.page }
     if (hash.startsWith('#profile-')) {
       return { view: 'profile', profilePubkey: hash.slice(9) }
     }
@@ -107,11 +110,12 @@
   function navigateTo(view: View, push = true, pubkey?: string, groupId?: string) {
     clearNativeEntry()
     currentView = view
+    settingsPage = null
     if (view === 'profile' && pubkey) {
       profilePubkey = pubkey
     }
     let hash = ''
-    if (view === 'settings') hash = '#settings'
+    if (view === 'settings') hash = settingsHref()
     else if (view === 'profile' && pubkey) hash = `#profile-${pubkey}`
     else if (view === 'createGroup') hash = '#create-group'
     else if (view === 'groupDetails' && groupId) hash = `#group-details-${groupId}`
@@ -173,6 +177,7 @@
     if (!hashInvite) {
       const hashState = getViewFromHash()
       currentView = hashState.view
+      settingsPage = hashState.settingsPage ?? null
       if (hashState.view === 'profile' && hashState.profilePubkey) {
         profilePubkey = hashState.profilePubkey
         mobileView = 'main'
@@ -190,6 +195,7 @@
     const handlePopState = () => {
       const hashState = getViewFromHash()
       currentView = hashState.view
+      settingsPage = hashState.settingsPage ?? null
       if (hashState.view === 'profile' && hashState.profilePubkey) {
         profilePubkey = hashState.profilePubkey
         mobileView = 'main'
@@ -201,11 +207,11 @@
       } else if (hashState.view === 'groupDetails' && hashState.groupId) {
         selectedGroupId = hashState.groupId
         mobileView = 'main'
-      } else if (hashState.view === 'createGroup') {
+      } else if (hashState.view === 'createGroup' || hashState.view === 'settings') {
         mobileView = 'main'
       } else {
         selectedGroupId = null
-        mobileView = hashState.view === 'settings' ? 'main' : 'sidebar'
+        mobileView = 'sidebar'
       }
     }
     window.addEventListener('popstate', handlePopState)
@@ -491,7 +497,25 @@
   }
 
   function handleSettingsBack() {
-    history.back()
+    if (settingsPage !== null) {
+      if (history.state?.settingsMenuParent) history.back()
+      else {
+        settingsPage = null
+        setHashSilently(settingsHref())
+      }
+      return
+    }
+    // Also works when Settings was opened directly or restored after a reload.
+    // Never send the user out of the app through an unrelated history entry.
+    navigateTo('chat', false, undefined, selectedGroupId ?? undefined)
+    mobileView = 'sidebar'
+  }
+
+  function handleSettingsPage(page: SettingsPage) {
+    if (page === settingsPage) return
+    const settingsMenuParent = settingsPage === null
+    settingsPage = page
+    history.pushState({ view: 'settings', settingsMenuParent }, '', settingsHref(page))
   }
 
   function handleProfileBack() {
@@ -559,6 +583,12 @@
 <svelte:window onhashchange={() => {
   nativeEntryHref = currentNativeEntryHref()
   nativeEntryIsDeviceLink = isLinkInvite(parseInviteFromHash())
+  const settingsRoute = parseSettingsRoute(window.location.hash)
+  if (settingsRoute) {
+    currentView = 'settings'
+    settingsPage = settingsRoute.page
+    mobileView = 'main'
+  }
 }} />
 
 <main class="min-h-[100dvh] h-[100dvh] bg-app text-apptext overflow-hidden">
@@ -621,7 +651,7 @@
           {mobileView === 'main' ? 'flex w-full' : 'hidden'} md:flex md:w-auto
         ">
           {#if currentView === 'settings'}
-            <SettingsView onBack={handleSettingsBack} onLogout={handleLogout} />
+            <SettingsView page={settingsPage} onNavigate={handleSettingsPage} onBack={handleSettingsBack} onLogout={handleLogout} />
           {:else if currentView === 'profile' && profilePubkey}
             <ProfileView
               pubkey={profilePubkey}

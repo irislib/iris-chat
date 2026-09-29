@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import { SETTINGS_PAGES, settingsHref, type SettingsPage } from '../lib/settingsNavigation'
   import { notificationSettings } from '../lib/notificationStore'
   import { getNotificationSupportError, requestNotificationPermission } from '../lib/notificationPermission'
   import { subscribeToDMNotifications, unsubscribeFromDMNotifications, NotificationService, type NotificationSubscription } from '../lib/notifications'
@@ -38,11 +40,25 @@
   import { NATIVE_APP_DOWNLOAD_URL } from '../lib/nativeApp'
 
   interface Props {
+    page: SettingsPage | null
+    onNavigate: (page: SettingsPage) => void
     onBack: () => void
     onLogout: () => void
   }
 
-  let { onBack, onLogout }: Props = $props()
+  let { page, onNavigate, onBack, onLogout }: Props = $props()
+  let detailPage = $derived(page ?? 'profile')
+  let detailTitle = $derived(SETTINGS_PAGES.find((entry) => entry.id === detailPage)?.title ?? 'Profile')
+  const menuGroups = [...new Set(SETTINGS_PAGES.map((entry) => entry.group))]
+  let settingsContainer = $state<HTMLDivElement | null>(null)
+  let detailPane = $state<HTMLElement | null>(null)
+  let titleHeading = $state<HTMLHeadingElement | null>(null)
+
+  function handleNavigate(event: MouseEvent, destination: SettingsPage) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    onNavigate(destination)
+  }
 
   function handleLogout() {
     if (confirm('Are you sure you want to logout?\n\nAll chats will be permanently deleted.')) {
@@ -123,6 +139,28 @@
   let relays = $derived([...$relayStore.relays])
   let relayStatuses = $derived($relayStore.statuses)
   let showConnectivity = $derived($relayStore.showConnectivity)
+
+  $effect(() => {
+    // A new destination must not retain a revealed key, scanner, or old feedback.
+    const destination = page
+    showPrivateKey = false
+    showPictureModal = false
+    statusMessage = null
+    notificationStatus = null
+    deviceError = ''
+    callServerError = ''
+    showAdvanced = false
+    editingRelays = false
+    selectedDevicePubkeys = []
+    closeLinkInviteModal()
+    void tick().then(() => {
+      if (destination !== page) return
+      detailPane?.scrollTo({ top: 0 })
+      if (destination && settingsContainer && settingsContainer.clientWidth < 700) {
+        titleHeading?.focus({ preventScroll: true })
+      }
+    })
+  })
 
   function getRelayStatus(url: string): RelayStatus {
     return relayStatuses.get(url) || 'disconnected'
@@ -600,29 +638,60 @@
   }
 </script>
 
-<div class="h-full flex flex-col bg-panel">
-  <!-- Header -->
+<div bind:this={settingsContainer} class="settings-container h-full flex flex-col bg-panel" class:settings-has-page={page !== null}>
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-surface">
-    <button
-      class="btn-ghost p-2"
-      onclick={onBack}
-      aria-label="Back"
-    >
-      <span class="i-carbon-arrow-left text-xl"></span>
+    <button class="btn-ghost p-2" onclick={onBack} aria-label="Back">
+      <span class="i-carbon-arrow-left text-xl" aria-hidden="true"></span>
     </button>
-    <h1 class="text-xl font-semibold">Settings</h1>
+    <h1 bind:this={titleHeading} tabindex="-1" class="text-xl font-semibold">
+      <span class="settings-narrow-title">{page ? detailTitle : 'Settings'}</span>
+      <span class="settings-wide-title">Settings</span>
+    </h1>
   </header>
 
-  <!-- Content -->
-  <div class="flex-1 overflow-y-auto overscroll-contain p-4">
-    <div class="max-w-lg mx-auto space-y-6">
-      <!-- Status Message -->
-      {#if statusMessage}
-        <div class="p-3 rounded-lg {statusMessage.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}">
-          {statusMessage.text}
+  <div class="settings-layout">
+    <nav class="settings-menu" aria-label="Settings sections">
+      {#each menuGroups as group}
+        <div class="settings-menu-group">
+          {#each SETTINGS_PAGES.filter((entry) => entry.group === group) as entry}
+            <a
+              href={settingsHref(entry.id)}
+              aria-label={entry.title}
+              aria-current={detailPage === entry.id ? 'page' : undefined}
+              class="settings-menu-row"
+              class:settings-profile-row={entry.id === 'profile'}
+              onclick={(event) => handleNavigate(event, entry.id)}
+            >
+              {#if entry.id === 'profile' && $identity}
+                <Avatar pubkey={$identity.pubkey} size={44} />
+                <span class="min-w-0 flex-1">
+                  <span class="block font-semibold truncate"><Name pubkey={$identity.pubkey} /></span>
+                  <span class="block text-sm text-gray-400">Profile</span>
+                </span>
+              {:else}
+                <span class={`${entry.icon} text-xl flex-shrink-0`} aria-hidden="true"></span>
+                <span class="flex-1">{entry.title}</span>
+              {/if}
+              <span class="i-carbon-chevron-right text-sm text-gray-400" aria-hidden="true"></span>
+            </a>
+          {/each}
         </div>
-      {/if}
+      {/each}
+      <button class="settings-menu-row settings-logout text-red-400" onclick={handleLogout}>
+        <span class="i-carbon-logout text-xl" aria-hidden="true"></span>
+        <span>Logout</span>
+      </button>
+    </nav>
 
+    <section bind:this={detailPane} class="settings-detail" aria-label={detailTitle}>
+      <div class="settings-detail-content space-y-5">
+        <h2 class="settings-wide-title text-xl font-semibold">{detailTitle}</h2>
+        {#if statusMessage}
+          <div role={statusMessage.type === 'error' ? 'alert' : 'status'} class="p-3 rounded-lg {statusMessage.type === 'success' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}">
+            {statusMessage.text}
+          </div>
+        {/if}
+        {#if detailPage === 'profile'}
       <!-- Profile Section -->
       {#if $identity}
         <div class="bg-surface rounded-lg p-4">
@@ -672,7 +741,7 @@
               <input
                 id="profile-name"
                 type="text"
-                class="input-field flex-1"
+                class="input-field flex-1 min-w-0"
                 bind:value={profileNameInput}
                 disabled={!canEditProfile || savingProfileName}
                 oninput={handleProfileNameInput}
@@ -725,22 +794,12 @@
             </div>
           {/if}
 
-          <!-- Logout Button -->
-          <div class="mt-4 pt-4 border-t border-surface-lighter">
-            <button
-              class="w-full flex items-center justify-center gap-2 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-lg py-2 transition-colors"
-              onclick={handleLogout}
-            >
-              <span class="i-carbon-logout"></span>
-              Logout
-            </button>
-          </div>
+
         </div>
       {/if}
-
+        {:else if detailPage === 'appearance'}
       <!-- Appearance Section -->
       <div class="bg-surface rounded-lg p-4">
-        <h2 class="font-medium mb-3">Appearance</h2>
         <label for="theme-preference" class="text-sm text-gray-400 block mb-2">Theme</label>
         <select
           id="theme-preference"
@@ -753,280 +812,12 @@
           <option value="dark">Dark</option>
         </select>
       </div>
-
-      <!-- Devices Section -->
-      {#if $identity}
-        <div class="bg-surface rounded-lg p-4">
-          <div class="flex items-center justify-between mb-3">
-            <div>
-              <h2 class="font-medium">Devices</h2>
-              <p class="text-sm text-gray-400 mt-1">Manage devices authorized for multi-device sync</p>
-            </div>
-          </div>
-
-          {#if deviceError}
-            <div class="p-2 mb-3 rounded text-sm bg-red-900/30 text-red-400">{deviceError}</div>
-          {/if}
-
-          {#if isLinkedDevice}
-            <p class="text-xs text-gray-400">
-              This is a linked device. Manage devices on your main client.
-            </p>
-          {:else if !deviceState.isCurrentDeviceRegistered}
-            <button
-              class="btn-primary w-full flex items-center justify-center gap-2"
-              onclick={handleRegisterDevice}
-              disabled={registeringDevice}
-            >
-              {registeringDevice ? 'Registering...' : 'Register this device'}
-            </button>
-            <p class="text-xs text-gray-500 mt-2">
-              Registering enables multi-device message sync.
-            </p>
-          {:else}
-            <div class="space-y-2">
-              {#if revocableDevicePubkeys.length > 0}
-                <div class="flex items-center justify-between gap-3 pb-1">
-                  <label class="flex items-center gap-2 text-xs text-gray-400">
-                    <input
-                      type="checkbox"
-                      class="h-4 w-4 accent-primary"
-                      checked={allRevocableDevicesSelected}
-                      onchange={(event) =>
-                        setAllRevocableDevicesSelected((event.currentTarget as HTMLInputElement).checked)}
-                      disabled={registeringDevice}
-                      aria-label="Select all devices"
-                    />
-                    <span>
-                      {selectedRevocableDevicePubkeys.length > 0
-                        ? `${selectedRevocableDevicePubkeys.length} selected`
-                        : 'Select devices'}
-                    </span>
-                  </label>
-                  <button
-                    class="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 disabled:hover:text-red-400"
-                    onclick={handleRevokeSelectedDevices}
-                    disabled={registeringDevice || selectedRevocableDevicePubkeys.length === 0}
-                  >
-                    Revoke selected
-                  </button>
-                </div>
-              {/if}
-              {#each deviceState.registeredDevices as device}
-                {@const deviceDisplay = getDeviceDisplay(device.identityPubkey)}
-                {@const addedAgo = formatAddedAgo(device.createdAt)}
-                <div class="flex items-center justify-between gap-2 p-2 bg-surface-light rounded">
-                  {#if device.identityPubkey !== deviceState.identityPubkey}
-                    <input
-                      type="checkbox"
-                      class="h-4 w-4 shrink-0 accent-primary"
-                      checked={isDeviceSelected(device.identityPubkey)}
-                      onchange={(event) =>
-                        setDeviceSelected(device.identityPubkey, (event.currentTarget as HTMLInputElement).checked)}
-                      disabled={registeringDevice}
-                      aria-label={`Select ${deviceDisplay.title}`}
-                    />
-                  {/if}
-                  <div class="min-w-0 flex-1">
-                    <div class="text-sm text-gray-200 truncate">{deviceDisplay.title}</div>
-                    {#if deviceDisplay.subtitle}
-                      <div class="text-xs text-gray-400 truncate">
-                        {deviceDisplay.subtitle}
-                      </div>
-                    {/if}
-                    {#if addedAgo}
-                      <div class="text-xs text-gray-500 truncate">Added {addedAgo}</div>
-                    {/if}
-                  </div>
-                  {#if device.identityPubkey === deviceState.identityPubkey}
-                    <span class="text-xs text-primary">This device</span>
-                  {:else}
-                    <button
-                      class="text-xs text-red-400 hover:text-red-300"
-                      onclick={() => handleRevokeDevice(device.identityPubkey)}
-                      disabled={registeringDevice}
-                    >
-                      Revoke
-                    </button>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          {#if !isLinkedDevice}
-            <div class="mt-4 pt-4 border-t border-surface-lighter">
-              <button
-                class="btn-secondary w-full flex items-center justify-center gap-2"
-                onclick={handleOpenLinkInvite}
-              >
-                <span class="i-carbon-qr-code"></span>
-                Link another device
-              </button>
-              <p class="text-xs text-gray-500 mt-2">
-                Paste or scan the link from your new device.
-              </p>
-            </div>
-          {/if}
-        </div>
-      {/if}
-
-      <!-- Link Device Modal -->
-      {#if linkInviteModalOpen}
-        <div
-          class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <button
-            class="absolute inset-0 cursor-default border-none bg-transparent"
-            onclick={closeLinkInviteModal}
-            aria-label="Close modal"
-          ></button>
-
-          <div class="bg-surface rounded-2xl p-8 max-w-lg w-full relative z-10">
-            <div class="flex justify-between items-center mb-6">
-              <h3 class="text-xl font-semibold text-white">Link another device</h3>
-              <button
-                class="btn-ghost p-2"
-                onclick={closeLinkInviteModal}
-                aria-label="Close"
-              >
-                <span class="i-carbon-close text-xl"></span>
-              </button>
-            </div>
-
-            <p class="text-gray-400 text-center mb-4">
-              Paste or scan the link shown on your new device.
-            </p>
-
-            {#if linkInviteShowScanner}
-              <div class="aspect-square rounded-lg overflow-hidden mb-4">
-                <QRScanner onresult={handleLinkInviteScan} />
-              </div>
-              <button
-                class="btn-secondary w-full flex items-center justify-center gap-2"
-                onclick={() => linkInviteShowScanner = false}
-              >
-                <span class="i-carbon-text-link"></span>
-                Paste Link Instead
-              </button>
-            {:else}
-              <input
-                type="text"
-                bind:value={linkInviteInput}
-                placeholder="Paste link code"
-                class="input-field"
-                oninput={() => {
-                  if (linkInviteStatus === 'error') {
-                    linkInviteStatus = 'idle'
-                    linkInviteError = ''
-                    linkInviteLastAutoAttempt = ''
-                  }
-                }}
-                disabled={linkInviteStatus === 'accepting'}
-              />
-              {#if linkInviteStatus === 'accepting'}
-                <p class="text-sm text-gray-400 mt-3 text-center">Linking...</p>
-              {/if}
-              <button
-                class="btn-secondary w-full flex items-center justify-center gap-2 mt-4"
-                onclick={() => linkInviteShowScanner = true}
-              >
-                <span class="i-carbon-qr-code"></span>
-                Scan QR Code
-              </button>
-            {/if}
-
-            {#if linkInviteStatus === 'linked'}
-              <p class="text-sm text-green-400 mt-4 text-center">Device linked</p>
-            {:else if linkInviteStatus === 'error'}
-              <p class="text-sm text-red-400 mt-4 text-center">{linkInviteError}</p>
-            {/if}
-          </div>
-        </div>
-      {/if}
-
-      <!-- Relays Section -->
-      <div class="bg-surface rounded-lg p-4">
-        <div class="flex items-center justify-between mb-3">
-          <div>
-            <h2 class="font-medium">Relays</h2>
-            <p class="text-sm text-gray-400 mt-1">Nostr servers for message delivery</p>
-          </div>
-          <button
-            class="text-sm text-primary hover:underline"
-            onclick={() => editingRelays = !editingRelays}
-          >
-            {editingRelays ? 'Done' : 'Edit'}
-          </button>
-        </div>
-
-        <div class="space-y-2">
-          {#each relays as relay (relay)}
-            {@const status = getRelayStatus(relay)}
-            <div class="flex items-center gap-2 p-2 bg-surface-light rounded">
-              <span class="w-2 h-2 rounded-full {getStatusColor(status)} flex-shrink-0"></span>
-              <span class="flex-1 text-sm truncate">
-                {(() => { try { return new URL(relay).hostname } catch { return relay } })()}
-              </span>
-              {#if editingRelays}
-                <button
-                  class="text-red-400 hover:text-red-300 p-1"
-                  onclick={() => removeRelay(relay)}
-                  aria-label="Remove relay"
-                >
-                  <span class="i-carbon-close text-sm"></span>
-                </button>
-              {:else}
-                <span class="text-xs text-gray-500 capitalize">{status}</span>
-              {/if}
-            </div>
-          {/each}
-        </div>
-
-        {#if editingRelays}
-          <div class="mt-3 flex gap-2">
-            <input
-              type="text"
-              bind:value={newRelayUrl}
-              placeholder="wss://relay.example.com"
-              class="flex-1 input-field text-sm py-2"
-              onkeydown={(e) => e.key === 'Enter' && addRelay()}
-            />
-            <button class="btn-primary text-sm px-3" onclick={addRelay}>Add</button>
-          </div>
-          <button
-            class="mt-2 text-xs text-gray-500 hover:text-gray-400"
-            onclick={resetRelays}
-          >
-            Reset to defaults
-          </button>
-        {/if}
-
-        <!-- Show connectivity indicator toggle -->
-        <div class="mt-4 pt-4 border-t border-surface-lighter flex items-center justify-between">
-          <span class="text-sm">Show connectivity in header</span>
-          <button
-            class="w-10 h-5 rounded-full transition-colors relative {showConnectivity ? 'bg-primary' : 'bg-gray-600'}"
-            onclick={() => relayStore.setShowConnectivity(!showConnectivity)}
-            role="switch"
-            aria-checked={showConnectivity}
-            aria-label="Toggle connectivity indicator"
-          >
-            <span
-              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {showConnectivity ? 'translate-x-5' : ''}"
-            ></span>
-          </button>
-        </div>
-      </div>
-
+        {:else if detailPage === 'privacy'}
       <!-- Privacy Section -->
       <div class="bg-surface rounded-lg p-4">
-        <h2 class="font-medium mb-3">Privacy</h2>
         <div class="flex flex-col gap-3">
-          <div class="flex items-center justify-between">
-            <div>
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex-1 min-w-0">
               <span class="text-sm">Send delivery receipts</span>
               <p class="text-xs text-gray-500 mt-0.5">Let others know their message was delivered</p>
             </div>
@@ -1042,8 +833,8 @@
               ></span>
             </button>
           </div>
-          <div class="flex items-center justify-between">
-            <div>
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex-1 min-w-0">
               <span class="text-sm">Send read receipts</span>
               <p class="text-xs text-gray-500 mt-0.5">Let others know when you've read their messages</p>
             </div>
@@ -1059,8 +850,8 @@
               ></span>
             </button>
           </div>
-          <div class="flex items-center justify-between">
-            <div>
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex-1 min-w-0">
               <span class="text-sm">Send typing indicators</span>
               <p class="text-xs text-gray-500 mt-0.5">Let others know when you're typing</p>
             </div>
@@ -1076,8 +867,8 @@
               ></span>
             </button>
           </div>
-          <div class="flex items-center justify-between">
-            <div>
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex-1 min-w-0">
               <span class="text-sm">Receive message requests</span>
               <p class="text-xs text-gray-500 mt-0.5">Allow new chats from people you don't follow</p>
             </div>
@@ -1095,52 +886,12 @@
           </div>
         </div>
       </div>
-
-      <section class="mb-6">
-        <h2 class="font-medium mb-3">Calls</h2>
-        <div class="space-y-4">
-          {#each [{ key: 'voice' as const, label: 'Voice calls' }, { key: 'video' as const, label: 'Video calls' }, { key: 'ringtone' as const, label: 'Ring sound' }] as option}
-            <div class="flex items-center justify-between">
-              <span class="text-sm">{option.label}</span>
-              <button class="w-10 h-5 rounded-full transition-colors relative {$callSettings[option.key] ? 'bg-primary' : 'bg-gray-600'}" role="switch" aria-checked={$callSettings[option.key]} aria-label={option.label} onclick={() => setCallSettings({ [option.key]: !$callSettings[option.key] })}>
-                <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$callSettings[option.key] ? 'translate-x-5' : ''}"></span>
-              </button>
-            </div>
-          {/each}
-          {#if notificationApiAvailable}
-            <div class="flex items-center justify-between">
-              <span class="text-sm">Call notifications</span>
-              <button class="w-10 h-5 rounded-full transition-colors relative {$callSettings.notifications && permissionState === 'granted' ? 'bg-primary' : 'bg-gray-600'}" role="switch" aria-checked={$callSettings.notifications && permissionState === 'granted'} aria-label="Call notifications" onclick={async () => {
-                if ($callSettings.notifications && permissionState === 'granted') setCallSettings({ notifications: false })
-                else {
-                  permissionState = await Notification.requestPermission()
-                  setCallSettings({ notifications: permissionState === 'granted' })
-                }
-              }}>
-                <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$callSettings.notifications && permissionState === 'granted' ? 'translate-x-5' : ''}"></span>
-              </button>
-            </div>
-          {/if}
-          <CallQualityControls />
-        </div>
-      </section>
-
-      <details class="mb-6">
-        <summary class="text-sm cursor-pointer">Call servers</summary>
-        <form class="mt-3 space-y-2" onsubmit={(event) => { event.preventDefault(); try { setCallServers(callServers); callServerError = '' } catch (error) { callServerError = error instanceof Error ? error.message : 'Invalid address' } }}>
-          <label class="block text-sm" for="call-connection-servers">Connection servers</label>
-          <textarea id="call-connection-servers" class="input w-full" aria-label="Call server addresses" rows="2" bind:value={callServers}></textarea>
-          <p class="text-xs text-gray-500">A local call server lets you call without internet.</p>
-          {#if callServerError}<p class="text-sm text-red-400" role="alert">{callServerError}</p>{/if}
-          <button type="submit" class="btn-primary text-sm">Save</button>
-        </form>
-      </details>
-
+        {:else if detailPage === 'notifications'}
       <!-- Notifications Section -->
       <div class="bg-surface rounded-lg p-4">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-4">
           <div>
-            <h2 class="font-medium">Notifications</h2>
+            <span class="font-medium">Message notifications</span>
             <p class="text-sm text-gray-400 mt-1">Get notified when you receive new messages</p>
           </div>
           <button
@@ -1251,28 +1002,6 @@
         </div>
       </div>
 
-      <!-- Source Code & Releases -->
-      <div class="bg-surface rounded-lg p-4 space-y-3">
-        <a
-          href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="flex items-center gap-2 text-primary hover:underline"
-        >
-          <span class="i-carbon-code text-lg"></span>
-          View Source Code
-        </a>
-        <a
-          href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat?tab=releases"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="flex items-center gap-2 text-primary hover:underline"
-        >
-          <span class="i-carbon-download text-lg"></span>
-          View Releases
-        </a>
-      </div>
-
       <!-- Advanced Section -->
       <div class="bg-surface rounded-lg p-4">
         <button
@@ -1293,7 +1022,7 @@
                 <input
                   id="server-url"
                   type="url"
-                  class="flex-1 bg-surface-light border border-surface-lighter rounded px-3 py-2 text-sm"
+                  class="flex-1 min-w-0 bg-surface-light border border-surface-lighter rounded px-3 py-2 text-sm"
                   bind:value={serverUrlInput}
                   placeholder="https://notifications.iris.to"
                 />
@@ -1374,10 +1103,231 @@
           </div>
         {/if}
       </div>
+        {:else if detailPage === 'calls'}
+      <section class="mb-6">
+        <div class="space-y-4">
+          {#each [{ key: 'voice' as const, label: 'Voice calls' }, { key: 'video' as const, label: 'Video calls' }, { key: 'ringtone' as const, label: 'Ring sound' }] as option}
+            <div class="flex items-center justify-between gap-4">
+              <span class="text-sm flex-1 min-w-0">{option.label}</span>
+              <button class="w-10 h-5 rounded-full transition-colors relative {$callSettings[option.key] ? 'bg-primary' : 'bg-gray-600'}" role="switch" aria-checked={$callSettings[option.key]} aria-label={option.label} onclick={() => setCallSettings({ [option.key]: !$callSettings[option.key] })}>
+                <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$callSettings[option.key] ? 'translate-x-5' : ''}"></span>
+              </button>
+            </div>
+          {/each}
+          {#if notificationApiAvailable}
+            <div class="flex items-center justify-between gap-4">
+              <span class="text-sm flex-1 min-w-0">Call notifications</span>
+              <button class="w-10 h-5 rounded-full transition-colors relative {$callSettings.notifications && permissionState === 'granted' ? 'bg-primary' : 'bg-gray-600'}" role="switch" aria-checked={$callSettings.notifications && permissionState === 'granted'} aria-label="Call notifications" onclick={async () => {
+                if ($callSettings.notifications && permissionState === 'granted') setCallSettings({ notifications: false })
+                else {
+                  permissionState = await Notification.requestPermission()
+                  setCallSettings({ notifications: permissionState === 'granted' })
+                }
+              }}>
+                <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$callSettings.notifications && permissionState === 'granted' ? 'translate-x-5' : ''}"></span>
+              </button>
+            </div>
+          {/if}
+          <CallQualityControls />
+        </div>
+      </section>
 
+      <details class="mb-6">
+        <summary class="text-sm cursor-pointer">Call servers</summary>
+        <form class="mt-3 space-y-2" onsubmit={(event) => { event.preventDefault(); try { setCallServers(callServers); callServerError = '' } catch (error) { callServerError = error instanceof Error ? error.message : 'Invalid address' } }}>
+          <label class="block text-sm" for="call-connection-servers">Connection servers</label>
+          <textarea id="call-connection-servers" class="input w-full" aria-label="Call server addresses" rows="2" bind:value={callServers}></textarea>
+          <p class="text-xs text-gray-500">A local call server lets you call without internet.</p>
+          {#if callServerError}<p class="text-sm text-red-400" role="alert">{callServerError}</p>{/if}
+          <button type="submit" class="btn-primary text-sm">Save</button>
+        </form>
+      </details>
+        {:else if detailPage === 'devices'}
+      <!-- Devices Section -->
+      {#if $identity}
+        <div class="bg-surface rounded-lg p-4">
+          <p class="text-sm text-gray-400 mb-3">Link your devices to keep chats in sync.</p>
+
+          {#if deviceError}
+            <div class="p-2 mb-3 rounded text-sm bg-red-900/30 text-red-400">{deviceError}</div>
+          {/if}
+
+          {#if isLinkedDevice}
+            <p class="text-xs text-gray-400">
+              This is a linked device. Manage devices on your main client.
+            </p>
+          {:else if !deviceState.isCurrentDeviceRegistered}
+            <button
+              class="btn-primary w-full flex items-center justify-center gap-2"
+              onclick={handleRegisterDevice}
+              disabled={registeringDevice}
+            >
+              {registeringDevice ? 'Registering...' : 'Register this device'}
+            </button>
+            <p class="text-xs text-gray-500 mt-2">
+              Registering enables multi-device message sync.
+            </p>
+          {:else}
+            <div class="space-y-2">
+              {#if revocableDevicePubkeys.length > 0}
+                <div class="flex items-center justify-between gap-3 pb-1">
+                  <label class="flex items-center gap-2 text-xs text-gray-400">
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4 accent-primary"
+                      checked={allRevocableDevicesSelected}
+                      onchange={(event) =>
+                        setAllRevocableDevicesSelected((event.currentTarget as HTMLInputElement).checked)}
+                      disabled={registeringDevice}
+                      aria-label="Select all devices"
+                    />
+                    <span>
+                      {selectedRevocableDevicePubkeys.length > 0
+                        ? `${selectedRevocableDevicePubkeys.length} selected`
+                        : 'Select devices'}
+                    </span>
+                  </label>
+                  <button
+                    class="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 disabled:hover:text-red-400"
+                    onclick={handleRevokeSelectedDevices}
+                    disabled={registeringDevice || selectedRevocableDevicePubkeys.length === 0}
+                  >
+                    Revoke selected
+                  </button>
+                </div>
+              {/if}
+              {#each deviceState.registeredDevices as device}
+                {@const deviceDisplay = getDeviceDisplay(device.identityPubkey)}
+                {@const addedAgo = formatAddedAgo(device.createdAt)}
+                <div class="flex items-center justify-between gap-2 p-2 bg-surface-light rounded">
+                  {#if device.identityPubkey !== deviceState.identityPubkey}
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4 shrink-0 accent-primary"
+                      checked={isDeviceSelected(device.identityPubkey)}
+                      onchange={(event) =>
+                        setDeviceSelected(device.identityPubkey, (event.currentTarget as HTMLInputElement).checked)}
+                      disabled={registeringDevice}
+                      aria-label={`Select ${deviceDisplay.title}`}
+                    />
+                  {/if}
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm text-gray-200 truncate">{deviceDisplay.title}</div>
+                    {#if deviceDisplay.subtitle}
+                      <div class="text-xs text-gray-400 truncate">
+                        {deviceDisplay.subtitle}
+                      </div>
+                    {/if}
+                    {#if addedAgo}
+                      <div class="text-xs text-gray-500 truncate">Added {addedAgo}</div>
+                    {/if}
+                  </div>
+                  {#if device.identityPubkey === deviceState.identityPubkey}
+                    <span class="text-xs text-primary">This device</span>
+                  {:else}
+                    <button
+                      class="text-xs text-red-400 hover:text-red-300"
+                      onclick={() => handleRevokeDevice(device.identityPubkey)}
+                      disabled={registeringDevice}
+                    >
+                      Revoke
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          {#if !isLinkedDevice}
+            <div class="mt-4 pt-4 border-t border-surface-lighter">
+              <button
+                class="btn-secondary w-full flex items-center justify-center gap-2"
+                onclick={handleOpenLinkInvite}
+              >
+                <span class="i-carbon-qr-code"></span>
+                Link another device
+              </button>
+              <p class="text-xs text-gray-500 mt-2">
+                Paste or scan the link from your new device.
+              </p>
+            </div>
+          {/if}
+        </div>
+      {/if}
+        {:else if detailPage === 'network'}
+      <!-- Relays Section -->
+      <div class="bg-surface rounded-lg p-4">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-sm text-gray-400">Servers that deliver your messages</p>
+          <button
+            class="text-sm text-primary hover:underline"
+            onclick={() => editingRelays = !editingRelays}
+          >
+            {editingRelays ? 'Done' : 'Edit'}
+          </button>
+        </div>
+
+        <div class="space-y-2">
+          {#each relays as relay (relay)}
+            {@const status = getRelayStatus(relay)}
+            <div class="flex items-center gap-2 p-2 bg-surface-light rounded">
+              <span class="w-2 h-2 rounded-full {getStatusColor(status)} flex-shrink-0"></span>
+              <span class="flex-1 text-sm truncate">
+                {(() => { try { return new URL(relay).hostname } catch { return relay } })()}
+              </span>
+              {#if editingRelays}
+                <button
+                  class="text-red-400 hover:text-red-300 p-1"
+                  onclick={() => removeRelay(relay)}
+                  aria-label="Remove message server"
+                >
+                  <span class="i-carbon-close text-sm"></span>
+                </button>
+              {:else}
+                <span class="text-xs text-gray-500 capitalize">{status}</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+
+        {#if editingRelays}
+          <div class="mt-3 flex gap-2">
+            <input
+              type="text"
+              bind:value={newRelayUrl}
+              placeholder="wss://relay.example.com"
+              class="flex-1 input-field text-sm py-2"
+              onkeydown={(e) => e.key === 'Enter' && addRelay()}
+            />
+            <button class="btn-primary text-sm px-3" onclick={addRelay}>Add</button>
+          </div>
+          <button
+            class="mt-2 text-xs text-gray-500 hover:text-gray-400"
+            onclick={resetRelays}
+          >
+            Reset to defaults
+          </button>
+        {/if}
+
+        <!-- Show connectivity indicator toggle -->
+        <div class="mt-4 pt-4 border-t border-surface-lighter flex items-center justify-between">
+          <span class="text-sm">Show connectivity in header</span>
+          <button
+            class="w-10 h-5 rounded-full transition-colors relative {showConnectivity ? 'bg-primary' : 'bg-gray-600'}"
+            onclick={() => relayStore.setShowConnectivity(!showConnectivity)}
+            role="switch"
+            aria-checked={showConnectivity}
+            aria-label="Toggle connectivity indicator"
+          >
+            <span
+              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {showConnectivity ? 'translate-x-5' : ''}"
+            ></span>
+          </button>
+        </div>
+      </div>
+        {:else if detailPage === 'about'}
       <!-- About Section -->
       <div class="bg-surface rounded-lg p-4">
-        <h2 class="font-medium mb-3">About iris chat</h2>
         <div class="text-sm text-gray-400 space-y-3">
           <a href={NATIVE_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" class="inline-flex items-center gap-2 text-primary hover:underline">
             <span class="i-carbon-download" aria-hidden="true"></span>
@@ -1406,9 +1356,109 @@
           </div>
         </div>
       </div>
-    </div>
+
+      <!-- Source Code & Releases -->
+      <div class="bg-surface rounded-lg p-4 space-y-3">
+        <a
+          href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center gap-2 text-primary hover:underline"
+        >
+          <span class="i-carbon-code text-lg"></span>
+          View Source Code
+        </a>
+        <a
+          href="https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat?tab=releases"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex items-center gap-2 text-primary hover:underline"
+        >
+          <span class="i-carbon-download text-lg"></span>
+          View Releases
+        </a>
+      </div>
+        {/if}
+      </div>
+    </section>
   </div>
 </div>
+
+      <!-- Link Device Modal -->
+      {#if linkInviteModalOpen}
+        <div
+          class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <button
+            class="absolute inset-0 cursor-default border-none bg-transparent"
+            onclick={closeLinkInviteModal}
+            aria-label="Close modal"
+          ></button>
+
+          <div class="bg-surface rounded-2xl p-8 max-w-lg w-full relative z-10">
+            <div class="flex justify-between items-center mb-6">
+              <h3 class="text-xl font-semibold text-white">Link another device</h3>
+              <button
+                class="btn-ghost p-2"
+                onclick={closeLinkInviteModal}
+                aria-label="Close"
+              >
+                <span class="i-carbon-close text-xl"></span>
+              </button>
+            </div>
+
+            <p class="text-gray-400 text-center mb-4">
+              Paste or scan the link shown on your new device.
+            </p>
+
+            {#if linkInviteShowScanner}
+              <div class="aspect-square rounded-lg overflow-hidden mb-4">
+                <QRScanner onresult={handleLinkInviteScan} />
+              </div>
+              <button
+                class="btn-secondary w-full flex items-center justify-center gap-2"
+                onclick={() => linkInviteShowScanner = false}
+              >
+                <span class="i-carbon-text-link"></span>
+                Paste Link Instead
+              </button>
+            {:else}
+              <input
+                type="text"
+                bind:value={linkInviteInput}
+                placeholder="Paste link code"
+                class="input-field"
+                oninput={() => {
+                  if (linkInviteStatus === 'error') {
+                    linkInviteStatus = 'idle'
+                    linkInviteError = ''
+                    linkInviteLastAutoAttempt = ''
+                  }
+                }}
+                disabled={linkInviteStatus === 'accepting'}
+              />
+              {#if linkInviteStatus === 'accepting'}
+                <p class="text-sm text-gray-400 mt-3 text-center">Linking...</p>
+              {/if}
+              <button
+                class="btn-secondary w-full flex items-center justify-center gap-2 mt-4"
+                onclick={() => linkInviteShowScanner = true}
+              >
+                <span class="i-carbon-qr-code"></span>
+                Scan QR Code
+              </button>
+            {/if}
+
+            {#if linkInviteStatus === 'linked'}
+              <p class="text-sm text-green-400 mt-4 text-center">Device linked</p>
+            {:else if linkInviteStatus === 'error'}
+              <p class="text-sm text-red-400 mt-4 text-center">{linkInviteError}</p>
+            {/if}
+          </div>
+        </div>
+      {/if}
 
 {#if showPictureModal && modalPicture}
   <MediaModal
@@ -1419,3 +1469,73 @@
     onclose={() => showPictureModal = false}
   />
 {/if}
+
+
+<style>
+  .settings-container {
+    container-type: inline-size;
+    container-name: settings;
+    min-width: 0;
+  }
+
+  .settings-layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .settings-menu,
+  .settings-detail {
+    width: 100%;
+    min-width: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .settings-menu { padding: 16px; }
+  .settings-menu-group { margin-bottom: 16px; }
+  .settings-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 12px;
+    border-radius: 10px;
+    text-align: left;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .settings-menu-row:hover,
+  .settings-menu-row:focus-visible { background: rgb(var(--color-surface-light)); }
+  .settings-menu-row:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .settings-profile-row { padding-top: 16px; padding-bottom: 16px; }
+  .settings-logout { margin-top: 16px; }
+
+  .settings-detail { display: none; }
+  .settings-detail :global([role="switch"]) { flex-shrink: 0; }
+  .settings-detail :global(input),
+  .settings-detail :global(select),
+  .settings-detail :global(textarea) { min-width: 0; max-width: 100%; }
+  .settings-detail-content { max-width: 640px; margin: 0 auto; padding: 20px 16px; }
+  .settings-has-page .settings-menu { display: none; }
+  .settings-has-page .settings-detail { display: block; }
+  .settings-wide-title { display: none; }
+
+  @container settings (min-width: 700px) {
+    .settings-menu,
+    .settings-has-page .settings-menu {
+      display: block;
+      flex: 0 0 240px;
+      border-right: 1px solid rgb(var(--color-surface-lighter));
+      padding: 16px 12px;
+    }
+    .settings-menu-row[aria-current="page"] { background: rgb(var(--color-surface-light)); }
+    .settings-profile-row { gap: 10px; padding-left: 8px; padding-right: 8px; }
+    .settings-detail { display: block; flex: 1; }
+    .settings-detail-content { padding: 24px; }
+    .settings-wide-title { display: block; }
+    .settings-narrow-title { display: none; }
+  }
+</style>

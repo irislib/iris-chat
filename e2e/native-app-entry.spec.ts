@@ -345,5 +345,6 @@ test('choosing the browser preserves the shared chat without a download topbar a
   await page.screenshot({ path: `work/native-app-entry/${info.project.name}-browser-shared-chat.png` })
   if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Back', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'About', exact: true }).click()
   await expect(page.getByRole('link', { name: 'Get the native app', exact: true })).toHaveAttribute('href', downloads)
 })

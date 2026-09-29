@@ -36,6 +36,7 @@ async function loginWithStoredKey(page: import('@playwright/test').Page) {
 
 async function registerDevice(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
   await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   const registerButton = page.getByRole('button', { name: 'Register this device' })
   const thisDeviceLabel = page.getByText('This device').first()
@@ -60,6 +61,8 @@ async function registerDevice(page: import('@playwright/test').Page) {
     }
     // Button likely disappeared due to auto-registration; continue.
   }
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
 }
 
@@ -209,12 +212,15 @@ async function openLinkThisDevice(page: import('@playwright/test').Page): Promis
 
 async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl: string): Promise<void> {
   await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link code').fill(inviteUrl)
   await expect(page.getByRole('heading', { name: 'Link another device' })).toBeHidden({
     timeout: 750,
   })
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
 }
 

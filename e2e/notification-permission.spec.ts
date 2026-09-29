@@ -7,6 +7,7 @@ async function openSettings(page: Page) {
   await page.goto('/')
   await page.getByRole('button', { name: 'Go', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible()
 }
 

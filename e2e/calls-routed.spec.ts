@@ -40,11 +40,14 @@ test('two browsers route voice and video through an intermediate FIPS node when 
     await page.goto('/')
     await page.getByRole('button', { name: 'Go', exact: true }).click()
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
     const register = page.getByRole('button', { name: 'Register this device' })
     await expect(async () => {
       if (await register.isVisible()) await register.click()
       await expect(page.getByText('This device', { exact: true }).first()).toBeVisible({ timeout: 1000 })
     }).toPass({ timeout: 30000 })
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect(page).toHaveURL(/#settings$/)
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     return page
   }

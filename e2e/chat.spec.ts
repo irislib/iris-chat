@@ -49,6 +49,7 @@ async function registerDevice(page: Page): Promise<void> {
   }
 
   await settingsButton.click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
   await page
     .getByRole('heading', { name: 'Devices' })
     .waitFor({ state: 'visible', timeout: 10000 })
@@ -83,6 +84,8 @@ async function registerDevice(page: Page): Promise<void> {
       )
       .toBe(true)
   }
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
 }
 
@@ -1444,7 +1447,8 @@ test.describe('iris chat', () => {
       await page.goto('/')
       await page.getByRole('button', { name: 'Go' }).click()
       await page.getByRole('button', { name: 'Settings' }).click()
-      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Profile', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'View profile picture' })).toBeVisible()
 
       await page.getByRole('button', { name: 'View profile picture' }).click()
       await expect(page.locator('[data-testid="media-modal"]')).toBeVisible()

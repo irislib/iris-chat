@@ -130,12 +130,15 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     await page.goto('/')
     await page.getByRole('button', { name: 'Go', exact: true }).click()
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible()
     const register = page.getByRole('button', { name: 'Register this device' })
     await expect(async () => {
       if (await register.isVisible()) await register.click()
       await expect(page.getByText('This device', { exact: true }).first()).toBeVisible({ timeout: 1000 })
     }).toPass({ timeout: 30000 })
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect(page).toHaveURL(/#settings$/)
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     return page
   }
@@ -362,6 +365,7 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     await expect(b.getByTestId('call-history-row').last()).toContainText('Missed voice call')
     await b.screenshot({ path: 'work/calls/chat-call-history.png' })
     await b.getByRole('button', { name: 'Settings', exact: true }).click()
+    await b.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Calls', exact: true }).click()
     await b.getByRole('switch', { name: 'Video calls', exact: true }).click()
     await b.getByRole('switch', { name: 'Voice calls', exact: true }).click()
     await b.reload()

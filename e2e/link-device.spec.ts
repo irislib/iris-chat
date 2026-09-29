@@ -91,6 +91,7 @@ test('link another device closes on paste and logs the other browser in promptly
     expect(metadata.clientLabel).toBe('Iris Chat Web')
 
     await ownerPage.getByRole('button', { name: 'Settings' }).click()
+    await ownerPage.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
     await ownerPage.getByRole('button', { name: 'Link another device' }).click()
     await expect(ownerPage.getByRole('heading', { name: 'Link another device' })).toBeVisible()
 

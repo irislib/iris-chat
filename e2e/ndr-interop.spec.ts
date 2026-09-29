@@ -158,6 +158,7 @@ async function waitForWebDeviceRoster(page: Page, testRelay: TestRelay): Promise
 
 async function registerDevice(page: Page) {
   await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
   await page
     .getByRole('heading', { name: 'Devices' })
     .waitFor({ state: 'visible', timeout: 5000 })
@@ -184,6 +185,8 @@ async function registerDevice(page: Page) {
       throw error
     }
   }
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
 }
 
@@ -316,12 +319,15 @@ async function getLinkInviteUrl(page: Page): Promise<string> {
 
 async function acceptLinkInvite(page: Page, inviteUrl: string): Promise<void> {
   await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link code').fill(inviteUrl)
   await expect(page.getByRole('heading', { name: 'Link another device' })).toBeHidden({
     timeout: 750,
   })
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
 }
 

@@ -34,9 +34,10 @@ test.describe('Notifications', () => {
 
       // Click on avatar to go to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
-      // Should see Settings header
-      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+      // Should see the selected notification page
+      await expect(page).toHaveURL(/#settings\/notifications$/)
 
       // Should see notification section
       await expect(page.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible()
@@ -69,6 +70,7 @@ test.describe('Notifications', () => {
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
       // Notification API should show as Available (browsers support it)
       await expect(page.getByText('Available').first()).toBeVisible()
@@ -80,6 +82,7 @@ test.describe('Notifications', () => {
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
       // Advanced section should be collapsed
       await expect(page.getByText('Notification Server URL')).not.toBeVisible()
@@ -98,6 +101,7 @@ test.describe('Notifications', () => {
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
       // Expand advanced section
       await page.getByRole('button', { name: 'Advanced' }).click()
@@ -109,8 +113,9 @@ test.describe('Notifications', () => {
       // Reload page - settings page should still be shown (URL has #settings)
       await safeReload(page)
 
-      // Settings page should already be visible after reload
-      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+      // The selected settings page survives reload.
+      await expect(page).toHaveURL(/#settings\/notifications$/)
+      await expect(page.getByRole('heading', { name: 'Notifications', exact: true })).toBeVisible()
 
       // Expand advanced section again
       await page.getByRole('button', { name: 'Advanced' }).click()
@@ -126,6 +131,7 @@ test.describe('Notifications', () => {
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
       // Permission should show as Denied in headless browser
       await expect(page.getByText('Denied')).toBeVisible()
@@ -189,6 +195,7 @@ test.describe('Notifications', () => {
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
       // Test notification button should be disabled (permission is denied in headless)
       const testButton = page.getByRole('button', { name: 'Send Test Notification' })
@@ -203,6 +210,7 @@ test.describe('Notifications', () => {
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
       // Toggle should be in off state (aria-checked="false")
       const toggle = page.getByRole('switch', { name: 'Toggle DM notifications' })
@@ -217,6 +225,7 @@ test.describe('Notifications', () => {
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
       // Service Worker should show as Running
       await expect(page.getByText('Running')).toBeVisible()

@@ -1,7 +1,9 @@
 import { defineConfig, presetUno, presetIcons } from 'unocss'
 import transformerDirectives from '@unocss/transformer-directives'
+import { SETTINGS_PAGES } from './src/lib/settingsNavigation'
 
 export default defineConfig({
+  safelist: SETTINGS_PAGES.map(page => page.icon),
   presets: [
     presetUno(),
     presetIcons({

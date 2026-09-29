@@ -29,6 +29,7 @@ async function registerDevice(page: import('@playwright/test').Page): Promise<vo
   const settingsButton = page.getByRole('button', { name: 'Settings' })
   if (await settingsButton.count()) {
     await settingsButton.click()
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
     await page.getByRole('heading', { name: 'Devices' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
     const registerButton = page.getByRole('button', { name: 'Register this device' })
     const thisDeviceLabel = page.getByText('This device').first()
@@ -53,6 +54,8 @@ async function registerDevice(page: import('@playwright/test').Page): Promise<vo
       }
       // Button likely disappeared due to auto-registration; continue.
     }
+    await page.getByRole('button', { name: 'Back' }).click()
+    await expect(page).toHaveURL(/#settings$/)
     await page.getByRole('button', { name: 'Back' }).click()
   }
 }
