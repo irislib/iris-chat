@@ -44,6 +44,7 @@
     return invite && !isLinkInvite(invite) ? nativeAppChatHref(window.location.href) : null
   }
   let nativeEntryHref = $state(currentNativeEntryHref())
+  let nativeEntryIsDeviceLink = $state(isLinkInvite(parseInviteFromHash()))
   function clearNativeEntry() {
     if (nativeEntryHref) setHashSilently('')
     nativeEntryHref = null
@@ -555,7 +556,10 @@
   }
 </script>
 
-<svelte:window onhashchange={() => nativeEntryHref = currentNativeEntryHref()} />
+<svelte:window onhashchange={() => {
+  nativeEntryHref = currentNativeEntryHref()
+  nativeEntryIsDeviceLink = isLinkInvite(parseInviteFromHash())
+}} />
 
 <main class="min-h-[100dvh] h-[100dvh] bg-app text-apptext overflow-hidden">
   {#if initializing}
@@ -586,12 +590,10 @@
           <p class="text-gray-400 mt-2">Secure, private messaging</p>
         </div>
         <LoginView onlogin={handleLogin} />
-        <InstallPrompt entryHref={nativeEntryHref} />
       </div>
     </div>
   {:else}
     <div class="h-full flex flex-col">
-      <InstallPrompt entryHref={nativeEntryHref} compact />
       <!-- Notification prompt -->
       <NotificationPrompt />
 
@@ -661,5 +663,9 @@
   {/if}
 
 </main>
+
+{#if !initializing && !duplicateTab}
+  <InstallPrompt entryHref={nativeEntryHref} welcome={!loggedIn} excluded={nativeEntryIsDeviceLink} />
+{/if}
 
 <CallView />

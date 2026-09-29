@@ -12,27 +12,32 @@ import { test as base, type BrowserContext, type Page } from '@playwright/test'
 import { SilentTestRelay, TestRelay } from './test-relay'
 
 /**
- * Configure a browser context to use the test relay.
+ * Configure a browser context to use the test relay. Most scenarios exercise
+ * chat after the optional download suggestion was dismissed; its own suite
+ * opts into the real first-visit prompt with showNativeAppSuggestion.
  */
-export async function useTestRelay(context: BrowserContext, relayUrlOrUrls: string | string[]) {
+export async function useTestRelay(context: BrowserContext, relayUrlOrUrls: string | string[],
+  { showNativeAppSuggestion = false }: { showNativeAppSuggestion?: boolean } = {}) {
   const relayUrls = Array.isArray(relayUrlOrUrls) ? relayUrlOrUrls : [relayUrlOrUrls]
 
-  await context.addInitScript((urls: string[]) => {
+  await context.addInitScript(({ urls, showNativeAppSuggestion }) => {
     // Some initial documents (e.g. about:blank) have an opaque origin where
     // accessing localStorage throws a SecurityError. Ignore those and rely on
     // the init script running again for the real app origin.
     try {
       window.localStorage.setItem('iris-chat-relays', JSON.stringify(urls))
+      if (!showNativeAppSuggestion) window.localStorage.setItem('iris-native-app-suggestion', 'dismissed')
     } catch {
       // ignore
     }
-  }, relayUrls)
+  }, { urls: relayUrls, showNativeAppSuggestion })
 }
 
 export const test = base.extend<
-  { testRelayUrl: string; silentRelayUrl: string; testRelayUrls: string[] },
+  { testRelayUrl: string; silentRelayUrl: string; testRelayUrls: string[]; showNativeAppSuggestion: boolean },
   { testRelay: TestRelay; silentRelay: SilentTestRelay }
 >({
+  showNativeAppSuggestion: [false, { option: true }],
   // One relay per worker (isolated)
   testRelay: [async ({}, use) => {
     const relay = new TestRelay()
@@ -62,8 +67,8 @@ export const test = base.extend<
   },
 
   // Override page: configure relay on the page's context before use
-  page: async ({ page, testRelay }, use) => {
-    await useTestRelay(page.context(), testRelay.url)
+  page: async ({ page, testRelay, showNativeAppSuggestion }, use) => {
+    await useTestRelay(page.context(), testRelay.url, { showNativeAppSuggestion })
     await use(page)
   },
 })
