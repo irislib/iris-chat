@@ -34,3 +34,21 @@ it('closes desktop alerts on transition and respects denied permission', async (
   Object.defineProperty(Notification, 'permission', { value: 'denied' })
   alerts.update(call); await Promise.resolve(); expect(created).toHaveBeenCalledOnce()
 })
+it('opens the incoming caller chat from the browser notification fallback', async () => {
+  let notification!: { onclick: () => void }
+  const close = vi.fn(), focus = vi.fn(), location = { hash: '' }
+  vi.stubGlobal('window', { focus, location })
+  vi.stubGlobal('navigator', {})
+  vi.stubGlobal('Notification', class {
+    static permission = 'granted'; onclick = () => {}; close = close
+    constructor() { notification = this }
+  })
+  const alerts = new CallNotification()
+  alerts.update({ ...call, chatId: 'caller', ownerPubkey: 'me' })
+  await Promise.resolve()
+  notification.onclick()
+  expect(location.hash).toContain('#notification-')
+  expect(JSON.parse(decodeURIComponent(location.hash.slice('#notification-'.length)))).toEqual({ chatId: 'caller', ownerPubkey: 'me' })
+  expect(focus).toHaveBeenCalledOnce()
+  expect(close).toHaveBeenCalledOnce()
+})

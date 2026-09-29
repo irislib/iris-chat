@@ -32,3 +32,7 @@ export function setDraft(chatId: string, text: string): void {
 export function clearDraft(chatId: string): void {
   setDraft(chatId, '')
 }
+
+export function clearDrafts(): void {
+  drafts.set(new Map())
+}

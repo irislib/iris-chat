@@ -61,7 +61,7 @@
   }
 
   function handleLogout() {
-    if (confirm('Are you sure you want to logout?\n\nAll chats will be permanently deleted.')) {
+    if (confirm('Log out?\n\nYour profile and chats will be removed from this browser. Your other devices are not affected. Make sure you have your secret key or another linked device before continuing.')) {
       onLogout()
     }
   }
@@ -679,7 +679,7 @@
       {/each}
       <button class="settings-menu-row settings-logout text-red-400" onclick={handleLogout}>
         <span class="i-carbon-logout text-xl" aria-hidden="true"></span>
-        <span>Logout</span>
+        <span>Log out</span>
       </button>
     </nav>
 

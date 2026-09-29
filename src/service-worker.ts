@@ -16,6 +16,7 @@ import {
 import Dexie, { type Table } from 'dexie'
 import { getAnimalName } from './lib/animalNames'
 import { generateProxyUrl } from './lib/imgproxy'
+import { notificationHash, notificationTarget, type NotificationTarget } from './lib/notificationNavigation'
 
 // Avoid importing from profilePicture.ts here so the service worker doesn't pull in @hashtree/core.
 function isHashtreePicture(picture: string | undefined): boolean {
@@ -558,7 +559,7 @@ self.addEventListener('push', (event) => {
           badge: appLogoUrl,
           tag,
           silent: !rendered.durable,
-          data: { chatId: result.chatId }
+          data: { chatId: result.chatId, ownerPubkey: (await getOwnerPubkeyFromSessionManager()) ?? undefined }
         })
         return
       }
@@ -582,46 +583,40 @@ async function showFallbackNotification() {
   })
 }
 
-// Handle notification clicks
-self.addEventListener('notificationclick', (event) => {
-  const notification = event.notification
-  console.log('[sw] notification clicked, tag:', notification.tag, 'data:', notification.data)
-
-  const handleClick = async () => {
-    // Close notification inside waitUntil for browser compatibility
-    notification.close()
-    console.log('[sw] notification closed')
-
-    const chatId = notification.data?.chatId
-    console.log('[sw] handling click for chatId:', chatId)
-
-    const windowClients = await self.clients.matchAll({
-      type: 'window',
-      includeUncontrolled: true
-    })
-    console.log('[sw] found window clients:', windowClients.length)
-
-    // Try to focus an existing window
-    for (const client of windowClients) {
-      console.log('[sw] client url:', client.url, 'origin:', self.location.origin)
-      if (client.url.includes(self.location.origin) && 'focus' in client) {
-        console.log('[sw] focusing client and sending NOTIFICATION_CLICK')
-        // Use the client returned by focus() for postMessage
-        const focusedClient = await client.focus()
-        if (chatId && focusedClient) {
-          focusedClient.postMessage({ type: 'NOTIFICATION_CLICK', chatId })
-        }
-        return
-      }
+// Keep a running call intact: route through the live app when it acknowledges
+// the tap, falling back to a durable URL only if no app listener is ready.
+async function deliverNotificationTarget(client: WindowClient, target: NotificationTarget): Promise<boolean> {
+  return new Promise(resolve => {
+    const channel = new MessageChannel()
+    const finish = (received: boolean) => {
+      clearTimeout(timeout)
+      channel.port1.close()
+      channel.port2.close()
+      resolve(received)
     }
+    const timeout = setTimeout(() => finish(false), 1500)
+    channel.port1.onmessage = event => finish(event.data?.received === true)
+    try { client.postMessage({ type: 'NOTIFICATION_CLICK', target }, [channel.port2]) }
+    catch { finish(false) }
+  })
+}
 
-    // Open new window if no existing one
-    const url = chatId ? `/#chat-${chatId}` : '/'
-    console.log('[sw] no existing window, opening:', url)
-    await self.clients.openWindow(url)
-  }
-
-  event.waitUntil(handleClick())
+self.addEventListener('notificationclick', event => {
+  event.notification.close()
+  event.waitUntil((async () => {
+    const target = notificationTarget(event.notification.data)
+    const url = new URL(target ? notificationHash(target) : '/', self.location.origin + '/')
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const client of clients) {
+      if (new URL(client.url).origin !== self.location.origin) continue
+      try {
+        const focused = await client.focus()
+        if (target && !await deliverNotificationTarget(focused, target)) await focused.navigate(url.href)
+        return
+      } catch { /* Try another window, or open one if this window closed. */ }
+    }
+    await self.clients.openWindow(url.href)
+  })())
 })
 
 // Listen for messages from client
@@ -638,6 +633,6 @@ self.addEventListener('message', (event) => {
       .then(notifications => notifications.forEach(n => n.close()))
     // Also try without tag filter as fallback
     self.registration.getNotifications()
-      .then(notifications => notifications.filter(n => n.tag === tag).forEach(n => n.close()))
+      .then(notifications => notifications.filter(n => n.tag === tag || notificationTarget(n.data)?.chatId === event.data.chatId).forEach(n => n.close()))
   }
 })

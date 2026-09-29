@@ -11,6 +11,8 @@
   import InstallPrompt from './components/InstallPrompt.svelte'
   import { nativeAppChatHref } from './lib/nativeApp'
   import { identity, autoLogin, logout } from './lib/identity'
+  import { notificationTarget, notificationFromHash, resolveNotificationTarget, type NotificationTarget } from './lib/notificationNavigation'
+  import { clearDrafts } from './lib/drafts'
   import { parseInviteFromHash, isLinkInvite, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToNdrRuntime } from './lib/disappearingMessages'
@@ -60,6 +62,28 @@
   // Mobile: which panel to show - 'sidebar' or 'main'
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
   let duplicateTab = $state(false)
+  let pendingNotification = $state<NotificationTarget | null>(notificationFromHash(window.location.hash))
+
+  // A notification may arrive before identity, chats, or groups have loaded.
+  $effect(() => {
+    const target = pendingNotification
+    const owner = $identity?.pubkey
+    if (!target || !loggedIn || initializing || !owner) return
+    const destination = resolveNotificationTarget(target, owner, new Set($chats.keys()), new Set($groups.keys()))
+    if (destination === 'pending') return
+    pendingNotification = null
+    if (destination === 'discard') {
+      if (notificationFromHash(window.location.hash)) setHashSilently('')
+      return
+    }
+    selectedGroupId = destination === 'group' ? target.chatId : null
+    selectedChat = destination === 'chat' ? $chats.get(target.chatId)! : null
+    currentChat.set(selectedChat)
+    navigateTo('chat', false, undefined, selectedGroupId ?? undefined)
+    mobileView = 'main'
+    postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: target.chatId })
+  })
+
   let deviceRemovalLogoutRequested = false
   let deviceRemovalLogoutInProgress = false
 
@@ -77,7 +101,7 @@
 
   // Notify service worker when chat is opened/closed
   $effect(() => {
-    const chatId = selectedChat?.id || null
+    const chatId = selectedGroupId || selectedChat?.id || null
     postToServiceWorker({ type: 'CHAT_OPENED', chatId })
   })
 
@@ -108,6 +132,7 @@
 
   // Navigate to a view with history
   function navigateTo(view: View, push = true, pubkey?: string, groupId?: string) {
+    pendingNotification = null
     clearNativeEntry()
     currentView = view
     settingsPage = null
@@ -135,6 +160,11 @@
   }
 
   onMount(() => {
+    const handleNotificationHash = () => {
+      const target = notificationFromHash(window.location.hash)
+      if (target) pendingNotification = target
+    }
+    window.addEventListener('hashchange', handleNotificationHash)
     let cleanup: (() => void) | undefined
     const stopFollowing = initFollowing()
     const stopCurrentDeviceRemovalLogout = onCurrentDeviceRemovedFromRoster(() => {
@@ -193,6 +223,7 @@
 
     // Listen for browser back/forward
     const handlePopState = () => {
+      if (notificationFromHash(window.location.hash)) { handleNotificationHash(); return }
       const hashState = getViewFromHash()
       currentView = hashState.view
       settingsPage = hashState.settingsPage ?? null
@@ -218,23 +249,11 @@
 
     // Listen for notification clicks from service worker
     const handleServiceWorkerMessage = (event: MessageEvent) => {
-      console.log('[app] received service worker message:', event.data)
-      if (event.data?.type === 'NOTIFICATION_CLICK' && event.data?.chatId) {
-        const chatMap = get(chats)
-        console.log('[app] looking for chat:', event.data.chatId, 'in', Array.from(chatMap.keys()))
-        const chat = chatMap.get(event.data.chatId)
-        if (chat) {
-          console.log('[app] found chat, selecting it')
-          selectedChat = chat
-          currentChat.set(chat)
-          currentView = 'chat'
-          mobileView = 'main'
-          // Tell service worker this chat is now open
-          postToServiceWorker({ type: 'CHAT_OPENED', chatId: chat.id })
-          // Clear any remaining notifications for this chat
-          postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
-        } else {
-          console.log('[app] chat not found in map')
+      if (event.data?.type === 'NOTIFICATION_CLICK') {
+        const target = notificationTarget(event.data.target ?? event.data)
+        if (target) {
+          pendingNotification = target
+          event.ports[0]?.postMessage({ received: true })
         }
       }
       if (event.data?.type === PUSH_NOSTR_EVENT_MESSAGE && event.data?.event && loggedIn) {
@@ -246,7 +265,7 @@
     // Handle GET_OPEN_CHAT queries from service worker (via MessageChannel)
     const handleGetOpenChat = (event: MessageEvent) => {
       if (event.data?.type === 'GET_OPEN_CHAT' && event.ports[0]) {
-        const chatId = document.visibilityState === 'visible' ? (selectedChat?.id || null) : null
+        const chatId = document.visibilityState === 'visible' ? (selectedGroupId || selectedChat?.id || null) : null
         console.log('[app] GET_OPEN_CHAT response:', chatId)
         event.ports[0].postMessage({ chatId })
       }
@@ -306,24 +325,7 @@
         mobileView = 'main'
       }
 
-      // Check for chat hash from notification click (e.g., #chat-{pubkey})
-      const hash = window.location.hash
-      if (hash.startsWith('#chat-')) {
-        const chatId = hash.slice(6) // Remove '#chat-'
-        const chatMap = get(chats)
-        const chat = chatMap.get(chatId)
-        if (chat) {
-          selectedChat = chat
-          currentChat.set(chat)
-          mobileView = 'main'
-          // Clear the hash
-          history.replaceState(null, '', window.location.pathname)
-          // Tell service worker this chat is now open
-          postToServiceWorker({ type: 'CHAT_OPENED', chatId: chat.id })
-          // Clear any notifications for this chat
-          postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: chat.id })
-        }
-      }
+
     }
 
     initializing = false
@@ -352,7 +354,7 @@
     }
     })()
 
-    return () => cleanup?.()
+    return () => { window.removeEventListener('hashchange', handleNotificationHash); cleanup?.() }
   })
 
   async function handleLogin() {
@@ -540,13 +542,18 @@
   }
 
   async function handleLogout() {
+    pendingNotification = null
     stopMessageExpirationCleanup()
     await stopDeviceSync()
-    logout()
     leaveChat()
-    await clearChatData()
     clearGroupData()
     resetManagers()
+    logout()
+    await clearChatData()
+    clearDrafts()
+    // Prevent a previous profile's alerts remaining after this browser signs out.
+    const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined)
+    await registration?.getNotifications().then(items => items.forEach(item => item.close())).catch(() => {})
     loggedIn = false
     selectedChat = null
     selectedGroupId = null

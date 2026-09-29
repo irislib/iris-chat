@@ -71,7 +71,7 @@
             onclick={() => { onlogout(); closeUserMenu(); }}
           >
             <span class="i-carbon-logout"></span>
-            Logout
+            Log out
           </button>
         </div>
       {/if}

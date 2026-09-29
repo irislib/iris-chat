@@ -27,7 +27,7 @@ export default defineConfig({
     },
     {
       name: 'webkit-notifications',
-      testMatch: 'notification-permission.spec.ts',
+      testMatch: ['notification-permission.spec.ts', 'notification-navigation.spec.ts'],
       use: { ...devices['iPhone 13'], defaultBrowserType: 'webkit' },
     },
     {

@@ -1248,7 +1248,8 @@ export function clearGroupData(): void {
     clearRemoteTyping(`group:${groupId}`)
   }
 
-  void getNdrRuntime().syncGroups([]).catch(() => {})
+  // Logout tears down the runtime separately. Do not recreate it after the
+  // identity has been cleared or publish an empty group list to other devices.
   groupRosterFactSyncCleanup?.()
   groupRosterFactSyncCleanup = null
   groupRosterFactSyncOwner = null

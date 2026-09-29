@@ -1,8 +1,10 @@
+import { notificationHash } from './notificationNavigation'
+
 /** One OS alert per incoming call, including cancellation during async delivery. */
 export class CallNotification {
   private current?: { id: string; close?: () => void }
 
-  update(call: { id: string; name: string; video: boolean; chatId?: string } | null) {
+  update(call: { id: string; name: string; video: boolean; chatId?: string; ownerPubkey?: string } | null) {
     if (call && this.current?.id === call.id) return
     this.clear()
     if (!call || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
@@ -12,7 +14,7 @@ export class CallNotification {
     const options: NotificationOptions = {
       body: call.video ? 'Incoming video call' : 'Incoming voice call',
       tag, icon: '/img/android-chrome-192x192.png', silent: true, requireInteraction: true,
-      data: { chatId: call.chatId, callId: call.id },
+      data: { chatId: call.chatId, ownerPubkey: call.ownerPubkey, callId: call.id },
     }
     void (async () => {
       try {
@@ -26,7 +28,11 @@ export class CallNotification {
         } else {
           const notification = new Notification(call.name, options)
           alert.close = () => notification.close()
-          notification.onclick = () => { window.focus(); notification.close() }
+          notification.onclick = () => {
+            if (call.chatId) window.location.hash = notificationHash({ chatId: call.chatId, ownerPubkey: call.ownerPubkey })
+            window.focus()
+            notification.close()
+          }
         }
       } catch { /* Permission or OS support may change while the call rings. */ }
     })()
