@@ -29,7 +29,7 @@ vi.mock('./identity', async () => {
 })
 vi.mock('./devices', () => ({ devices: { reset: vi.fn() } }))
 vi.mock('./relayStore', () => ({ relayStore: { getState: () => ({ relays: [] }) } }))
-vi.mock('./sessionManagerStorage', () => ({ DexieStorageAdapter: class {} }))
+vi.mock('./sessionManagerStorage', () => ({ DexieStorageAdapter: class { close() {} } }))
 vi.mock('./deviceLabels', () => ({ getCurrentDeviceRegistrationLabels: async () => ({}), getLinkedDeviceRegistrationLabels: async () => ({}) }))
 vi.mock('./runtimeSubscribe', () => ({ createRuntimeSubscribe: vi.fn() }))
 vi.mock('./runtimePublish', () => ({ createRuntimePublish: () => ({ start() {}, close() {}, enqueue: vi.fn(), publish: vi.fn() }) }))

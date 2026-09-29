@@ -9,6 +9,11 @@ overrides:
   '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
   serialize-javascript: 7.0.5
 
+patchedDependencies:
+  nostr-double-ratchet@0.0.172:
+    hash: 129ff08f1951eafa6f5f0451fe5839fd810e69f58818515fd9ea726d5ad63dfd
+    path: patches/nostr-double-ratchet@0.0.172.patch
+
 importers:
 
   .:
@@ -54,7 +59,7 @@ importers:
         version: 4.2.1
       nostr-double-ratchet:
         specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz
-        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(typescript@5.9.3)
+        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(patch_hash=129ff08f1951eafa6f5f0451fe5839fd810e69f58818515fd9ea726d5ad63dfd)(typescript@5.9.3)
       nostr-pubsub:
         specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz
         version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz(nostr-tools@2.23.12(typescript@5.9.3))
@@ -5508,7 +5513,7 @@ snapshots:
 
   node-releases@2.0.51: {}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(typescript@5.9.3):
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.172/nostr-double-ratchet-0.0.172.tgz(patch_hash=129ff08f1951eafa6f5f0451fe5839fd810e69f58818515fd9ea726d5ad63dfd)(typescript@5.9.3):
     dependencies:
       '@noble/curves': 2.0.1
       nostr-tools: 2.23.12(typescript@5.9.3)

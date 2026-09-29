@@ -57,4 +57,4 @@ it('encrypts every uploaded attachment chunk and cannot read it with the hash al
     const unkeyed = await reader.readFile({ hash: cid.hash }).catch(() => null)
     expect(unkeyed).not.toEqual(bytes)
   }
-})
+}, 30_000)

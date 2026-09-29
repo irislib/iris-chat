@@ -1,0 +1,1808 @@
+diff --git a/src/GroupChannel.ts b/src/GroupChannel.ts
+index b522256..e5df488 100644
+--- a/src/GroupChannel.ts
++++ b/src/GroupChannel.ts
+@@ -201,6 +201,9 @@ export class Group extends GroupSending {
+       );
+       return null;
+     }
++    // The local sending chain has already advanced past its own relay echoes.
++    if (senderDevicePubkey === this.ourDevicePubkey &&
++        await this.storage.get(this.senderEventSecretKeyKey(senderDevicePubkey))) return null;
+     if (!this.isSenderDeviceActive(senderDevicePubkey)) {
+       await this.removeSenderDeviceState(senderDevicePubkey);
+       return null;
+diff --git a/src/MessageQueue.ts b/src/MessageQueue.ts
+index ec2e085..fb95aea 100644
+--- a/src/MessageQueue.ts
++++ b/src/MessageQueue.ts
+@@ -28,6 +28,7 @@ export class MessageQueue {
+     const keys = await this.storage.list(this.prefix)
+     const entries: QueueEntry[] = []
+     for (const key of keys) {
++      if (!key.endsWith(`/${targetKey}`)) continue
+       const entry = await this.storage.get<QueueEntry>(key)
+       if (entry && entry.targetKey === targetKey) {
+         entries.push(entry)
+@@ -52,6 +53,7 @@ export class MessageQueue {
+   async removeForTarget(targetKey: string): Promise<void> {
+     const keys = await this.storage.list(this.prefix)
+     for (const key of keys) {
++      if (!key.endsWith(`/${targetKey}`)) continue
+       const entry = await this.storage.get<QueueEntry>(key)
+       if (entry && entry.targetKey === targetKey) {
+         await this.storage.del(key)
+diff --git a/src/RuntimeGroupController.ts b/src/RuntimeGroupController.ts
+index 843ede4..c64f237 100644
+--- a/src/RuntimeGroupController.ts
++++ b/src/RuntimeGroupController.ts
+@@ -229,7 +229,7 @@ export class SessionGroupRuntime {
+       nowMs: opts.nowMs,
+       sendPairwise: async (recipientOwnerPubkey, rumor) => {
+         const manager = await this.waitForSessionManagerFn();
+-        await manager.sendEvent(recipientOwnerPubkey, rumor);
++        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
+       },
+     });
+   }
+@@ -244,7 +244,7 @@ export class SessionGroupRuntime {
+       nowMs: opts.nowMs,
+       sendPairwise: async (recipientOwnerPubkey, rumor) => {
+         const manager = await this.waitForSessionManagerFn();
+-        await manager.sendEvent(recipientOwnerPubkey, rumor);
++        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
+       },
+       publishOuter: this.nostrPublish,
+     });
+diff --git a/src/SessionManager.ts b/src/SessionManager.ts
+index d8b616c..c6f88f5 100644
+--- a/src/SessionManager.ts
++++ b/src/SessionManager.ts
+@@ -82,17 +82,17 @@ export class SessionManager extends SessionManagerInvites {
+   async sendEvent(
+     recipientIdentityKey: string,
+     event: Partial<Rumor>,
++    options: { includeLocalSiblings?: boolean } = {},
+   ): Promise<Rumor | undefined> {
+     await this.init();
+ 
+-    await Promise.allSettled([
+-      this.setupUser(recipientIdentityKey),
+-      this.setupUser(this.ownerPublicKey),
+-    ]);
++    const targets = new Set([recipientIdentityKey]);
++    // Group fanout includes our owner explicitly, so it needs only one self-copy.
++    if (options.includeLocalSiblings !== false) targets.add(this.ownerPublicKey);
++    await Promise.allSettled(Array.from(targets, (target) => this.setupUser(target)));
+ 
+     // Queue event for devices that don't have sessions yet
+     const completeEvent = event as Rumor;
+-    const targets = new Set([recipientIdentityKey, this.ownerPublicKey]);
+     const queuedDeviceIds = new Set<string>();
+     for (const target of targets) {
+       const userRecord = this.userRecords.get(target);
+@@ -122,20 +122,10 @@ export class SessionManager extends SessionManagerInvites {
+       }
+     }
+ 
+-    const userRecord = this.getOrCreateUserRecord(recipientIdentityKey);
+-    // Use ownerPublicKey to find sibling devices (important for delegates)
+-    const ourUserRecord = this.getOrCreateUserRecord(this.ownerPublicKey);
+-
+-    const recipientDevices = Array.from(userRecord.devices.values());
+-    const ownDevices = Array.from(ourUserRecord.devices.values());
+-
+-    // Merge and deduplicate by deviceId, excluding our own sending device
+-    // This fixes the self-message bug where sending to yourself would duplicate devices
+     const deviceMap = new Map<string, DeviceRecord>();
+-    for (const d of [...recipientDevices, ...ownDevices]) {
+-      if (d.deviceId !== this.deviceId) {
+-        // Exclude sender's own device
+-        deviceMap.set(d.deviceId, d);
++    for (const target of targets) {
++      for (const device of this.getOrCreateUserRecord(target).devices.values()) {
++        if (device.deviceId !== this.deviceId) deviceMap.set(device.deviceId, device);
+       }
+     }
+     const devices = Array.from(deviceMap.values());
+@@ -165,11 +155,8 @@ export class SessionManager extends SessionManagerInvites {
+       sentDeviceIds.push(device.deviceId);
+     }
+ 
+-    // Persist recipient + owner records before publishing (best-effort).
+-    await this.storeUserRecord(recipientIdentityKey).catch(() => {});
+-    if (this.ownerPublicKey !== recipientIdentityKey) {
+-      await this.storeUserRecord(this.ownerPublicKey).catch(() => {});
+-    }
++    // Persist each target's ratchet state before publishing (best-effort).
++    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target).catch(() => {})));
+ 
+     await Promise.allSettled(
+       toPublish.map((evt, i) =>
+diff --git a/src/group/GroupSenderKeys.ts b/src/group/GroupSenderKeys.ts
+index 9287c45..74226fa 100644
+--- a/src/group/GroupSenderKeys.ts
++++ b/src/group/GroupSenderKeys.ts
+@@ -152,6 +152,7 @@ export abstract class GroupSenderKeys extends GroupState {
+       keyId: dist.keyId >>> 0,
+       distribution: { ...dist },
+       recipients: uniqueRecipients,
++      pendingRecipients: uniqueRecipients,
+     });
+     await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
+   }
+diff --git a/src/group/GroupSending.ts b/src/group/GroupSending.ts
+index e92b57a..a05bef8 100644
+--- a/src/group/GroupSending.ts
++++ b/src/group/GroupSending.ts
+@@ -30,6 +30,26 @@ export abstract class GroupSending extends GroupSenderKeys {
+     }
+   }
+ 
++  private async flushSenderKeyDistributions(sendPairwise: PairwiseSend): Promise<void> {
++    const snapshots = (await this.loadSenderKeyRepairSnapshots(this.ourDevicePubkey))
++      .map((snapshot) => ({ ...snapshot }));
++    let changed = false;
++    for (const snapshot of snapshots) {
++      // Older snapshots did not track handoff success; retry their original recipients once.
++      const pending = snapshot.pendingRecipients ?? snapshot.recipients;
++      if (!pending.length) continue;
++      const recipients = pending.filter((recipient) =>
++        snapshot.recipients.includes(recipient) && this.isMemberOwnerPubkey(recipient),
++      );
++      const dist = snapshot.distribution;
++      const rumor = this.buildDistributionRumor(dist.createdAt, dist.createdAt * 1000, dist);
++      const results = await Promise.allSettled(recipients.map((recipient) => sendPairwise(recipient, rumor)));
++      snapshot.pendingRecipients = recipients.filter((_, index) => results[index].status === "rejected");
++      changed = true;
++    }
++    if (changed) await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
++  }
++
+   /**
+    * Rotate our sender key (new keyId + chain key) and distribute it to group members.
+    */
+@@ -48,15 +68,12 @@ export abstract class GroupSending extends GroupSenderKeys {
+     const { state } = await this.ensureOurSenderKeyState(true);
+ 
+     const dist = this.buildDistribution(nowSeconds, senderEventPubkey, state);
+-    const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
+ 
+     // Include our owner so sibling devices on the same account can decrypt
+     // subsequent outer messages in self-only and multi-device group chats.
+     await this.recordSenderKeyRepairSnapshot(dist, recipients);
+     this.assertCurrentRecipients(recipients);
+-    await Promise.allSettled(
+-      recipients.map((pk) => opts.sendPairwise(pk, rumor)),
+-    );
++    await this.flushSenderKeyDistributions(opts.sendPairwise);
+     this.assertCurrentRecipients(recipients);
+ 
+     return dist;
+@@ -100,14 +117,11 @@ export abstract class GroupSending extends GroupSenderKeys {
+         senderEventPubkey,
+         senderKey,
+       );
+-      const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
+       await this.recordSenderKeyRepairSnapshot(dist, recipients);
+-      this.assertCurrentRecipients(recipients);
+-      await Promise.allSettled(
+-        recipients.map((pk) => opts.sendPairwise(pk, rumor)),
+-      );
+     }
+ 
++    this.assertCurrentRecipients(recipients);
++    await this.flushSenderKeyDistributions(opts.sendPairwise);
+     this.assertCurrentRecipients(recipients);
+     const inner = this.buildGroupInnerRumor(nowSeconds, nowMs, event);
+     const innerJson = JSON.stringify(inner);
+diff --git a/src/group/groupInternals.ts b/src/group/groupInternals.ts
+index 3b7bd81..7a4ea99 100644
+--- a/src/group/groupInternals.ts
++++ b/src/group/groupInternals.ts
+@@ -4,6 +4,8 @@ export interface SenderKeyRepairSnapshot {
+   keyId: number;
+   distribution: SenderKeyDistribution;
+   recipients: string[];
++  /** Recipients whose key distribution has not reached the durable pairwise queue. */
++  pendingRecipients?: string[];
+ }
+ 
+ export function randomU32(): number {
+diff --git a/src/session-manager/DeviceRecordActor.ts b/src/session-manager/DeviceRecordActor.ts
+index 190b249..2f3c72e 100644
+--- a/src/session-manager/DeviceRecordActor.ts
++++ b/src/session-manager/DeviceRecordActor.ts
+@@ -29,6 +29,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
+   private ensurePromise?: Promise<void>
+   private inviteSubscription?: Unsubscribe
+   private inviteAcceptancePromise?: Promise<Session>
++  private failedReceiveAttempts = new WeakMap<VerifiedEvent, WeakMap<Session, string>>()
+ 
+   constructor(
+     public readonly deviceId: string,
+@@ -316,18 +317,39 @@ export class DeviceRecordActor implements DeviceRecordShape {
+     sessions.push(...this.inactiveSessions)
+ 
+     const seenSessionNames = new Set<string>()
++    let failedSessions = this.failedReceiveAttempts.get(event)
++    if (!failedSessions) {
++      failedSessions = new WeakMap()
++      this.failedReceiveAttempts.set(event, failedSessions)
++    }
+     for (const session of sessions) {
+       if (seenSessionNames.has(session.name)) {
+         continue
+       }
+       seenSessionNames.add(session.name)
+ 
++      // Startup replays pending envelopes after many independent roster/storage
++      // callbacks. A rejected envelope cannot decrypt with unchanged receive
++      // keys. Keep weak references so removing pending events or sessions also
++      // removes this memo; new sessions and ratchet advances are retried.
++      const state = session.state
++      const receiveState = [
++        state.ourCurrentNostrKey?.publicKey,
++        state.ourNextNostrKey.publicKey,
++        state.theirCurrentNostrPublicKey,
++        state.theirNextNostrPublicKey,
++        state.receivingChainMessageNumber,
++      ].join(":")
++      if (failedSessions.get(session) === receiveState) continue
++
+       let rumor: Rumor | undefined
+       try {
+         rumor = session.receiveEvent(event)
+       } catch {
++        failedSessions.set(session, receiveState)
+         continue
+       }
++      if (!rumor) failedSessions.set(session, receiveState)
+       if (rumor && this.handleSessionRumor(session, rumor, event)) {
+         return true
+       }
+diff --git a/dist/GroupChannel.d.ts.map b/dist/GroupChannel.d.ts.map
+index d2f2c5d..7e329de 100644
+--- a/dist/GroupChannel.d.ts.map
++++ b/dist/GroupChannel.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"GroupChannel.d.ts","sourceRoot":"","sources":["../src/GroupChannel.ts"],"names":[],"mappings":"AAAA,OAAO,EAA6B,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAC5E,OAAO,EAGL,KAAK,SAAS,EACf,MAAM,gBAAgB,CAAC;AACxB,OAAO,EAIL,KAAK,aAAa,EACnB,MAAM,oBAAoB,CAAC;AAC5B,OAAO,EAAE,gBAAgB,EAAE,MAAM,uBAAuB,CAAC;AAIzD,OAAO,EAAE,KAAK,cAAc,EAAE,MAAM,qBAAqB,CAAC;AAC1D,OAAO,EAAyC,KAAK,KAAK,EAAE,KAAK,qBAAqB,EAAE,MAAM,YAAY,CAAC;AAC3G,OAAO,EAAE,YAAY,EAAE,MAAM,yBAAyB,CAAC;AAGvD,MAAM,MAAM,YAAY,GAAG,CACzB,oBAAoB,EAAE,MAAM,EAC5B,KAAK,EAAE,KAAK,KACT,OAAO,CAAC,IAAI,CAAC,CAAC;AACnB,MAAM,MAAM,YAAY,GAAG,CACzB,KAAK,EAAE,aAAa,EACpB,YAAY,CAAC,EAAE,MAAM,KAClB,OAAO,CAAC,OAAO,CAAC,CAAC;AAEtB,MAAM,WAAW,YAAa,SAAQ,qBAAqB;IACzD,IAAI,EAAE,SAAS,CAAC;IAChB,uFAAuF;IACvF,cAAc,EAAE,MAAM,CAAC;IACvB,iFAAiF;IACjF,eAAe,EAAE,MAAM,CAAC;IACxB,OAAO,CAAC,EAAE,cAAc,CAAC;IACzB,SAAS,CAAC,EAAE,gBAAgB,CAAC;CAC9B;AAED,MAAM,WAAW,mBAAmB;IAClC,OAAO,EAAE,MAAM,CAAC;IAChB,iBAAiB,EAAE,MAAM,CAAC;IAC1B,kBAAkB,EAAE,MAAM,CAAC;IAC3B,iBAAiB,CAAC,EAAE,MAAM,CAAC;IAC3B,MAAM,EAAE,aAAa,CAAC;IACtB,MAAM,EAAE,OAAO,CAAC;IAChB,iBAAiB,EAAE,OAAO,CAAC;IAC3B,YAAY,EAAE,MAAM,CAAC;IACrB,cAAc,EAAE,MAAM,CAAC;IACvB,KAAK,EAAE,MAAM,CAAC;IACd,aAAa,EAAE,MAAM,CAAC;IACtB,KAAK,EAAE,KAAK,CAAC;CACd;AAUD;;;;;;;;;;;;GAYG;AAEH,qBAAa,KAAM,SAAQ,YAAY;IACrC;;;OAGG;IACG,0BAA0B,CAC9B,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,EACvB,sBAAsB,CAAC,EAAE,MAAM,GAC9B,OAAO,CAAC,mBAAmB,EAAE,CAAC;IAuFjC;;;OAGG;IACG,gBAAgB,CACpB,KAAK,EAAE,aAAa,GACnB,OAAO,CAAC,mBAAmB,GAAG,IAAI,CAAC;CA+HvC"}
+\ No newline at end of file
++{"version":3,"file":"GroupChannel.d.ts","sourceRoot":"","sources":["../src/GroupChannel.ts"],"names":[],"mappings":"AAAA,OAAO,EAA6B,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAC5E,OAAO,EAGL,KAAK,SAAS,EACf,MAAM,gBAAgB,CAAC;AACxB,OAAO,EAIL,KAAK,aAAa,EACnB,MAAM,oBAAoB,CAAC;AAC5B,OAAO,EAAE,gBAAgB,EAAE,MAAM,uBAAuB,CAAC;AAIzD,OAAO,EAAE,KAAK,cAAc,EAAE,MAAM,qBAAqB,CAAC;AAC1D,OAAO,EAAyC,KAAK,KAAK,EAAE,KAAK,qBAAqB,EAAE,MAAM,YAAY,CAAC;AAC3G,OAAO,EAAE,YAAY,EAAE,MAAM,yBAAyB,CAAC;AAGvD,MAAM,MAAM,YAAY,GAAG,CACzB,oBAAoB,EAAE,MAAM,EAC5B,KAAK,EAAE,KAAK,KACT,OAAO,CAAC,IAAI,CAAC,CAAC;AACnB,MAAM,MAAM,YAAY,GAAG,CACzB,KAAK,EAAE,aAAa,EACpB,YAAY,CAAC,EAAE,MAAM,KAClB,OAAO,CAAC,OAAO,CAAC,CAAC;AAEtB,MAAM,WAAW,YAAa,SAAQ,qBAAqB;IACzD,IAAI,EAAE,SAAS,CAAC;IAChB,uFAAuF;IACvF,cAAc,EAAE,MAAM,CAAC;IACvB,iFAAiF;IACjF,eAAe,EAAE,MAAM,CAAC;IACxB,OAAO,CAAC,EAAE,cAAc,CAAC;IACzB,SAAS,CAAC,EAAE,gBAAgB,CAAC;CAC9B;AAED,MAAM,WAAW,mBAAmB;IAClC,OAAO,EAAE,MAAM,CAAC;IAChB,iBAAiB,EAAE,MAAM,CAAC;IAC1B,kBAAkB,EAAE,MAAM,CAAC;IAC3B,iBAAiB,CAAC,EAAE,MAAM,CAAC;IAC3B,MAAM,EAAE,aAAa,CAAC;IACtB,MAAM,EAAE,OAAO,CAAC;IAChB,iBAAiB,EAAE,OAAO,CAAC;IAC3B,YAAY,EAAE,MAAM,CAAC;IACrB,cAAc,EAAE,MAAM,CAAC;IACvB,KAAK,EAAE,MAAM,CAAC;IACd,aAAa,EAAE,MAAM,CAAC;IACtB,KAAK,EAAE,KAAK,CAAC;CACd;AAUD;;;;;;;;;;;;GAYG;AAEH,qBAAa,KAAM,SAAQ,YAAY;IACrC;;;OAGG;IACG,0BAA0B,CAC9B,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,EACvB,sBAAsB,CAAC,EAAE,MAAM,GAC9B,OAAO,CAAC,mBAAmB,EAAE,CAAC;IAuFjC;;;OAGG;IACG,gBAAgB,CACpB,KAAK,EAAE,aAAa,GACnB,OAAO,CAAC,mBAAmB,GAAG,IAAI,CAAC;CAkIvC"}
+\ No newline at end of file
+diff --git a/dist/MessageQueue.d.ts.map b/dist/MessageQueue.d.ts.map
+index d0dec79..5eb1a07 100644
+--- a/dist/MessageQueue.d.ts.map
++++ b/dist/MessageQueue.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"MessageQueue.d.ts","sourceRoot":"","sources":["../src/MessageQueue.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,cAAc,EAAE,MAAM,qBAAqB,CAAA;AACpD,OAAO,EAAE,KAAK,EAAE,MAAM,YAAY,CAAA;AAElC,MAAM,WAAW,UAAU;IACzB,EAAE,EAAE,MAAM,CAAA;IACV,SAAS,EAAE,MAAM,CAAA;IACjB,KAAK,EAAE,KAAK,CAAA;IACZ,SAAS,EAAE,MAAM,CAAA;CAClB;AAED,qBAAa,YAAY;IACvB,OAAO,CAAC,OAAO,CAAgB;IAC/B,OAAO,CAAC,MAAM,CAAQ;gBAEV,OAAO,EAAE,cAAc,EAAE,MAAM,EAAE,MAAM;IAK7C,GAAG,CAAC,SAAS,EAAE,MAAM,EAAE,KAAK,EAAE,KAAK,GAAG,OAAO,CAAC,MAAM,CAAC;IAOrD,YAAY,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,UAAU,EAAE,CAAC;IAatD,OAAO,IAAI,OAAO,CAAC,UAAU,EAAE,CAAC;IAYhC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IAUjD,wBAAwB,CAAC,SAAS,EAAE,MAAM,EAAE,OAAO,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IAI3E,MAAM,CAAC,EAAE,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CAGxC"}
+\ No newline at end of file
++{"version":3,"file":"MessageQueue.d.ts","sourceRoot":"","sources":["../src/MessageQueue.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,cAAc,EAAE,MAAM,qBAAqB,CAAA;AACpD,OAAO,EAAE,KAAK,EAAE,MAAM,YAAY,CAAA;AAElC,MAAM,WAAW,UAAU;IACzB,EAAE,EAAE,MAAM,CAAA;IACV,SAAS,EAAE,MAAM,CAAA;IACjB,KAAK,EAAE,KAAK,CAAA;IACZ,SAAS,EAAE,MAAM,CAAA;CAClB;AAED,qBAAa,YAAY;IACvB,OAAO,CAAC,OAAO,CAAgB;IAC/B,OAAO,CAAC,MAAM,CAAQ;gBAEV,OAAO,EAAE,cAAc,EAAE,MAAM,EAAE,MAAM;IAK7C,GAAG,CAAC,SAAS,EAAE,MAAM,EAAE,KAAK,EAAE,KAAK,GAAG,OAAO,CAAC,MAAM,CAAC;IAOrD,YAAY,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,UAAU,EAAE,CAAC;IActD,OAAO,IAAI,OAAO,CAAC,UAAU,EAAE,CAAC;IAYhC,eAAe,CAAC,SAAS,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IAWjD,wBAAwB,CAAC,SAAS,EAAE,MAAM,EAAE,OAAO,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;IAI3E,MAAM,CAAC,EAAE,EAAE,MAAM,GAAG,OAAO,CAAC,IAAI,CAAC;CAGxC"}
+\ No newline at end of file
+diff --git a/dist/SessionManager.d.ts b/dist/SessionManager.d.ts
+index a07a179..e547849 100644
+--- a/dist/SessionManager.d.ts
++++ b/dist/SessionManager.d.ts
+@@ -11,7 +11,9 @@ export interface SendMessageOptions extends ExpirationOptions {
+ }
+ export declare class SessionManager extends SessionManagerInvites {
+     static createForRuntime(ourPublicKey: string, identityKey: IdentityKey, deviceId: string, ownerPublicKey: string, inviteKeys: InviteCredentials, storage?: StorageAdapter): SessionManager;
+-    sendEvent(recipientIdentityKey: string, event: Partial<Rumor>): Promise<Rumor | undefined>;
++    sendEvent(recipientIdentityKey: string, event: Partial<Rumor>, options?: {
++        includeLocalSiblings?: boolean;
++    }): Promise<Rumor | undefined>;
+     sendMessage(recipientPublicKey: string, content: string, options?: SendMessageOptions): Promise<Rumor>;
+     /**
+      * Send an encrypted kind-10448 chat-settings event without an expiration tag.
+diff --git a/dist/SessionManager.d.ts.map b/dist/SessionManager.d.ts.map
+index 9a70be3..8860710 100644
+--- a/dist/SessionManager.d.ts.map
++++ b/dist/SessionManager.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"SessionManager.d.ts","sourceRoot":"","sources":["../src/SessionManager.ts"],"names":[],"mappings":"AAAA,OAAO,EACL,WAAW,EAGX,KAAK,EAKL,WAAW,EACX,iBAAiB,EACjB,qBAAqB,EACtB,MAAM,YAAY,CAAC;AACpB,OAAO,EAAE,cAAc,EAAE,MAAM,qBAAqB,CAAC;AAarD,OAAO,KAAK,EAEV,iBAAiB,EAClB,MAAM,4BAA4B,CAAC;AACpC,OAAO,EAAE,qBAAqB,EAAE,MAAM,4CAA4C,CAAC;AAEnF,YAAY,EACV,mBAAmB,EACnB,kBAAkB,EAClB,YAAY,EACZ,iBAAiB,EACjB,eAAe,EACf,WAAW,EACX,mBAAmB,EACnB,qCAAqC,EACrC,UAAU,GACX,MAAM,4BAA4B,CAAC;AAEpC,YAAY,EACV,uBAAuB,EACvB,kBAAkB,GACnB,MAAM,uCAAuC,CAAC;AAE/C,MAAM,WAAW,kBAAmB,SAAQ,iBAAiB;IAC3D,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,IAAI,CAAC,EAAE,MAAM,EAAE,EAAE,CAAC;IAClB,UAAU,CAAC,EAAE,iBAAiB,GAAG,IAAI,CAAC;CACvC;AAED,qBAAa,cAAe,SAAQ,qBAAqB;IACvD,MAAM,CAAC,gBAAgB,CACrB,YAAY,EAAE,MAAM,EACpB,WAAW,EAAE,WAAW,EACxB,QAAQ,EAAE,MAAM,EAChB,cAAc,EAAE,MAAM,EACtB,UAAU,EAAE,iBAAiB,EAC7B,OAAO,CAAC,EAAE,cAAc,GACvB,cAAc;IAkBX,SAAS,CACb,oBAAoB,EAAE,MAAM,EAC5B,KAAK,EAAE,OAAO,CAAC,KAAK,CAAC,GACpB,OAAO,CAAC,KAAK,GAAG,SAAS,CAAC;IA+GvB,WAAW,CACf,kBAAkB,EAAE,MAAM,EAC1B,OAAO,EAAE,MAAM,EACf,OAAO,GAAE,kBAAuB,GAC/B,OAAO,CAAC,KAAK,CAAC;IAyCjB;;OAEG;IACG,gBAAgB,CACpB,kBAAkB,EAAE,MAAM,EAC1B,iBAAiB,EAAE,qBAAqB,CAAC,mBAAmB,CAAC,GAC5D,OAAO,CAAC,KAAK,CAAC;IAYjB;;OAEG;IACG,sBAAsB,CAC1B,UAAU,EAAE,MAAM,EAClB,iBAAiB,EAAE,qBAAqB,CAAC,mBAAmB,CAAC,GAC5D,OAAO,CAAC,KAAK,CAAC;IAcX,WAAW,CACf,kBAAkB,EAAE,MAAM,EAC1B,WAAW,EAAE,WAAW,EACxB,UAAU,EAAE,MAAM,EAAE,GACnB,OAAO,CAAC,KAAK,GAAG,SAAS,CAAC;IAQvB,UAAU,CAAC,kBAAkB,EAAE,MAAM,GAAG,OAAO,CAAC,KAAK,CAAC;IAM5D,SAAS,CAAC,0BAA0B,CAClC,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAcP,SAAS,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM;IAK3C,SAAS,CAAC,cAAc,CAAC,SAAS,EAAE,MAAM;IAuB1C,SAAS,CAAC,kBAAkB;CAS7B"}
+\ No newline at end of file
++{"version":3,"file":"SessionManager.d.ts","sourceRoot":"","sources":["../src/SessionManager.ts"],"names":[],"mappings":"AAAA,OAAO,EACL,WAAW,EAGX,KAAK,EAKL,WAAW,EACX,iBAAiB,EACjB,qBAAqB,EACtB,MAAM,YAAY,CAAC;AACpB,OAAO,EAAE,cAAc,EAAE,MAAM,qBAAqB,CAAC;AAarD,OAAO,KAAK,EAEV,iBAAiB,EAClB,MAAM,4BAA4B,CAAC;AACpC,OAAO,EAAE,qBAAqB,EAAE,MAAM,4CAA4C,CAAC;AAEnF,YAAY,EACV,mBAAmB,EACnB,kBAAkB,EAClB,YAAY,EACZ,iBAAiB,EACjB,eAAe,EACf,WAAW,EACX,mBAAmB,EACnB,qCAAqC,EACrC,UAAU,GACX,MAAM,4BAA4B,CAAC;AAEpC,YAAY,EACV,uBAAuB,EACvB,kBAAkB,GACnB,MAAM,uCAAuC,CAAC;AAE/C,MAAM,WAAW,kBAAmB,SAAQ,iBAAiB;IAC3D,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,IAAI,CAAC,EAAE,MAAM,EAAE,EAAE,CAAC;IAClB,UAAU,CAAC,EAAE,iBAAiB,GAAG,IAAI,CAAC;CACvC;AAED,qBAAa,cAAe,SAAQ,qBAAqB;IACvD,MAAM,CAAC,gBAAgB,CACrB,YAAY,EAAE,MAAM,EACpB,WAAW,EAAE,WAAW,EACxB,QAAQ,EAAE,MAAM,EAChB,cAAc,EAAE,MAAM,EACtB,UAAU,EAAE,iBAAiB,EAC7B,OAAO,CAAC,EAAE,cAAc,GACvB,cAAc;IAkBX,SAAS,CACb,oBAAoB,EAAE,MAAM,EAC5B,KAAK,EAAE,OAAO,CAAC,KAAK,CAAC,EACrB,OAAO,GAAE;QAAE,oBAAoB,CAAC,EAAE,OAAO,CAAA;KAAO,GAC/C,OAAO,CAAC,KAAK,GAAG,SAAS,CAAC;IAiGvB,WAAW,CACf,kBAAkB,EAAE,MAAM,EAC1B,OAAO,EAAE,MAAM,EACf,OAAO,GAAE,kBAAuB,GAC/B,OAAO,CAAC,KAAK,CAAC;IAyCjB;;OAEG;IACG,gBAAgB,CACpB,kBAAkB,EAAE,MAAM,EAC1B,iBAAiB,EAAE,qBAAqB,CAAC,mBAAmB,CAAC,GAC5D,OAAO,CAAC,KAAK,CAAC;IAYjB;;OAEG;IACG,sBAAsB,CAC1B,UAAU,EAAE,MAAM,EAClB,iBAAiB,EAAE,qBAAqB,CAAC,mBAAmB,CAAC,GAC5D,OAAO,CAAC,KAAK,CAAC;IAcX,WAAW,CACf,kBAAkB,EAAE,MAAM,EAC1B,WAAW,EAAE,WAAW,EACxB,UAAU,EAAE,MAAM,EAAE,GACnB,OAAO,CAAC,KAAK,GAAG,SAAS,CAAC;IAQvB,UAAU,CAAC,kBAAkB,EAAE,MAAM,GAAG,OAAO,CAAC,KAAK,CAAC;IAM5D,SAAS,CAAC,0BAA0B,CAClC,KAAK,EAAE,KAAK,EACZ,eAAe,EAAE,MAAM,GACtB,IAAI;IAcP,SAAS,CAAC,eAAe,CAAC,SAAS,EAAE,MAAM;IAK3C,SAAS,CAAC,cAAc,CAAC,SAAS,EAAE,MAAM;IAuB1C,SAAS,CAAC,kBAAkB;CAS7B"}
+\ No newline at end of file
+diff --git a/dist/group/GroupSenderKeys.d.ts.map b/dist/group/GroupSenderKeys.d.ts.map
+index a330f55..e4e4925 100644
+--- a/dist/group/GroupSenderKeys.d.ts.map
++++ b/dist/group/GroupSenderKeys.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"GroupSenderKeys.d.ts","sourceRoot":"","sources":["../../src/group/GroupSenderKeys.ts"],"names":[],"mappings":"AAGA,OAAO,EAAE,KAAK,sBAAsB,EAAE,MAAM,uBAAuB,CAAC;AACpE,OAAO,KAAK,EACV,qBAAqB,EAEtB,MAAM,iBAAiB,CAAC;AACzB,OAAO,EAAE,cAAc,EAAE,MAAM,iBAAiB,CAAC;AACjD,OAAO,EAAE,KAAK,KAAK,EAAE,MAAM,aAAa,CAAC;AACzC,OAAO,EAAE,UAAU,EAAE,MAAM,iBAAiB,CAAC;AAC7C,OAAO,EAAa,KAAK,uBAAuB,EAAE,MAAM,qBAAqB,CAAC;AAE9E,8BAAsB,eAAgB,SAAQ,UAAU;cACtC,wBAAwB,IAAI,OAAO,CAAC;QAClD,oBAAoB,EAAE,UAAU,CAAC;QACjC,iBAAiB,EAAE,MAAM,CAAC;QAC1B,OAAO,EAAE,OAAO,CAAC;KAClB,CAAC;cAyCc,kBAAkB,CAChC,kBAAkB,EAAE,MAAM,EAC1B,KAAK,EAAE,MAAM,GACZ,OAAO,CAAC,cAAc,GAAG,IAAI,CAAC;cAYjB,mBAAmB,CACjC,kBAAkB,EAAE,MAAM,GACzB,OAAO,CAAC,cAAc,EAAE,CAAC;cAgBZ,kBAAkB,CAChC,kBAAkB,EAAE,MAAM,EAC1B,EAAE,EAAE,cAAc,GACjB,OAAO,CAAC,IAAI,CAAC;cAOA,4BAA4B,CAC1C,kBAAkB,EAAE,MAAM,GACzB,OAAO,CAAC,uBAAuB,EAAE,CAAC;cAoBrB,4BAA4B,CAC1C,kBAAkB,EAAE,MAAM,EAC1B,SAAS,EAAE,uBAAuB,EAAE,GACnC,OAAO,CAAC,IAAI,CAAC;cAOA,6BAA6B,CAC3C,IAAI,EAAE,qBAAqB,EAC3B,UAAU,EAAE,MAAM,EAAE,GACnB,OAAO,CAAC,IAAI,CAAC;cAqBA,sBAAsB,CACpC,oBAAoB,EAAE,MAAM,EAC5B,OAAO,EAAE,sBAAsB,GAC9B,OAAO,CAAC,qBAAqB,EAAE,CAAC;cAyDnB,uBAAuB,CACrC,WAAW,EAAE,OAAO,GACnB,OAAO,CAAC;QAAE,KAAK,EAAE,cAAc,CAAC;QAAC,OAAO,EAAE,OAAO,CAAA;KAAE,CAAC;cAsCvC,0BAA0B,CACxC,SAAS,EAAE,cAAc,EACzB,iBAAiB,EAAE,MAAM,EACzB,UAAU,EAAE,MAAM,EAAE,GACnB,OAAO,CAAC,OAAO,CAAC;IAmBnB,SAAS,CAAC,iBAAiB,CACzB,UAAU,EAAE,MAAM,EAClB,iBAAiB,EAAE,MAAM,EACzB,SAAS,EAAE,cAAc,GACxB,qBAAqB;IAWxB,SAAS,CAAC,sBAAsB,CAC9B,UAAU,EAAE,MAAM,EAClB,KAAK,EAAE,MAAM,EACb,IAAI,EAAE,qBAAqB,GAC1B,KAAK;IAiBR,SAAS,CAAC,oBAAoB,CAC5B,UAAU,EAAE,MAAM,EAClB,KAAK,EAAE,MAAM,EACb,KAAK,EAAE;QAAE,IAAI,EAAE,MAAM,CAAC;QAAC,OAAO,EAAE,MAAM,CAAC;QAAC,IAAI,CAAC,EAAE,MAAM,EAAE,EAAE,CAAA;KAAE,GAC1D,KAAK;CAoBT"}
+\ No newline at end of file
++{"version":3,"file":"GroupSenderKeys.d.ts","sourceRoot":"","sources":["../../src/group/GroupSenderKeys.ts"],"names":[],"mappings":"AAGA,OAAO,EAAE,KAAK,sBAAsB,EAAE,MAAM,uBAAuB,CAAC;AACpE,OAAO,KAAK,EACV,qBAAqB,EAEtB,MAAM,iBAAiB,CAAC;AACzB,OAAO,EAAE,cAAc,EAAE,MAAM,iBAAiB,CAAC;AACjD,OAAO,EAAE,KAAK,KAAK,EAAE,MAAM,aAAa,CAAC;AACzC,OAAO,EAAE,UAAU,EAAE,MAAM,iBAAiB,CAAC;AAC7C,OAAO,EAAa,KAAK,uBAAuB,EAAE,MAAM,qBAAqB,CAAC;AAE9E,8BAAsB,eAAgB,SAAQ,UAAU;cACtC,wBAAwB,IAAI,OAAO,CAAC;QAClD,oBAAoB,EAAE,UAAU,CAAC;QACjC,iBAAiB,EAAE,MAAM,CAAC;QAC1B,OAAO,EAAE,OAAO,CAAC;KAClB,CAAC;cAyCc,kBAAkB,CAChC,kBAAkB,EAAE,MAAM,EAC1B,KAAK,EAAE,MAAM,GACZ,OAAO,CAAC,cAAc,GAAG,IAAI,CAAC;cAYjB,mBAAmB,CACjC,kBAAkB,EAAE,MAAM,GACzB,OAAO,CAAC,cAAc,EAAE,CAAC;cAgBZ,kBAAkB,CAChC,kBAAkB,EAAE,MAAM,EAC1B,EAAE,EAAE,cAAc,GACjB,OAAO,CAAC,IAAI,CAAC;cAOA,4BAA4B,CAC1C,kBAAkB,EAAE,MAAM,GACzB,OAAO,CAAC,uBAAuB,EAAE,CAAC;cAoBrB,4BAA4B,CAC1C,kBAAkB,EAAE,MAAM,EAC1B,SAAS,EAAE,uBAAuB,EAAE,GACnC,OAAO,CAAC,IAAI,CAAC;cAOA,6BAA6B,CAC3C,IAAI,EAAE,qBAAqB,EAC3B,UAAU,EAAE,MAAM,EAAE,GACnB,OAAO,CAAC,IAAI,CAAC;cAsBA,sBAAsB,CACpC,oBAAoB,EAAE,MAAM,EAC5B,OAAO,EAAE,sBAAsB,GAC9B,OAAO,CAAC,qBAAqB,EAAE,CAAC;cAyDnB,uBAAuB,CACrC,WAAW,EAAE,OAAO,GACnB,OAAO,CAAC;QAAE,KAAK,EAAE,cAAc,CAAC;QAAC,OAAO,EAAE,OAAO,CAAA;KAAE,CAAC;cAsCvC,0BAA0B,CACxC,SAAS,EAAE,cAAc,EACzB,iBAAiB,EAAE,MAAM,EACzB,UAAU,EAAE,MAAM,EAAE,GACnB,OAAO,CAAC,OAAO,CAAC;IAmBnB,SAAS,CAAC,iBAAiB,CACzB,UAAU,EAAE,MAAM,EAClB,iBAAiB,EAAE,MAAM,EACzB,SAAS,EAAE,cAAc,GACxB,qBAAqB;IAWxB,SAAS,CAAC,sBAAsB,CAC9B,UAAU,EAAE,MAAM,EAClB,KAAK,EAAE,MAAM,EACb,IAAI,EAAE,qBAAqB,GAC1B,KAAK;IAiBR,SAAS,CAAC,oBAAoB,CAC5B,UAAU,EAAE,MAAM,EAClB,KAAK,EAAE,MAAM,EACb,KAAK,EAAE;QAAE,IAAI,EAAE,MAAM,CAAC;QAAC,OAAO,EAAE,MAAM,CAAC;QAAC,IAAI,CAAC,EAAE,MAAM,EAAE,EAAE,CAAA;KAAE,GAC1D,KAAK;CAoBT"}
+\ No newline at end of file
+diff --git a/dist/group/GroupSending.d.ts b/dist/group/GroupSending.d.ts
+index dbba6ba..1956020 100644
+--- a/dist/group/GroupSending.d.ts
++++ b/dist/group/GroupSending.d.ts
+@@ -7,6 +7,7 @@ import type { PairwiseSend, PublishOuter } from "../GroupChannel.js";
+ export declare abstract class GroupSending extends GroupSenderKeys {
+     protected senderKeyRecipientOwnerPubkeys(): string[];
+     private assertCurrentRecipients;
++    private flushSenderKeyDistributions;
+     /**
+      * Rotate our sender key (new keyId + chain key) and distribute it to group members.
+      */
+diff --git a/dist/group/GroupSending.d.ts.map b/dist/group/GroupSending.d.ts.map
+index d3d7647..c7bd6a6 100644
+--- a/dist/group/GroupSending.d.ts.map
++++ b/dist/group/GroupSending.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"GroupSending.d.ts","sourceRoot":"","sources":["../../src/group/GroupSending.ts"],"names":[],"mappings":"AAAA,OAAO,EAAe,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAC9D,OAAO,EAEL,KAAK,sBAAsB,EAC5B,MAAM,uBAAuB,CAAC;AAC/B,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,iBAAiB,CAAC;AAC7D,OAAO,EAAyC,KAAK,KAAK,EAAqB,MAAM,aAAa,CAAC;AAEnG,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AACvD,OAAO,KAAK,EAAE,YAAY,EAAE,YAAY,EAAE,MAAM,oBAAoB,CAAC;AAErE,8BAAsB,YAAa,SAAQ,eAAe;IACxD,SAAS,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAUpD,OAAO,CAAC,uBAAuB;IAU/B;;OAEG;IACG,eAAe,CAAC,IAAI,EAAE;QAC1B,YAAY,EAAE,YAAY,CAAC;QAC3B,KAAK,CAAC,EAAE,MAAM,CAAC;KAChB,GAAG,OAAO,CAAC,qBAAqB,CAAC;IA0BlC;;;OAGG;IACG,SAAS,CACb,KAAK,EAAE;QAAE,IAAI,EAAE,MAAM,CAAC;QAAC,OAAO,EAAE,MAAM,CAAC;QAAC,IAAI,CAAC,EAAE,MAAM,EAAE,EAAE,CAAA;KAAE,EAC3D,IAAI,EAAE;QACJ,YAAY,EAAE,YAAY,CAAC;QAC3B,YAAY,EAAE,YAAY,CAAC;QAC3B,KAAK,CAAC,EAAE,MAAM,CAAC;KAChB,GACA,OAAO,CAAC;QAAE,KAAK,EAAE,aAAa,CAAC;QAAC,KAAK,EAAE,KAAK,CAAA;KAAE,CAAC;IAuDlD,mDAAmD;IAC7C,WAAW,CACf,OAAO,EAAE,MAAM,EACf,IAAI,EAAE;QACJ,YAAY,EAAE,YAAY,CAAC;QAC3B,YAAY,EAAE,YAAY,CAAC;QAC3B,KAAK,CAAC,EAAE,MAAM,CAAC;KAChB,GACA,OAAO,CAAC;QAAE,KAAK,EAAE,aAAa,CAAC;QAAC,KAAK,EAAE,KAAK,CAAA;KAAE,CAAC;IAUlD,mCAAmC,CACjC,KAAK,EAAE,aAAa,EACpB,gBAAgB,GAAE,MAAsC,EACxD,gBAAgB,CAAC,EAAE,MAAM,GACxB,sBAAsB,GAAG,IAAI;IAyB1B,sBAAsB,CAC1B,OAAO,EAAE,sBAAsB,EAC/B,IAAI,EAAE;QAAE,YAAY,EAAE,YAAY,CAAC;QAAC,KAAK,CAAC,EAAE,MAAM,CAAA;KAAE,GACnD,OAAO,CAAC,KAAK,GAAG,IAAI,CAAC;IAkBlB,+BAA+B,CACnC,oBAAoB,EAAE,MAAM,EAC5B,OAAO,EAAE,sBAAsB,EAC/B,IAAI,EAAE;QAAE,YAAY,EAAE,YAAY,CAAC;QAAC,KAAK,CAAC,EAAE,MAAM,CAAA;KAAE,GACnD,OAAO,CAAC,qBAAqB,GAAG,IAAI,CAAC;CAiBzC"}
+\ No newline at end of file
++{"version":3,"file":"GroupSending.d.ts","sourceRoot":"","sources":["../../src/group/GroupSending.ts"],"names":[],"mappings":"AAAA,OAAO,EAAe,KAAK,aAAa,EAAE,MAAM,aAAa,CAAC;AAC9D,OAAO,EAEL,KAAK,sBAAsB,EAC5B,MAAM,uBAAuB,CAAC;AAC/B,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,iBAAiB,CAAC;AAC7D,OAAO,EAAyC,KAAK,KAAK,EAAqB,MAAM,aAAa,CAAC;AAEnG,OAAO,EAAE,eAAe,EAAE,MAAM,sBAAsB,CAAC;AACvD,OAAO,KAAK,EAAE,YAAY,EAAE,YAAY,EAAE,MAAM,oBAAoB,CAAC;AAErE,8BAAsB,YAAa,SAAQ,eAAe;IACxD,SAAS,CAAC,8BAA8B,IAAI,MAAM,EAAE;IAUpD,OAAO,CAAC,uBAAuB;YAUjB,2BAA2B;IAoBzC;;OAEG;IACG,eAAe,CAAC,IAAI,EAAE;QAC1B,YAAY,EAAE,YAAY,CAAC;QAC3B,KAAK,CAAC,EAAE,MAAM,CAAC;KAChB,GAAG,OAAO,CAAC,qBAAqB,CAAC;IAuBlC;;;OAGG;IACG,SAAS,CACb,KAAK,EAAE;QAAE,IAAI,EAAE,MAAM,CAAC;QAAC,OAAO,EAAE,MAAM,CAAC;QAAC,IAAI,CAAC,EAAE,MAAM,EAAE,EAAE,CAAA;KAAE,EAC3D,IAAI,EAAE;QACJ,YAAY,EAAE,YAAY,CAAC;QAC3B,YAAY,EAAE,YAAY,CAAC;QAC3B,KAAK,CAAC,EAAE,MAAM,CAAC;KAChB,GACA,OAAO,CAAC;QAAE,KAAK,EAAE,aAAa,CAAC;QAAC,KAAK,EAAE,KAAK,CAAA;KAAE,CAAC;IAoDlD,mDAAmD;IAC7C,WAAW,CACf,OAAO,EAAE,MAAM,EACf,IAAI,EAAE;QACJ,YAAY,EAAE,YAAY,CAAC;QAC3B,YAAY,EAAE,YAAY,CAAC;QAC3B,KAAK,CAAC,EAAE,MAAM,CAAC;KAChB,GACA,OAAO,CAAC;QAAE,KAAK,EAAE,aAAa,CAAC;QAAC,KAAK,EAAE,KAAK,CAAA;KAAE,CAAC;IAUlD,mCAAmC,CACjC,KAAK,EAAE,aAAa,EACpB,gBAAgB,GAAE,MAAsC,EACxD,gBAAgB,CAAC,EAAE,MAAM,GACxB,sBAAsB,GAAG,IAAI;IAyB1B,sBAAsB,CAC1B,OAAO,EAAE,sBAAsB,EAC/B,IAAI,EAAE;QAAE,YAAY,EAAE,YAAY,CAAC;QAAC,KAAK,CAAC,EAAE,MAAM,CAAA;KAAE,GACnD,OAAO,CAAC,KAAK,GAAG,IAAI,CAAC;IAkBlB,+BAA+B,CACnC,oBAAoB,EAAE,MAAM,EAC5B,OAAO,EAAE,sBAAsB,EAC/B,IAAI,EAAE;QAAE,YAAY,EAAE,YAAY,CAAC;QAAC,KAAK,CAAC,EAAE,MAAM,CAAA;KAAE,GACnD,OAAO,CAAC,qBAAqB,GAAG,IAAI,CAAC;CAiBzC"}
+\ No newline at end of file
+diff --git a/dist/group/groupInternals.d.ts b/dist/group/groupInternals.d.ts
+index dddd8e4..5cd8228 100644
+--- a/dist/group/groupInternals.d.ts
++++ b/dist/group/groupInternals.d.ts
+@@ -3,6 +3,8 @@ export interface SenderKeyRepairSnapshot {
+     keyId: number;
+     distribution: SenderKeyDistribution;
+     recipients: string[];
++    /** Recipients whose key distribution has not reached the durable pairwise queue. */
++    pendingRecipients?: string[];
+ }
+ export declare function randomU32(): number;
+ export declare function isHex32(value: string): boolean;
+diff --git a/dist/group/groupInternals.d.ts.map b/dist/group/groupInternals.d.ts.map
+index 74d9834..567c9e4 100644
+--- a/dist/group/groupInternals.d.ts.map
++++ b/dist/group/groupInternals.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"groupInternals.d.ts","sourceRoot":"","sources":["../../src/group/groupInternals.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,iBAAiB,CAAC;AAE7D,MAAM,WAAW,uBAAuB;IACtC,KAAK,EAAE,MAAM,CAAC;IACd,YAAY,EAAE,qBAAqB,CAAC;IACpC,UAAU,EAAE,MAAM,EAAE,CAAC;CACtB;AAED,wBAAgB,SAAS,IAAI,MAAM,CAIlC;AAED,wBAAgB,OAAO,CAAC,KAAK,EAAE,MAAM,GAAG,OAAO,CAE9C"}
+\ No newline at end of file
++{"version":3,"file":"groupInternals.d.ts","sourceRoot":"","sources":["../../src/group/groupInternals.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,qBAAqB,EAAE,MAAM,iBAAiB,CAAC;AAE7D,MAAM,WAAW,uBAAuB;IACtC,KAAK,EAAE,MAAM,CAAC;IACd,YAAY,EAAE,qBAAqB,CAAC;IACpC,UAAU,EAAE,MAAM,EAAE,CAAC;IACrB,oFAAoF;IACpF,iBAAiB,CAAC,EAAE,MAAM,EAAE,CAAC;CAC9B;AAED,wBAAgB,SAAS,IAAI,MAAM,CAIlC;AAED,wBAAgB,OAAO,CAAC,KAAK,EAAE,MAAM,GAAG,OAAO,CAE9C"}
+\ No newline at end of file
+diff --git a/dist/nostr-double-ratchet.es.js b/dist/nostr-double-ratchet.es.js
+index 8debad6..b20eda7 100644
+--- a/dist/nostr-double-ratchet.es.js
++++ b/dist/nostr-double-ratchet.es.js
+@@ -268,13 +268,13 @@ class Qa extends Za {
+     for (let h = 0; h < 16; h++, r += 4)
+       _e[h] = e.getUint32(r, !1);
+     for (let h = 16; h < 64; h++) {
+-      const p = _e[h - 15], f = _e[h - 2], g = Se(p, 7) ^ Se(p, 18) ^ p >>> 3, y = Se(f, 17) ^ Se(f, 19) ^ f >>> 10;
+-      _e[h] = y + _e[h - 7] + g + _e[h - 16] | 0;
++      const p = _e[h - 15], f = _e[h - 2], y = Se(p, 7) ^ Se(p, 18) ^ p >>> 3, b = Se(f, 17) ^ Se(f, 19) ^ f >>> 10;
++      _e[h] = b + _e[h - 7] + y + _e[h - 16] | 0;
+     }
+     let { A: n, B: i, C: s, D: o, E: a, F: c, G: u, H: d } = this;
+     for (let h = 0; h < 64; h++) {
+-      const p = Se(a, 6) ^ Se(a, 11) ^ Se(a, 25), f = d + p + Wa(a, c, u) + Ya[h] + _e[h] | 0, y = (Se(n, 2) ^ Se(n, 13) ^ Se(n, 22)) + Ja(n, i, s) | 0;
+-      d = u, u = c, c = a, a = o + f | 0, o = s, s = i, i = n, n = f + y | 0;
++      const p = Se(a, 6) ^ Se(a, 11) ^ Se(a, 25), f = d + p + Wa(a, c, u) + Ya[h] + _e[h] | 0, b = (Se(n, 2) ^ Se(n, 13) ^ Se(n, 22)) + Ja(n, i, s) | 0;
++      d = u, u = c, c = a, a = o + f | 0, o = s, s = i, i = n, n = f + b | 0;
+     }
+     n = n + this.A | 0, i = i + this.B | 0, s = s + this.C | 0, o = o + this.D | 0, a = a + this.E | 0, c = c + this.F | 0, u = u + this.G | 0, d = d + this.H | 0, this.set(n, i, s, o, a, c, u, d);
+   }
+@@ -381,24 +381,24 @@ function sc(t, e, r) {
+     c.fill(1), u.fill(0), d = 0;
+   }, p = (...w) => r(u, Q(c, ...w)), f = (w = i) => {
+     u = p(s, w), c = p(), w.length !== 0 && (u = p(o, w), c = p());
+-  }, g = () => {
++  }, y = () => {
+     if (d++ >= a)
+       throw new Error("drbg: tried max amount of iterations");
+     let w = 0;
+     const m = [];
+     for (; w < e; ) {
+       c = p();
+-      const S = c.slice();
+-      m.push(S), w += c.length;
++      const k = c.slice();
++      m.push(k), w += c.length;
+     }
+     return Q(...m);
+   };
+   return (w, m) => {
+     h(), f(w);
+-    let S;
+-    for (; !(S = m(g())); )
++    let k;
++    for (; !(k = m(y())); )
+       f();
+-    return h(), S;
++    return h(), k;
+   };
+ }
+ function Mn(t, e = {}, r = {}) {
+@@ -467,9 +467,9 @@ function uc(t) {
+   const e = kr(t), r = Rs(t), n = r(e, e.neg(e.ONE)), i = r(e, n), s = r(e, e.neg(n)), o = (t + oc) / Ms;
+   return (a, c) => {
+     let u = a.pow(c, o), d = a.mul(u, n);
+-    const h = a.mul(u, i), p = a.mul(u, s), f = a.eql(a.sqr(d), c), g = a.eql(a.sqr(h), c);
+-    u = a.cmov(u, d, f), d = a.cmov(p, h, g);
+-    const y = a.eql(a.sqr(d), c), w = a.cmov(u, d, y);
++    const h = a.mul(u, i), p = a.mul(u, s), f = a.eql(a.sqr(d), c), y = a.eql(a.sqr(h), c);
++    u = a.cmov(u, d, f), d = a.cmov(p, h, y);
++    const b = a.eql(a.sqr(d), c), w = a.cmov(u, d, b);
+     return In(a, w, c), w;
+   };
+ }
+@@ -497,12 +497,12 @@ function Rs(t) {
+     for (; !c.eql(p, c.ONE); ) {
+       if (c.is0(p))
+         return c.ZERO;
+-      let g = 1, y = c.sqr(p);
+-      for (; !c.eql(y, c.ONE); )
+-        if (g++, y = c.sqr(y), g === d)
++      let y = 1, b = c.sqr(p);
++      for (; !c.eql(b, c.ONE); )
++        if (y++, b = c.sqr(b), y === d)
+           throw new Error("Cannot find square root");
+-      const w = ce << BigInt(d - g - 1), m = c.pow(h, w);
+-      d = g, h = c.sqr(m), p = c.mul(p, h), f = c.mul(f, m);
++      const w = ce << BigInt(d - y - 1), m = c.pow(h, w);
++      d = y, h = c.sqr(m), p = c.mul(p, h), f = c.mul(f, m);
+     }
+     return f;
+   };
+@@ -1039,59 +1039,59 @@ function Sc(t, e = {}) {
+     if (!n.isOdd)
+       throw new Error("compression is not supported: Field does not have .isOdd()");
+   }
+-  function h(I, b, v) {
+-    const { x: E, y: k } = b.toAffine(), x = n.toBytes(E);
+-    if (ar(v, "isCompressed"), v) {
++  function h(I, v, g) {
++    const { x: E, y: K } = v.toAffine(), x = n.toBytes(E);
++    if (ar(g, "isCompressed"), g) {
+       d();
+-      const A = !n.isOdd(k);
++      const A = !n.isOdd(K);
+       return Q(Fs(A), x);
+     } else
+-      return Q(Uint8Array.of(4), x, n.toBytes(k));
++      return Q(Uint8Array.of(4), x, n.toBytes(K));
+   }
+   function p(I) {
+     $(I, void 0, "Point");
+-    const { publicKey: b, publicKeyUncompressed: v } = u, E = I.length, k = I[0], x = I.subarray(1);
+-    if (E === b && (k === 2 || k === 3)) {
++    const { publicKey: v, publicKeyUncompressed: g } = u, E = I.length, K = I[0], x = I.subarray(1);
++    if (E === v && (K === 2 || K === 3)) {
+       const A = n.fromBytes(x);
+       if (!n.isValid(A))
+         throw new Error("bad point: is not on curve, wrong x");
+-      const M = y(A);
+-      let K;
++      const M = b(A);
++      let S;
+       try {
+-        K = n.sqrt(M);
++        S = n.sqrt(M);
+       } catch (ee) {
+         const z = ee instanceof Error ? ": " + ee.message : "";
+         throw new Error("bad point: is not on curve, sqrt error" + z);
+       }
+       d();
+-      const P = n.isOdd(K);
+-      return (k & 1) === 1 !== P && (K = n.neg(K)), { x: A, y: K };
+-    } else if (E === v && k === 4) {
+-      const A = n.BYTES, M = n.fromBytes(x.subarray(0, A)), K = n.fromBytes(x.subarray(A, A * 2));
+-      if (!w(M, K))
++      const P = n.isOdd(S);
++      return (K & 1) === 1 !== P && (S = n.neg(S)), { x: A, y: S };
++    } else if (E === g && K === 4) {
++      const A = n.BYTES, M = n.fromBytes(x.subarray(0, A)), S = n.fromBytes(x.subarray(A, A * 2));
++      if (!w(M, S))
+         throw new Error("bad point: is not on curve");
+-      return { x: M, y: K };
++      return { x: M, y: S };
+     } else
+-      throw new Error(`bad point: got length ${E}, expected compressed=${b} or uncompressed=${v}`);
++      throw new Error(`bad point: got length ${E}, expected compressed=${v} or uncompressed=${g}`);
+   }
+-  const f = e.toBytes || h, g = e.fromBytes || p;
+-  function y(I) {
+-    const b = n.sqr(I), v = n.mul(b, I);
+-    return n.add(n.add(v, n.mul(I, s.a)), s.b);
++  const f = e.toBytes || h, y = e.fromBytes || p;
++  function b(I) {
++    const v = n.sqr(I), g = n.mul(v, I);
++    return n.add(n.add(g, n.mul(I, s.a)), s.b);
+   }
+-  function w(I, b) {
+-    const v = n.sqr(b), E = y(I);
+-    return n.eql(v, E);
++  function w(I, v) {
++    const g = n.sqr(v), E = b(I);
++    return n.eql(g, E);
+   }
+   if (!w(s.Gx, s.Gy))
+     throw new Error("bad curve params: generator point");
+-  const m = n.mul(n.pow(s.a, Jt), Ec), S = n.mul(n.sqr(s.b), BigInt(27));
+-  if (n.is0(n.add(m, S)))
++  const m = n.mul(n.pow(s.a, Jt), Ec), k = n.mul(n.sqr(s.b), BigInt(27));
++  if (n.is0(n.add(m, k)))
+     throw new Error("bad curve params: a or b");
+-  function O(I, b, v = !1) {
+-    if (!n.isValid(b) || v && n.is0(b))
++  function O(I, v, g = !1) {
++    if (!n.isValid(v) || g && n.is0(v))
+       throw new Error(`bad point coordinate ${I}`);
+-    return b;
++    return v;
+   }
+   function B(I) {
+     if (!(I instanceof T))
+@@ -1102,16 +1102,16 @@ function Sc(t, e = {}) {
+       throw new Error("no endo");
+     return wc(I, c.basises, i.ORDER);
+   }
+-  const U = Mi((I, b) => {
+-    const { X: v, Y: E, Z: k } = I;
+-    if (n.eql(k, n.ONE))
+-      return { x: v, y: E };
++  const U = Mi((I, v) => {
++    const { X: g, Y: E, Z: K } = I;
++    if (n.eql(K, n.ONE))
++      return { x: g, y: E };
+     const x = I.is0();
+-    b == null && (b = x ? n.ONE : n.inv(k));
+-    const A = n.mul(v, b), M = n.mul(E, b), K = n.mul(k, b);
++    v == null && (v = x ? n.ONE : n.inv(K));
++    const A = n.mul(g, v), M = n.mul(E, v), S = n.mul(K, v);
+     if (x)
+       return { x: n.ZERO, y: n.ZERO };
+-    if (!n.eql(K, n.ONE))
++    if (!n.eql(S, n.ONE))
+       throw new Error("invZ was invalid");
+     return { x: A, y: M };
+   }), G = Mi((I) => {
+@@ -1120,44 +1120,44 @@ function Sc(t, e = {}) {
+         return;
+       throw new Error("bad point: ZERO");
+     }
+-    const { x: b, y: v } = I.toAffine();
+-    if (!n.isValid(b) || !n.isValid(v))
++    const { x: v, y: g } = I.toAffine();
++    if (!n.isValid(v) || !n.isValid(g))
+       throw new Error("bad point: x or y not field elements");
+-    if (!w(b, v))
++    if (!w(v, g))
+       throw new Error("bad point: equation left != right");
+     if (!I.isTorsionFree())
+       throw new Error("bad point: not in prime-order subgroup");
+     return !0;
+   });
+-  function R(I, b, v, E, k) {
+-    return v = new T(n.mul(v.X, I), v.Y, v.Z), b = cr(E, b), v = cr(k, v), b.add(v);
++  function R(I, v, g, E, K) {
++    return g = new T(n.mul(g.X, I), g.Y, g.Z), v = cr(E, v), g = cr(K, g), v.add(g);
+   }
+   const C = class C {
+     /** Does NOT validate if the point is valid. Use `.assertValidity()`. */
+-    constructor(b, v, E) {
++    constructor(v, g, E) {
+       l(this, "X");
+       l(this, "Y");
+       l(this, "Z");
+-      this.X = O("x", b), this.Y = O("y", v, !0), this.Z = O("z", E), Object.freeze(this);
++      this.X = O("x", v), this.Y = O("y", g, !0), this.Z = O("z", E), Object.freeze(this);
+     }
+     static CURVE() {
+       return s;
+     }
+     /** Does NOT validate if the point is valid. Use `.assertValidity()`. */
+-    static fromAffine(b) {
+-      const { x: v, y: E } = b || {};
+-      if (!b || !n.isValid(v) || !n.isValid(E))
++    static fromAffine(v) {
++      const { x: g, y: E } = v || {};
++      if (!v || !n.isValid(g) || !n.isValid(E))
+         throw new Error("invalid affine point");
+-      if (b instanceof C)
++      if (v instanceof C)
+         throw new Error("projective point not allowed");
+-      return n.is0(v) && n.is0(E) ? C.ZERO : new C(v, E, n.ONE);
++      return n.is0(g) && n.is0(E) ? C.ZERO : new C(g, E, n.ONE);
+     }
+-    static fromBytes(b) {
+-      const v = C.fromAffine(g($(b, void 0, "point")));
+-      return v.assertValidity(), v;
++    static fromBytes(v) {
++      const g = C.fromAffine(y($(v, void 0, "point")));
++      return g.assertValidity(), g;
+     }
+-    static fromHex(b) {
+-      return C.fromBytes(j(b));
++    static fromHex(v) {
++      return C.fromBytes(j(v));
+     }
+     get x() {
+       return this.toAffine().x;
+@@ -1171,8 +1171,8 @@ function Sc(t, e = {}) {
+      * @param isLazy true will defer table computation until the first multiplication
+      * @returns
+      */
+-    precompute(b = 8, v = !0) {
+-      return J.createCache(this, b), v || this.multiply(Jt), this;
++    precompute(v = 8, g = !0) {
++      return J.createCache(this, v), g || this.multiply(Jt), this;
+     }
+     // TODO: return `this`
+     /** A point on curve is valid if it conforms to equation. */
+@@ -1180,16 +1180,16 @@ function Sc(t, e = {}) {
+       G(this);
+     }
+     hasEvenY() {
+-      const { y: b } = this.toAffine();
++      const { y: v } = this.toAffine();
+       if (!n.isOdd)
+         throw new Error("Field doesn't support isOdd");
+-      return !n.isOdd(b);
++      return !n.isOdd(v);
+     }
+     /** Compare one point to another. */
+-    equals(b) {
+-      B(b);
+-      const { X: v, Y: E, Z: k } = this, { X: x, Y: A, Z: M } = b, K = n.eql(n.mul(v, M), n.mul(x, k)), P = n.eql(n.mul(E, M), n.mul(A, k));
+-      return K && P;
++    equals(v) {
++      B(v);
++      const { X: g, Y: E, Z: K } = this, { X: x, Y: A, Z: M } = v, S = n.eql(n.mul(g, M), n.mul(x, K)), P = n.eql(n.mul(E, M), n.mul(A, K));
++      return S && P;
+     }
+     /** Flips point to one corresponding to (x, -y) in Affine coordinates. */
+     negate() {
+@@ -1200,26 +1200,26 @@ function Sc(t, e = {}) {
+     // https://eprint.iacr.org/2015/1060, algorithm 3
+     // Cost: 8M + 3S + 3*a + 2*b3 + 15add.
+     double() {
+-      const { a: b, b: v } = s, E = n.mul(v, Jt), { X: k, Y: x, Z: A } = this;
+-      let M = n.ZERO, K = n.ZERO, P = n.ZERO, D = n.mul(k, k), ee = n.mul(x, x), z = n.mul(A, A), N = n.mul(k, x);
+-      return N = n.add(N, N), P = n.mul(k, A), P = n.add(P, P), M = n.mul(b, P), K = n.mul(E, z), K = n.add(M, K), M = n.sub(ee, K), K = n.add(ee, K), K = n.mul(M, K), M = n.mul(N, M), P = n.mul(E, P), z = n.mul(b, z), N = n.sub(D, z), N = n.mul(b, N), N = n.add(N, P), P = n.add(D, D), D = n.add(P, D), D = n.add(D, z), D = n.mul(D, N), K = n.add(K, D), z = n.mul(x, A), z = n.add(z, z), D = n.mul(z, N), M = n.sub(M, D), P = n.mul(z, ee), P = n.add(P, P), P = n.add(P, P), new C(M, K, P);
++      const { a: v, b: g } = s, E = n.mul(g, Jt), { X: K, Y: x, Z: A } = this;
++      let M = n.ZERO, S = n.ZERO, P = n.ZERO, D = n.mul(K, K), ee = n.mul(x, x), z = n.mul(A, A), N = n.mul(K, x);
++      return N = n.add(N, N), P = n.mul(K, A), P = n.add(P, P), M = n.mul(v, P), S = n.mul(E, z), S = n.add(M, S), M = n.sub(ee, S), S = n.add(ee, S), S = n.mul(M, S), M = n.mul(N, M), P = n.mul(E, P), z = n.mul(v, z), N = n.sub(D, z), N = n.mul(v, N), N = n.add(N, P), P = n.add(D, D), D = n.add(P, D), D = n.add(D, z), D = n.mul(D, N), S = n.add(S, D), z = n.mul(x, A), z = n.add(z, z), D = n.mul(z, N), M = n.sub(M, D), P = n.mul(z, ee), P = n.add(P, P), P = n.add(P, P), new C(M, S, P);
+     }
+     // Renes-Costello-Batina exception-free addition formula.
+     // There is 30% faster Jacobian formula, but it is not complete.
+     // https://eprint.iacr.org/2015/1060, algorithm 1
+     // Cost: 12M + 0S + 3*a + 3*b3 + 23add.
+-    add(b) {
+-      B(b);
+-      const { X: v, Y: E, Z: k } = this, { X: x, Y: A, Z: M } = b;
+-      let K = n.ZERO, P = n.ZERO, D = n.ZERO;
++    add(v) {
++      B(v);
++      const { X: g, Y: E, Z: K } = this, { X: x, Y: A, Z: M } = v;
++      let S = n.ZERO, P = n.ZERO, D = n.ZERO;
+       const ee = s.a, z = n.mul(s.b, Jt);
+-      let N = n.mul(v, x), te = n.mul(E, A), se = n.mul(k, M), fe = n.add(v, E), Z = n.add(x, A);
+-      fe = n.mul(fe, Z), Z = n.add(N, te), fe = n.sub(fe, Z), Z = n.add(v, k);
++      let N = n.mul(g, x), te = n.mul(E, A), se = n.mul(K, M), fe = n.add(g, E), Z = n.add(x, A);
++      fe = n.mul(fe, Z), Z = n.add(N, te), fe = n.sub(fe, Z), Z = n.add(g, K);
+       let oe = n.add(x, M);
+-      return Z = n.mul(Z, oe), oe = n.add(N, se), Z = n.sub(Z, oe), oe = n.add(E, k), K = n.add(A, M), oe = n.mul(oe, K), K = n.add(te, se), oe = n.sub(oe, K), D = n.mul(ee, Z), K = n.mul(z, se), D = n.add(K, D), K = n.sub(te, D), D = n.add(te, D), P = n.mul(K, D), te = n.add(N, N), te = n.add(te, N), se = n.mul(ee, se), Z = n.mul(z, Z), te = n.add(te, se), se = n.sub(N, se), se = n.mul(ee, se), Z = n.add(Z, se), N = n.mul(te, Z), P = n.add(P, N), N = n.mul(oe, Z), K = n.mul(fe, K), K = n.sub(K, N), N = n.mul(fe, te), D = n.mul(oe, D), D = n.add(D, N), new C(K, P, D);
++      return Z = n.mul(Z, oe), oe = n.add(N, se), Z = n.sub(Z, oe), oe = n.add(E, K), S = n.add(A, M), oe = n.mul(oe, S), S = n.add(te, se), oe = n.sub(oe, S), D = n.mul(ee, Z), S = n.mul(z, se), D = n.add(S, D), S = n.sub(te, D), D = n.add(te, D), P = n.mul(S, D), te = n.add(N, N), te = n.add(te, N), se = n.mul(ee, se), Z = n.mul(z, Z), te = n.add(te, se), se = n.sub(N, se), se = n.mul(ee, se), Z = n.add(Z, se), N = n.mul(te, Z), P = n.add(P, N), N = n.mul(oe, Z), S = n.mul(fe, S), S = n.sub(S, N), N = n.mul(fe, te), D = n.mul(oe, D), D = n.add(D, N), new C(S, P, D);
+     }
+-    subtract(b) {
+-      return this.add(b.negate());
++    subtract(v) {
++      return this.add(v.negate());
+     }
+     is0() {
+       return this.equals(C.ZERO);
+@@ -1233,69 +1233,69 @@ function Sc(t, e = {}) {
+      * @param scalar by which the point would be multiplied
+      * @returns New point
+      */
+-    multiply(b) {
+-      const { endo: v } = e;
+-      if (!i.isValidNot0(b))
++    multiply(v) {
++      const { endo: g } = e;
++      if (!i.isValidNot0(v))
+         throw new Error("invalid scalar: out of range");
+-      let E, k;
++      let E, K;
+       const x = (A) => J.cached(this, A, (M) => Ci(C, M));
+-      if (v) {
+-        const { k1neg: A, k1: M, k2neg: K, k2: P } = Y(b), { p: D, f: ee } = x(M), { p: z, f: N } = x(P);
+-        k = ee.add(N), E = R(v.beta, D, z, A, K);
++      if (g) {
++        const { k1neg: A, k1: M, k2neg: S, k2: P } = Y(v), { p: D, f: ee } = x(M), { p: z, f: N } = x(P);
++        K = ee.add(N), E = R(g.beta, D, z, A, S);
+       } else {
+-        const { p: A, f: M } = x(b);
+-        E = A, k = M;
++        const { p: A, f: M } = x(v);
++        E = A, K = M;
+       }
+-      return Ci(C, [E, k])[0];
++      return Ci(C, [E, K])[0];
+     }
+     /**
+      * Non-constant-time multiplication. Uses double-and-add algorithm.
+      * It's faster, but should only be used when you don't care about
+      * an exposed secret key e.g. sig verification, which works over *public* keys.
+      */
+-    multiplyUnsafe(b) {
+-      const { endo: v } = e, E = this;
+-      if (!i.isValid(b))
++    multiplyUnsafe(v) {
++      const { endo: g } = e, E = this;
++      if (!i.isValid(v))
+         throw new Error("invalid scalar: out of range");
+-      if (b === Ce || E.is0())
++      if (v === Ce || E.is0())
+         return C.ZERO;
+-      if (b === ct)
++      if (v === ct)
+         return E;
+       if (J.hasCache(this))
+-        return this.multiply(b);
+-      if (v) {
+-        const { k1neg: k, k1: x, k2neg: A, k2: M } = Y(b), { p1: K, p2: P } = vc(C, E, x, M);
+-        return R(v.beta, K, P, k, A);
++        return this.multiply(v);
++      if (g) {
++        const { k1neg: K, k1: x, k2neg: A, k2: M } = Y(v), { p1: S, p2: P } = vc(C, E, x, M);
++        return R(g.beta, S, P, K, A);
+       } else
+-        return J.unsafe(E, b);
++        return J.unsafe(E, v);
+     }
+     /**
+      * Converts Projective point to affine (x, y) coordinates.
+      * @param invertedZ Z^-1 (inverted zero) - optional, precomputation is useful for invertBatch
+      */
+-    toAffine(b) {
+-      return U(this, b);
++    toAffine(v) {
++      return U(this, v);
+     }
+     /**
+      * Checks whether Point is free of torsion elements (is in prime subgroup).
+      * Always torsion-free for cofactor=1 curves.
+      */
+     isTorsionFree() {
+-      const { isTorsionFree: b } = e;
+-      return o === ct ? !0 : b ? b(C, this) : J.unsafe(this, a).is0();
++      const { isTorsionFree: v } = e;
++      return o === ct ? !0 : v ? v(C, this) : J.unsafe(this, a).is0();
+     }
+     clearCofactor() {
+-      const { clearCofactor: b } = e;
+-      return o === ct ? this : b ? b(C, this) : this.multiplyUnsafe(o);
++      const { clearCofactor: v } = e;
++      return o === ct ? this : v ? v(C, this) : this.multiplyUnsafe(o);
+     }
+     isSmallOrder() {
+       return this.multiplyUnsafe(o).is0();
+     }
+-    toBytes(b = !0) {
+-      return ar(b, "isCompressed"), this.assertValidity(), f(C, this, b);
++    toBytes(v = !0) {
++      return ar(v, "isCompressed"), this.assertValidity(), f(C, this, v);
+     }
+-    toHex(b = !0) {
+-      return V(this.toBytes(b));
++    toHex(v = !0) {
++      return V(this.toBytes(v));
+     }
+     toString() {
+       return `<Point ${this.is0() ? "ZERO" : this.toHex()}>`;
+@@ -1327,17 +1327,17 @@ function Kc(t, e = {}) {
+   const { Fn: r } = t, n = e.randomBytes || tt, i = Object.assign($s(t.Fp, r), { seed: Os(r.ORDER) });
+   function s(f) {
+     try {
+-      const g = r.fromBytes(f);
+-      return r.isValidNot0(g);
++      const y = r.fromBytes(f);
++      return r.isValidNot0(y);
+     } catch {
+       return !1;
+     }
+   }
+-  function o(f, g) {
+-    const { publicKey: y, publicKeyUncompressed: w } = i;
++  function o(f, y) {
++    const { publicKey: b, publicKeyUncompressed: w } = i;
+     try {
+       const m = f.length;
+-      return g === !0 && m !== y || g === !1 && m !== w ? !1 : !!t.fromBytes(f);
++      return y === !0 && m !== b || y === !1 && m !== w ? !1 : !!t.fromBytes(f);
+     } catch {
+       return !1;
+     }
+@@ -1345,23 +1345,23 @@ function Kc(t, e = {}) {
+   function a(f = n(i.seed)) {
+     return Ns($(f, i.seed, "seed"), r.ORDER);
+   }
+-  function c(f, g = !0) {
+-    return t.BASE.multiply(r.fromBytes(f)).toBytes(g);
++  function c(f, y = !0) {
++    return t.BASE.multiply(r.fromBytes(f)).toBytes(y);
+   }
+   function u(f) {
+-    const { secretKey: g, publicKey: y, publicKeyUncompressed: w } = i;
+-    if (!kn(f) || "_lengths" in r && r._lengths || g === y)
++    const { secretKey: y, publicKey: b, publicKeyUncompressed: w } = i;
++    if (!kn(f) || "_lengths" in r && r._lengths || y === b)
+       return;
+     const m = $(f, void 0, "key").length;
+-    return m === y || m === w;
++    return m === b || m === w;
+   }
+-  function d(f, g, y = !0) {
++  function d(f, y, b = !0) {
+     if (u(f) === !0)
+       throw new Error("first arg must be private key");
+-    if (u(g) === !1)
++    if (u(y) === !1)
+       throw new Error("second arg must be public key");
+     const w = r.fromBytes(f);
+-    return t.fromBytes(g).multiply(w).toBytes(y);
++    return t.fromBytes(y).multiply(w).toBytes(b);
+   }
+   const h = {
+     isValidSecretKey: s,
+@@ -1378,70 +1378,70 @@ function kc(t, e, r = {}) {
+     bits2int: "function",
+     bits2int_modN: "function"
+   }), r = Object.assign({}, r);
+-  const n = r.randomBytes || tt, i = r.hmac || ((b, v) => mt(e, b, v)), { Fp: s, Fn: o } = t, { ORDER: a, BITS: c } = o, { keygen: u, getPublicKey: d, getSharedSecret: h, utils: p, lengths: f } = Kc(t, r), g = {
++  const n = r.randomBytes || tt, i = r.hmac || ((v, g) => mt(e, v, g)), { Fp: s, Fn: o } = t, { ORDER: a, BITS: c } = o, { keygen: u, getPublicKey: d, getSharedSecret: h, utils: p, lengths: f } = Kc(t, r), y = {
+     prehash: !0,
+     lowS: typeof r.lowS == "boolean" ? r.lowS : !0,
+     format: "compact",
+     extraEntropy: !1
+-  }, y = a * Us < s.ORDER;
+-  function w(b) {
+-    const v = a >> ct;
+-    return b > v;
+-  }
+-  function m(b, v) {
+-    if (!o.isValidNot0(v))
+-      throw new Error(`invalid signature ${b}: out of range 1..Point.Fn.ORDER`);
+-    return v;
+-  }
+-  function S() {
+-    if (y)
++  }, b = a * Us < s.ORDER;
++  function w(v) {
++    const g = a >> ct;
++    return v > g;
++  }
++  function m(v, g) {
++    if (!o.isValidNot0(g))
++      throw new Error(`invalid signature ${v}: out of range 1..Point.Fn.ORDER`);
++    return g;
++  }
++  function k() {
++    if (b)
+       throw new Error('"recovered" sig type is not supported for cofactor >2 curves');
+   }
+-  function O(b, v) {
+-    sn(v);
+-    const E = f.signature, k = v === "compact" ? E : v === "recovered" ? E + 1 : void 0;
+-    return $(b, k);
++  function O(v, g) {
++    sn(g);
++    const E = f.signature, K = g === "compact" ? E : g === "recovered" ? E + 1 : void 0;
++    return $(v, K);
+   }
+   class B {
+-    constructor(v, E, k) {
++    constructor(g, E, K) {
+       l(this, "r");
+       l(this, "s");
+       l(this, "recovery");
+-      if (this.r = m("r", v), this.s = m("s", E), k != null) {
+-        if (S(), ![0, 1, 2, 3].includes(k))
++      if (this.r = m("r", g), this.s = m("s", E), K != null) {
++        if (k(), ![0, 1, 2, 3].includes(K))
+           throw new Error("invalid recovery id");
+-        this.recovery = k;
++        this.recovery = K;
+       }
+       Object.freeze(this);
+     }
+-    static fromBytes(v, E = g.format) {
+-      O(v, E);
+-      let k;
++    static fromBytes(g, E = y.format) {
++      O(g, E);
++      let K;
+       if (E === "der") {
+-        const { r: K, s: P } = Fe.toSig($(v));
+-        return new B(K, P);
++        const { r: S, s: P } = Fe.toSig($(g));
++        return new B(S, P);
+       }
+-      E === "recovered" && (k = v[0], E = "compact", v = v.subarray(1));
+-      const x = f.signature / 2, A = v.subarray(0, x), M = v.subarray(x, x * 2);
+-      return new B(o.fromBytes(A), o.fromBytes(M), k);
++      E === "recovered" && (K = g[0], E = "compact", g = g.subarray(1));
++      const x = f.signature / 2, A = g.subarray(0, x), M = g.subarray(x, x * 2);
++      return new B(o.fromBytes(A), o.fromBytes(M), K);
+     }
+-    static fromHex(v, E) {
+-      return this.fromBytes(j(v), E);
++    static fromHex(g, E) {
++      return this.fromBytes(j(g), E);
+     }
+     assertRecovery() {
+-      const { recovery: v } = this;
+-      if (v == null)
++      const { recovery: g } = this;
++      if (g == null)
+         throw new Error("invalid recovery id: must be present");
+-      return v;
++      return g;
+     }
+-    addRecoveryBit(v) {
+-      return new B(this.r, this.s, v);
++    addRecoveryBit(g) {
++      return new B(this.r, this.s, g);
+     }
+-    recoverPublicKey(v) {
+-      const { r: E, s: k } = this, x = this.assertRecovery(), A = x === 2 || x === 3 ? E + a : E;
++    recoverPublicKey(g) {
++      const { r: E, s: K } = this, x = this.assertRecovery(), A = x === 2 || x === 3 ? E + a : E;
+       if (!s.isValid(A))
+         throw new Error("invalid recovery id: sig.r+curve.n != R.x");
+-      const M = s.toBytes(A), K = t.fromBytes(Q(Fs((x & 1) === 0), M)), P = o.inv(A), D = U($(v, void 0, "msgHash")), ee = o.create(-D * P), z = o.create(k * P), N = t.BASE.multiplyUnsafe(ee).add(K.multiplyUnsafe(z));
++      const M = s.toBytes(A), S = t.fromBytes(Q(Fs((x & 1) === 0), M)), P = o.inv(A), D = U($(g, void 0, "msgHash")), ee = o.create(-D * P), z = o.create(K * P), N = t.BASE.multiplyUnsafe(ee).add(S.multiplyUnsafe(z));
+       if (N.is0())
+         throw new Error("invalid recovery: point at infinify");
+       return N.assertValidity(), N;
+@@ -1450,37 +1450,37 @@ function kc(t, e, r = {}) {
+     hasHighS() {
+       return w(this.s);
+     }
+-    toBytes(v = g.format) {
+-      if (sn(v), v === "der")
++    toBytes(g = y.format) {
++      if (sn(g), g === "der")
+         return j(Fe.hexFromSig(this));
+-      const { r: E, s: k } = this, x = o.toBytes(E), A = o.toBytes(k);
+-      return v === "recovered" ? (S(), Q(Uint8Array.of(this.assertRecovery()), x, A)) : Q(x, A);
++      const { r: E, s: K } = this, x = o.toBytes(E), A = o.toBytes(K);
++      return g === "recovered" ? (k(), Q(Uint8Array.of(this.assertRecovery()), x, A)) : Q(x, A);
+     }
+-    toHex(v) {
+-      return V(this.toBytes(v));
++    toHex(g) {
++      return V(this.toBytes(g));
+     }
+   }
+-  const Y = r.bits2int || function(v) {
+-    if (v.length > 8192)
++  const Y = r.bits2int || function(g) {
++    if (g.length > 8192)
+       throw new Error("input is too large");
+-    const E = qt(v), k = v.length * 8 - c;
+-    return k > 0 ? E >> BigInt(k) : E;
+-  }, U = r.bits2int_modN || function(v) {
+-    return o.create(Y(v));
++    const E = qt(g), K = g.length * 8 - c;
++    return K > 0 ? E >> BigInt(K) : E;
++  }, U = r.bits2int_modN || function(g) {
++    return o.create(Y(g));
+   }, G = xn(c);
+-  function R(b) {
+-    return nc("num < 2^" + c, b, Ce, G), o.toBytes(b);
++  function R(v) {
++    return nc("num < 2^" + c, v, Ce, G), o.toBytes(v);
+   }
+-  function T(b, v) {
+-    return $(b, void 0, "message"), v ? $(e(b), void 0, "prehashed message") : b;
++  function T(v, g) {
++    return $(v, void 0, "message"), g ? $(e(v), void 0, "prehashed message") : v;
+   }
+-  function X(b, v, E) {
+-    const { lowS: k, prehash: x, extraEntropy: A } = Fr(E, g);
+-    b = T(b, x);
+-    const M = U(b), K = o.fromBytes(v);
+-    if (!o.isValidNot0(K))
++  function X(v, g, E) {
++    const { lowS: K, prehash: x, extraEntropy: A } = Fr(E, y);
++    v = T(v, x);
++    const M = U(v), S = o.fromBytes(g);
++    if (!o.isValidNot0(S))
+       throw new Error("invalid private key");
+-    const P = [R(K), R(M)];
++    const P = [R(S), R(M)];
+     if (A != null && A !== !1) {
+       const N = A === !0 ? n(f.secretKey) : A;
+       P.push($(N, void 0, "extraEntropy"));
+@@ -1493,38 +1493,38 @@ function kc(t, e, r = {}) {
+       const se = o.inv(te), fe = t.BASE.multiply(te).toAffine(), Z = o.create(fe.x);
+       if (Z === Ce)
+         return;
+-      const oe = o.create(se * o.create(ee + Z * K));
++      const oe = o.create(se * o.create(ee + Z * S));
+       if (oe === Ce)
+         return;
+       let Ai = (fe.x === Z ? 0 : 2) | Number(fe.y & ct), Pi = oe;
+-      return k && w(oe) && (Pi = o.neg(oe), Ai ^= 1), new B(Z, Pi, y ? void 0 : Ai);
++      return K && w(oe) && (Pi = o.neg(oe), Ai ^= 1), new B(Z, Pi, b ? void 0 : Ai);
+     }
+     return { seed: D, k2sig: z };
+   }
+-  function J(b, v, E = {}) {
+-    const { seed: k, k2sig: x } = X(b, v, E);
+-    return sc(e.outputLen, o.BYTES, i)(k, x).toBytes(E.format);
++  function J(v, g, E = {}) {
++    const { seed: K, k2sig: x } = X(v, g, E);
++    return sc(e.outputLen, o.BYTES, i)(K, x).toBytes(E.format);
+   }
+-  function C(b, v, E, k = {}) {
+-    const { lowS: x, prehash: A, format: M } = Fr(k, g);
+-    if (E = $(E, void 0, "publicKey"), v = T(v, A), !kn(b)) {
+-      const K = b instanceof B ? ", use sig.toBytes()" : "";
+-      throw new Error("verify expects Uint8Array signature" + K);
++  function C(v, g, E, K = {}) {
++    const { lowS: x, prehash: A, format: M } = Fr(K, y);
++    if (E = $(E, void 0, "publicKey"), g = T(g, A), !kn(v)) {
++      const S = v instanceof B ? ", use sig.toBytes()" : "";
++      throw new Error("verify expects Uint8Array signature" + S);
+     }
+-    O(b, M);
++    O(v, M);
+     try {
+-      const K = B.fromBytes(b, M), P = t.fromBytes(E);
+-      if (x && K.hasHighS())
++      const S = B.fromBytes(v, M), P = t.fromBytes(E);
++      if (x && S.hasHighS())
+         return !1;
+-      const { r: D, s: ee } = K, z = U(v), N = o.inv(ee), te = o.create(z * N), se = o.create(D * N), fe = t.BASE.multiplyUnsafe(te).add(P.multiplyUnsafe(se));
++      const { r: D, s: ee } = S, z = U(g), N = o.inv(ee), te = o.create(z * N), se = o.create(D * N), fe = t.BASE.multiplyUnsafe(te).add(P.multiplyUnsafe(se));
+       return fe.is0() ? !1 : o.create(fe.x) === D;
+     } catch {
+       return !1;
+     }
+   }
+-  function I(b, v, E = {}) {
+-    const { prehash: k } = Fr(E, g);
+-    return v = T(v, k), B.fromBytes(b, "recovered").recoverPublicKey(v).toBytes();
++  function I(v, g, E = {}) {
++    const { prehash: K } = Fr(E, y);
++    return g = T(g, K), B.fromBytes(v, "recovered").recoverPublicKey(g).toBytes();
+   }
+   return Object.freeze({
+     keygen: u,
+@@ -1557,7 +1557,7 @@ const Ar = {
+   ]
+ }, Pc = /* @__PURE__ */ BigInt(0), on = /* @__PURE__ */ BigInt(2);
+ function xc(t) {
+-  const e = Ar.p, r = BigInt(3), n = BigInt(6), i = BigInt(11), s = BigInt(22), o = BigInt(23), a = BigInt(44), c = BigInt(88), u = t * t * t % e, d = u * u * t % e, h = ve(d, r, e) * d % e, p = ve(h, r, e) * d % e, f = ve(p, on, e) * u % e, g = ve(f, i, e) * f % e, y = ve(g, s, e) * g % e, w = ve(y, a, e) * y % e, m = ve(w, c, e) * w % e, S = ve(m, a, e) * y % e, O = ve(S, r, e) * d % e, B = ve(O, o, e) * g % e, Y = ve(B, n, e) * u % e, U = ve(Y, on, e);
++  const e = Ar.p, r = BigInt(3), n = BigInt(6), i = BigInt(11), s = BigInt(22), o = BigInt(23), a = BigInt(44), c = BigInt(88), u = t * t * t % e, d = u * u * t % e, h = ve(d, r, e) * d % e, p = ve(h, r, e) * d % e, f = ve(p, on, e) * u % e, y = ve(f, i, e) * f % e, b = ve(y, s, e) * y % e, w = ve(b, a, e) * b % e, m = ve(w, c, e) * w % e, k = ve(m, a, e) * b % e, O = ve(k, r, e) * d % e, B = ve(O, o, e) * y % e, Y = ve(B, n, e) * u % e, U = ve(Y, on, e);
+   if (!ur.eql(ur.sqr(U), t))
+     throw new Error("Cannot find square root");
+   return U;
+@@ -1611,8 +1611,8 @@ function Hs(t, e, r) {
+     const h = Dt(o.subarray(32, 64));
+     if (!i.isValidNot0(h))
+       return !1;
+-    const p = qs(i.toBytes(d), Rn(u), a), f = s.multiplyUnsafe(h).add(u.multiplyUnsafe(i.neg(p))), { x: g, y } = f.toAffine();
+-    return !(f.is0() || !Cn(y) || g !== d);
++    const p = qs(i.toBytes(d), Rn(u), a), f = s.multiplyUnsafe(h).add(u.multiplyUnsafe(i.neg(p))), { x: y, y: b } = f.toAffine();
++    return !(f.is0() || !Cn(b) || y !== d);
+   } catch {
+     return !1;
+   }
+@@ -1829,12 +1829,12 @@ function Nc(t) {
+   const e = t === "bech32" ? 1 : 734539939, r = /* @__PURE__ */ Ys(5), n = r.decode, i = r.encode, s = Bi(n);
+   function o(h, p, f = 90) {
+     Xe("bech32.encode prefix", h), Dn(p) && (p = Array.from(p)), Vs("bech32.encode", p);
+-    const g = h.length;
+-    if (g === 0)
+-      throw new TypeError(`Invalid prefix length ${g}`);
+-    const y = g + 7 + p.length;
+-    if (f !== !1 && y > f)
+-      throw new TypeError(`Length ${y} exceeds limit ${f}`);
++    const y = h.length;
++    if (y === 0)
++      throw new TypeError(`Invalid prefix length ${y}`);
++    const b = y + 7 + p.length;
++    if (f !== !1 && b > f)
++      throw new TypeError(`Length ${b} exceeds limit ${f}`);
+     const w = h.toLowerCase(), m = Fi(w, p, e);
+     return `${w}1${dn.encode(p)}${m}`;
+   }
+@@ -1843,19 +1843,19 @@ function Nc(t) {
+     const f = h.length;
+     if (f < 8 || p !== !1 && f > p)
+       throw new TypeError(`invalid string length: ${f} (${h}). Expected (8..${p})`);
+-    const g = h.toLowerCase();
+-    if (h !== g && h !== h.toUpperCase())
++    const y = h.toLowerCase();
++    if (h !== y && h !== h.toUpperCase())
+       throw new Error("String must be lowercase or uppercase");
+-    const y = g.lastIndexOf("1");
+-    if (y === 0 || y === -1)
++    const b = y.lastIndexOf("1");
++    if (b === 0 || b === -1)
+       throw new Error('Letter "1" must be present between prefix and data only');
+-    const w = g.slice(0, y), m = g.slice(y + 1);
++    const w = y.slice(0, b), m = y.slice(b + 1);
+     if (m.length < 6)
+       throw new Error("Data must be at least 6 characters long");
+-    const S = dn.decode(m).slice(0, -6), O = Fi(w, S, e);
++    const k = dn.decode(m).slice(0, -6), O = Fi(w, k, e);
+     if (!m.endsWith(O))
+       throw new Error(`Invalid checksum in ${h}: expected "${O}"`);
+-    return { prefix: w, words: S };
++    return { prefix: w, words: k };
+   }
+   const c = Bi(a);
+   function u(h) {
+@@ -2055,9 +2055,9 @@ function Gi(t, e, r, n, i) {
+   let c = 0;
+   e ^= t[c++], r ^= t[c++], n ^= t[c++], i ^= t[c++];
+   const u = t.length / 4 - 2;
+-  for (let g = 0; g < u; g++) {
+-    const y = t[c++] ^ Ge(o, a, e, r, n, i), w = t[c++] ^ Ge(o, a, r, n, i, e), m = t[c++] ^ Ge(o, a, n, i, e, r), S = t[c++] ^ Ge(o, a, i, e, r, n);
+-    e = y, r = w, n = m, i = S;
++  for (let y = 0; y < u; y++) {
++    const b = t[c++] ^ Ge(o, a, e, r, n, i), w = t[c++] ^ Ge(o, a, r, n, i, e), m = t[c++] ^ Ge(o, a, n, i, e, r), k = t[c++] ^ Ge(o, a, i, e, r, n);
++    e = b, r = w, n = m, i = k;
+   }
+   const d = t[c++] ^ ke(s, e, r, n, i), h = t[c++] ^ ke(s, r, n, i, e), p = t[c++] ^ ke(s, n, i, e, r), f = t[c++] ^ ke(s, i, e, r, n);
+   return { s0: d, s1: h, s2: p, s3: f };
+@@ -2067,9 +2067,9 @@ function Vc(t, e, r, n, i) {
+   let c = 0;
+   e ^= t[c++], r ^= t[c++], n ^= t[c++], i ^= t[c++];
+   const u = t.length / 4 - 2;
+-  for (let g = 0; g < u; g++) {
+-    const y = t[c++] ^ Ge(o, a, e, i, n, r), w = t[c++] ^ Ge(o, a, r, e, i, n), m = t[c++] ^ Ge(o, a, n, r, e, i), S = t[c++] ^ Ge(o, a, i, n, r, e);
+-    e = y, r = w, n = m, i = S;
++  for (let y = 0; y < u; y++) {
++    const b = t[c++] ^ Ge(o, a, e, i, n, r), w = t[c++] ^ Ge(o, a, r, e, i, n), m = t[c++] ^ Ge(o, a, n, r, e, i), k = t[c++] ^ Ge(o, a, i, n, r, e);
++    e = b, r = w, n = m, i = k;
+   }
+   const d = t[c++] ^ ke(s, e, i, n, r), h = t[c++] ^ ke(s, r, e, i, n), p = t[c++] ^ ke(s, n, r, e, i), f = t[c++] ^ ke(s, i, n, r, e);
+   return { s0: d, s1: h, s2: p, s3: f };
+@@ -2126,12 +2126,12 @@ const io = /* @__PURE__ */ Uc({ blockSize: 16, nonceLength: 16 }, function(e, r,
+       const p = [a];
+       ut(h) || p.push(h = Qe(h));
+       const f = re(h);
+-      let g = f[0], y = f[1], w = f[2], m = f[3], S = 0;
+-      for (; S + 4 <= c.length; )
+-        g ^= c[S + 0], y ^= c[S + 1], w ^= c[S + 2], m ^= c[S + 3], { s0: g, s1: y, s2: w, s3: m } = Gi(a, g, y, w, m), u[S++] = g, u[S++] = y, u[S++] = w, u[S++] = m;
++      let y = f[0], b = f[1], w = f[2], m = f[3], k = 0;
++      for (; k + 4 <= c.length; )
++        y ^= c[k + 0], b ^= c[k + 1], w ^= c[k + 2], m ^= c[k + 3], { s0: y, s1: b, s2: w, s3: m } = Gi(a, y, b, w, m), u[k++] = y, u[k++] = b, u[k++] = w, u[k++] = m;
+       if (i) {
+-        const O = Zc(s.subarray(S * 4));
+-        g ^= O[0], y ^= O[1], w ^= O[2], m ^= O[3], { s0: g, s1: y, s2: w, s3: m } = Gi(a, g, y, w, m), u[S++] = g, u[S++] = y, u[S++] = w, u[S++] = m;
++        const O = Zc(s.subarray(k * 4));
++        y ^= O[0], b ^= O[1], w ^= O[2], m ^= O[3], { s0: y, s1: b, s2: w, s3: m } = Gi(a, y, b, w, m), u[k++] = y, u[k++] = b, u[k++] = w, u[k++] = m;
+       }
+       return pt(...p), d;
+     },
+@@ -2144,12 +2144,12 @@ const io = /* @__PURE__ */ Uc({ blockSize: 16, nonceLength: 16 }, function(e, r,
+       const d = re(c);
+       o = eo(s.length, o), ut(s) || u.push(s = Qe(s)), Qs(s, o);
+       const h = re(s), p = re(o);
+-      let f = d[0], g = d[1], y = d[2], w = d[3];
++      let f = d[0], y = d[1], b = d[2], w = d[3];
+       for (let m = 0; m + 4 <= h.length; ) {
+-        const S = f, O = g, B = y, Y = w;
+-        f = h[m + 0], g = h[m + 1], y = h[m + 2], w = h[m + 3];
+-        const { s0: U, s1: G, s2: R, s3: T } = Vc(a, f, g, y, w);
+-        p[m++] = U ^ S, p[m++] = G ^ O, p[m++] = R ^ B, p[m++] = T ^ Y;
++        const k = f, O = y, B = b, Y = w;
++        f = h[m + 0], y = h[m + 1], b = h[m + 2], w = h[m + 3];
++        const { s0: U, s1: G, s2: R, s3: T } = Vc(a, f, y, b, w);
++        p[m++] = U ^ k, p[m++] = G ^ O, p[m++] = R ^ B, p[m++] = T ^ Y;
+       }
+       return pt(...u), Jc(o, i);
+     }
+@@ -2164,22 +2164,22 @@ function ln(t) {
+ const Zt = 64, tu = 16, oo = 2 ** 32 - 1, qi = Uint32Array.of();
+ function ru(t, e, r, n, i, s, o, a) {
+   const c = i.length, u = new Uint8Array(Zt), d = re(u), h = ln(i) && ln(s), p = h ? re(i) : qi, f = h ? re(s) : qi;
+-  for (let g = 0; g < c; o++) {
++  for (let y = 0; y < c; o++) {
+     if (t(e, r, n, d, o, a), o >= oo)
+       throw new Error("arx: counter overflow");
+-    const y = Math.min(Zt, c - g);
+-    if (h && y === Zt) {
+-      const w = g / 4;
+-      if (g % 4 !== 0)
++    const b = Math.min(Zt, c - y);
++    if (h && b === Zt) {
++      const w = y / 4;
++      if (y % 4 !== 0)
+         throw new Error("arx: invalid block position");
+-      for (let m = 0, S; m < tu; m++)
+-        S = w + m, f[S] = p[S] ^ d[m];
+-      g += Zt;
++      for (let m = 0, k; m < tu; m++)
++        k = w + m, f[k] = p[k] ^ d[m];
++      y += Zt;
+       continue;
+     }
+-    for (let w = 0, m; w < y; w++)
+-      m = g + w, s[m] = i[m] ^ u[w];
+-    g += y;
++    for (let w = 0, m; w < b; w++)
++      m = y + w, s[m] = i[m] ^ u[w];
++    y += b;
+   }
+ }
+ function nu(t, e) {
+@@ -2194,24 +2194,24 @@ function nu(t, e) {
+     if (d.length < p)
+       throw new Error(`arx: output (${d.length}) is shorter than data (${p})`);
+     const f = [];
+-    let g = a.length, y, w;
+-    if (g === 32)
+-      f.push(y = Qe(a)), w = eu;
+-    else if (g === 16 && r)
+-      y = new Uint8Array(32), y.set(a), y.set(a, 16), w = Xc, f.push(y);
++    let y = a.length, b, w;
++    if (y === 32)
++      f.push(b = Qe(a)), w = eu;
++    else if (y === 16 && r)
++      b = new Uint8Array(32), b.set(a), b.set(a, 16), w = Xc, f.push(b);
+     else
+       throw de(a, 32, "arx key"), new Error("invalid key size");
+     ln(c) || f.push(c = Qe(c));
+-    const m = re(y);
++    const m = re(b);
+     if (n) {
+       if (c.length !== 24)
+         throw new Error("arx: extended nonce must be 24 bytes");
+       n(w, m, re(c.subarray(0, 16)), m), c = c.subarray(16);
+     }
+-    const S = 16 - i;
+-    if (S !== c.length)
+-      throw new Error(`arx: nonce must be ${S} or 16 bytes`);
+-    if (S !== 12) {
++    const k = 16 - i;
++    if (k !== c.length)
++      throw new Error(`arx: nonce must be ${k} or 16 bytes`);
++    if (k !== 12) {
+       const B = new Uint8Array(12);
+       B.set(c, s ? 0 : 12 - c.length), c = B, f.push(c);
+     }
+@@ -2220,11 +2220,11 @@ function nu(t, e) {
+   };
+ }
+ function iu(t, e, r, n, i, s = 20) {
+-  let o = t[0], a = t[1], c = t[2], u = t[3], d = e[0], h = e[1], p = e[2], f = e[3], g = e[4], y = e[5], w = e[6], m = e[7], S = i, O = r[0], B = r[1], Y = r[2], U = o, G = a, R = c, T = u, X = d, J = h, C = p, I = f, b = g, v = y, E = w, k = m, x = S, A = O, M = B, K = Y;
++  let o = t[0], a = t[1], c = t[2], u = t[3], d = e[0], h = e[1], p = e[2], f = e[3], y = e[4], b = e[5], w = e[6], m = e[7], k = i, O = r[0], B = r[1], Y = r[2], U = o, G = a, R = c, T = u, X = d, J = h, C = p, I = f, v = y, g = b, E = w, K = m, x = k, A = O, M = B, S = Y;
+   for (let D = 0; D < s; D += 2)
+-    U = U + X | 0, x = L(x ^ U, 16), b = b + x | 0, X = L(X ^ b, 12), U = U + X | 0, x = L(x ^ U, 8), b = b + x | 0, X = L(X ^ b, 7), G = G + J | 0, A = L(A ^ G, 16), v = v + A | 0, J = L(J ^ v, 12), G = G + J | 0, A = L(A ^ G, 8), v = v + A | 0, J = L(J ^ v, 7), R = R + C | 0, M = L(M ^ R, 16), E = E + M | 0, C = L(C ^ E, 12), R = R + C | 0, M = L(M ^ R, 8), E = E + M | 0, C = L(C ^ E, 7), T = T + I | 0, K = L(K ^ T, 16), k = k + K | 0, I = L(I ^ k, 12), T = T + I | 0, K = L(K ^ T, 8), k = k + K | 0, I = L(I ^ k, 7), U = U + J | 0, K = L(K ^ U, 16), E = E + K | 0, J = L(J ^ E, 12), U = U + J | 0, K = L(K ^ U, 8), E = E + K | 0, J = L(J ^ E, 7), G = G + C | 0, x = L(x ^ G, 16), k = k + x | 0, C = L(C ^ k, 12), G = G + C | 0, x = L(x ^ G, 8), k = k + x | 0, C = L(C ^ k, 7), R = R + I | 0, A = L(A ^ R, 16), b = b + A | 0, I = L(I ^ b, 12), R = R + I | 0, A = L(A ^ R, 8), b = b + A | 0, I = L(I ^ b, 7), T = T + X | 0, M = L(M ^ T, 16), v = v + M | 0, X = L(X ^ v, 12), T = T + X | 0, M = L(M ^ T, 8), v = v + M | 0, X = L(X ^ v, 7);
++    U = U + X | 0, x = L(x ^ U, 16), v = v + x | 0, X = L(X ^ v, 12), U = U + X | 0, x = L(x ^ U, 8), v = v + x | 0, X = L(X ^ v, 7), G = G + J | 0, A = L(A ^ G, 16), g = g + A | 0, J = L(J ^ g, 12), G = G + J | 0, A = L(A ^ G, 8), g = g + A | 0, J = L(J ^ g, 7), R = R + C | 0, M = L(M ^ R, 16), E = E + M | 0, C = L(C ^ E, 12), R = R + C | 0, M = L(M ^ R, 8), E = E + M | 0, C = L(C ^ E, 7), T = T + I | 0, S = L(S ^ T, 16), K = K + S | 0, I = L(I ^ K, 12), T = T + I | 0, S = L(S ^ T, 8), K = K + S | 0, I = L(I ^ K, 7), U = U + J | 0, S = L(S ^ U, 16), E = E + S | 0, J = L(J ^ E, 12), U = U + J | 0, S = L(S ^ U, 8), E = E + S | 0, J = L(J ^ E, 7), G = G + C | 0, x = L(x ^ G, 16), K = K + x | 0, C = L(C ^ K, 12), G = G + C | 0, x = L(x ^ G, 8), K = K + x | 0, C = L(C ^ K, 7), R = R + I | 0, A = L(A ^ R, 16), v = v + A | 0, I = L(I ^ v, 12), R = R + I | 0, A = L(A ^ R, 8), v = v + A | 0, I = L(I ^ v, 7), T = T + X | 0, M = L(M ^ T, 16), g = g + M | 0, X = L(X ^ g, 12), T = T + X | 0, M = L(M ^ T, 8), g = g + M | 0, X = L(X ^ g, 7);
+   let P = 0;
+-  n[P++] = o + U | 0, n[P++] = a + G | 0, n[P++] = c + R | 0, n[P++] = u + T | 0, n[P++] = d + X | 0, n[P++] = h + J | 0, n[P++] = p + C | 0, n[P++] = f + I | 0, n[P++] = g + b | 0, n[P++] = y + v | 0, n[P++] = w + E | 0, n[P++] = m + k | 0, n[P++] = S + x | 0, n[P++] = O + A | 0, n[P++] = B + M | 0, n[P++] = Y + K | 0;
++  n[P++] = o + U | 0, n[P++] = a + G | 0, n[P++] = c + R | 0, n[P++] = u + T | 0, n[P++] = d + X | 0, n[P++] = h + J | 0, n[P++] = p + C | 0, n[P++] = f + I | 0, n[P++] = y + v | 0, n[P++] = b + g | 0, n[P++] = w + E | 0, n[P++] = m + K | 0, n[P++] = k + x | 0, n[P++] = O + A | 0, n[P++] = B + M | 0, n[P++] = Y + S | 0;
+ }
+ const xr = /* @__PURE__ */ nu(iu, {
+   counterRight: !1,
+@@ -4029,34 +4029,34 @@ var up = class {
+     for (; n.length !== 0; ) {
+       let d = new Re(), h = () => {
+         u && (u = !1, d.extend(this.encodeBound(a)), d.extend(Me(ze.Skip)));
+-      }, p = this.decodeBound(n), f = Qt(n), g = c, y = this.storage.findLowerBound(c, o, p);
++      }, p = this.decodeBound(n), f = Qt(n), y = c, b = this.storage.findLowerBound(c, o, p);
+       if (f === ze.Skip)
+         u = !0;
+       else if (f === ze.Fingerprint) {
+-        let w = sr(n, zo), m = this.storage.fingerprint(g, y);
+-        jo(w, m) !== 0 ? (h(), this.splitRange(g, y, p, d)) : u = !0;
++        let w = sr(n, zo), m = this.storage.fingerprint(y, b);
++        jo(w, m) !== 0 ? (h(), this.splitRange(y, b, p, d)) : u = !0;
+       } else if (f === ze.IdList) {
+         let w = Qt(n), m = {};
+-        for (let S = 0; S < w; S++) {
++        for (let k = 0; k < w; k++) {
+           let O = sr(n, dt);
+           m[V(O)] = O;
+         }
+-        if (u = !0, this.storage.iterate(g, y, (S) => {
+-          let O = S.id;
++        if (u = !0, this.storage.iterate(y, b, (k) => {
++          let O = k.id;
+           const B = V(O);
+           return m[B] ? delete m[V(O)] : e == null || e(B), !0;
+         }), r)
+-          for (let S of Object.values(m))
+-            r(V(S));
++          for (let k of Object.values(m))
++            r(V(k));
+       } else
+         throw Error("unexpected mode");
+       if (this.exceededFrameSizeLimit(i.length + d.length)) {
+-        let w = this.storage.fingerprint(y, o);
++        let w = this.storage.fingerprint(b, o);
+         i.extend(this.encodeBound(this._bound(Number.MAX_VALUE))), i.extend(Me(ze.Fingerprint)), i.extend(w);
+         break;
+       } else
+         i.extend(d);
+-      c = y, a = p;
++      c = b, a = p;
+     }
+     return i.length === 1 ? null : V(i.unwrap());
+   }
+@@ -4073,8 +4073,8 @@ var up = class {
+         if (c === e)
+           p = r;
+         else {
+-          let f, g;
+-          this.storage.iterate(c - 1, c + 1, (y, w) => (w === c - 1 ? f = y : g = y, !0)), p = this.getMinimalBound(f, g);
++          let f, y;
++          this.storage.iterate(c - 1, c + 1, (b, w) => (w === c - 1 ? f = b : y = b, !0)), p = this.getMinimalBound(f, y);
+         }
+         n.extend(this.encodeBound(p)), n.extend(Me(ze.Fingerprint)), n.extend(h);
+       }
+@@ -4537,13 +4537,13 @@ class aa extends Pp {
+     for (let h = 0; h < 16; h++, r += 4)
+       Be[h] = e.getUint32(r, !1);
+     for (let h = 16; h < 64; h++) {
+-      const p = Be[h - 15], f = Be[h - 2], g = Ke(p, 7) ^ Ke(p, 18) ^ p >>> 3, y = Ke(f, 17) ^ Ke(f, 19) ^ f >>> 10;
+-      Be[h] = y + Be[h - 7] + g + Be[h - 16] | 0;
++      const p = Be[h - 15], f = Be[h - 2], y = Ke(p, 7) ^ Ke(p, 18) ^ p >>> 3, b = Ke(f, 17) ^ Ke(f, 19) ^ f >>> 10;
++      Be[h] = b + Be[h - 7] + y + Be[h - 16] | 0;
+     }
+     let { A: n, B: i, C: s, D: o, E: a, F: c, G: u, H: d } = this;
+     for (let h = 0; h < 64; h++) {
+-      const p = Ke(a, 6) ^ Ke(a, 11) ^ Ke(a, 25), f = d + p + xp(a, c, u) + Ip[h] + Be[h] | 0, y = (Ke(n, 2) ^ Ke(n, 13) ^ Ke(n, 22)) + Mp(n, i, s) | 0;
+-      d = u, u = c, c = a, a = o + f | 0, o = s, s = i, i = n, n = f + y | 0;
++      const p = Ke(a, 6) ^ Ke(a, 11) ^ Ke(a, 25), f = d + p + xp(a, c, u) + Ip[h] + Be[h] | 0, b = (Ke(n, 2) ^ Ke(n, 13) ^ Ke(n, 22)) + Mp(n, i, s) | 0;
++      d = u, u = c, c = a, a = o + f | 0, o = s, s = i, i = n, n = f + b | 0;
+     }
+     n = n + this.A | 0, i = i + this.B | 0, s = s + this.C | 0, o = o + this.D | 0, a = a + this.E | 0, c = c + this.F | 0, u = u + this.G | 0, d = d + this.H | 0, this.set(n, i, s, o, a, c, u, d);
+   }
+@@ -5833,24 +5833,24 @@ async function hy(t) {
+     sessionKey: e,
+     sessionProof: p,
+     ...c && { ownerPublicKey: c }
+-  }), g = await h(f, s), y = {
++  }), y = await h(f, s), b = {
+     id: "",
+     pubkey: n,
+-    content: q.encrypt(g, d),
++    content: q.encrypt(y, d),
+     created_at: Pa(),
+     kind: ue,
+     tags: []
+   };
+-  y.id = ne(y);
+-  const w = pe(), m = F(w), S = JSON.stringify(y), O = {
++  b.id = ne(b);
++  const w = pe(), m = F(w), k = JSON.stringify(b), O = {
+     kind: nt,
+     pubkey: m,
+-    content: q.encrypt(S, gt(w, o)),
++    content: q.encrypt(k, gt(w, o)),
+     created_at: uy(),
+     tags: [["p", o]]
+   };
+   return {
+-    innerEvent: y,
++    innerEvent: b,
+     envelope: O,
+     randomSenderPublicKey: m,
+     randomSenderPrivateKey: w
+@@ -5868,17 +5868,17 @@ async function Ma(t) {
+   } = t, c = W(o), u = q.decrypt(
+     e,
+     gt(n, r)
+-  ), d = dy(u), h = d.pubkey, p = q.decrypt(d.content, c), g = await (a ?? (async (R, T) => {
++  ), d = dy(u), h = d.pubkey, p = q.decrypt(d.content, c), y = await (a ?? (async (R, T) => {
+     if (!i)
+       throw new Error("inviterPrivateKey is required when decrypt function is not provided");
+     return q.decrypt(R, gt(i, T));
+-  }))(p, h), y = JSON.parse(g);
+-  if (typeof y != "object" || y === null || Array.isArray(y))
++  }))(p, h), b = JSON.parse(y);
++  if (typeof b != "object" || b === null || Array.isArray(b))
+     throw new Error("Invalid invite response payload");
+-  const w = y, m = /* @__PURE__ */ new Set(["sessionKey", "sessionProof", "ownerPublicKey", "deviceId"]);
++  const w = b, m = /* @__PURE__ */ new Set(["sessionKey", "sessionProof", "ownerPublicKey", "deviceId"]);
+   if (Object.keys(w).some((R) => !m.has(R)))
+     throw new Error("Invalid invite response payload");
+-  const S = $e(w.sessionKey, 32, "session key"), O = $e(w.sessionProof, 64, "invite session proof"), B = w.ownerPublicKey === void 0 ? void 0 : $e(w.ownerPublicKey, 32, "owner public key");
++  const k = $e(w.sessionKey, 32, "session key"), O = $e(w.sessionProof, 64, "invite session proof"), B = w.ownerPublicKey === void 0 ? void 0 : $e(w.ownerPublicKey, 32, "owner public key");
+   if (w.deviceId !== void 0 && typeof w.deviceId != "string")
+     throw new Error("Invalid device id");
+   const Y = s ?? (i ? F(i) : void 0);
+@@ -5888,12 +5888,12 @@ async function Ma(t) {
+     Y,
+     F(n),
+     h,
+-    S,
++    k,
+     o
+   );
+   let G = !1;
+   try {
+-    G = We.verify(W(O), U, W(S));
++    G = We.verify(W(O), U, W(k));
+   } catch {
+     G = !1;
+   }
+@@ -5901,7 +5901,7 @@ async function Ma(t) {
+     throw new Error("Invalid invite session proof");
+   return {
+     inviteeIdentity: h,
+-    inviteeSessionPublicKey: S,
++    inviteeSessionPublicKey: k,
+     ownerPublicKey: B
+   };
+ }
+@@ -5952,8 +5952,8 @@ class he {
+     let s;
+     try {
+       s = JSON.parse(i);
+-    } catch (y) {
+-      throw new Error("Invite data in URL hash is not valid JSON: " + y);
++    } catch (b) {
++      throw new Error("Invite data in URL hash is not valid JSON: " + b);
+     }
+     const {
+       inviter: o,
+@@ -5966,7 +5966,7 @@ class he {
+     } = s, f = a || c;
+     if (!o || !f || !u)
+       throw new Error("Missing required fields (inviter, ephemeralKey, sharedSecret) in invite data.");
+-    const g = h || p;
++    const y = h || p;
+     return new he(
+       f,
+       u,
+@@ -5977,7 +5977,7 @@ class he {
+       [],
+       Xr(),
+       d === "link" || d === "chat" ? d : void 0,
+-      g && /^[0-9a-fA-F]{64}$/.test(g) ? g : void 0
++      y && /^[0-9a-fA-F]{64}$/.test(y) ? y : void 0
+     );
+   }
+   static deserialize(e) {
+@@ -6033,12 +6033,12 @@ class he {
+       if (f.pubkey === e && !s.has(f.id)) {
+         s.add(f.id);
+         try {
+-          const y = {
++          const b = {
+             invite: he.fromEvent(f),
+             createdAt: f.created_at,
+             eventId: f.id
+           };
+-          is(f) ? (!o || f.created_at >= o.createdAt) && (o = y) : (!a || f.created_at >= a.createdAt) && (a = y), h();
++          is(f) ? (!o || f.created_at >= o.createdAt) && (o = b) : (!a || f.created_at >= a.createdAt) && (a = b), h();
+         } catch {
+         }
+       }
+@@ -6712,6 +6712,7 @@ const Tt = class Tt {
+     l(this, "ensurePromise");
+     l(this, "inviteSubscription");
+     l(this, "inviteAcceptancePromise");
++    l(this, "failedReceiveAttempts", /* @__PURE__ */ new WeakMap());
+     this.deviceId = e, this.deps = r, this.createdAt = r.createdAt ?? Date.now();
+   }
+   detachSession(e) {
+@@ -6844,20 +6845,32 @@ const Tt = class Tt {
+     }), this.deps.user.onDeviceDirty(), !0) : !1;
+   }
+   processReceivedEvent(e) {
++    var s;
+     const r = [];
+     this.activeSession && r.push(this.activeSession), r.push(...this.inactiveSessions);
+     const n = /* @__PURE__ */ new Set();
+-    for (const i of r) {
+-      if (n.has(i.name))
++    let i = this.failedReceiveAttempts.get(e);
++    i || (i = /* @__PURE__ */ new WeakMap(), this.failedReceiveAttempts.set(e, i));
++    for (const o of r) {
++      if (n.has(o.name))
+         continue;
+-      n.add(i.name);
+-      let s;
++      n.add(o.name);
++      const a = o.state, c = [
++        (s = a.ourCurrentNostrKey) == null ? void 0 : s.publicKey,
++        a.ourNextNostrKey.publicKey,
++        a.theirCurrentNostrPublicKey,
++        a.theirNextNostrPublicKey,
++        a.receivingChainMessageNumber
++      ].join(":");
++      if (i.get(o) === c) continue;
++      let u;
+       try {
+-        s = i.receiveEvent(e);
++        u = o.receiveEvent(e);
+       } catch {
++        i.set(o, c);
+         continue;
+       }
+-      if (s && this.handleSessionRumor(i, s, e))
++      if (u || i.set(o, c), u && this.handleSessionRumor(o, u, e))
+         return !0;
+     }
+     return !1;
+@@ -7176,6 +7189,7 @@ class hs {
+   async getForTarget(e) {
+     const r = await this.storage.list(this.prefix), n = [];
+     for (const s of r) {
++      if (!s.endsWith(`/${e}`)) continue;
+       const o = await this.storage.get(s);
+       o && o.targetKey === e && n.push(o);
+     }
+@@ -7192,6 +7206,7 @@ class hs {
+   async removeForTarget(e) {
+     const r = await this.storage.list(this.prefix);
+     for (const n of r) {
++      if (!n.endsWith(`/${e}`)) continue;
+       const i = await this.storage.get(n);
+       i && i.targetKey === e && await this.storage.del(n);
+     }
+@@ -8052,20 +8067,20 @@ class Vy extends zy {
+     ];
+     if (e.purpose === "link" && f.length > 0)
+       return await h(), { ownerPublicKey: a, deviceId: i, session: f[0] };
+-    const g = f.find(
++    const y = f.find(
+       (R) => wt(R) && (Ut(R) || mn(R))
+     );
+-    if (g)
+-      return await h(), { ownerPublicKey: a, deviceId: i, session: g };
+-    const y = f.length > 0;
+-    if (s && e.purpose !== "link" && y && f.every(
++    if (y)
++      return await h(), { ownerPublicKey: a, deviceId: i, session: y };
++    const b = f.length > 0;
++    if (s && e.purpose !== "link" && b && f.every(
+       (R) => !wt(R) && !Ut(R) && !mn(R)
+     ))
+       return await h(), { ownerPublicKey: a, deviceId: i, session: f[0] };
+-    const m = this.identityKey instanceof Uint8Array ? this.identityKey : this.identityKey.encrypt, S = e.purpose === "link" ? this.ownerPublicKey : await this.resolveInviteeOwnerClaim(a), { session: O, event: B } = await e.accept(
++    const m = this.identityKey instanceof Uint8Array ? this.identityKey : this.identityKey.encrypt, k = e.purpose === "link" ? this.ownerPublicKey : await this.resolveInviteeOwnerClaim(a), { session: O, event: B } = await e.accept(
+       this.ourPublicKey,
+       m,
+-      S,
++      k,
+       (G = this.userRecords.get(this.ownerPublicKey)) == null ? void 0 : G.ownerProofForDevice(this.deviceId)
+     ), Y = this.upsertDeviceRecord(d, i);
+     return this.delegateToOwner.set(i, a), Y.installSession(O, !1, { preferActive: !0 }), await this.emitPublish(B), await this.sendInviteBootstrap(O, i), e.purpose === "link" && a === this.ownerPublicKey && await this.sendLinkBootstrap(a, i), await this.flushMessageQueue(i).catch(() => {
+@@ -8092,52 +8107,51 @@ class mr extends Vy {
+     );
+     return u.legacyNostrSubscribe = void 0, u.legacyNostrPublish = void 0, u;
+   }
+-  async sendEvent(e, r) {
+-    var g;
+-    await this.init(), await Promise.allSettled([
+-      this.setupUser(e),
+-      this.setupUser(this.ownerPublicKey)
+-    ]);
+-    const n = r, i = /* @__PURE__ */ new Set([e, this.ownerPublicKey]), s = /* @__PURE__ */ new Set();
+-    for (const y of i) {
+-      const w = this.userRecords.get(y), m = /* @__PURE__ */ new Set();
+-      for (const S of ((g = w == null ? void 0 : w.appKeys) == null ? void 0 : g.getAllDevices()) ?? [])
+-        S.identityPubkey && S.identityPubkey !== this.deviceId && m.add(S.identityPubkey);
+-      for (const S of (w == null ? void 0 : w.devices.keys()) ?? [])
+-        S && S !== this.deviceId && m.add(S);
+-      if (m.size > 0)
+-        for (const S of m)
+-          await this.messageQueue.add(S, n), s.add(S);
++  async sendEvent(e, r, n = {}) {
++    var h;
++    await this.init();
++    const i = /* @__PURE__ */ new Set([e]);
++    n.includeLocalSiblings !== !1 && i.add(this.ownerPublicKey), await Promise.allSettled(Array.from(i, (p) => this.setupUser(p)));
++    const s = r, o = /* @__PURE__ */ new Set();
++    for (const p of i) {
++      const f = this.userRecords.get(p), y = /* @__PURE__ */ new Set();
++      for (const b of ((h = f == null ? void 0 : f.appKeys) == null ? void 0 : h.getAllDevices()) ?? [])
++        b.identityPubkey && b.identityPubkey !== this.deviceId && y.add(b.identityPubkey);
++      for (const b of (f == null ? void 0 : f.devices.keys()) ?? [])
++        b && b !== this.deviceId && y.add(b);
++      if (y.size > 0)
++        for (const b of y)
++          await this.messageQueue.add(b, s), o.add(b);
+       else
+-        await this.discoveryQueue.add(y, n);
+-    }
+-    const o = this.getOrCreateUserRecord(e), a = this.getOrCreateUserRecord(this.ownerPublicKey), c = Array.from(o.devices.values()), u = Array.from(a.devices.values()), d = /* @__PURE__ */ new Map();
+-    for (const y of [...c, ...u])
+-      y.deviceId !== this.deviceId && d.set(y.deviceId, y);
+-    const h = Array.from(d.values()), p = [], f = [];
+-    for (const y of h) {
+-      const w = this.resolveToOwner(y.deviceId);
+-      if (w !== y.deviceId && !this.isDeviceAuthorized(w, y.deviceId))
++        await this.discoveryQueue.add(p, s);
++    }
++    const a = /* @__PURE__ */ new Map();
++    for (const p of i)
++      for (const f of this.getOrCreateUserRecord(p).devices.values())
++        f.deviceId !== this.deviceId && a.set(f.deviceId, f);
++    const c = Array.from(a.values()), u = [], d = [];
++    for (const p of c) {
++      const f = this.resolveToOwner(p.deviceId);
++      if (f !== p.deviceId && !this.isDeviceAuthorized(f, p.deviceId))
+         continue;
+-      const m = y.prepareOutboundEvent(n);
+-      m && (p.push(m), f.push(y.deviceId));
+-    }
+-    return await this.storeUserRecord(e).catch(() => {
+-    }), this.ownerPublicKey !== e && await this.storeUserRecord(this.ownerPublicKey).catch(() => {
+-    }), await Promise.allSettled(
+-      p.map(
+-        (y, w) => this.emitPublish(y, r.id).then(() => {
+-          const m = f[w];
+-          this.messageQueue.removeByTargetAndEventId(m, r.id).catch(() => {
+-          }), this.flushMessageQueue(m).catch(() => {
++      const y = p.prepareOutboundEvent(s);
++      y && (u.push(y), d.push(p.deviceId));
++    }
++    return await Promise.all(Array.from(i, (p) => this.storeUserRecord(p).catch(() => {
++    }))), await Promise.allSettled(
++      u.map(
++        (p, f) => this.emitPublish(p, r.id).then(() => {
++          const y = d[f];
++          this.messageQueue.removeByTargetAndEventId(y, r.id).catch(() => {
++          }), this.flushMessageQueue(y).catch(() => {
+           });
+         })
+       )
+     ), await Promise.allSettled(
+-      Array.from(s).map(
+-        (y) => this.flushMessageQueue(y)
++      Array.from(o).map(
++        (p) => this.flushMessageQueue(p)
+       )
+-    ), n;
++    ), s;
+   }
+   async sendMessage(e, r, n = {}) {
+     var d;
+@@ -9256,7 +9270,8 @@ class rg extends tg {
+     ) || (i.push({
+       keyId: e.keyId >>> 0,
+       distribution: { ...e },
+-      recipients: n
++      recipients: n,
++      pendingRecipients: n
+     }), await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, i));
+   }
+   async repairDistributionsFor(e, r) {
+@@ -9370,16 +9385,27 @@ class ng extends rg {
+     if (r.length !== e.length || r.some((n) => !e.includes(n)))
+       throw new Error("Group membership changed while preparing the send; retry with current members");
+   }
++  async flushSenderKeyDistributions(e) {
++    const r = (await this.loadSenderKeyRepairSnapshots(this.ourDevicePubkey)).map((i) => ({ ...i }));
++    let n = !1;
++    for (const i of r) {
++      const s = i.pendingRecipients ?? i.recipients;
++      if (!s.length) continue;
++      const o = s.filter(
++        (d) => i.recipients.includes(d) && this.isMemberOwnerPubkey(d)
++      ), a = i.distribution, c = this.buildDistributionRumor(a.createdAt, a.createdAt * 1e3, a), u = await Promise.allSettled(o.map((d) => e(d, c)));
++      i.pendingRecipients = o.filter((d, h) => u[h].status === "rejected"), n = !0;
++    }
++    n && await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, r);
++  }
+   /**
+    * Rotate our sender key (new keyId + chain key) and distribute it to group members.
+    */
+   async rotateSenderKey(e) {
+     const r = this.senderKeyRecipientOwnerPubkeys();
+     this.assertCurrentRecipients(r), await this.init();
+-    const n = e.nowMs ?? Date.now(), i = Math.floor(n / 1e3), { senderEventPubkey: s } = await this.ensureOurSenderEventKeys(), { state: o } = await this.ensureOurSenderKeyState(!0), a = this.buildDistribution(i, s, o), c = this.buildDistributionRumor(i, n, a);
+-    return await this.recordSenderKeyRepairSnapshot(a, r), this.assertCurrentRecipients(r), await Promise.allSettled(
+-      r.map((u) => e.sendPairwise(u, c))
+-    ), this.assertCurrentRecipients(r), a;
++    const n = e.nowMs ?? Date.now(), i = Math.floor(n / 1e3), { senderEventPubkey: s } = await this.ensureOurSenderEventKeys(), { state: o } = await this.ensureOurSenderKeyState(!0), a = this.buildDistribution(i, s, o);
++    return await this.recordSenderKeyRepairSnapshot(a, r), this.assertCurrentRecipients(r), await this.flushSenderKeyDistributions(e.sendPairwise), this.assertCurrentRecipients(r), a;
+   }
+   /**
+    * Send an inner group event over one-to-many transport.
+@@ -9395,16 +9421,14 @@ class ng extends rg {
+     } = await this.ensureOurSenderEventKeys();
+     let { state: u, created: d } = await this.ensureOurSenderKeyState(!1);
+     if (!d && !await this.senderKeyMatchesRecipients(u, a, n) && ({ state: u, created: d } = await this.ensureOurSenderKeyState(!0)), d || c) {
+-      const g = this.buildDistribution(
++      const y = this.buildDistribution(
+         s,
+         a,
+         u
+-      ), y = this.buildDistributionRumor(s, i, g);
+-      await this.recordSenderKeyRepairSnapshot(g, n), this.assertCurrentRecipients(n), await Promise.allSettled(
+-        n.map((w) => r.sendPairwise(w, y))
+       );
++      await this.recordSenderKeyRepairSnapshot(y, n);
+     }
+-    this.assertCurrentRecipients(n);
++    this.assertCurrentRecipients(n), await this.flushSenderKeyDistributions(r.sendPairwise), this.assertCurrentRecipients(n);
+     const h = this.buildGroupInnerRumor(s, i, e), p = JSON.stringify(h), f = this.oneToMany.encryptToOuterEvent(
+       o,
+       u,
+@@ -9553,16 +9577,17 @@ class Ki extends ng {
+         r.isHiddenCounterMessage() ? void 0 : r.keyId,
+         e
+       ), null;
++    if (i === this.ourDevicePubkey && await this.storage.get(this.senderEventSecretKeyKey(i))) return null;
+     if (!this.isSenderDeviceActive(i))
+       return await this.removeSenderDeviceState(i), null;
+     let s = "", o = r.keyId, a = r.messageNumber, c = null;
+     if (r.isHiddenCounterMessage()) {
+       const f = await this.loadSenderKeyStates(i);
+-      for (const g of f) {
+-        const y = be.fromJSON(g.toJSON());
++      for (const y of f) {
++        const b = be.fromJSON(y.toJSON());
+         try {
+-          const w = y.decryptBlindFromBytes(r.ciphertext);
+-          s = w.plaintext, o = w.keyId, a = w.messageNumber, c = y;
++          const w = b.decryptBlindFromBytes(r.ciphertext);
++          s = w.plaintext, o = w.keyId, a = w.messageNumber, c = b;
+           break;
+         } catch {
+         }
+@@ -9770,17 +9795,17 @@ class cg extends ig {
+       };
+       u.id = ne(u);
+       const d = i.members, h = await Promise.allSettled(
+-        d.map(async (g) => {
+-          const y = {
++        d.map(async (y) => {
++          const b = {
+             ...u,
+-            tags: [...u.tags, ["p", g]]
++            tags: [...u.tags, ["p", y]]
+           };
+-          return y.id = ne(y), await n.sendPairwise(g, y), g;
++          return b.id = ne(b), await n.sendPairwise(y, b), y;
+         })
+       ), p = [], f = [];
+-      for (let g = 0; g < h.length; g += 1) {
+-        const y = h[g], w = d[g];
+-        y.status === "fulfilled" ? p.push(w) : f.push(w);
++      for (let y = 0; y < h.length; y += 1) {
++        const b = h[y], w = d[y];
++        b.status === "fulfilled" ? p.push(w) : f.push(w);
+       }
+       return {
+         group: i,
+@@ -10804,7 +10829,7 @@ class Rg {
+       fanoutMetadata: n.fanoutMetadata,
+       nowMs: n.nowMs,
+       sendPairwise: async (s, o) => {
+-        await (await this.waitForSessionManagerFn()).sendEvent(s, o);
++        await (await this.waitForSessionManagerFn()).sendEvent(s, o, { includeLocalSiblings: !1 });
+       }
+     });
+   }
+@@ -10812,7 +10837,7 @@ class Rg {
+     return (await this.waitForManager()).sendEvent(e, r, {
+       nowMs: n.nowMs,
+       sendPairwise: async (s, o) => {
+-        await (await this.waitForSessionManagerFn()).sendEvent(s, o);
++        await (await this.waitForSessionManagerFn()).sendEvent(s, o, { includeLocalSiblings: !1 });
+       },
+       publishOuter: this.nostrPublish
+     });
+diff --git a/dist/session-manager/DeviceRecordActor.d.ts b/dist/session-manager/DeviceRecordActor.d.ts
+index 7e7b4df..2cae7ce 100644
+--- a/dist/session-manager/DeviceRecordActor.d.ts
++++ b/dist/session-manager/DeviceRecordActor.d.ts
+@@ -14,6 +14,7 @@ export declare class DeviceRecordActor implements DeviceRecordShape {
+     private ensurePromise?;
+     private inviteSubscription?;
+     private inviteAcceptancePromise?;
++    private failedReceiveAttempts;
+     constructor(deviceId: string, deps: DeviceRecordDeps);
+     private detachSession;
+     private pruneDuplicateSessions;
+diff --git a/dist/session-manager/DeviceRecordActor.d.ts.map b/dist/session-manager/DeviceRecordActor.d.ts.map
+index 32ca910..16e9688 100644
+--- a/dist/session-manager/DeviceRecordActor.d.ts.map
++++ b/dist/session-manager/DeviceRecordActor.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"DeviceRecordActor.d.ts","sourceRoot":"","sources":["../../src/session-manager/DeviceRecordActor.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAE,MAAM,cAAc,CAAA;AACrC,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAA;AACvC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAEhD,OAAO,EAAqB,KAAK,KAAK,EAAE,MAAM,aAAa,CAAA;AAS3D,OAAO,KAAK,EACV,YAAY,IAAI,iBAAiB,EACjC,gBAAgB,EAChB,gBAAgB,EAEjB,MAAM,YAAY,CAAA;AAEnB,qBAAa,iBAAkB,YAAW,iBAAiB;aAavC,QAAQ,EAAE,MAAM;IAChC,OAAO,CAAC,QAAQ,CAAC,IAAI;IAbvB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAAC,qBAAqB,CAAK;IAE3C,aAAa,CAAC,EAAE,OAAO,CAAA;IACvB,gBAAgB,EAAE,OAAO,EAAE,CAAK;IAChC,KAAK,EAAE,gBAAgB,CAAQ;IAC/B,SAAS,EAAE,MAAM,CAAA;IAExB,OAAO,CAAC,aAAa,CAAC,CAAe;IACrC,OAAO,CAAC,kBAAkB,CAAC,CAAa;IACxC,OAAO,CAAC,uBAAuB,CAAC,CAAkB;gBAGhC,QAAQ,EAAE,MAAM,EACf,IAAI,EAAE,gBAAgB;IAKzC,OAAO,CAAC,aAAa;IAIrB,OAAO,CAAC,sBAAsB;IAmB9B,2BAA2B,IAAI,OAAO;IActC,WAAW,IAAI,OAAO,CAAC,IAAI,CAAC;YAiBd,aAAa;IAuB3B,OAAO,CAAC,wBAAwB;IAuBhC,YAAY,CAAC,MAAM,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;YAyBhC,cAAc;YAyBd,sBAAsB;IAepC,OAAO,CAAC,eAAe;IAqDvB,OAAO,CAAC,wBAAwB;IAmBhC,oBAAoB,CAAC,KAAK,EAAE,KAAK,GAAG,aAAa,GAAG,SAAS;IAO7D,OAAO,CAAC,kBAAkB;IA2B1B,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IA4BnD,cAAc,CACZ,OAAO,EAAE,OAAO,EAChB,QAAQ,UAAQ,EAChB,OAAO,GAAE;QAAE,OAAO,CAAC,EAAE,OAAO,CAAC;QAAC,YAAY,CAAC,EAAE,OAAO,CAAA;KAAO,GAC1D,IAAI;IAyBP,OAAO,CAAC,oBAAoB;IAUtB,iBAAiB,IAAI,OAAO,CAAC,IAAI,CAAC;IA0BxC,wBAAwB,IAAI,IAAI;IAQ1B,MAAM,IAAI,OAAO,CAAC,IAAI,CAAC;IAS7B,KAAK,IAAI,IAAI;CAed"}
+\ No newline at end of file
++{"version":3,"file":"DeviceRecordActor.d.ts","sourceRoot":"","sources":["../../src/session-manager/DeviceRecordActor.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,MAAM,EAAE,MAAM,cAAc,CAAA;AACrC,OAAO,EAAE,OAAO,EAAE,MAAM,eAAe,CAAA;AACvC,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,aAAa,CAAA;AAEhD,OAAO,EAAqB,KAAK,KAAK,EAAE,MAAM,aAAa,CAAA;AAS3D,OAAO,KAAK,EACV,YAAY,IAAI,iBAAiB,EACjC,gBAAgB,EAChB,gBAAgB,EAEjB,MAAM,YAAY,CAAA;AAEnB,qBAAa,iBAAkB,YAAW,iBAAiB;aAcvC,QAAQ,EAAE,MAAM;IAChC,OAAO,CAAC,QAAQ,CAAC,IAAI;IAdvB,OAAO,CAAC,MAAM,CAAC,QAAQ,CAAC,qBAAqB,CAAK;IAE3C,aAAa,CAAC,EAAE,OAAO,CAAA;IACvB,gBAAgB,EAAE,OAAO,EAAE,CAAK;IAChC,KAAK,EAAE,gBAAgB,CAAQ;IAC/B,SAAS,EAAE,MAAM,CAAA;IAExB,OAAO,CAAC,aAAa,CAAC,CAAe;IACrC,OAAO,CAAC,kBAAkB,CAAC,CAAa;IACxC,OAAO,CAAC,uBAAuB,CAAC,CAAkB;IAClD,OAAO,CAAC,qBAAqB,CAAyD;gBAGpE,QAAQ,EAAE,MAAM,EACf,IAAI,EAAE,gBAAgB;IAKzC,OAAO,CAAC,aAAa;IAIrB,OAAO,CAAC,sBAAsB;IAmB9B,2BAA2B,IAAI,OAAO;IActC,WAAW,IAAI,OAAO,CAAC,IAAI,CAAC;YAiBd,aAAa;IAuB3B,OAAO,CAAC,wBAAwB;IAuBhC,YAAY,CAAC,MAAM,EAAE,MAAM,GAAG,OAAO,CAAC,OAAO,CAAC;YAyBhC,cAAc;YAyBd,sBAAsB;IAepC,OAAO,CAAC,eAAe;IAqDvB,OAAO,CAAC,wBAAwB;IAmBhC,oBAAoB,CAAC,KAAK,EAAE,KAAK,GAAG,aAAa,GAAG,SAAS;IAO7D,OAAO,CAAC,kBAAkB;IA2B1B,oBAAoB,CAAC,KAAK,EAAE,aAAa,GAAG,OAAO;IAiDnD,cAAc,CACZ,OAAO,EAAE,OAAO,EAChB,QAAQ,UAAQ,EAChB,OAAO,GAAE;QAAE,OAAO,CAAC,EAAE,OAAO,CAAC;QAAC,YAAY,CAAC,EAAE,OAAO,CAAA;KAAO,GAC1D,IAAI;IAyBP,OAAO,CAAC,oBAAoB;IAUtB,iBAAiB,IAAI,OAAO,CAAC,IAAI,CAAC;IA0BxC,wBAAwB,IAAI,IAAI;IAQ1B,MAAM,IAAI,OAAO,CAAC,IAAI,CAAC;IAS7B,KAAK,IAAI,IAAI;CAed"}
+\ No newline at end of file
