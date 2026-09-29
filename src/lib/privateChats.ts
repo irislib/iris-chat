@@ -48,6 +48,7 @@ import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 import { restoreSignerAuthorization } from './signerAuthorizationStorage'
 
 let runtime: NdrRuntime | null = null
+let runtimeStorage: DexieStorageAdapter | null = null
 let runtimePublication: ReturnType<typeof createRuntimePublish> | null = null
 let runtimeOwnerPubkey: string | null = null
 let runtimeCleanup: (() => void) | null = null
@@ -297,6 +298,8 @@ const getRuntime = (): NdrRuntime => {
     return runtime
   }
 
+  runtimeStorage?.close()
+  runtimeStorage = null
   runtimePublication?.close()
   runtimePublication = null
   runtimeCleanup?.()
@@ -311,7 +314,10 @@ const getRuntime = (): NdrRuntime => {
   const ndkInstance = getNDK()
   const ownerIdentityKey = getPrivkeyBytes()
   const sign = createSign(ndkInstance)
+  const storage = new DexieStorageAdapter()
+  runtimeStorage = storage
   const publication = createRuntimePublish({
+    storage,
     owner: ownerPubkey,
     publish: createRelayPublish(ndkInstance),
     onAcceptedRelays: notifyMessageRelayPublish,
@@ -331,7 +337,7 @@ const getRuntime = (): NdrRuntime => {
     },
     onPublishError: ({ error }) => reportPublicationError(error),
     nostrFetch: createFetch(ndkInstance),
-    storage: new DexieStorageAdapter(),
+    storage,
     appKeysFetchTimeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
     appKeysFastTimeoutMs: APP_KEYS_FAST_TIMEOUT_MS,
     ...(ownerIdentityKey ? { ownerIdentityKey } : {}),
@@ -773,6 +779,10 @@ export const stopAppKeysSubscription = (): void => {
 }
 
 export const resetManagers = (): void => {
+  // In-flight roster callbacks can finish after the database is cleared.
+  // Retire their storage before shutting down subscriptions and clearing data.
+  runtimeStorage?.close()
+  runtimeStorage = null
   if (linkedInviteRepublishTimer) {
     clearTimeout(linkedInviteRepublishTimer)
     linkedInviteRepublishTimer = null

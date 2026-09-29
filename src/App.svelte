@@ -89,6 +89,7 @@
 
   let deviceRemovalLogoutRequested = false
   let deviceRemovalLogoutInProgress = false
+  let deviceRemovalNotice = $state(false)
 
   // If a chat is deleted (e.g. rejected request), ensure we don't keep rendering it.
   $effect(() => {
@@ -361,6 +362,7 @@
   })
 
   async function handleLogin() {
+    deviceRemovalNotice = false
     const currentIdentity = get(identity)
     let multiDeviceReady: Promise<void> | null = null
     if (currentIdentity?.pubkey) {
@@ -586,6 +588,7 @@
     deviceRemovalLogoutInProgress = true
     try {
       await handleLogout()
+      deviceRemovalNotice = true
     } catch (error) {
       console.error('[app] failed to logout after current device removal:', error)
     } finally {
@@ -634,6 +637,9 @@
           </h1>
           <p class="text-gray-400 mt-2">Secure, private messaging</p>
         </div>
+        {#if deviceRemovalNotice}
+          <p role="status" class="mb-6 max-w-sm text-center text-gray-400">This device was removed. Its local data has been cleared.</p>
+        {/if}
         <LoginView onlogin={handleLogin} />
       </div>
     </div>
