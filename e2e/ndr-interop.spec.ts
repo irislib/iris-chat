@@ -59,7 +59,11 @@ function resolveNativeCliBin(): string {
 }
 
 function nativeCliEnv(dataDir?: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, NOSTR_PREFER_LOCAL: '0' }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NOSTR_PREFER_LOCAL: '0',
+    IRIS_FIPS_WEBSOCKET_SEED_URLS: '',
+  }
   if (dataDir) {
     try {
       const config = JSON.parse(
@@ -112,6 +116,16 @@ async function loginWithStoredKey(page: Page) {
   await page.goto('/')
   await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({
     timeout: 30000,
+  })
+}
+
+async function disablePublicCallServers(context: BrowserContext) {
+  await context.addInitScript(() => {
+    try {
+      localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [], stunServers: [] }))
+    } catch {
+      // Ignore opaque origins before the app loads.
+    }
   })
 }
 
@@ -1081,6 +1095,7 @@ test('iris-chat group <-> ndr interop (web creates group)', async ({
 }) => {
   skipIfNdrWorkspaceMissing()
   test.setTimeout(240000)
+  await disablePublicCallServers(page.context())
 
   const dataDir = createNdrDataDir(testRelayUrls)
   const ndrSecret = randomNdrSecretHex()
@@ -1172,6 +1187,7 @@ test('iris-chat group <-> ndr interop (ndr creates group)', async ({
 }) => {
   skipIfNdrWorkspaceMissing()
   test.setTimeout(240000)
+  await disablePublicCallServers(page.context())
 
   const dataDir = createNdrDataDir(testRelayUrls)
   const ndrSecret = randomNdrSecretHex()
