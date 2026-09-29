@@ -81,6 +81,7 @@ export function initFollowing(): () => void {
     ))
 
     sub.on('event', (ev: NDKEvent) => {
+      if (lastPubkey !== pubkey) return
       const raw = ev.rawEvent() as Event
       if (!validFollowEvent(raw, pubkey)) return
       const createdAt = raw.created_at
@@ -100,4 +101,8 @@ export function initFollowing(): () => void {
     following.set(new Set())
     verifiedFollowingHead.set(null)
   }
+}
+
+export function clearFollowingCache(owner: string): void {
+  try { localStorage.removeItem(FOLLOWING_CACHE_PREFIX + owner) } catch { /* Storage may be unavailable. */ }
 }

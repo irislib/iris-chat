@@ -45,7 +45,12 @@ test('notification taps select the exact chat warm and after startup, and reject
 test('Log out is cancelable and clears this browser identity and chat data', async ({ page }) => {
   await login(page)
   await contact(page, 'c'.repeat(64), 'Private unsent draft')
-  if (!await page.getByRole('button', { name: 'Settings', exact: true }).isVisible()) await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await page.evaluate(() => {
+    localStorage.setItem('iris-chat-message-request-decisions', JSON.stringify({ acceptedChats: { oldPeer: true }, rejectedChats: {} }))
+    localStorage.setItem('iris-chat-expirations', JSON.stringify({ expirations: { oldPeer: 60 } }))
+  })
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   page.once('dialog', async dialog => { expect(dialog.message()).toContain('other devices are not affected'); await dialog.dismiss() })
   await page.getByRole('button', { name: 'Log out', exact: true }).click()
@@ -66,6 +71,7 @@ test('Log out is cancelable and clears this browser identity and chat data', asy
     database.close(); return counts
   })
   expect(remaining).toEqual([0, 0, 0, 0, 0])
+  expect(await page.evaluate(() => [localStorage.getItem('iris-chat-message-request-decisions'), localStorage.getItem('iris-chat-expirations')])).toEqual([null, null])
 })
 
 test('production service worker routes warm taps without reloading and emits a cold-start URL', async ({ page, context, browserName }) => {

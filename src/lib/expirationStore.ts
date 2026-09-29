@@ -32,7 +32,7 @@ function saveToStorage(state: ChatExpirationState): void {
 }
 
 const initial = loadFromStorage()
-const { subscribe, update } = writable<ChatExpirationState>(initial)
+const { subscribe, update, set } = writable<ChatExpirationState>(initial)
 
 function setExpiration(chatId: string, ttlSeconds: ChatExpirationSeconds | undefined): void {
   update((state) => {
@@ -68,7 +68,13 @@ function getAllExpirations(): Record<string, ChatExpirationSeconds | undefined> 
   return result
 }
 
+function clear(): void {
+  set({ expirations: {} })
+  try { localStorage.removeItem(STORAGE_KEY) } catch { /* Storage may be unavailable. */ }
+}
+
 export const expirationStore = {
+  clear,
   subscribe,
   setExpiration,
   clearExpiration,

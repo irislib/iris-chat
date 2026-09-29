@@ -13,6 +13,9 @@
   import { identity, autoLogin, logout } from './lib/identity'
   import { notificationTarget, notificationFromHash, resolveNotificationTarget, type NotificationTarget } from './lib/notificationNavigation'
   import { clearDrafts } from './lib/drafts'
+  import { clearMessageRequestDecisions } from './lib/messageRequests'
+  import { expirationStore } from './lib/expirationStore'
+  import { closeMediaModal } from './lib/mediaModal'
   import { parseInviteFromHash, isLinkInvite, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToNdrRuntime } from './lib/disappearingMessages'
@@ -23,7 +26,7 @@
   import { startDeviceSync, stopDeviceSync } from './lib/deviceSync'
   import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
   import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
-  import { initFollowing } from './lib/following'
+  import { initFollowing, clearFollowingCache } from './lib/following'
   import CreateGroup from './components/CreateGroup.svelte'
   import GroupChatView from './components/GroupChatView.svelte'
   import GroupDetailsView from './components/GroupDetailsView.svelte'
@@ -542,6 +545,7 @@
   }
 
   async function handleLogout() {
+    const owner = get(identity)?.pubkey
     pendingNotification = null
     stopMessageExpirationCleanup()
     await stopDeviceSync()
@@ -551,6 +555,10 @@
     logout()
     await clearChatData()
     clearDrafts()
+    closeMediaModal()
+    clearMessageRequestDecisions()
+    expirationStore.clear()
+    if (owner) clearFollowingCache(owner)
     // Prevent a previous profile's alerts remaining after this browser signs out.
     const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined)
     await registration?.getNotifications().then(items => items.forEach(item => item.close())).catch(() => {})

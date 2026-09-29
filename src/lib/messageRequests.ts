@@ -71,3 +71,8 @@ export function clearChat(chatId: string): void {
   })
 }
 
+// Account decisions must not grant access to chats in the next local profile.
+export function clearMessageRequestDecisions(): void {
+  messageRequests.set({ acceptedChats: {}, rejectedChats: {} })
+  try { localStorage.removeItem(STORAGE_KEY) } catch { /* Storage may be unavailable. */ }
+}
