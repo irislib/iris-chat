@@ -4,7 +4,7 @@ import type { FipsNode } from '@fips/core'
 import { encodeCallControl } from './callProtocol'
 
 const fixture = vi.hoisted(() => ({
-  media: [] as Array<{ finish: () => void; stop: ReturnType<typeof vi.fn> }>,
+  media: [] as Array<{ finish: () => void; fail: (error: Error) => void; stop: ReturnType<typeof vi.fn> }>,
   receive: undefined as ((context: { src: string; payload: Uint8Array }) => void) | undefined,
 }))
 const peer = `02${'b'.repeat(64)}`
@@ -19,11 +19,11 @@ vi.mock('./callMedia', () => ({ BrowserCallMedia: class {
   stop = vi.fn()
   setState = vi.fn()
   setQuality = vi.fn(async () => {})
-  open = () => new Promise<void>(resolve => { fixture.media.push({ finish: resolve, stop: this.stop }) })
+  open = () => new Promise<void>((resolve, reject) => { fixture.media.push({ finish: resolve, fail: reject, stop: this.stop }) })
 } }))
 import { chats, recordCallHistory } from './chat'
 import { callHistoryLabel, type CallHistory } from './callHistory'
-import { attachCalls, detachCalls, answerCall, startCall, callState } from './calls'
+import { attachCalls, detachCalls, answerCall, startCall, endCall, dismissCall, callState, callError } from './calls'
 import { callSettings } from './callSettings'
 import { following } from './following'
 import { messageRequests, acceptChat, rejectChat } from './messageRequests'
@@ -40,8 +40,87 @@ describe('answer capture ownership', () => {
     callSettings.set({ voice: true, video: true })
     attachCalls({ registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} }, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode, () => [peer])
   })
-  afterEach(() => detachCalls())
+  afterEach(() => { detachCalls(); callError.set(''); vi.useRealTimers(); vi.restoreAllMocks() })
   const offer = (id: string) => fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'offer', call_id: id, video: true }) })
+  const remoteEnd = (id: string) => fixture.receive?.({ src: peer, payload: encodeCallControl({ v: 3, type: 'end', call_id: id }) })
+  function useCallTimers(visibility: DocumentVisibilityState = 'visible') {
+    detachCalls()
+    vi.useFakeTimers()
+    const visible = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(visibility)
+    attachCalls({ registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} }, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode, () => [peer])
+    return visible
+  }
+
+  it.each([false, true])('immediately closes a locally ended call (answered: %s) and keeps history', async (answered: boolean) => {
+    useCallTimers()
+    const id = 'ab'.repeat(16)
+    offer(id)
+    if (answered) {
+      const answer = answerCall(false)
+      fixture.media[0].finish()
+      await answer
+    }
+    endCall()
+    expect(get(callState)).toBeNull()
+    expect(recordCallHistory).toHaveBeenLastCalledWith(owner, expect.objectContaining({ callId: id, outcome: answered ? 'answered' : 'declined' }))
+  })
+
+  it('shows the remote end briefly, then closes without removing call history', () => {
+    useCallTimers()
+    const id = 'ab'.repeat(16)
+    offer(id)
+    remoteEnd(id)
+    expect(get(callState)).toMatchObject({ id, status: 'ended' })
+    vi.advanceTimersByTime(1499)
+    expect(get(callState)?.status).toBe('ended')
+    const historyWrites = vi.mocked(recordCallHistory).mock.calls.length
+    vi.advanceTimersByTime(1)
+    expect(get(callState)).toBeNull()
+    expect(recordCallHistory).toHaveBeenCalledTimes(historyWrites)
+    expect(recordCallHistory).toHaveBeenLastCalledWith(owner, expect.objectContaining({ callId: id, outcome: 'missed' }))
+  })
+
+  it.each([false, true])('does not linger after remote end in a hidden tab (hidden before end: %s)', (initiallyHidden: boolean) => {
+    const visibility = useCallTimers(initiallyHidden ? 'hidden' : 'visible')
+    const id = 'ab'.repeat(16)
+    offer(id)
+    remoteEnd(id)
+    if (!initiallyHidden) {
+      expect(get(callState)?.status).toBe('ended')
+      visibility.mockReturnValue('hidden')
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+    expect(get(callState)).toBeNull()
+  })
+
+  it.each(['new call', 'new runtime', 'manual dismissal'])('does not let an old dismissal timer close a %s', (change: string) => {
+    useCallTimers()
+    const oldId = 'ab'.repeat(16), newId = 'cd'.repeat(16)
+    offer(oldId)
+    remoteEnd(oldId)
+    vi.advanceTimersByTime(500)
+    if (change === 'new runtime') {
+      attachCalls({ registerService: (_port: number, handler: typeof fixture.receive) => { fixture.receive = handler; return () => {} }, sendDatagram: vi.fn(async () => {}) } as unknown as FipsNode, () => [peer])
+    } else if (change === 'manual dismissal') dismissCall()
+    offer(newId)
+    vi.advanceTimersByTime(1500)
+    expect(get(callState)).toMatchObject({ id: newId, status: 'ringing' })
+  })
+
+  it.each(['visible', 'hidden'] as const)('closes a failed call in a %s tab while retaining actionable error feedback', async (visibility: DocumentVisibilityState) => {
+    useCallTimers(visibility)
+    offer('ab'.repeat(16))
+    const answer = answerCall(false)
+    fixture.media[0].fail(new Error('Allow microphone access in browser settings'))
+    await answer
+    if (visibility === 'visible') expect(get(callState)?.status).toBe('ended')
+    else expect(get(callState)).toBeNull()
+    vi.advanceTimersByTime(1500)
+    expect(get(callState)).toBeNull()
+    expect(get(callError)).toBe('Allow microphone access in browser settings')
+    dismissCall()
+    expect(get(callError)).toBe('')
+  })
   it.each([false, true])('requires chat acceptance even for followed users (message requests enabled: %s)', (receiveMessageRequests: boolean) => {
     messageRequests.set({ acceptedChats: {}, rejectedChats: {} })
     following.set(new Set([owner]))

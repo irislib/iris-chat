@@ -72,6 +72,20 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   session.onMedia = frame => media?.receive(frame)
   session.onFeedback = feedback => media?.feedback(feedback)
   session.onKeyframe = () => media?.requestKeyframe()
+  const attachedSession = session
+  let dismissalTimer: ReturnType<typeof setTimeout> | undefined
+  let dismissalCallId: string | undefined
+  const cancelDismissal = () => {
+    clearTimeout(dismissalTimer)
+    dismissalTimer = undefined
+    dismissalCallId = undefined
+  }
+  const clearEndedCall = (id?: string) => {
+    const state = get(attachedSession.state)
+    if (session === attachedSession && state?.status === 'ended' && (!id || state.id === id)) attachedSession.clear()
+  }
+  const visibilityChanged = () => { if (document.visibilityState !== 'visible') clearEndedCall() }
+  document.addEventListener('visibilitychange', visibilityChanged)
   let historyKey = ''
   const unsubscribe = session.state.subscribe(state => {
     if (state) {
@@ -85,6 +99,16 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
     callNotification.update(state?.direction === 'incoming' && state.status === 'ringing' && !answersInFlight.has(state.id) && get(callSettings).notifications !== false
       ? { id: state.id, name: getProfileName(get(createProfileStore(state.owner, false))) || getAnimalName(state.owner), video: state.video, chatId: chat?.id } : null)
     if (state) media?.setState(state.status === 'active', state.muted, state.camera, state.video)
+    if (state?.status !== 'ended' || state.id !== dismissalCallId) cancelDismissal()
+    if (state?.status === 'ended') {
+      // Allow time to read a remote end/failure, without retaining an overlay
+      // in a hidden tab where browser timers may be suspended.
+      if (document.visibilityState !== 'visible') clearEndedCall(state.id)
+      else if (dismissalTimer === undefined) {
+        dismissalCallId = state.id
+        dismissalTimer = setTimeout(() => clearEndedCall(state.id), 1500)
+      }
+    }
   })
   const settingsUnsubscribe = callSettings.subscribe(settings => {
     const state = get(callState)
@@ -97,10 +121,12 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   const decisionsUnsubscribe = messageRequests.subscribe(checkContact)
   const chatsUnsubscribe = chats.subscribe(checkContact)
   runtimeCleanup = () => {
+    cancelDismissal()
     unsubscribe(); settingsUnsubscribe(); decisionsUnsubscribe(); chatsUnsubscribe()
     window.removeEventListener('pointerdown', ringtone.unlock)
     window.removeEventListener('keydown', ringtone.unlock)
     window.removeEventListener('pagehide', clearAlerts)
+    document.removeEventListener('visibilitychange', visibilityChanged)
     ringtone.dispose(); callNotification.clear()
   }
 }
@@ -195,7 +221,9 @@ export async function answerCall(video: boolean) {
 }
 export function endCall() {
   const state = get(callState)
-  session?.end('Call ended', true, state?.direction === 'incoming' && state.status === 'ringing' ? 'declined' : undefined)
+  const current = session
+  current?.end('Call ended', true, state?.direction === 'incoming' && state.status === 'ringing' ? 'declined' : undefined)
+  current?.clear()
 }
 export function dismissCall() { session?.clear(); callError.set('') }
 export function toggleCallMute() { const s = get(callState); if (s) session?.setMedia(!s.muted, s.camera) }

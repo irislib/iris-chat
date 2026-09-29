@@ -105,9 +105,8 @@ test('two browsers route voice and video through an intermediate FIPS node when 
     await mkdir('work/calls-routed', { recursive: true })
     await a.screenshot({ path: 'work/calls-routed/active-video.png' })
     await a.getByRole('button', { name: 'End call', exact: true }).click()
-    await expect(b.getByTestId('call-screen')).toHaveAttribute('data-status', 'ended')
     for (const page of [a, b]) {
-      await page.getByRole('button', { name: 'Done', exact: true }).click()
+      await expect(page.getByTestId('call-screen')).toBeHidden()
       await expect(page.locator('[data-testid="call-history-row"][data-outcome="answered"]')).toHaveCount(1)
     }
     await expect(a.getByTestId('call-history-row')).toContainText('Outgoing video call')

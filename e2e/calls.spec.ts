@@ -193,13 +193,12 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
   }
   async function hangup(a: Page, b: Page) {
     await a.getByRole('button', { name: 'End call', exact: true }).click()
-    await expect(b.getByTestId('call-screen')).toHaveAttribute('data-status', 'ended')
     for (const page of [a, b]) {
       await expect.poll(() => page.evaluate(() => {
         const a = (window as unknown as { callAlerts: { notifications: Set<Notification>; oscillators: Set<OscillatorNode> } }).callAlerts
         return [a.notifications.size, a.oscillators.size]
       })).toEqual([0, 0])
-      await page.getByRole('button', { name: 'Done', exact: true }).click()
+      await expect(page.getByTestId('call-screen')).toBeHidden()
       expect(await page.evaluate(() => (window as unknown as { callEvidence: { streams: MediaStream[] } }).callEvidence.streams.every(s => s.getTracks().every(t => t.readyState === 'ended')))).toBe(true)
     }
   }
