@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { nativeAppPlatform, NATIVE_APP_DOWNLOAD_URL, NATIVE_APP_SUGGESTION_KEY, type NativeAppPlatform } from '../lib/nativeApp'
+  import { nativeAppPlatform, loadNativeAppDownload, NATIVE_APP_DOWNLOAD_URL, NATIVE_APP_SUGGESTION_KEY, type NativeAppPlatform, type NativeAppDownload } from '../lib/nativeApp'
 
   let { entryHref = null, welcome = false, excluded = false }: {
     entryHref?: string | null
@@ -12,6 +12,7 @@
   let platform = $state<NativeAppPlatform | null>(null)
   let showPrompt = $state(false)
   let downloadStarted = $state(false)
+  let downloadTarget = $state<NativeAppDownload>({ href: NATIVE_APP_DOWNLOAD_URL })
   let canOpenApp = $derived(platform === 'iPhone' || platform === 'iPad' || platform === 'Android' || platform === 'Mac')
 
   function remember(value: 'seen' | 'dismissed' | 'opened') {
@@ -41,6 +42,11 @@
     } catch { /* Keep onboarding usable. */ }
     showPrompt = true
     if (!downloadStarted) remember('seen')
+    const controller = new AbortController()
+    void loadNativeAppDownload(platform, controller.signal).then(target => {
+      if (!controller.signal.aborted) downloadTarget = target
+    })
+    return () => controller.abort()
   })
 
   $effect(() => {
@@ -64,12 +70,20 @@
       <h1 id="native-download-title">Download Iris</h1>
       <p class="download-description">Private messages and calls on {platform}.</p>
       <div class="download-actions">
-        <a href={NATIVE_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
-          class="download-button" data-download onclick={download}>
-          Download for {platform}
-        </a>
+        <div>
+          <a href={downloadTarget.href} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
+            class="download-button" data-download onclick={download}
+            aria-describedby={downloadTarget.detail ? 'native-download-detail' : undefined}>
+            Download for {platform}
+          </a>
+          {#if downloadTarget.detail}
+            <p id="native-download-detail" class="download-detail">{downloadTarget.detail}</p>
+          {/if}
+        </div>
         <button class="browser-button" onclick={dismiss}>Continue in browser</button>
       </div>
+      <a href={NATIVE_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
+        class="other-downloads">Other downloads</a>
       {#if downloadStarted && entryHref && canOpenApp}
         <div class="installed-action">
           <p>After installing, return here to open this chat.</p>
@@ -130,8 +144,11 @@
   }
   .download-button { background: rgb(var(--color-primary)); color: white; }
   .download-button:hover { background: rgb(var(--color-primary-dark)); }
+  .download-detail { margin: 8px 0 0; font-size: 13px; color: rgb(var(--color-muted)); }
   .browser-button { color: rgb(var(--color-muted)); }
   .browser-button:hover { background: rgb(var(--color-surface)); color: rgb(var(--color-text)); }
+  .other-downloads { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; color: rgb(var(--color-muted)); }
+  .other-downloads:hover { text-decoration: underline; }
   .installed-action { margin-top: 24px; font-size: 14px; }
   .installed-action p { margin: 0 0 8px; color: rgb(var(--color-muted)); }
   .installed-action a { display: inline-flex; align-items: center; min-height: 44px; color: rgb(var(--color-primary)); font-weight: 600; }
@@ -139,5 +156,11 @@
   @media (min-width: 640px) {
     .download-dialog { width: 440px; max-width: calc(100vw - 48px); height: fit-content; max-height: calc(100dvh - 48px); margin: auto; border-radius: 24px; }
     .download-content { padding: 64px 28px 40px; }
+  }
+  @media (max-height: 700px) {
+    .download-content { padding: 64px 24px 24px; }
+    .app-logo { width: 64px; height: 64px; margin-bottom: 20px; }
+    h1 { font-size: 28px; }
+    .download-description { margin-bottom: 24px; }
   }
 </style>
