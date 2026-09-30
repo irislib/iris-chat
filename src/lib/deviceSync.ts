@@ -105,6 +105,7 @@ export interface DeviceSyncMergeState {
 let activeNode: FipsNode | null = null
 let activeTcp: DeviceSyncTcp | null = null
 let activeKey = ''
+let pendingReconcile: { key: string; promise: Promise<void> } | null = null
 let activeOwnerPubkey = ''
 let activePeers = new Set<string>()
 let deviceUnsubscribe: (() => void) | null = null
@@ -672,7 +673,18 @@ async function stopActiveNode(): Promise<void> {
   await node?.stop().catch(() => undefined)
 }
 
-async function reconcileRuntime(
+function reconcileRuntime(ownerPubkey: string, secretKey: Uint8Array, state: DeviceState): Promise<void> {
+  // One roster update emits several store notifications while a node is still starting.
+  const key = `${runtimeKey(ownerPubkey, state)}:${state.isCurrentDeviceRegistered}`
+  if (pendingReconcile?.key === key) return pendingReconcile.promise
+  const promise = updateRuntime(ownerPubkey, secretKey, state).finally(() => {
+    if (pendingReconcile?.promise === promise) pendingReconcile = null
+  })
+  pendingReconcile = { key, promise }
+  return promise
+}
+
+async function updateRuntime(
   ownerPubkey: string,
   secretKey: Uint8Array,
   state: DeviceState,
@@ -765,7 +777,14 @@ async function reconcileRuntime(
     }))
   }, call => sendCallWakeups(secretKey, call.peers, call.id, call.video,
     get(notificationSettings).serverUrl, event => new AppEvent(get(nostrClient), event).publish()))
-  await node.start()
+  try {
+    await node.start()
+  } catch (error) {
+    if (run === generation) detachCalls()
+    await tcp.dispose().catch(() => undefined)
+    await node.stop().catch(() => undefined)
+    throw error
+  }
   if (run !== generation) {
     await tcp.dispose()
     await node.stop()
@@ -809,6 +828,7 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
 
 export async function stopDeviceSync(): Promise<void> {
   generation += 1
+  pendingReconcile = null
   deviceUnsubscribe?.()
   deviceUnsubscribe = null
   for (const unsubscribe of storeUnsubscribers) unsubscribe()

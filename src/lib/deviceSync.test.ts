@@ -8,7 +8,8 @@ import type { Group } from './groups'
 
 const fips = vi.hoisted(() => ({
   transports: [] as Array<Record<string, unknown>>,
-  nodes: [] as Array<{ emit: (event: string, value: unknown) => void }>,
+  nodes: [] as Array<{ emit: (event: string, value: unknown) => void; stop: ReturnType<typeof vi.fn> }>,
+  start: vi.fn(async () => undefined),
   sendDatagram: vi.fn(async () => undefined),
 }))
 const tcp = vi.hoisted(() => ({
@@ -46,7 +47,7 @@ vi.mock('@fips/core', () => ({
       return () => listeners.delete(listener)
     }
     emit(event: string, value: unknown) { for (const listener of this.listeners.get(event) ?? []) listener(value) }
-    start = vi.fn(async () => undefined)
+    start = vi.fn(() => fips.start())
     stop = vi.fn(async () => undefined)
     sendDatagram = fips.sendDatagram
   },
@@ -155,6 +156,7 @@ import { encodeDeviceSyncPacket } from './deviceSyncProtocol'
 import { chats } from './chat'
 import { groups } from './groups'
 import { nostrClient } from './identity'
+import { devices } from './devices'
 import { chatMutes, clearChatMutes } from './chatMuteStore'
 import { pinnedChatIds, clearChatPins } from './chatPinStore'
 
@@ -237,6 +239,8 @@ describe('device sync', () => {
   })
 
   beforeEach(() => {
+    vi.mocked(get(nostrClient).runtime.addSource).mockClear()
+    fips.start.mockReset().mockResolvedValue(undefined)
     fips.nodes.length = 0
     fips.transports.length = 0
     ndr.knownSnapshots = []
@@ -259,6 +263,61 @@ describe('device sync', () => {
       await vi.waitFor(() => expect(get(nostrClient).runtime.addSource)
         .toHaveBeenCalledWith(expect.objectContaining({ id: 'fips' })))
     } finally { await stopDeviceSync() }
+  })
+
+  it('keeps one node while the same device state is emitted during startup', async () => {
+    let finishStart!: () => void
+    fips.start.mockImplementationOnce(() => new Promise<void>(resolve => { finishStart = resolve }))
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(fips.nodes).toHaveLength(1))
+      for (let update = 0; update < 6; update++) {
+        ;(devices as unknown as Writable<DeviceState>).update(state => ({ ...state }))
+      }
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fips.nodes).toHaveLength(1)
+      finishStart()
+      await vi.waitFor(() => expect(get(nostrClient).runtime.addSource)
+        .toHaveBeenCalledWith(expect.objectContaining({ id: 'fips' })))
+    } finally {
+      finishStart?.()
+      await stopDeviceSync()
+    }
+  })
+
+  it('cancels an in-flight startup when the device is removed from the roster', async () => {
+    let finishStart!: () => void
+    fips.start.mockImplementationOnce(() => new Promise<void>(resolve => { finishStart = resolve }))
+    const original = get(devices)
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(fips.nodes).toHaveLength(1))
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({ ...state, isCurrentDeviceRegistered: false }))
+      finishStart()
+      await vi.waitFor(() => expect(fips.nodes[0].stop).toHaveBeenCalledOnce())
+      expect(get(nostrClient).runtime.addSource).not.toHaveBeenCalled()
+    } finally {
+      finishStart?.()
+      await stopDeviceSync()
+      ;(devices as unknown as Writable<DeviceState>).set(original)
+    }
+  })
+
+  it('disposes a failed startup before a later state update can retry', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fips.start.mockRejectedValueOnce(new Error('test advert unavailable'))
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(warning).toHaveBeenCalledWith(
+        '[deviceSync] Runtime start failed:', expect.any(Error)))
+      expect(fips.nodes[0].stop).toHaveBeenCalledOnce()
+      expect(tcp.instances[0].dispose).toHaveBeenCalledOnce()
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({ ...state }))
+      await vi.waitFor(() => expect(fips.nodes).toHaveLength(2))
+    } finally {
+      await stopDeviceSync()
+      warning.mockRestore()
+    }
   })
 
   it('accepts only authenticated devices on the active roster', () => {

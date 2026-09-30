@@ -4,6 +4,8 @@
 
 - Route larger peer connection offers over paths that can carry them.
 - Resume peer connections promptly after authenticated signaling recovers.
+- Preserve device names in synchronization snapshots and avoid duplicate
+  connection startups when device metadata changes.
 
 ## 2.6.30 - 2026-09-30
 
