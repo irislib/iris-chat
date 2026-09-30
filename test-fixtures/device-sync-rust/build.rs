@@ -9,7 +9,16 @@ fn main() {
     let tcp_path = core.join("src/core/device_sync_tcp.rs");
     let framing_path = core.join("src/core/device_sync_tcp/framing.rs");
     let body_path = core.join("src/core/device_sync/body.rs");
-    for path in [&protocol_path, &tcp_path, &framing_path, &body_path] {
+    let model_path = core.join("src/core/model.rs");
+    let contact_path = core.join("src/core/contact_details.rs");
+    for path in [
+        &protocol_path,
+        &tcp_path,
+        &framing_path,
+        &body_path,
+        &model_path,
+        &contact_path,
+    ] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
     println!("cargo:rerun-if-env-changed=IRIS_CHAT_RS_CORE_DIR");
@@ -32,7 +41,13 @@ fn main() {
         .find("enum DeviceSyncPage")
         .expect("DeviceSyncPage enum");
     let contract_end = item_end(&protocol, page_at);
-    let contract = &protocol[contract_start..contract_end];
+    let contract = format!(
+        "{}\n{}\n{}",
+        derived_item(&read(model_path), "struct ChatReadState").replace("pub(super) ", ""),
+        derived_item(&read(contact_path), "struct ContactDetails").replace("pub(super) ", ""),
+        protocol[contract_start..contract_end]
+            .replace("super::contact_details::ContactDetails", "ContactDetails"),
+    );
 
     let framing = read(framing_path);
     let framing_start = framing
@@ -64,6 +79,14 @@ fn main() {
 
 fn read(path: PathBuf) -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+fn derived_item<'a>(source: &'a str, name: &str) -> &'a str {
+    let item = source
+        .find(name)
+        .unwrap_or_else(|| panic!("missing native {name}"));
+    let start = source[..item].rfind("#[derive").expect("item derive");
+    &source[start..item_end(source, item)]
 }
 
 fn constant(source: &str, name: &str) -> String {

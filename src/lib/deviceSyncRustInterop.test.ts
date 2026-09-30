@@ -55,6 +55,24 @@ interop('iris-chat-rs device-sync interop', () => {
     })
   })
 
+  it('accepts native chat metadata extensions without losing the shared snapshot', () => {
+    const snapshot: DeviceSyncSnapshot = {
+      v: 1, type: 'snapshot', rosterAt: 42,
+      chats: [{ id: peer, updatedAt: 43 }], appKeys: [], groups: [], messages: [],
+    }
+    const nativeSnapshot = {
+      ...snapshot,
+      chats: [{
+        ...snapshot.chats[0],
+        readState: { updatedAtMs: 44000, deviceId: owner, seenThroughSecs: 43, seenAtBoundary: ['message-1'] },
+        contactDetails: { nickname: 'Friend', note: 'Test contact', updatedAtMs: 44000 },
+      }],
+    }
+    const nativeBytes = runNative('roundtrip', encodeDeviceSyncPacket(nativeSnapshot))
+    expect(JSON.parse(new TextDecoder().decode(nativeBytes))).toEqual(nativeSnapshot)
+    expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(nativeSnapshot)
+  })
+
   it('lets Rust decode TS and TS decode Rust for every paged packet shape', () => {
     const snapshot: DeviceSyncSnapshot = {
       v: 1,
