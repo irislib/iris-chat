@@ -46,6 +46,7 @@ export interface StoredGroup {
   createdAt: number
   secret?: string     // 32-byte hex group secret for shared channel
   accepted?: boolean  // whether user has accepted the group invitation
+  rosterVersion?: { revision: number; updatedAt: number; eventCreatedAt: number; eventId: string }
 }
 
 export interface StoredProfile {

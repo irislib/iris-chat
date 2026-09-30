@@ -105,6 +105,7 @@ vi.mock('./chat', () => {
 })
 
 vi.mock('./privateChats', () => ({
+  cancelGroupPublications: vi.fn(),
   ensureDeviceRegistered: vi.fn().mockResolvedValue(undefined),
   getSessionManager: () => ({
     sendEvent: (recipient: string, event: unknown) => {
@@ -124,12 +125,12 @@ vi.mock('./privateChats', () => ({
       return Promise.resolve(undefined)
     },
   }),
-  waitForSendReadyRuntime: async () => ({
+  waitForSendReadyRuntime: vi.fn(async () => ({
     sendEvent: (recipient: string, event: unknown) => {
       sendEventCalls.push({ recipient, event })
       return Promise.resolve(undefined)
     },
-  }),
+  })),
   getNdrRuntime: () => ({
     getState: () => ({ sessionManagerReady: true }),
     sendEvent: (recipient: string, event: unknown) => {
@@ -674,8 +675,10 @@ describe('groups', () => {
       expect(group.admins).toEqual([ROSTER_ADMIN])
     })
 
-    it('deletes the local group when an admin roster fact removes us', async () => {
-      const { handleGroupRosterFactEvent, groups } = await import('./groups')
+    it('retains history and blocks sending after an admin removes us, including after reload', async () => {
+      const { handleGroupRosterFactEvent, groups, groupMessages, currentGroupId, sendGroupMessage,
+        sendGroupReaction, acceptGroupInvitation, clearGroupData, loadGroupsFromStorage } = await import('./groups')
+      const storage = await import('./storage')
       const groupId = 'fact-removes-local-member'
       handleGroupRosterFactEvent(makeRosterFactEvent({
         groupId,
@@ -685,6 +688,10 @@ describe('groups', () => {
         revision: 1,
       }))
       expect(get(groups).has(groupId)).toBe(true)
+      acceptGroupInvitation(groupId)
+      const history = [{ id: 'before-removal', content: 'Keep this history', timestamp: 1, isMine: true }]
+      groupMessages.set(new Map([[groupId, history]]))
+      currentGroupId.set(groupId)
 
       const handled = handleGroupRosterFactEvent(makeRosterFactEvent({
         groupId,
@@ -695,7 +702,66 @@ describe('groups', () => {
       }))
 
       expect(handled).toBe(true)
-      expect(get(groups).has(groupId)).toBe(false)
+      expect(get(groups).get(groupId)?.members).toEqual([ROSTER_ADMIN])
+      expect(get(groupMessages).get(groupId)).toEqual(history)
+      expect(get(currentGroupId)).toBe(groupId)
+      expect(storage.deleteGroupFromDb).not.toHaveBeenCalled()
+      expect(storage.deleteMessagesForSession).not.toHaveBeenCalled()
+      sendGroupMessage(groupId, 'Blocked after removal')
+      sendGroupReaction(groupId, 'before-removal', '👍')
+      expect(get(groupMessages).get(groupId)).toEqual(history)
+      await vi.waitFor(() => expect(storage.saveGroup).toHaveBeenLastCalledWith(expect.objectContaining({
+        id: groupId, members: [ROSTER_ADMIN], rosterVersion: expect.objectContaining({ revision: 2 }),
+      })))
+      const saved = vi.mocked(storage.saveGroup).mock.calls.at(-1)![0]
+      clearGroupData()
+      vi.mocked(storage.getAllGroups).mockResolvedValueOnce([saved])
+      vi.mocked(storage.getMessagesForSession).mockResolvedValueOnce(history.map(message => ({ ...message, sessionId: `group:${groupId}` })))
+      await loadGroupsFromStorage()
+      expect(handleGroupRosterFactEvent(makeRosterFactEvent({ groupId, name: 'Stale',
+        members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN], revision: 1,
+      }))).toBe(false)
+      expect(get(groups).get(groupId)?.members).toEqual([ROSTER_ADMIN])
+      expect(get(groupMessages).get(groupId)).toMatchObject(history)
+    })
+
+    it('does not undo a sibling removal snapshot with an equal-version fact, but accepts a later re-add', async () => {
+      const { groups, rememberSyncedGroupRosterVersion, handleGroupRosterFactEvent, canSendToGroup } = await import('./groups')
+      const groupId = 'sibling-removal-tie'
+      groups.set(new Map([[groupId, { id: groupId, name: 'History', members: [ROSTER_ADMIN],
+        admins: [ROSTER_ADMIN], createdAt: 1700000000, accepted: true,
+      }]]))
+      rememberSyncedGroupRosterVersion(groupId, 2, 1700000002)
+      const roster = (revision: number) => makeRosterFactEvent({ groupId, name: 'History',
+        members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN], revision,
+      })
+      expect(handleGroupRosterFactEvent(roster(2))).toBe(false)
+      expect(canSendToGroup(get(groups).get(groupId))).toBe(false)
+      expect(handleGroupRosterFactEvent(roster(3))).toBe(true)
+      expect(canSendToGroup(get(groups).get(groupId))).toBe(true)
+    })
+
+    it('cancels a group send waiting for runtime readiness when removal arrives', async () => {
+      const { handleGroupRosterFactEvent, acceptGroupInvitation, sendGroupMessage } = await import('./groups')
+      const { waitForSendReadyRuntime } = await import('./privateChats')
+      let ready!: () => void
+      vi.mocked(waitForSendReadyRuntime).mockImplementationOnce(() => new Promise(resolve => {
+        ready = () => resolve({} as Awaited<ReturnType<typeof waitForSendReadyRuntime>>)
+      }))
+      const groupId = 'removed-during-send'
+      handleGroupRosterFactEvent(makeRosterFactEvent({ groupId, name: 'Waiting',
+        members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN], revision: 1,
+      }))
+      acceptGroupInvitation(groupId)
+      sendGroupMessage(groupId, 'Waiting for a connection')
+      await vi.waitFor(() => expect(ready).toBeTypeOf('function'))
+      handleGroupRosterFactEvent(makeRosterFactEvent({ groupId, name: 'Waiting',
+        members: [ROSTER_ADMIN], admins: [ROSTER_ADMIN], revision: 2,
+      }))
+      sendEventCalls.length = 0
+      ready()
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sendEventCalls).toEqual([])
     })
 
     it('accepts admin roster facts that add a new member', async () => {

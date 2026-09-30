@@ -17,7 +17,7 @@ import { getPubkey, ndk } from './identity'
 import { NDKEvent } from '@nostr-dev-kit/ndk'
 import { notificationSettings } from './notificationStore'
 import { sendCallWakeups } from './callPush'
-import { getNdrRuntime } from './privateChats'
+import { getNdrRuntime, cancelGroupPublications } from './privateChats'
 import {
   groups,
   groupMessages,
@@ -465,6 +465,7 @@ export async function applyDeviceSyncSnapshot(
 
   for (const group of additions.groups) {
     const existing = get(groups).get(group.id)
+    if (!existing && !group.members.includes(ownerPubkey)) continue
     const local: Group = {
       id: group.id,
       name: group.name,
@@ -473,6 +474,7 @@ export async function applyDeviceSyncSnapshot(
       members: [...group.members],
       admins: [...group.admins],
       createdAt: group.createdAt * 1000,
+      rosterVersion: { revision: group.revision, updatedAt: group.updatedAt, eventCreatedAt: group.updatedAt, eventId: '' },
       ...(existing?.secret && { secret: existing.secret }),
       ...((group.accepted ?? existing?.accepted) !== undefined && {
         accepted: group.accepted ?? existing?.accepted,
@@ -482,6 +484,7 @@ export async function applyDeviceSyncSnapshot(
       groups.update((all) => new Map(all).set(group.id, local))
       groupMessages.update((all) => all.has(group.id) ? all : new Map(all).set(group.id, []))
     })
+    if (!local.members.includes(ownerPubkey)) cancelGroupPublications(group.id)
     const stored: StoredGroup = { ...local }
     await saveGroup(stored)
     rememberSyncedGroupRosterVersion(group.id, group.revision, group.updatedAt)

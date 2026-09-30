@@ -108,6 +108,7 @@ vi.mock('./groups', () => ({
 }))
 vi.mock('./identity', () => ({ getPubkey: vi.fn(() => 'a'.repeat(64)) }))
 vi.mock('./privateChats', () => ({
+  cancelGroupPublications: vi.fn(),
   getNdrRuntime: () => ({
     getKnownAppKeysSnapshots: () => ndr.knownSnapshots,
     applyTrustedAppKeysSnapshot: ndr.applyTrustedAppKeysSnapshot,
@@ -320,7 +321,7 @@ describe('device sync', () => {
     }).messages).toEqual([])
   })
 
-  it('rejects malformed snapshots and groups that exclude the local owner', () => {
+  it('accepts removed-group snapshots from authorized siblings but rejects malformed snapshots', () => {
     const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
     const validGroup = {
       id: 'group-id',
@@ -340,14 +341,14 @@ describe('device sync', () => {
       groups: [validGroup],
       messages: [],
     }), owner)).toMatchObject({ type: 'snapshot', appKeys: [] })
-    expect(() => parseDeviceSyncPacket(encode({
+    expect(parseDeviceSyncPacket(encode({
       v: 1,
       type: 'snapshot',
       rosterAt: 100,
       chats: [],
       groups: [{ ...validGroup, members: [device], admins: [device] }],
       messages: [],
-    }), owner)).toThrow()
+    }), owner)).toMatchObject({ groups: [{ members: [device] }] })
     expect(() => parseDeviceSyncPacket(encode({
       v: 1,
       type: 'snapshot',
@@ -490,6 +491,24 @@ describe('device sync', () => {
     }, owner)
     expect(get(groupStore).get(groupId)?.name).toBe('New name')
     expect(groupRoster.get(groupId)).toEqual({ revision: 2, updatedAt: 101 })
+  })
+
+  it('retains known removed chats from sibling snapshots and ignores stale reactivation or unknown removed groups', async () => {
+    const groupId = 'removed-sibling-group'
+    groups.set(new Map([[groupId, { id: groupId, name: 'History', members: [owner, device], admins: [device], createdAt: 80000, accepted: true }]]))
+    const packet: DeviceSyncSnapshot = { ...snapshot([]), groups: [{
+      id: groupId, name: 'History', members: [device], admins: [device], createdBy: device,
+      revision: 2, createdAt: 80, updatedAt: 101,
+    }] }
+    await applyDeviceSyncSnapshot(packet, owner)
+    expect(get(groups).get(groupId)?.members).toEqual([device])
+    expect(get(groups).get(groupId)?.rosterVersion?.revision).toBe(2)
+    await applyDeviceSyncSnapshot({ ...packet, groups: [
+      { ...packet.groups[0], revision: 1, updatedAt: 999, members: [device, owner] },
+      { ...packet.groups[0], id: 'unknown-removed' },
+    ] }, owner)
+    expect(get(groups).get(groupId)?.members).toEqual([device])
+    expect(get(groups).has('unknown-removed')).toBe(false)
   })
 
   it('chunks snapshots into self-contained bounded packets', () => {

@@ -105,7 +105,7 @@ describe('durable runtime publication', () => {
     const publish = vi.fn(async () => accepted())
     queueFor(publish, { storage: new DexieStorageAdapter(), onAcceptedRelays }).start()
     await waitFor(() => expect(publish).toHaveBeenCalledOnce())
-    expect(publish.mock.calls[0]).toEqual([event('a'), expect.any(AbortSignal)])
+    expect(publish.mock.calls[0]).toEqual([event('a'), expect.any(AbortSignal), undefined])
     await waitFor(async () => expect(await rows()).toEqual([]))
     expect(onAcceptedRelays).toHaveBeenCalledExactlyOnceWith('inner-a', [
       'wss://relay.example',
@@ -164,6 +164,44 @@ describe('durable runtime publication', () => {
     await vi.advanceTimersByTimeAsync(2000)
     expect(vi.getTimerCount()).toBe(0)
     expect(publish).toHaveBeenCalledTimes(3)
+  })
+
+  it('drops durable removed-group retries after restart while allowing direct messages and roster controls', async () => {
+    const failed = queueFor(async () => new Set())
+    await expect(failed.publish(event('a'), 'group-inner', { groupId: 'removed' })).rejects.toThrow('not accepted')
+    await failed.enqueue(event('d'), 'queued-key-handoff', { groupId: 'removed' })
+    await failed.enqueue(event('b'), 'direct-inner')
+    await failed.enqueue(event('c'), 'roster-control')
+    failed.close()
+    db.close()
+    await db.open()
+
+    const publish = vi.fn(async (_event: VerifiedEvent) => accepted())
+    const onAcceptedRelays = vi.fn()
+    queueFor(publish, { canPublish: ({ groupId }) => groupId !== 'removed', onAcceptedRelays }).start()
+    await waitFor(async () => expect(await rows()).toEqual([]))
+    expect(publish.mock.calls.map(([sent]: [VerifiedEvent]) => sent.id).sort()).toEqual([event('b').id, event('c').id])
+    expect(onAcceptedRelays).not.toHaveBeenCalledWith('group-inner', expect.anything())
+  })
+
+  it('aborts an in-flight group attempt and checks membership again before retrying', async () => {
+    let member = true
+    const onlineTarget = new EventTarget()
+    const publish = vi.fn((_event: VerifiedEvent, signal: AbortSignal) => new Promise<ReturnType<typeof accepted>>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    }))
+    const onAcceptedRelays = vi.fn()
+    const queue = queueFor(publish, { canPublish: () => member, onlineTarget, onAcceptedRelays })
+    const pending = queue.publish(event('a'), 'inner', { groupId: 'removed' })
+    const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    await waitFor(() => expect(publish).toHaveBeenCalledOnce())
+    member = false
+    queue.cancelGroup('removed')
+    await cancelled
+    expect(onAcceptedRelays).not.toHaveBeenCalled()
+    queue.start()
+    await waitFor(async () => expect(await rows()).toEqual([]))
+    expect(publish).toHaveBeenCalledOnce()
   })
 
   it('extracts unique accepted relay URLs from NDK results', () => {

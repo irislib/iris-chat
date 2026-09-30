@@ -31,6 +31,7 @@ import { getPubkey, identity, ndk } from './identity'
 import { devices } from './devices'
 import { chats, type ChatMessage } from './chat'
 import {
+  cancelGroupPublications,
   ensureDeviceRegistered,
   getNdrRuntime,
   waitForSendReadyRuntime,
@@ -67,7 +68,7 @@ import { typingSettings } from './typingSettings'
 import { parseChatSettingsContent } from './chatSettings'
 
 export { GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE }
-export type Group = GroupData
+export type Group = GroupData & Pick<StoredGroup, 'rosterVersion'>
 
 type OuterEvent = { id?: string; outerEventId?: string } | unknown
 type NativeGroupSendResult = { outer: VerifiedEvent; inner: Rumor }
@@ -170,6 +171,15 @@ function isRuntimeSessionReady(): boolean {
 
 export const isAdmin = isGroupAdmin
 
+export function canSendToGroup(group: Group | undefined, ownerPubkey = getPubkey()): boolean {
+  return !!group && !!ownerPubkey && group.accepted !== false && group.members.includes(ownerPubkey)
+}
+
+function currentGroupForSend(groupId: string, expected?: Group): Group | undefined {
+  const group = get(groups).get(groupId)
+  return canSendToGroup(group) && (!expected || group === expected) ? group : undefined
+}
+
 function compareGroupRosterFactCursor(
   left: GroupRosterFactCursor,
   right: GroupRosterFactCursor,
@@ -198,6 +208,9 @@ export function rememberSyncedGroupRosterVersion(groupId: string, revision: numb
 function shouldApplyGroupRosterFact(fact: GroupRosterFact): boolean {
   if (seenGroupRosterFactIds.has(fact.eventId)) return false
   const existing = groupRosterFactCursors.get(fact.groupId)
+  // Sibling snapshots omit the signed event ID. Its absence is not evidence
+  // that a conflicting fact with the same known version is newer.
+  if (existing?.eventId === '' && fact.revision === existing.revision && fact.updatedAt === existing.updatedAt) return false
   return !existing || compareGroupRosterFactCursor(fact, existing) > 0
 }
 
@@ -246,6 +259,8 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
     updatedAt: Number(unsigned.tags.find((tag) => tag[0] === 'updated_at')?.[1] || eventCreatedAt),
     eventCreatedAt: signed.created_at,
   })
+  const current = get(groups).get(group.id)
+  if (current) saveGroupState(current)
   void event.publish(undefined, 10000, 1).catch((error) => {
     console.warn('[groups] Failed to publish group roster fact:', error)
   })
@@ -279,16 +294,14 @@ function applyGroupRosterFact(fact: GroupRosterFact): boolean {
   if (existing) {
     const result = validateMetadataUpdate(existing, metadata, fact.signerPubkey, myPubkey)
     if (result === 'reject') return false
-    if (result === 'removed') {
-      seenGroupRosterFactIds.add(fact.eventId)
-      rememberGroupRosterFact(fact.groupId, fact)
-      void deleteGroup(fact.groupId)
-      return true
-    }
-
     const updated = applyMetadataUpdate(existing, metadata)
+    rememberGroupRosterFact(fact.groupId, fact)
     groups.update(g => { g.set(fact.groupId, updated); return g })
     saveGroupState(updated)
+    if (result === 'removed') {
+      clearRemoteTyping(`group:${fact.groupId}`)
+      cancelGroupPublications(fact.groupId)
+    }
     syncNativeGroupTransport(fact.groupId)
   } else {
     if (!validateMetadataCreation(metadata, fact.signerPubkey, myPubkey)) return false
@@ -298,6 +311,7 @@ function applyGroupRosterFact(fact: GroupRosterFact): boolean {
       createdAt: fact.group.createdAt,
       accepted: fact.signerPubkey === myPubkey,
     }
+    rememberGroupRosterFact(fact.groupId, fact)
     groups.update(g => { g.set(fact.groupId, group); return g })
     groupMessages.update(gm => { if (!gm.has(fact.groupId)) gm.set(fact.groupId, []); return gm })
     saveGroupState(group)
@@ -306,7 +320,6 @@ function applyGroupRosterFact(fact: GroupRosterFact): boolean {
   }
 
   seenGroupRosterFactIds.add(fact.eventId)
-  rememberGroupRosterFact(fact.groupId, fact)
   return true
 }
 
@@ -554,8 +567,7 @@ function fanOutToMembers(
   recipientOverride?: string[],
   options?: { includeSelf?: boolean },
 ): void {
-  const currentGroups = get(groups)
-  const group = currentGroups.get(groupId)
+  const group = currentGroupForSend(groupId)
   if (!group) return
 
   const myPubkey = getPubkey()
@@ -571,7 +583,7 @@ function fanOutToMembers(
     try {
       const rumor = buildScopedGroupRumor(['p', memberPubkey], { ...partialEvent, tags }, true)
       void ensureDeviceRegistered()
-        .then(() => getNdrRuntime().sendEvent(memberPubkey, rumor))
+        .then(() => currentGroupForSend(groupId, group) && getNdrRuntime().sendEvent(memberPubkey, rumor))
         .catch((error) => {
           console.warn(
             '[groups] Failed to send to member:',
@@ -590,9 +602,11 @@ async function fanOutToOwnDevices(
   partialEvent: { content: string, kind: number, tags: string[][] },
 ): Promise<void> {
   const myPubkey = getPubkey()
-  if (!myPubkey) return
+  const group = currentGroupForSend(groupId)
+  if (!myPubkey || !group) return
 
   await ensureDeviceRegistered()
+  if (!currentGroupForSend(groupId, group)) return
   const rumor = buildScopedGroupRumor(['p', myPubkey], {
     ...partialEvent,
     tags: [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]],
@@ -607,19 +621,13 @@ async function sendNativeGroupEvent(
 ): Promise<NativeGroupSendResult | null> {
   return enqueueNativeGroupSend(groupId, async () => {
     const runtime = getNdrRuntime()
-    const groupData = get(groups).get(groupId)
-    if (!groupData) {
-      fanOutToMembers(
-        groupId,
-        partialEvent,
-        undefined,
-        options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
-      )
-      return null
-    }
+    const groupData = currentGroupForSend(groupId)
+    if (!groupData) return null
 
     await waitForSendReadyRuntime()
+    if (!currentGroupForSend(groupId, groupData)) return null
     await runtime.upsertGroup(groupData)
+    if (!currentGroupForSend(groupId, groupData)) return null
     try {
       const runtimeRumor = buildScopedGroupRumor(['l', groupId], partialEvent)
       const result = await runtime.sendGroupEvent(groupId, {
@@ -633,6 +641,7 @@ async function sendNativeGroupEvent(
       }
       return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
     } catch (error) {
+      if (!currentGroupForSend(groupId, groupData)) return null
       console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
       fanOutToMembers(
         groupId,
@@ -655,7 +664,8 @@ function saveGroupState(group: Group): void {
     ...(group.description && { description: group.description }),
     ...(group.picture && { picture: group.picture }),
     ...(group.secret && { secret: group.secret }),
-    accepted: group.accepted
+    accepted: group.accepted,
+    rosterVersion: groupRosterFactCursors.get(group.id) ?? group.rosterVersion,
   }
   saveGroupToDb(storedGroup).catch(e => console.error('[groups] Failed to save group:', e))
 }
@@ -699,7 +709,7 @@ function mutateGroup(
 ): void {
   const myPubkey = getPubkey()
   const group = get(groups).get(groupId)
-  if (!myPubkey || !group) return
+  if (!myPubkey || !group || !currentGroupForSend(groupId)) return
 
   const updated = transform(group, myPubkey)
   if (!updated) return
@@ -733,7 +743,7 @@ export function removeGroupAdmin(groupId: string, pubkey: string): void {
 
 export function sendGroupMessage(groupId: string, text: string, replyTo?: string): void {
   const myPubkey = getPubkey()
-  if (!myPubkey) return
+  if (!myPubkey || !currentGroupForSend(groupId)) return
 
   const tags: string[][] = []
   if (replyTo) {
@@ -795,7 +805,7 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
 
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {
   const myPubkey = getPubkey()
-  if (!myPubkey) return
+  if (!myPubkey || !currentGroupForSend(groupId)) return
 
   groupMessages.update(gm => {
     const msgs = gm.get(groupId) || []
@@ -1141,8 +1151,10 @@ export async function loadGroupsFromStorage(): Promise<void> {
         admins: stored.admins || [],
         createdAt: stored.createdAt,
         secret: stored.secret,
-        accepted: stored.accepted
+        accepted: stored.accepted,
+        rosterVersion: stored.rosterVersion,
       }
+      if (stored.rosterVersion) rememberGroupRosterFact(group.id, stored.rosterVersion)
 
       groups.update(g => {
         g.set(group.id, group)
@@ -1264,7 +1276,7 @@ export function clearGroupData(): void {
 export function acceptGroupInvitation(groupId: string): void {
   const currentGroups = get(groups)
   const group = currentGroups.get(groupId)
-  if (!group) return
+  if (!group || !group.members.includes(getPubkey() || '')) return
 
   const updated: Group = { ...group, accepted: true }
 

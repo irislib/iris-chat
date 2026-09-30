@@ -120,7 +120,7 @@ function serializedPacket(packet: DeviceSyncPacket): Uint8Array {
 
 export function parseDeviceSyncPacket(
   payload: Uint8Array,
-  ownerPubkey: string,
+  _ownerPubkey: string,
 ): DeviceSyncPacket {
   if (payload.byteLength > DEVICE_SYNC_MAX_PACKET_BYTES) fail('record exceeds 64 KiB')
 
@@ -149,7 +149,7 @@ export function parseDeviceSyncPacket(
       if (!isTime(value.rosterAt)) fail('pageEnd rosterAt is invalid')
       return { v: 1, type: 'pageEnd', rosterAt: value.rosterAt, next: parsePage(value.next) }
     case 'snapshot':
-      return parseSnapshot(value, ownerPubkey)
+      return parseSnapshot(value)
     default:
       fail(`unknown packet type ${value.type}`)
   }
@@ -183,7 +183,7 @@ function parsePage(value: unknown): DeviceSyncPage {
   fail('page kind is unsupported')
 }
 
-function parseSnapshot(value: Record<string, unknown>, ownerPubkey: string): DeviceSyncSnapshot {
+function parseSnapshot(value: Record<string, unknown>): DeviceSyncSnapshot {
   if (!isTime(value.rosterAt)) fail('snapshot rosterAt is invalid')
   const appKeys = defaultArray(value.appKeys, 'appKeys')
   const chats = defaultArray(value.chats, 'chats')
@@ -192,7 +192,7 @@ function parseSnapshot(value: Record<string, unknown>, ownerPubkey: string): Dev
 
   if (!appKeys.every(validAppKeys)) fail('snapshot appKeys are invalid')
   if (!chats.every(validChat)) fail('snapshot chats are invalid')
-  if (!groups.every((group) => validGroup(group, ownerPubkey))) {
+  if (!groups.every(validGroup)) {
     fail('snapshot groups are invalid')
   }
 
@@ -231,14 +231,13 @@ function validChat(value: unknown): boolean {
   return isObject(value) && isPubkey(value.id) && isTime(value.updatedAt)
 }
 
-function validGroup(value: unknown, ownerPubkey: string): boolean {
+function validGroup(value: unknown): boolean {
   if (!isObject(value)) return false
   return isId(value.id, 128) &&
     typeof value.name === 'string' && value.name.length <= 4096 &&
     isPubkey(value.createdBy) &&
     Array.isArray(value.members) && value.members.length > 0 &&
     value.members.every(isPubkey) &&
-    value.members.some((member) => member.toLowerCase() === ownerPubkey.toLowerCase()) &&
     Array.isArray(value.admins) && value.admins.every(isPubkey) &&
     isTime(value.revision) && isTime(value.createdAt) && isTime(value.updatedAt) &&
     (value.description === undefined || typeof value.description === 'string') &&

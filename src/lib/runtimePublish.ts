@@ -1,20 +1,22 @@
-import type { StorageAdapter } from 'nostr-double-ratchet'
+import type { NostrPublishContext, StorageAdapter } from 'nostr-double-ratchet'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import type { VerifiedEvent } from 'nostr-tools'
 
 interface PendingPublication {
   event: VerifiedEvent
   innerEventId?: string
+  context?: NostrPublishContext
 }
 
 interface RuntimePublishOptions {
   /** Public identity key whose outgoing envelopes this queue may publish. */
   owner: string
-  publish: (event: VerifiedEvent, signal: AbortSignal) => Promise<RuntimePublishResult>
+  publish: (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => Promise<RuntimePublishResult>
   onAcceptedRelays?: (
     innerEventId: string | undefined,
     relayUrls: string[]
   ) => void | Promise<void>
+  canPublish?: (context: NostrPublishContext) => boolean | Promise<boolean>
   onError: (error: unknown) => void
   storage?: StorageAdapter
   onlineTarget?: EventTarget
@@ -27,6 +29,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
   const controller = new AbortController()
   const { signal } = controller
   const enqueuing = new Map<string, Promise<void>>()
+  const groupAttempts = new Map<AbortController, string>()
   const inFlight = new Map<string, Promise<VerifiedEvent | undefined>>()
   const onlineTarget =
     options.onlineTarget ?? (typeof window !== 'undefined' ? window : undefined)
@@ -36,7 +39,8 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
 
   const enqueue = async (
     event: VerifiedEvent,
-    innerEventId?: string
+    innerEventId?: string,
+    context?: NostrPublishContext,
   ): Promise<void> => {
     signal.throwIfAborted()
     if (!event.id || !event.sig) throw new Error('Cannot queue an unsigned event')
@@ -45,7 +49,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
     if (pending) return pending
 
     // Keep the signed envelope unchanged even if its caller later mutates it.
-    const row: PendingPublication = { event: structuredClone(event), innerEventId }
+    const row: PendingPublication = { event: structuredClone(event), innerEventId, ...(context && { context: { ...context } }) }
     const writing = (async () => {
       const existing = await storage.get<PendingPublication>(key)
       signal.throwIfAborted()
@@ -66,7 +70,21 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       const row = await storage.get<PendingPublication>(key)
       signal.throwIfAborted()
       if (!row) return
-      const accepted = await options.publish(row.event, signal)
+      if (row.context && options.canPublish && !await options.canPublish(row.context)) {
+        await storage.del(key)
+        return
+      }
+      signal.throwIfAborted()
+      const groupController = row.context ? new AbortController() : undefined
+      if (groupController) groupAttempts.set(groupController, row.context!.groupId)
+      const attemptSignal = groupController ? AbortSignal.any([signal, groupController.signal]) : signal
+      let accepted: RuntimePublishResult
+      try {
+        accepted = await options.publish(row.event, attemptSignal, row.context)
+        attemptSignal.throwIfAborted()
+      } finally {
+        if (groupController) groupAttempts.delete(groupController)
+      }
       if (accepted.size === 0)
         throw new Error('Runtime event was not accepted by any relay')
       signal.throwIfAborted()
@@ -108,9 +126,12 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
 
   return {
     enqueue,
-    async publish(event: VerifiedEvent, innerEventId?: string): Promise<VerifiedEvent> {
-      await enqueue(event, innerEventId)
+    async publish(event: VerifiedEvent, innerEventId?: string, context?: NostrPublishContext): Promise<VerifiedEvent> {
+      await enqueue(event, innerEventId, context)
       return (await attempt(prefix + event.id)) ?? event
+    },
+    cancelGroup(groupId: string) {
+      for (const [attempt, id] of groupAttempts) if (id === groupId) attempt.abort()
     },
     start() {
       if (started || signal.aborted) return

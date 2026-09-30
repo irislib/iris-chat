@@ -32,7 +32,7 @@ export async function setGroupDisappearingMessages(
 
   const currentGroups = get(groups)
   const group = currentGroups.get(groupId)
-  if (!group) return
+  if (!group || group.accepted === false || !group.members.includes(myPubKey)) return
   if (!group.admins?.includes(myPubKey)) return
 
   const normalizedTtl = normalizeDisappearingTtl(messageTtlSeconds)

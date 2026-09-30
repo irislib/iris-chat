@@ -23,6 +23,7 @@ import {
   type NdrRuntimeState,
   type NostrFetch,
   type NostrSubscribe,
+  type NostrPublishContext,
 } from 'nostr-double-ratchet'
 import {
   ndk,
@@ -227,13 +228,22 @@ const createSign = (ndkInstance: ReturnType<typeof getNDK>) => {
 }
 
 const createRelayPublish = (ndkInstance: ReturnType<typeof getNDK>) => {
-  return async (event: VerifiedEvent) => {
+  return async (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => {
+    signal.throwIfAborted()
     const e = new NDKEvent(ndkInstance, event)
     void publishNostrPubsub(event).catch((error) => {
       console.warn('[privateChats] FIPS pubsub publish failed:', error)
     })
     const relayUrls = [...relayStore.getState().relays]
     const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
+    if (context) {
+      // Our durable queue owns retries. NDK must not retain a second group send
+      // waiting for a future connection after membership has been revoked.
+      const connected = new Set(ndkInstance.pool.connectedRelays())
+      for (const relay of relaySet.relays) if (!connected.has(relay)) relaySet.relays.delete(relay)
+      if (!relaySet.size) throw new Error('No connected message server')
+    }
+    signal.throwIfAborted()
     return e.publish(relaySet, 10000, 1)
   }
 }
@@ -325,6 +335,12 @@ const getRuntime = (): NdrRuntime => {
     owner: ownerPubkey,
     publish: createRelayPublish(ndkInstance),
     onAcceptedRelays: notifyMessageRelayPublish,
+    canPublish: async ({ groupId }) => {
+      const { groups, canSendToGroup } = await import('./groups')
+      const { db } = await import('./storage')
+      const stored = get(groups).get(groupId) ?? await db.groups.get(groupId)
+      return canSendToGroup(get(groups).get(groupId) ?? stored, ownerPubkey)
+    },
     onError: reportPublicationError,
   })
   runtimePublication = publication
@@ -333,11 +349,11 @@ const getRuntime = (): NdrRuntime => {
     nostrSubscribe: createSubscribe(ndkInstance),
     nostrSign: sign,
     nostrEnqueue: publication.enqueue,
-    nostrPublish: async (event, innerEventId) => {
+    nostrPublish: async (event, innerEventId, context) => {
       const signed = 'sig' in event && event.sig
         ? event as VerifiedEvent
         : await sign(event)
-      return publication.publish(signed, innerEventId)
+      return publication.publish(signed, innerEventId, context)
     },
     onPublishError: ({ error }) => reportPublicationError(error),
     nostrFetch: createFetch(ndkInstance),
@@ -367,6 +383,10 @@ const getRuntime = (): NdrRuntime => {
   })
   publication.start()
   return runtime
+}
+
+export function cancelGroupPublications(groupId: string): void {
+  runtimePublication?.cancelGroup(groupId)
 }
 
 export const getNdrRuntime = (): NdrRuntime => {

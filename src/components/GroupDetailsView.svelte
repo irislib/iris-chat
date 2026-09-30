@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { groups, deleteGroup, isAdmin, addGroupMember, removeGroupMember, updateGroupInfo, addGroupAdmin, removeGroupAdmin, type Group } from '../lib/groups'
+  import { groups, deleteGroup, isAdmin, canSendToGroup, addGroupMember, removeGroupMember, updateGroupInfo, addGroupAdmin, removeGroupAdmin, type Group } from '../lib/groups'
   import { chats } from '../lib/chat'
   import { getPubkey } from '../lib/identity'
   import { uploadFile, getMediaUrl, parseFileLink, isImageFile } from '../lib/hashtree'
@@ -22,7 +22,7 @@
   // Read live group state from store
   let group = $derived($groups.get(initialGroup.id) || initialGroup)
   let myPubkey = $derived(getPubkey() || '')
-  let amAdmin = $derived(isAdmin(group, myPubkey))
+  let amAdmin = $derived(canSendToGroup(group, myPubkey) && isAdmin(group, myPubkey))
 
   let editingName = $state(false)
   let editNameValue = $state('')

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
   import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
-  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, isAdmin, type Group, type GroupMessage } from '../lib/groups'
+  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, isAdmin, canSendToGroup, type Group, type GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
@@ -60,7 +60,8 @@
   let activeGroupId = $state(group.id)
   let replyingTo = $state<GroupMessage | null>(null)
   let showDisappearingModal = $state(false)
-  let attachmentAllowed = $derived(!!$identity && group.accepted !== false)
+  let removed = $derived(!!$identity && !group.members.includes($identity.pubkey))
+  let attachmentAllowed = $derived(canSendToGroup(group, $identity?.pubkey))
   let canAttach = $derived(attachmentAllowed && !isRecordingVoice)
   $effect(() => {
     if (!attachmentAllowed) {
@@ -68,6 +69,9 @@
       isRecordingVoice = false
       recordingContext = null
       isFileDrag = false
+      replyingTo = null
+      showEmojiPicker = false
+      showDisappearingModal = false
     }
   })
 
@@ -77,7 +81,7 @@
   let disappearingNoticeTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   let canChangeDisappearing = $derived((() => {
     const pk = getPubkey()
-    return pk ? isAdmin(group, pk) : false
+    return pk ? canSendToGroup(group, pk) && isAdmin(group, pk) : false
   })())
 
   async function handleSetDisappearing(ttlSeconds: number | null) {
@@ -330,7 +334,7 @@
   let myPubkey = $derived(getPubkey())
 
   let canSend = $derived(
-    !!$identity && group.accepted !== false &&
+    attachmentAllowed &&
     ($attachmentDraft.length === 0 || attachmentAllowed) &&
     !!(messageText.trim() || $attachmentDraft.length) &&
     $attachmentDraft.every(item => !!item.nhash && !item.uploading && !item.error)
@@ -431,7 +435,7 @@
   {/if}
 
   <!-- Invite banner for unaccepted groups -->
-  {#if group.accepted !== true}
+  {#if !removed && group.accepted !== true}
     <div class="px-4 py-3 bg-primary/10 border-b border-primary/20 flex items-center gap-3 flex-shrink-0">
       <div class="flex-1 min-w-0">
         <p class="text-sm font-medium">You've been invited to <strong>{group.name}</strong></p>
@@ -497,9 +501,9 @@
           {myPubkey}
           groupMembers={group.members}
           {replyToMessage}
-          onreact={handleReact}
+          onreact={attachmentAllowed ? handleReact : undefined}
           ondelete={handleDeleteMessage}
-          onreply={handleReply}
+          onreply={attachmentAllowed ? handleReply : undefined}
         />
       {/each}
     {/if}
@@ -609,6 +613,10 @@
       </div>
     {/if}
 
+    {#if removed}
+      <p role="status" class="px-4 pt-3 pb-1 text-center text-sm text-gray-400">You were removed from the group</p>
+    {/if}
+
     <!-- Input row -->
     {#if attachmentError}
       <p role="status" class="px-4 pt-2 text-sm text-red-400">{attachmentError}</p>
@@ -640,6 +648,7 @@
               class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
               onclick={() => showEmojiPicker = !showEmojiPicker}
               aria-label="Emoji picker"
+              disabled={!attachmentAllowed}
             >
               <span class="i-carbon-face-add text-xl"></span>
             </button>
@@ -669,6 +678,7 @@
           onpaste={handlePaste}
           oninput={handleTypingInput}
           placeholder="Type a message..."
+          disabled={!attachmentAllowed}
           class="input-field flex-1 resize-none min-h-[44px] max-h-32 py-3"
           rows="1"
           autofocus
