@@ -33,7 +33,7 @@
       <h1><Name pubkey={$callState.owner} /></h1>
       <p aria-live="polite">
         {#if $callState.status === 'ended'}{$callState.reason}
-        {:else if $callState.status === 'active'}{duration}{#if $callState.remoteMuted} · Muted{/if}
+        {:else if $callState.status === 'active'}{duration}{#if $callState.remoteMuted} · Their microphone is off{/if}
         {:else if $callState.status === 'connecting'}Connecting…
         {:else if $callState.direction === 'incoming'}Incoming {$callState.video ? 'video' : 'voice'} call
         {:else}Calling…{/if}

@@ -247,6 +247,20 @@ describe('FIPS calls', () => {
     expect(get(a.state)?.remoteMuted).toBe(true)
     expect(get(a.state)?.remoteVideo).toBe(false)
   })
+  it('receives audio when the remote mute notice is stale', async () => {
+    a.start('Bob', ['b'], false); b.accept(false)
+    b.setMedia(true, false)
+    expect(get(a.state)?.remoteMuted).toBe(true)
+    eb.drop = true
+    b.setMedia(false, false)
+    eb.drop = false
+    const received = vi.fn(); a.onMedia = received
+    const frame = { kind: 1 as const, seq: 0, timestamp: 0, key: false, bytes: packet(20) }
+    await b.sendMedia(frame)
+    expect(get(a.state)?.remoteMuted).toBe(true)
+    expect(received).toHaveBeenCalledOnce()
+    expect(received.mock.calls[0][0]).toMatchObject(frame)
+  })
   it('remembers cancellation received before a delayed offer', () => {
     eb.handler?.({ src: 'a', payload: encodeCallControl({ v: 3, type: 'end', call_id: id }) })
     eb.handler?.({ src: 'a', payload: encodeCallControl({ v: 3, type: 'offer', call_id: id }) })
