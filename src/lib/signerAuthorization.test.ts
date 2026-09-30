@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppKeys } from 'nostr-double-ratchet'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
 import { prepareSignerAuthorization, selectSignerRoster, validateSignerAuthorization } from './signerAuthorization'
@@ -9,6 +9,9 @@ const oldDevice = getPublicKey(generateSecretKey())
 const newDevice = getPublicKey(generateSecretKey())
 const now = Math.floor(Date.now() / 1000)
 const roster = (createdAt = now - 1, device = oldDevice) => finalizeEvent(new AppKeys([{ identityPubkey: device, createdAt: 123 }]).getEvent({ ownerPubkey: owner, createdAt }), secret)
+
+beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now * 1000) })
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('one-time signer authorization', () => {
   it('preserves existing devices and every opaque label tag', () => {

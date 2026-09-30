@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.30 - 2026-09-30
+
+- Keep shared message-server batches within common filter limits so history
+  and profile lookups are not rejected during busy sessions.
+
 ## 2.6.29 - 2026-09-30
 
 - Replace NDK with the shared nostr-pubsub worker runtime and Hashtree event
