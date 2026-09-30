@@ -1,3 +1,5 @@
+import { chatMuteStates, loadChatMutes, mergeChatMutes } from './chatMuteStore'
+import type { ChatMuteState } from './chatMuteSync'
 import { get } from 'svelte/store'
 import {
   FipsNode,
@@ -84,6 +86,7 @@ export interface DeviceSyncSnapshotSource {
   ownerPubkey: string
   appKeys: DeviceSyncAppKeys[]
   chats: ChatSession[]
+  chatMutes?: ChatMuteState[]
   groups: Group[]
   groupMessages: Map<string, GroupMessage[]>
 }
@@ -147,22 +150,22 @@ function emptySnapshot(rosterAt: number): DeviceSyncSnapshot {
 }
 
 function hasSnapshotData(packet: DeviceSyncSnapshot): boolean {
-  return packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
+  return (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
 }
 
 function chunkSnapshot(
   rosterAt: number,
-  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages'>,
+  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes'>,
   maxBytes: number,
 ): DeviceSyncSnapshot[] {
   const packets: DeviceSyncSnapshot[] = []
   let packet = emptySnapshot(rosterAt)
 
-  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages'>(
+  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes'>(
     key: K,
-    value: DeviceSyncSnapshot[K][number],
+    value: NonNullable<DeviceSyncSnapshot[K]>[number],
   ) => {
-    const candidate = { ...packet, [key]: [...packet[key], value] } as DeviceSyncSnapshot
+    const candidate = { ...packet, [key]: [...(packet[key] ?? []), value] } as DeviceSyncSnapshot
     if (deviceSyncPacketByteLength(candidate) <= maxBytes) {
       packet = candidate
       return
@@ -175,6 +178,7 @@ function chunkSnapshot(
     packet = single
   }
 
+  for (const mute of items.chatMutes ?? []) append('chatMutes', mute)
   for (const chat of items.chats) append('chats', chat)
   for (const appKeys of items.appKeys) append('appKeys', appKeys)
   for (const group of items.groups) append('groups', group)
@@ -261,7 +265,7 @@ export function buildDeviceSyncSnapshots(
 
   return chunkSnapshot(
     rosterAt,
-    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages },
+    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages, chatMutes: source.chatMutes },
     maxBytes,
   )
 }
@@ -436,6 +440,7 @@ export async function applyDeviceSyncSnapshot(
   packet: DeviceSyncSnapshot,
   ownerPubkey = getPubkey() || '',
 ): Promise<void> {
+  if (packet.chatMutes?.length) await mergeChatMutes(packet.chatMutes, ownerPubkey)
   const additions = selectDeviceSyncAdditions(packet, currentMergeState())
   if (!hasSnapshotData({ ...packet, ...additions })) return
 
@@ -558,6 +563,7 @@ function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyn
       })),
     })),
     chats: Array.from(get(chats).values()),
+    chatMutes: Object.values(get(chatMuteStates)),
     groups: Array.from(get(groups).values()),
     groupMessages: get(groupMessages),
   }
@@ -779,7 +785,8 @@ async function reconcileRuntime(
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {
   deviceUnsubscribe?.()
   for (const unsubscribe of storeUnsubscribers) unsubscribe()
-  storeUnsubscribers = [chats, groups].map((store) =>
+  void loadChatMutes(ownerPubkey).catch(error => console.warn('Could not load mute settings', error))
+  storeUnsubscribers = [chats, groups, chatMuteStates].map((store) =>
     store.subscribe(scheduleSnapshotPush)
   )
   const key = new Uint8Array(secretKey)

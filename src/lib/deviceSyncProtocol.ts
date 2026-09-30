@@ -1,3 +1,4 @@
+import { isChatMuteState, type ChatMuteState } from './chatMuteSync'
 export const DEVICE_SYNC_PORT = 7369
 export const DEVICE_SYNC_MAX_PACKET_BYTES = 64 * 1024
 export const DEVICE_SYNC_PAGE_MESSAGES = 32
@@ -73,6 +74,7 @@ export interface DeviceSyncSnapshot {
   rosterAt: number
   appKeys: DeviceSyncAppKeys[]
   chats: DeviceSyncChat[]
+  chatMutes?: ChatMuteState[]
   groups: DeviceSyncGroup[]
   messages: DeviceSyncMessage[]
 }
@@ -187,6 +189,8 @@ function parseSnapshot(value: Record<string, unknown>): DeviceSyncSnapshot {
   if (!isTime(value.rosterAt)) fail('snapshot rosterAt is invalid')
   const appKeys = defaultArray(value.appKeys, 'appKeys')
   const chats = defaultArray(value.chats, 'chats')
+  const chatMutes = defaultArray(value.chatMutes, 'chatMutes')
+  if (!chatMutes.every(isChatMuteState)) fail('snapshot chatMutes are invalid')
   const groups = defaultArray(value.groups, 'groups')
   const messages = defaultArray(value.messages, 'messages')
 
@@ -203,6 +207,7 @@ function parseSnapshot(value: Record<string, unknown>): DeviceSyncSnapshot {
     rosterAt: value.rosterAt,
     appKeys: appKeys as unknown as DeviceSyncAppKeys[],
     chats: chats as unknown as DeviceSyncChat[],
+    ...(chatMutes.length && { chatMutes: chatMutes as ChatMuteState[] }),
     groups: groups as unknown as DeviceSyncGroup[],
     messages: decodedMessages,
   }

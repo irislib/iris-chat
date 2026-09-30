@@ -108,7 +108,9 @@ vi.mock('./groups', () => ({
   ),
   syncNativeGroupTransport: vi.fn(),
 }))
+vi.mock('./notifications', () => ({ updateDMSubscription: vi.fn(async () => {}) }))
 vi.mock('./identity', () => ({
+  identity: writable({ pubkey: 'a'.repeat(64) }),
   getPubkey: vi.fn(() => 'a'.repeat(64)),
   nostrClient: writable({ runtime: { addSource: vi.fn(), removeSource: vi.fn() } }),
 }))
@@ -123,6 +125,9 @@ vi.mock('./relayStore', () => ({
   relayStore: { getState: () => ({ relays: new Set(['wss://relay.example']) }) },
 }))
 vi.mock('./storage', () => ({
+  getSessionManagerValue: vi.fn(async () => undefined),
+  putSessionManagerValue: vi.fn(async () => {}),
+  deleteSessionManagerValue: vi.fn(async () => {}),
   saveGroup: vi.fn(),
   saveMessage: vi.fn(),
   saveSession: vi.fn(),
@@ -149,6 +154,7 @@ import { encodeDeviceSyncPacket } from './deviceSyncProtocol'
 import { chats } from './chat'
 import { groups } from './groups'
 import { nostrClient } from './identity'
+import { chatMutes, clearChatMutes } from './chatMuteStore'
 
 const owner = 'a'.repeat(64)
 const device = 'b'.repeat(64)
@@ -193,6 +199,25 @@ function appKeys(
 }
 
 describe('device sync', () => {
+  it('includes mutes predating the new device and applies mute-only metadata', async () => {
+    await clearChatMutes()
+    const until = Math.floor(Date.now() / 1000) + 3600
+    const chatMutesState = [
+      { chatId: peerOwner, untilSecs: until, updatedAtMs: Date.now() - 1000 },
+      { chatId: 'group:friends', untilSecs: 0, updatedAtMs: 1 },
+    ]
+    const packets = buildDeviceSyncReplyPackets({
+      requestRosterAt: Math.floor(Date.now() / 1000), localRosterAt: 100, ownerPubkey: owner,
+      appKeys: [], chats: [], groups: [], groupMessages: new Map(), chatMutes: chatMutesState,
+    })
+    const packet = packets.find(packet => packet.type === 'snapshot')!
+    expect(packet).toMatchObject({ chatMutes: chatMutesState })
+    if (packet.type !== 'snapshot') throw new Error('Expected metadata snapshot')
+    await applyDeviceSyncSnapshot(packet, owner)
+    expect(get(chatMutes)).toEqual({ [peerOwner]: until, 'group:friends': 0 })
+    await clearChatMutes()
+  })
+
   beforeEach(() => {
     fips.nodes.length = 0
     fips.transports.length = 0

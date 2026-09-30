@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { writable } from 'svelte/store'
 const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map() }))
 vi.mock('./identity', () => ({ identity: writable(null), nostrClient: writable({ signer: {} }) }))
+vi.mock('./chatMuteControl', () => ({ sendChatMuteControl: vi.fn(async () => {}) }))
 vi.mock('./chat', () => ({ getInviteEphemeralPubkeys: () => [] }))
 vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getSessionUserRecords: () => fixture.authors }) }))
 vi.mock('./notificationPermission', () => ({ getNotificationSupportError: () => null, requestNotificationPermission: async () => ({ permission: 'granted' }) }))
@@ -16,7 +17,7 @@ import { clearAllData } from './storage'
 beforeEach(() => {
   fixture.requests = []
   fixture.supported = true
-  fixture.authors = new Map(['alice', 'bob'].map(owner => [owner, { devices: new Map([['device', {
+  fixture.authors = new Map(['alice', 'bob'].map(owner => [owner === 'alice' ? 'a'.repeat(64) : 'b'.repeat(64), { devices: new Map([['device', {
     activeSession: { state: { theirCurrentNostrPublicKey: `${owner}-current`, theirNextNostrPublicKey: `${owner}-next` } }, inactiveSessions: [],
   }]]) }]))
   identity.set({ pubkey: 'profile', displayName: null, isNip07: false })
@@ -38,7 +39,7 @@ beforeEach(() => {
 afterEach(async () => { notificationSettings.setEnabled(false); await clearChatMutes(); await clearAllData(); identity.set(null); vi.unstubAllGlobals() })
 
 it('production subscription builder delays every muted ratchet author while retaining other chats', async () => {
-  await setChatMute('alice', 3600)
+  await setChatMute('a'.repeat(64), 3600)
   expect((await subscribeToDMNotifications()).success).toBe(true)
   const filters = fixture.requests.at(-1)?.filters as Array<{ authors: string[]; since?: number }>
   expect(filters[0]).toEqual({ kinds: [1060], authors: ['bob-current', 'bob-next'] })
@@ -47,13 +48,13 @@ it('production subscription builder delays every muted ratchet author while reta
 })
 it('production subscription update conservatively excludes timed authors on a legacy server', async () => {
   fixture.supported = false
-  await setChatMute('alice', 3600)
+  await setChatMute('a'.repeat(64), 3600)
   expect((await subscribeToDMNotifications()).success).toBe(true)
   expect(fixture.requests.at(-1)?.filters).toEqual([{ kinds: [1060], authors: ['bob-current', 'bob-next'] }])
 })
 it('muting every chat replaces the old subscription with an empty author list, never a wildcard', async () => {
-  await setChatMute('alice', 0)
-  await setChatMute('bob', 0)
+  await setChatMute('a'.repeat(64), 0)
+  await setChatMute('b'.repeat(64), 0)
   expect((await subscribeToDMNotifications()).success).toBe(true)
   expect(fixture.requests.at(-1)?.filter).toEqual({ kinds: [1060], authors: [] })
   expect(fixture.requests.at(-1)?.filters).toEqual([{ kinds: [1060], authors: [] }])

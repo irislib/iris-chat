@@ -1,3 +1,5 @@
+import { CHAT_MUTE_KIND } from './chatMuteSync'
+import { receiveChatMuteControl } from './chatMuteControl'
 import { callHistoryLabel, restoredCallHistory, type CallHistory } from './callHistory'
 import { messagingDeviceList, type MessagingSupportEvent } from './messagingPeople'
 import { writable, get } from 'svelte/store'
@@ -1087,6 +1089,11 @@ export async function handleManagerEvent(
 ): Promise<void> {
   const myPubkey = getPubkey()
   if (!myPubkey) return
+
+  if (rumor.kind === CHAT_MUTE_KIND) {
+    await receiveChatMuteControl(rumor, meta)
+    return
+  }
 
   const effectiveFromPubkey = resolveManagerSender(fromPubkey, myPubkey)
   const resolvedFromPubkey = resolveSessionPubkeyToOwner(effectiveFromPubkey)

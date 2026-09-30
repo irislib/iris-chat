@@ -73,6 +73,20 @@ interop('iris-chat-rs device-sync interop', () => {
     expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(nativeSnapshot)
   })
 
+  it('preserves timed, forever, and unmuted states across native and web chat sync', () => {
+    const snapshot: DeviceSyncSnapshot = {
+      v: 1, type: 'snapshot', rosterAt: 100,
+      appKeys: [], chats: [], groups: [], messages: [],
+      chatMutes: [
+        { chatId: peer, untilSecs: 1_900_000_000, updatedAtMs: 1_800_000_000_001 },
+        { chatId: 'group:friends', untilSecs: 0, updatedAtMs: 1_800_000_000_002 },
+        { chatId: owner, untilSecs: null, updatedAtMs: 1_800_000_000_003 },
+      ],
+    }
+    const nativeBytes = runNative('roundtrip', encodeDeviceSyncPacket(snapshot))
+    expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(snapshot)
+  })
+
   it('lets Rust decode TS and TS decode Rust for every paged packet shape', () => {
     const snapshot: DeviceSyncSnapshot = {
       v: 1,
