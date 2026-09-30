@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.6.29 - 2026-09-30
+
+- Replace NDK with the shared nostr-pubsub worker runtime and Hashtree event
+  indexes, preserving existing secret keys and encrypted messaging sessions.
+- Share encrypted attachment caches over existing FIPS connections with
+  approved contacts and devices; keep private event exchange account-scoped.
+- Keep conversations and pending messages available across offline reloads,
+  saving outgoing messages before displaying them.
+- Batch peer subscriptions and wait for stored history before completing
+  lookups, including people search and device authorization.
+
 ## 2.6.25 - 2026-09-23
 
 - Improve direct calls across different networks using STUN, while retaining

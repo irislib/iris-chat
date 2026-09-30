@@ -28,35 +28,35 @@ const releases = {
     "integrity": "sha512-OLd2ARbYKt9s7wipMX58OhJwZQ6XwIdkuJ+Zfp+NNz3rjXDV8kYl67S9HlrXOj5eSsy5SbN/JuKS8QuwXzEiRQ=="
   },
   "nostr-pubsub": {
-    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.11/nostr-pubsub-0.5.11.tgz",
-    "integrity": "sha512-wyHDPvyDPSQo6JRuof5tx5Mn2WdA6W6asiGR+VEKF9hRKGNfobAcbWlShGtCmJFLa/tjAVj8vY5tGbxfrgOJrQ=="
+    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.12/nostr-pubsub-0.5.12.tgz",
+    "integrity": "sha512-qtoz+tpXuckjW2yXomBrI2vom20pdBZwpAb5XaIYVgpYMNM9fXoDq0XsyLiD/8tO0AUEeTE0WZKAnTVRZ21vvQ=="
   },
-  'nostr-double-ratchet': {
-    url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.174/nostr-double-ratchet-0.0.174.tgz',
-    integrity: 'sha512-tSWSNsfqbjM9sq7N1A/Sltt9nTO4EYCHUAr7D+k9hWU3s5vNUCtvdcTCXNqzudPddtHwhby57pK9+gvwHKCPRA==',
+  "nostr-double-ratchet": {
+    "url": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.174/nostr-double-ratchet-0.0.174.tgz",
+    "integrity": "sha512-tSWSNsfqbjM9sq7N1A/Sltt9nTO4EYCHUAr7D+k9hWU3s5vNUCtvdcTCXNqzudPddtHwhby57pK9+gvwHKCPRA=="
   },
   "nostr-social-graph": {
     "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz",
     "integrity": "sha512-7bR840Fmz7wYaHi0P9fXxxKlQSphFARmj2VBMIQdFvrNT584bj6ci18GaeJ49OghutUot/FwHmPOTjYqmg6koA=="
   },
   "@hashtree/worker": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-worker-0.4.5.tgz",
-    "integrity": "sha512-b6DPm6KwiBy31s+Uz6y+MDakp8mP4HLXWi7wxhB8YapbkiRPB9XOdn9eSgPL2sUMkO/uFCKGnqEF6uQ4Et/5Tg=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.10/hashtree-worker-0.4.6.tgz",
+    "integrity": "sha512-GodKoHNKrQpDJ4FgqEk4vk2QYbBLDH8IjV4Yv0u0Zwq0fGQA5aP01HGfEsl7QlvLk42s0lszKdkBNnetM8lVhw=="
   },
   "@hashtree/fips-transport": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-fips-transport-0.4.12.tgz",
-    "integrity": "sha512-PzJdi3IAnkqQ8H3mDM1WSYBRcdcVYnolQcFEvfeLfsj0JfXIWCBX2gkS53PZvZPPLgDGP/rLY1NBXDFs+a4nqw=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.10/hashtree-fips-transport-0.4.13.tgz",
+    "integrity": "sha512-JjuYaxd/JX2Od/xC+m0oBRJfdu6+hBijXu31d8qMHEf0YoRfCXjLKOX0J0eJ9MwVt6Q0ZsRs2yXGQ6dOLi1DEA=="
   },
   "@hashtree/nostr-pubsub": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-nostr-pubsub-0.1.5.tgz",
-    "integrity": "sha512-vKU/EoxWS23tgl+vOvr1L+L8yjEcbGbraS91esuC0h/AsJ8Zcimhy/5ZO18BLpqtXSOGs+iOWeLoIr8kn1kbbw=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.10/hashtree-nostr-pubsub-0.1.6.tgz",
+    "integrity": "sha512-EsKtQYKjqOuiK5iiMCQtnQCzKB8VRtYaYfJH4Po9cN+OiQrowCRD2YUtT9FFU6JJlks7Rb0Cf5snENE9uhKUUA=="
   },
   "@hashtree/dexie": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz",
     "integrity": "sha512-NGe+rKVuyBrhlWeIemO0Hzd/mAcuN+PqpXYeg508dlvwuRrl+0GNIwRwPVh7e7Zg5VlwiKaN6E5itp9W6EZEGg=="
   },
   "@iris/identity": {
-    "url": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.5/iris-identity-0.3.1.tgz",
+    "url": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz",
     "integrity": "sha512-HwLi00j/Buf85f//Q4FsKCzvDcidul2U+rNIkfwHZjusNPfJaw6p/Yk4nlKXGkpN4W+TGVj1tZmHGj9Tz8UBAg=="
   }
 }

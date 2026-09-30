@@ -1600,7 +1600,7 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
 }
 
 // Send a message
-export function sendMessage(chatSession: ChatSession, text: string, replyTo?: string): void {
+export async function sendMessage(chatSession: ChatSession, text: string, replyTo?: string): Promise<void> {
   const tags: string[][] = []
   if (replyTo) {
     tags.push(['e', replyTo, '', 'reply'])
@@ -1611,7 +1611,6 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     buildManagerRumorOptions(chatSession.recipientPubkey, tags)
   )
   const messageId = rumor.id
-  sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send message')
 
   // Get current state from store (not the passed reference which may be stale)
   const currentChats = get(chats)
@@ -1633,15 +1632,15 @@ export function sendMessage(chatSession: ChatSession, text: string, replyTo?: st
     ...(replyTo && { replyTo }),
   }
 
+  // A rendered pending message must survive a reload, including while offline.
+  await Promise.all([saveMessageToStorage(chatSession.id, message), saveSessionToStorage(currentSession)])
+  sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send message')
+
   const updatedSession = updateChatSession(chatSession.id, (latestSession) => ({
     ...latestSession,
     messages: [...latestSession.messages, message],
   }))
   if (!updatedSession) return
-
-  // Save and publish in background - don't block UI
-  saveMessageToStorage(chatSession.id, message)
-  saveSessionToStorage(updatedSession)
 
   // Update notification subscription (debounced) since keys may have rotated
   updateDMSubscription()

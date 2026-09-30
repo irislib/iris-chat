@@ -152,6 +152,7 @@ vi.mock('nostr-tools', async () => {
 import {handleManagerEvent, chats, sendMessage} from './chat'
 import {countUnseenMessages} from './unseenCount'
 import {devices} from './devices'
+import {saveMessage as saveMessageToDb} from './storage'
 
 beforeEach(() => {
   chats.set(new Map())
@@ -756,6 +757,22 @@ describe('handleManagerEvent', () => {
       pubkey: MY_PUBKEY,
       content: 'register before send',
     })
+  })
+
+  it('persists a pending message before showing it across an immediate reload', async () => {
+    const peer = 'c'.repeat(64)
+    chats.set(new Map([[peer, { id: peer, recipientPubkey: peer, mode: 'manager', messages: [] }]]))
+    let saved!: () => void
+    const writing = new Promise<void>(resolve => { saved = resolve })
+    vi.mocked(saveMessageToDb).mockImplementationOnce(() => writing)
+    const pending = sendMessage(get(chats).get(peer)!, 'Save before reload')
+    try {
+      await Promise.resolve()
+      expect(get(chats).get(peer)?.messages).toEqual([])
+      saved()
+      await pending
+      expect(get(chats).get(peer)?.messages.at(-1)?.content).toBe('Save before reload')
+    } finally { saved(); await pending }
   })
 
   it('delegates first peer message sends to the runtime', async () => {

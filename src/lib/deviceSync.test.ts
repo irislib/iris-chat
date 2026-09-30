@@ -36,20 +36,22 @@ const ndr = vi.hoisted(() => ({
 
 vi.mock('@fips/core', () => ({
   FipsNode: class {
-    private listeners = new Map<string, (value: unknown) => void>()
+    private listeners = new Map<string, Set<(value: unknown) => void>>()
     constructor() { fips.nodes.push(this) }
     registerService() { return () => undefined }
     on(event: string, listener: (value: unknown) => void) {
-      this.listeners.set(event, listener)
-      return () => this.listeners.delete(event)
+      const listeners = this.listeners.get(event) ?? new Set()
+      listeners.add(listener)
+      this.listeners.set(event, listeners)
+      return () => listeners.delete(listener)
     }
-    emit(event: string, value: unknown) { this.listeners.get(event)?.(value) }
+    emit(event: string, value: unknown) { for (const listener of this.listeners.get(event) ?? []) listener(value) }
     start = vi.fn(async () => undefined)
     stop = vi.fn(async () => undefined)
     sendDatagram = fips.sendDatagram
   },
-  identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32) })),
-  toHex: vi.fn(() => 'a'.repeat(64)),
+  identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32), publicKey: new Uint8Array(33) })),
+  toHex: vi.fn((bytes: Uint8Array) => `${bytes.length === 33 ? '02' : ''}${'a'.repeat(64)}`),
 }))
 vi.mock('@fips/transport-webrtc', async importOriginal => ({
   ...await importOriginal<typeof import('@fips/transport-webrtc')>(),
@@ -106,7 +108,10 @@ vi.mock('./groups', () => ({
   ),
   syncNativeGroupTransport: vi.fn(),
 }))
-vi.mock('./identity', () => ({ getPubkey: vi.fn(() => 'a'.repeat(64)) }))
+vi.mock('./identity', () => ({
+  getPubkey: vi.fn(() => 'a'.repeat(64)),
+  nostrClient: writable({ runtime: { addSource: vi.fn(), removeSource: vi.fn() } }),
+}))
 vi.mock('./privateChats', () => ({
   cancelGroupPublications: vi.fn(),
   getNdrRuntime: () => ({
@@ -143,6 +148,7 @@ import {
 import { encodeDeviceSyncPacket } from './deviceSyncProtocol'
 import { chats } from './chat'
 import { groups } from './groups'
+import { nostrClient } from './identity'
 
 const owner = 'a'.repeat(64)
 const device = 'b'.repeat(64)
@@ -207,6 +213,8 @@ describe('device sync', () => {
         maxRetransmits: 0,
       })
       expect(fips.transports[0]).not.toHaveProperty('iceGatherTimeoutMs')
+      await vi.waitFor(() => expect(get(nostrClient).runtime.addSource)
+        .toHaveBeenCalledWith(expect.objectContaining({ id: 'fips' })))
     } finally { await stopDeviceSync() }
   })
 
