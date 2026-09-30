@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.32 - 2026-09-30
+
+- Recover peer connection answers after temporary route failures with the updated shared networking runtime.
+- Preserve existing accounts and offline data while updating the immutable file transport.
+
 ## 2.6.31 - 2026-09-30
 
 - Route larger peer connection offers over paths that can carry them.
