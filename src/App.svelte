@@ -304,15 +304,7 @@
       }
 
       // Set callback for invite acceptance (works for both loaded and new invites)
-      setInviteAcceptedCallback((chatSession) => {
-        selectedChat = chatSession
-        currentChat.set(chatSession)
-        currentView = 'chat'
-        selectedGroupId = null
-        mobileView = 'main'
-        // Tell service worker this chat is now open
-        postToServiceWorker({ type: 'CHAT_OPENED', chatId: chatSession.id })
-      })
+      setInviteAcceptedCallback(handleInviteAccepted)
 
       // Load and monitor saved invites
       await loadAndMonitorInvites()
@@ -388,15 +380,7 @@
     }
 
     // Set callback for invite acceptance (works for both loaded and new invites)
-    setInviteAcceptedCallback((chatSession) => {
-      selectedChat = chatSession
-      currentChat.set(chatSession)
-      currentView = 'chat'
-      selectedGroupId = null
-      mobileView = 'main'
-      // Tell service worker this chat is now open
-      postToServiceWorker({ type: 'CHAT_OPENED', chatId: chatSession.id })
-    })
+    setInviteAcceptedCallback(handleInviteAccepted)
 
     // Load and monitor saved invites
     await loadAndMonitorInvites()
@@ -442,6 +426,12 @@
     selectedGroupId = null
     navigateTo('chat')
     mobileView = 'sidebar'
+  }
+
+  function handleInviteAccepted(chat: ChatSession) {
+    // Only open automatically while the user is on the explicit New Chat screen.
+    if (currentView !== 'chat' || mobileView !== 'main' || selectedChat || selectedGroupId) return
+    handleSelectChat(chat)
   }
 
   function handleSelectChat(chat: ChatSession) {

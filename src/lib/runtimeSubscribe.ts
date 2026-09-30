@@ -45,7 +45,8 @@ interface RuntimeSubscribeNdk {
       closeOnEose: boolean
       cacheUsage: NDKSubscriptionCacheUsage
       relayUrls?: string[]
-    }
+    },
+    autoStart?: boolean
   ) => NDKSubscription
 }
 
@@ -66,11 +67,11 @@ export const createRuntimeSubscribe = (
     const registered = tracker.registerFilter(filter)
 
     const liveSubscription = asNdkEventSubscription(
-      ndkInstance.subscribe(filter as NDKFilter, {
-        closeOnEose: false,
-        cacheUsage,
-        ...relayOptions,
-      })
+      ndkInstance.subscribe(
+        filter as NDKFilter,
+        { closeOnEose: false, cacheUsage, ...relayOptions },
+        false
+      )
     )
     liveSubscription.on('event', forwardEvent)
     liveSubscription.start()
@@ -80,11 +81,15 @@ export const createRuntimeSubscribe = (
       DIRECT_MESSAGE_BACKFILL_LIMIT
     ).map((backfillFilter) =>
       asNdkEventSubscription(
-        ndkInstance.subscribe(backfillFilter as NDKFilter, {
-          closeOnEose: true,
-          cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-          ...relayOptions,
-        })
+        ndkInstance.subscribe(
+          backfillFilter as NDKFilter,
+          {
+            closeOnEose: true,
+            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+            ...relayOptions,
+          },
+          false
+        )
       )
     )
 

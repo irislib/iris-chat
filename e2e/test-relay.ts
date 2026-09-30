@@ -34,16 +34,25 @@ export class TestRelay {
   private server: http.Server
   private wss: WebSocketServer
   private events: Map<string, NostrEvent> = new Map()
+  private eventsByAuthor = new Map<string, Set<string>>()
+  private eventsByRecipient = new Map<string, Set<string>>()
+  private eventOrder = new Map<string, number>()
   private subscriptions: Map<WebSocket, Map<string, Filter[]>> = new Map()
   public port: number = 0
   public deliveryFilter?: (event: NostrEvent) => boolean
   public acceptFilter?: (event: NostrEvent) => boolean
+  public observeRequest?: (filters: Filter[], browser: boolean) => void
+  public deliveredEvents = 0
+  public replayedEvents = 0
+  public liveEvents = 0
+  private browsers = new WeakSet<WebSocket>()
 
   constructor() {
     this.server = http.createServer()
     this.wss = new WebSocketServer({ server: this.server })
 
-    this.wss.on('connection', (ws) => {
+    this.wss.on('connection', (ws, request) => {
+      if (request.headers['user-agent']?.includes('Mozilla/')) this.browsers.add(ws)
       this.subscriptions.set(ws, new Map())
 
       ws.on('message', (data) => {
@@ -79,7 +88,11 @@ export class TestRelay {
         return
       }
       // Store event (no signature verification for tests)
+      const previous = this.events.get(event.id)
+      if (previous) this.indexEvent(previous, false)
+      else this.eventOrder.set(event.id, this.eventOrder.size)
       this.events.set(event.id, event)
+      this.indexEvent(event, true)
       // Send OK
       ws.send(JSON.stringify(['OK', event.id, true, '']))
       // Broadcast to matching subscriptions
@@ -87,6 +100,7 @@ export class TestRelay {
     } else if (type === 'REQ') {
       const subId = msg[1] as string
       const filters = msg.slice(2) as Filter[]
+      this.observeRequest?.(filters, this.browsers.has(ws))
       // Store subscription
       const subs = this.subscriptions.get(ws)
       if (subs) {
@@ -94,9 +108,11 @@ export class TestRelay {
       }
       // Send matching stored events
       let sent = 0
-      for (const event of this.events.values()) {
+      for (const event of this.historyCandidates(filters)) {
         if (this.matchesFilters(event, filters)) {
           ws.send(JSON.stringify(['EVENT', subId, event]))
+          this.deliveredEvents++
+          this.replayedEvents++
           sent++
         }
       }
@@ -133,6 +149,8 @@ export class TestRelay {
       for (const [subId, filters] of subs) {
         if (this.matchesFilters(event, filters)) {
           ws.send(JSON.stringify(['EVENT', subId, event]))
+          this.deliveredEvents++
+          this.liveEvents++
           matched++
         }
       }
@@ -159,6 +177,49 @@ export class TestRelay {
   }
 
   public debug = false
+
+  private indexEvent(event: NostrEvent, add: boolean) {
+    const entries: Array<[Map<string, Set<string>>, string[]]> = [
+      [this.eventsByAuthor, [event.pubkey]],
+      [this.eventsByRecipient, event.tags.filter((tag) => tag[0] === 'p').map((tag) => tag[1])],
+    ]
+    for (const [index, keys] of entries) for (const key of keys) {
+      if (add) {
+        let ids = index.get(key)
+        if (!ids) index.set(key, ids = new Set())
+        ids.add(event.id)
+      } else {
+        const ids = index.get(key)
+        ids?.delete(event.id)
+        if (!ids?.size) index.delete(key)
+      }
+    }
+  }
+
+  private historyCandidates(filters: Filter[]): Iterable<NostrEvent> {
+    // Real relays index these fields. Avoid making the test's single relay
+    // scan its entire history for every one of the simulated clients' REQs.
+    // The original matcher still verifies all constraints and delivery hooks.
+    const candidates = new Set<string>()
+    for (const filter of filters) {
+      const choices: Array<{ keys: string[]; index?: Map<string, Set<string>> }> = []
+      if (filter.ids) choices.push({ keys: filter.ids })
+      if (filter.authors) choices.push({ keys: filter.authors, index: this.eventsByAuthor })
+      if (filter['#p']) choices.push({ keys: filter['#p'], index: this.eventsByRecipient })
+      if (!choices.length) return this.events.values()
+      const cost = ({ keys, index }: typeof choices[number]) => index
+        ? keys.reduce((sum, key) => sum + (index.get(key)?.size ?? 0), 0) : keys.length
+      choices.sort((left, right) => cost(left) - cost(right))
+      const { keys, index } = choices[0]!
+      for (const key of keys) {
+        if (index) {
+          for (const id of index.get(key) ?? []) candidates.add(id)
+        } else if (this.events.has(key)) candidates.add(key)
+      }
+    }
+    return [...candidates].sort((left, right) => this.eventOrder.get(left)! - this.eventOrder.get(right)!)
+      .map((id) => this.events.get(id)!)
+  }
 
   private matchesFilters(event: NostrEvent, filters: Filter[]): boolean {
     if (this.deliveryFilter && !this.deliveryFilter(event)) return false
@@ -220,6 +281,9 @@ export class TestRelay {
   /** Clear all stored events */
   clear() {
     this.events.clear()
+    this.eventsByAuthor.clear()
+    this.eventsByRecipient.clear()
+    this.eventOrder.clear()
   }
 }
 

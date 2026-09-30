@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
-import { NDKSubscriptionCacheUsage } from '@nostr-dev-kit/ndk'
+import NDK, { NDKSubscription, NDKSubscriptionCacheUsage } from '@nostr-dev-kit/ndk'
 
 const pubsub = vi.hoisted(() => ({
   subscriptions: new Set<{ filter: unknown; onEvent: (event: never) => void }>(),
@@ -58,11 +58,27 @@ const createNdk = () => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 beforeEach(() => pubsub.subscriptions.clear())
 
 describe('createRuntimeSubscribe', () => {
+  it('starts each real NDK subscription once after attaching its handlers', async () => {
+    vi.useFakeTimers()
+    // Keep NDK's real subscribe/autostart scheduling, without opening sockets.
+    const start = vi.spyOn(NDKSubscription.prototype, 'start').mockReturnValue(null)
+    const subscribe = createRuntimeSubscribe(new NDK())
+    const stop = subscribe({ kinds: [1060], authors: [BOB] }, vi.fn())
+    expect(start).toHaveBeenCalledTimes(2) // live + historical backfill
+    const subscriptions = [...start.mock.contexts]
+    await vi.advanceTimersByTimeAsync(1)
+    expect(start.mock.contexts.filter((subscription: NDKSubscription) =>
+      subscriptions.includes(subscription)
+    )).toHaveLength(2)
+    stop()
+  })
+
   it('starts a relay-only backfill for newly added DM authors', () => {
     vi.spyOn(Date, 'now').mockReturnValue(20_000)
 

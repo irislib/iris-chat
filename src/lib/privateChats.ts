@@ -199,12 +199,16 @@ const createRelayOnlySubscribe = (
     const relayUrls = [...relayStore.getState().relays]
     const relayOptions = relayUrls.length > 0 ? { relayUrls } : {}
     const subscription = asNdkEventSubscription(
-      ndkInstance.subscribe(filter as NDKFilter, {
-        closeOnEose: false,
-        cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
-        skipOptimisticPublishEvent: true,
-        ...relayOptions,
-      })
+      ndkInstance.subscribe(
+        filter as NDKFilter,
+        {
+          closeOnEose: false,
+          cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+          skipOptimisticPublishEvent: true,
+          ...relayOptions,
+        },
+        false
+      )
     )
     subscription.on('event', (event) => {
       onEvent(event.rawEvent() as Parameters<typeof onEvent>[0])
