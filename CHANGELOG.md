@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.33 - 2026-09-30
+
+- Reduce unnecessary routing traffic and recover peer sessions reliably with the audited FIPS runtime.
+- Close canceled peer connections promptly and preserve usable routes during retries.
+
 ## 2.6.32 - 2026-09-30
 
 - Recover peer connection answers after temporary route failures with the updated shared networking runtime.

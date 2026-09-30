@@ -4,24 +4,23 @@ const root = new URL('../', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 const lockfile = await readFile(new URL('pnpm-lock.yaml', root), 'utf8')
 const packages = lockfile.split('\nsnapshots:')[0]
-const workspace = await readFile(new URL('pnpm-workspace.yaml', root), 'utf8')
 const pubsubRuntime = await readFile(new URL('src/lib/nostrPubsubRuntime.ts', root), 'utf8')
 const releases = {
   "@fips/core": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.45/fips-core-0.0.45.tgz",
-    "integrity": "sha512-A+8esJMMdPcibpmVy30utUQFmv1tDVDdVJOD0oH5mZpFXAO9Gi/a5WjZea8P4PFnzea5lNJE8yBQF79LTvLyUQ=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.48/fips-core-0.0.48.tgz",
+    "integrity": "sha512-9Ko3aX3QLgBy+1zFFySjMpLPP70PG61fOWUkguSmfIn5xFM4m7sZa7FfrY/qJnWhFvhFYdwpVVxfWv06woY5GA=="
   },
   "@fips/tcp": {
     "url": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
     "integrity": "sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w=="
   },
   "@fips/transport-webrtc": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.45/fips-transport-webrtc-0.0.50.tgz",
-    "integrity": "sha512-q/9eqBc2hT/5ttodnTf0TM7ym+L/3quexfzHhCZuJUAqmf5/n41ES09YbeVX3orgmiJLKUvE+DMImfGM/RJObw=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.48/fips-transport-webrtc-0.0.51.tgz",
+    "integrity": "sha512-hDUvPHo7wolA/unWR8xiPpR2lLl7ECq4ut29QhdMxcEAeKNN03aBVe2BAyMWzRSdZmt3K6P1cbixSvuoQK2oAw=="
   },
   "@fips/transport-websocket": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.45/fips-transport-websocket-0.0.7.tgz",
-    "integrity": "sha512-v4f74Z0z0Wc4BbQMnRA5xGw9/6kmXIHDBee182bgDeSnCt4je4LH+QBt9x1zGpz64jW4YQNbhYLNoaqv1qQbcw=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.48/fips-transport-websocket-0.0.8.tgz",
+    "integrity": "sha512-+hFqBxpGZVwmM9stFEazeDjTcB7Y6KKpFEWHaiQz92knWH0FVQQOg4hmgpby6wIcyOl7RF/onG2ck7ZAg4kiQw=="
   },
   "@hashtree/core": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz",
@@ -44,8 +43,8 @@ const releases = {
     "integrity": "sha512-ZIkcdIYY9XXKhi2w9HfsdrEFPSe0Qlm9+OSxVGGjBH/+YJf6lwQkrGR/00KqX4GAJVjI59B3rPwcqBAH6Mlo1Q=="
   },
   "@hashtree/fips-transport": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.13/hashtree-fips-transport-0.4.16.tgz",
-    "integrity": "sha512-LgLpG1kJXhg1V6Lm83ip7wuSU9JHwjHl8jPHiSoRWiuf08osUxb0t8aIpowsdeCaeyTpR5IhwxfuUa8zOQuIBQ=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.14/hashtree-fips-transport-0.4.17.tgz",
+    "integrity": "sha512-hBhfa7AEB5D7KJY0whTMsybX1Q3cYuqBb9C/nLi10TAponqRqwObv6dkKHLpycJyNZq4FbplS/pizie2eIzTpg=="
   },
   "@hashtree/nostr-pubsub": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-nostr-pubsub-0.1.7.tgz",
@@ -83,8 +82,8 @@ for (const [name, release] of Object.entries(releases)) {
     throw new Error(`${name} lock entry is missing its verified release integrity`)
   }
 }
-if (!workspace.includes(`'@fips/core': '${releases['@fips/core'].url}'`)) {
-  throw new Error('pnpm workspace override must use the audited @fips/core release')
+if ((packages.match(/^  ['"]?@fips\/core@/gm) ?? []).length !== 1) {
+  throw new Error('The dependency graph must contain one audited @fips/core release')
 }
 if (manifest.scripts?.test?.startsWith('pnpm verify:dependency-lock') !== true) {
   throw new Error('The normal test gate must verify GitHub dependency integrity')
