@@ -7,7 +7,7 @@ settings:
 overrides:
   dexie: ^4.4.4
   '@isaacs/brace-expansion': 5.0.1
-  '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
+  '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz
   serialize-javascript: 7.0.5
 
 importers:
@@ -15,17 +15,17 @@ importers:
   .:
     dependencies:
       '@fips/core':
-        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
-        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
+        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz
+        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz
       '@fips/tcp':
         specifier: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
         version: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
       '@fips/transport-webrtc':
-        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz
-        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz
+        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz
+        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz
       '@fips/transport-websocket':
-        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz
-        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz
+        specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-websocket-0.0.6.tgz
+        version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-websocket-0.0.6.tgz
       '@hashtree/core':
         specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz
         version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz
@@ -33,8 +33,8 @@ importers:
         specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz
         version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz
       '@hashtree/fips-transport':
-        specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-fips-transport-0.4.14.tgz
-        version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-fips-transport-0.4.14.tgz(@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz)(@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz)(nostr-tools@2.23.12(typescript@5.9.3))
+        specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.12/hashtree-fips-transport-0.4.15.tgz
+        version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.12/hashtree-fips-transport-0.4.15.tgz(@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz)(@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz)(nostr-tools@2.23.12(typescript@5.9.3))
       '@hashtree/nostr-pubsub':
         specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-nostr-pubsub-0.1.7.tgz
         version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-nostr-pubsub-0.1.7.tgz(nostr-tools@2.23.12(typescript@5.9.3))(typescript@5.9.3)
@@ -856,25 +856,21 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz':
-    resolution: {integrity: sha512-6zKvgowk5yBa6SVf5MDgOzn9IKVjJGgoa1oXqfv1uHDt7U98JjbIXdUCbMEUMyHX7qoeutH/2Kw+13E5LTB96A==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz}
-    version: 0.0.43
+  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz':
+    resolution: {integrity: sha512-64RklKjkFFppkxxhLgCYjXNwuPhTPGV9WVg1nHPH1NljEkS1Bt3aZEhxIk20nE/dZDaWmbD47FGiofMSMWedxw==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz}
+    version: 0.0.44
 
   '@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz':
     resolution: {integrity: sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w==, tarball: https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz}
     version: 0.2.0
 
-  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz':
-    resolution: {integrity: sha512-lKCTDAiHT0FNo/SR5ebWysc1mesM+ktNlUtoPIWgRz/rw7IGp3MqN1YUfa3gUmGUb8n6B8utpLn82J3oq1SCRg==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz}
-    version: 0.0.48
+  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz':
+    resolution: {integrity: sha512-iidNN5W89AQXzbssNuuae84gq7gJV09k6ZI6SbqqImuN5/6D3hi15/UVx2p3OLV5y+znpE0cIjB4Bew7oaFfzg==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz}
+    version: 0.0.49
 
-  '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-websocket-0.0.3.tgz':
-    resolution: {integrity: sha512-/K+DCBHoTyGtxEqjK4SquQ1Ua8hPjZokzQCmPtEJachd8CeQmDcmGUugRSWs9/FrVBwvfqi11DXs8eK+MZfp5Q==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-websocket-0.0.3.tgz}
-    version: 0.0.3
-
-  '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz':
-    resolution: {integrity: sha512-Qj641P/xa7CQpcVQl52u5PgftzGPtGHIva9mpXRcNgdteB5LlTdCA7/GBfRKtuSxGoNaRi1iKHH4fBHitNe30A==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz}
-    version: 0.0.5
+  '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-websocket-0.0.6.tgz':
+    resolution: {integrity: sha512-dzquYryja3/1rYdyIV2ohxrA6m/5U3bCDrJoEPg9tN9xIWzckntsHxSiqvFw221wYO4bUrRk1lIoVjDnheQ/1g==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-websocket-0.0.6.tgz}
+    version: 0.0.6
 
   '@hashtree/collection@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-collection-0.2.10.tgz':
     resolution: {integrity: sha512-K50NRsrVm3a9JA24zH5E+F3ve31ibb3fYeE6L8J1hSHCBYEuNqn2r4/awXC1mheMehG8r2074dfWe8n0qPe4oA==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-collection-0.2.10.tgz}
@@ -888,12 +884,12 @@ packages:
     resolution: {integrity: sha512-NGe+rKVuyBrhlWeIemO0Hzd/mAcuN+PqpXYeg508dlvwuRrl+0GNIwRwPVh7e7Zg5VlwiKaN6E5itp9W6EZEGg==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz}
     version: 0.1.11
 
-  '@hashtree/fips-transport@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-fips-transport-0.4.14.tgz':
-    resolution: {integrity: sha512-yvmzkYKhxuAQLDAlJ31dmc2EPGkDng3K7uaiMNmQwo9zYs0F7q15pei8ZhO+Osb+EGnZHTKSnyv+YxOf+0o++Q==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-fips-transport-0.4.14.tgz}
-    version: 0.4.14
+  '@hashtree/fips-transport@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.12/hashtree-fips-transport-0.4.15.tgz':
+    resolution: {integrity: sha512-TG9WuaN8haDCmP9L5+TJLYrYXxXrZjWoaSqAEd5GiME7Dpc93ZfbaGb/jktiLKx3Aqrf+zuUsr6cTPuHVDjkZw==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.12/hashtree-fips-transport-0.4.15.tgz}
+    version: 0.4.15
     peerDependencies:
-      '@fips/core': '>=0.0.29'
-      '@fips/transport-webrtc': '>=0.0.45'
+      '@fips/core': '>=0.0.44'
+      '@fips/transport-webrtc': '>=0.0.49'
 
   '@hashtree/index@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-index-0.1.14.tgz':
     resolution: {integrity: sha512-5JAekyGQAb+6yhXramZhzaKZ8I8HpVrnDd6SZCF6y3sYOLge2zAPep0MpPJtYpNsD3HdXCIhUL1JK40YvKCgHA==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-index-0.1.14.tgz}
@@ -3856,7 +3852,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz':
+  '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz':
     dependencies:
       '@noble/ciphers': 1.3.0
       '@noble/curves': 1.9.7
@@ -3865,20 +3861,16 @@ snapshots:
 
   '@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz': {}
 
-  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz':
+  '@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz':
     dependencies:
-      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
+      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz
       '@noble/ciphers': 1.3.0
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
 
-  '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-websocket-0.0.3.tgz':
+  '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-websocket-0.0.6.tgz':
     dependencies:
-      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
-
-  '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz':
-    dependencies:
-      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
+      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz
 
   '@hashtree/collection@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-collection-0.2.10.tgz':
     dependencies:
@@ -3896,12 +3888,12 @@ snapshots:
       '@hashtree/core': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz
       dexie: 4.4.4
 
-  '@hashtree/fips-transport@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-fips-transport-0.4.14.tgz(@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz)(@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz)(nostr-tools@2.23.12(typescript@5.9.3))':
+  '@hashtree/fips-transport@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.12/hashtree-fips-transport-0.4.15.tgz(@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz)(@fips/transport-webrtc@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz)(nostr-tools@2.23.12(typescript@5.9.3))':
     dependencies:
-      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz
+      '@fips/core': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-core-0.0.44.tgz
       '@fips/tcp': https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz
-      '@fips/transport-webrtc': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz
-      '@fips/transport-websocket': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.29/fips-transport-websocket-0.0.3.tgz
+      '@fips/transport-webrtc': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-webrtc-0.0.49.tgz
+      '@fips/transport-websocket': https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.44/fips-transport-websocket-0.0.6.tgz
       '@hashtree/core': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz
       nostr-pubsub: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.13/nostr-pubsub-0.5.13.tgz(nostr-tools@2.23.12(typescript@5.9.3))
     transitivePeerDependencies:

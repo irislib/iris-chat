@@ -154,11 +154,13 @@ import {countUnseenMessages} from './unseenCount'
 import {devices} from './devices'
 import {saveMessage as saveMessageToDb} from './storage'
 import {messageRequestSettings} from './messageRequestSettings'
+import {clearMessageRequestDecisions} from './messageRequests'
 
 beforeEach(() => {
   chats.set(new Map())
   // Routing fixtures must not inherit another test's persisted request policy.
   messageRequestSettings.set({ receiveMessageRequests: true })
+  clearMessageRequestDecisions()
   devices.reset()
   typingMocks.setRemoteTyping.mockClear()
   typingMocks.clearRemoteTyping.mockClear()

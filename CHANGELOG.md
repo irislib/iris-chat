@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.31 - 2026-09-30
+
+- Route larger peer connection offers over paths that can carry them.
+- Resume peer connections promptly after authenticated signaling recovers.
+
 ## 2.6.30 - 2026-09-30
 
 - Keep shared message-server batches within common filter limits so history
