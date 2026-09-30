@@ -16,11 +16,11 @@ const ROSTER_MEMBER_SECRET = new Uint8Array(32).fill(8)
 const ROSTER_MEMBER = getPublicKey(ROSTER_MEMBER_SECRET)
 const publishedGroupRosterFacts: Array<{ kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number }> = []
 
-vi.mock('@nostr-dev-kit/ndk', () => ({
-  NDKEvent: class {
+vi.mock('./nostrClient', () => ({
+  AppEvent: class {
     private event: { kind: number; content: string; tags: string[][]; pubkey: string; id?: string; sig?: string; created_at?: number }
 
-    constructor(_ndk: unknown, event: { kind: number; content: string; tags?: string[][]; pubkey?: string; created_at?: number }) {
+    constructor(_client: unknown, event: { kind: number; content: string; tags?: string[][]; pubkey?: string; created_at?: number }) {
       this.event = {
         kind: event.kind,
         content: event.content,
@@ -54,7 +54,7 @@ vi.mock('./identity', () => {
   return {
     getPubkey: () => MY_PUBKEY,
     identity: writable({ pubkey: MY_PUBKEY, signer, displayName: null, isNip07: false }),
-    ndk: writable({
+    nostrClient: writable({
       signer,
       subscribe: vi.fn(() => ({
         on: vi.fn(),

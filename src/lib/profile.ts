@@ -1,5 +1,5 @@
 import { writable, type Readable, get } from 'svelte/store'
-import { ndk } from './identity'
+import { nostrClient } from './identity'
 import { saveProfileToStorage, getProfileFromStorage } from './storage'
 
 export interface Profile {
@@ -194,8 +194,8 @@ async function fetchProfile(pubkey: string, retryCount = 0): Promise<void> {
   }
 
   try {
-    const ndkInstance = get(ndk)
-    const events = await ndkInstance.fetchEvents({ kinds: [0], authors: [pubkey], limit: 1 })
+    const client = get(nostrClient)
+    const events = await client.fetchEvents({ kinds: [0], authors: [pubkey], limit: 1 })
 
     if (events.size > 0) {
       const eventsArray = Array.from(events)

@@ -1597,6 +1597,51 @@ test.describe('iris chat', () => {
       }
     })
 
+    test('keeps keys, conversation, and queued message across an offline reload', async ({ browser, testRelayUrl }) => {
+      test.setTimeout(120_000)
+      const sender = await createContext(browser, testRelayUrl)
+      const receiver = await createContext(browser, testRelayUrl)
+      const a = await sender.newPage(), b = await receiver.newPage()
+      const evidence: string[] = []
+      a.on('pageerror', error => evidence.push(`PAGE: ${error.message}`))
+      a.on('requestfailed', request => evidence.push(`REQUEST: ${request.url()} ${request.failure()?.errorText}`))
+      a.on('console', message => { if (message.type() === 'error' || message.type() === 'warning') evidence.push(`CONSOLE: ${message.text()}`) })
+      try {
+        const invite = await setupUserWithInvite(a)
+        await b.goto('/')
+        await b.getByRole('button', { name: 'Go', exact: true }).click()
+        await b.getByRole('button', { name: 'New Chat' }).click()
+        await joinViaPasteAndSync(a, b, invite, 'Online conversation')
+        const originalKey = await a.evaluate(() => localStorage.getItem('iris-chat-identity'))
+        expect(originalKey).toBeTruthy()
+        await a.evaluate(async () => { await navigator.serviceWorker.ready })
+        // The first controlled navigation activates the installed shell without claiming an active chat.
+        await a.reload()
+        await expect(a.getByRole('button', { name: 'New Chat' })).toBeVisible()
+        await openChatFromList(a, 'Online conversation')
+        await expect(a.getByPlaceholder('Type a message...')).toBeVisible()
+        await expect.poll(() => a.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true)
+        await sender.setOffline(true)
+        await a.reload({ waitUntil: 'domcontentloaded' })
+        await expect(a.getByRole('button', { name: 'New Chat' })).toBeVisible()
+        await openChatFromList(a, 'Online conversation')
+        await expect(a.getByPlaceholder('Type a message...')).toBeVisible()
+        expect(await a.evaluate(() => localStorage.getItem('iris-chat-identity'))).toBe(originalKey)
+        await a.getByPlaceholder('Type a message...').fill('Queued while offline')
+        await a.getByRole('button', { name: 'Send', exact: true }).click()
+        await expect(a.getByText('Queued while offline', { exact: true }).first()).toBeVisible()
+        await a.reload({ waitUntil: 'domcontentloaded' })
+        await expect(a.getByRole('button', { name: 'New Chat' })).toBeVisible()
+        await openChatFromList(a, 'Queued while offline')
+        await expect(a.getByText('Queued while offline', { exact: true }).first()).toBeVisible()
+        await sender.setOffline(false)
+        await expect(b.getByText('Queued while offline', { exact: true }).first()).toBeVisible({ timeout: 40_000 })
+      } finally {
+        await test.info().attach('offline-errors', { body: evidence.join('\n'), contentType: 'text/plain' })
+        await sender.close(); await receiver.close()
+      }
+    })
+
     test('should persist chat session across page reload', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)
       const context2 = await createContext(browser, testRelayUrl)

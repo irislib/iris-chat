@@ -1,9 +1,9 @@
 import {
-  NDKSubscriptionCacheUsage,
-  type NDKEvent,
-  type NDKFilter,
-  type NDKSubscription,
-} from '@nostr-dev-kit/ndk'
+  CacheMode,
+  type AppEvent,
+  type EventFilter,
+  type EventSubscription,
+} from './nostrClient'
 import {
   buildRuntimeBackfillFilters,
   RuntimeSubscriptionTracker,
@@ -11,8 +11,6 @@ import {
 } from 'nostr-double-ratchet'
 import type { VerifiedEvent } from 'nostr-tools'
 
-import { asNdkEventSubscription } from './ndkSubscription'
-import { subscribeNostrPubsub } from './nostrPubsubRuntime'
 
 const DIRECT_MESSAGE_BACKFILL_LIMIT = 200
 const RECENT_EVENT_LIMIT = 1024
@@ -35,44 +33,42 @@ function deduplicatingForwarder(onEvent: (event: VerifiedEvent) => void) {
   }
 }
 
-interface RuntimeSubscribeNdk {
+interface RuntimeSubscribeClient {
   pool: {
     connectedRelays: () => Array<{ url: string }>
   }
   subscribe: (
-    filter: NDKFilter,
+    filter: EventFilter,
     opts: {
       closeOnEose: boolean
-      cacheUsage: NDKSubscriptionCacheUsage
+      cacheUsage: CacheMode
       relayUrls?: string[]
+      sources?: readonly string[]
     },
     autoStart?: boolean
-  ) => NDKSubscription
+  ) => EventSubscription
 }
 
 export const createRuntimeSubscribe = (
-  ndkInstance: RuntimeSubscribeNdk,
-  cacheUsage: NDKSubscriptionCacheUsage = NDKSubscriptionCacheUsage.PARALLEL
+  client: RuntimeSubscribeClient,
+  cacheUsage: CacheMode = CacheMode.PARALLEL
 ): NostrSubscribe => {
   const tracker = new RuntimeSubscriptionTracker()
 
   return (filter, onEvent) => {
-    const relayUrls = ndkInstance.pool.connectedRelays().map((relay) => relay.url)
-    const relayOptions = relayUrls.length > 0 ? { relayUrls } : {}
+    const relayUrls = client.pool.connectedRelays().map((relay) => relay.url)
+    const relayOptions = relayUrls.length > 0 ? { relayUrls, sources: ['fips'] } : {}
     const forward = deduplicatingForwarder(onEvent)
-    const forwardEvent = (event: NDKEvent) =>
+    const forwardEvent = (event: AppEvent) =>
       forward(event.rawEvent() as Parameters<typeof onEvent>[0])
-    const stopPubsub = subscribeNostrPubsub(filter, forward)
 
     const registered = tracker.registerFilter(filter)
 
-    const liveSubscription = asNdkEventSubscription(
-      ndkInstance.subscribe(
-        filter as NDKFilter,
+    const liveSubscription = client.subscribe(
+        filter as EventFilter,
         { closeOnEose: false, cacheUsage, ...relayOptions },
         false
       )
-    )
     liveSubscription.on('event', forwardEvent)
     liveSubscription.start()
 
@@ -80,17 +76,16 @@ export const createRuntimeSubscribe = (
       registered,
       DIRECT_MESSAGE_BACKFILL_LIMIT
     ).map((backfillFilter) =>
-      asNdkEventSubscription(
-        ndkInstance.subscribe(
-          backfillFilter as NDKFilter,
+      client.subscribe(
+          backfillFilter as EventFilter,
           {
             closeOnEose: true,
-            cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+            cacheUsage: CacheMode.ONLY_RELAY,
             ...relayOptions,
+            sources: [],
           },
           false
         )
-      )
     )
 
     for (const backfillSubscription of backfillSubscriptions) {
@@ -100,7 +95,6 @@ export const createRuntimeSubscribe = (
 
     return () => {
       tracker.unregister(registered.token)
-      stopPubsub()
       for (const backfillSubscription of backfillSubscriptions) {
         backfillSubscription.stop()
       }

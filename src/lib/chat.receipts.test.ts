@@ -46,7 +46,7 @@ const mocks = vi.hoisted(() => {
 vi.mock('./identity', () => {
   const { writable } = require('svelte/store')
   return {
-    ndk: writable({}),
+    nostrClient: writable({}),
     getPrivkeyBytes: () => null,
     getPubkey: () => MY_PUBKEY,
     hasNip44Support: () => true,

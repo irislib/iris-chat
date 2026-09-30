@@ -2,11 +2,11 @@ import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { writable } from 'svelte/store'
 const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map() }))
-vi.mock('./identity', () => ({ identity: writable(null), ndk: writable({ signer: {} }) }))
+vi.mock('./identity', () => ({ identity: writable(null), nostrClient: writable({ signer: {} }) }))
 vi.mock('./chat', () => ({ getInviteEphemeralPubkeys: () => [] }))
 vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getSessionUserRecords: () => fixture.authors }) }))
 vi.mock('./notificationPermission', () => ({ getNotificationSupportError: () => null, requestNotificationPermission: async () => ({ permission: 'granted' }) }))
-vi.mock('@nostr-dev-kit/ndk', () => ({ NDKEvent: class { async sign() {} async toNostrEvent() { return {} } } }))
+vi.mock('./nostrClient', () => ({ AppEvent: class { async sign() {} async toNostrEvent() { return {} } } }))
 import { identity } from './identity'
 import { notificationSettings } from './notificationStore'
 import { subscribeToDMNotifications } from './notifications'

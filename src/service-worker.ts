@@ -24,14 +24,13 @@ function isHashtreePicture(picture: string | undefined): boolean {
   return !!picture && (picture.startsWith('htree://') || picture.startsWith('nhash://'))
 }
 
-declare let self: ServiceWorkerGlobalScope
+declare let self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<{ url: string; revision?: string | null }> }
 
 type NostrEvent = Parameters<Parameters<NostrSubscribe>[1]>[0]
 
-// Keep this worker focused on push notifications. App-shell caching and
-// client-claiming can interrupt active invite joins during service-worker
-// updates, while the chat runtime already works from the network/cache layer
-// provided by the browser and CDN.
+// Updates wait for open chats to close; cached assets also include the event worker.
+import { installOfflineShell } from './lib/offlineShell'
+installOfflineShell(self, self.__WB_MANIFEST ?? [])
 
 // Dexie DB for service worker (must match main app schema)
 interface StoredSession {

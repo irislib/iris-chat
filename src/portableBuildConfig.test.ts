@@ -32,7 +32,7 @@ describe('portable build config', () => {
 
     expect(manualChunks).toBeTypeOf('function')
     expect(manualChunks?.('/repo/node_modules/@fips/core/dist/index.js', {} as never)).toBe('vendor')
-    expect(manualChunks?.('/repo/node_modules/@nostr-dev-kit/ndk/dist/index.js', {} as never)).toBe('vendor')
+    expect(manualChunks?.('/repo/node_modules/nostr-pubsub/dist/index.js', {} as never)).toBe('vendor')
     expect(manualChunks?.('/repo/node_modules/marked/lib/marked.esm.js', {} as never)).toBe('vendor')
   })
 

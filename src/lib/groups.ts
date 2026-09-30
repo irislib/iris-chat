@@ -26,8 +26,8 @@ import {
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
 import type { Rumor } from 'nostr-double-ratchet'
-import { NDKEvent } from '@nostr-dev-kit/ndk'
-import { getPubkey, identity, ndk } from './identity'
+import { AppEvent } from './nostrClient'
+import { getPubkey, identity, nostrClient } from './identity'
 import { devices } from './devices'
 import { chats, type ChatMessage } from './chat'
 import {
@@ -52,7 +52,6 @@ import {
   type StoredGroup,
   type StoredMessage
 } from './storage'
-import { asNdkEventSubscription } from './ndkSubscription'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { expirationStore } from './expirationStore'
 import {
@@ -221,7 +220,7 @@ function nextGroupRosterRevision(groupId: string): number {
 
 function getGroupRosterSignerPubkey(group: Group): string | null {
   const currentIdentity = get(identity)
-  const signer = get(ndk).signer || currentIdentity?.signer
+  const signer = get(nostrClient).signer || currentIdentity?.signer
   if (!signer) return null
   const signerPubkey = currentIdentity?.pubkey || (() => {
     try {
@@ -235,8 +234,8 @@ function getGroupRosterSignerPubkey(group: Group): string | null {
 }
 
 async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
-  const ndkInstance = get(ndk)
-  const signer = ndkInstance.signer || get(identity)?.signer
+  const client = get(nostrClient)
+  const signer = client.signer || get(identity)?.signer
   const signerPubkey = getGroupRosterSignerPubkey(group)
   if (!signer || !signerPubkey) return
 
@@ -250,7 +249,7 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
     protocol: group.secret ? 'sender_key_v1' : 'pairwise_fanout_v1',
   })
 
-  const event = new NDKEvent(ndkInstance, unsigned)
+  const event = new AppEvent(client, unsigned)
   await event.sign(signer)
   const signed = event.rawEvent() as VerifiedEvent
   rememberGroupRosterFact(group.id, {
@@ -261,7 +260,7 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
   })
   const current = get(groups).get(group.id)
   if (current) saveGroupState(current)
-  void event.publish(undefined, 10000, 1).catch((error) => {
+  void event.publish({ requireAck: true }).catch((error) => {
     console.warn('[groups] Failed to publish group roster fact:', error)
   })
 }
@@ -346,9 +345,9 @@ export function handleGroupRosterFactRumor(rumor: Rumor): boolean {
 }
 
 async function backfillGroupRosterFacts(): Promise<void> {
-  const ndkInstance = get(ndk)
-  if (typeof ndkInstance.fetchEvents !== 'function') return
-  const events = await ndkInstance.fetchEvents(buildGroupRosterFactFilter({ limit: 200 }))
+  const client = get(nostrClient)
+  if (typeof client.fetchEvents !== 'function') return
+  const events = await client.fetchEvents(buildGroupRosterFactFilter({ limit: 200 }))
   for (const event of events) {
     const raw = typeof event.rawEvent === 'function' ? event.rawEvent() : event
     handleGroupRosterFactEvent(raw as VerifiedEvent)
@@ -357,8 +356,8 @@ async function backfillGroupRosterFacts(): Promise<void> {
 
 export function initGroupRosterFactSync(): () => void {
   const ownerPubkey = getPubkey()
-  const ndkInstance = get(ndk)
-  if (!ownerPubkey || typeof ndkInstance.subscribe !== 'function') {
+  const client = get(nostrClient)
+  if (!ownerPubkey || typeof client.subscribe !== 'function') {
     return () => {}
   }
   if (groupRosterFactSyncCleanup && groupRosterFactSyncOwner === ownerPubkey) {
@@ -366,10 +365,8 @@ export function initGroupRosterFactSync(): () => void {
   }
 
   groupRosterFactSyncCleanup?.()
-  const subscription = asNdkEventSubscription(
-    ndkInstance.subscribe(buildGroupRosterFactFilter(), { closeOnEose: false })
-  )
-  subscription.on('event', (event: NDKEvent) => {
+  const subscription = client.subscribe(buildGroupRosterFactFilter(), { closeOnEose: false })
+  subscription.on('event', (event: AppEvent) => {
     handleGroupRosterFactEvent(event.rawEvent() as VerifiedEvent)
   })
   subscription.start()

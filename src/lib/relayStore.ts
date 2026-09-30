@@ -2,8 +2,7 @@
  * Relay Store - tracks relay configuration and connection status
  */
 import { writable, derived, get } from 'svelte/store'
-import type NDK from '@nostr-dev-kit/ndk'
-import { NDKRelayStatus } from '@nostr-dev-kit/ndk'
+import type NostrClient from './nostrClient'
 import { DEFAULT_RELAYS } from './defaultRelays'
 
 export type RelayStatus = 'disconnected' | 'connecting' | 'connected'
@@ -127,7 +126,7 @@ function createRelayStore() {
       update(state => ({ ...state, showConnectivity: show }))
     },
 
-    updateStatuses(ndk: NDK) {
+    updateStatuses(nostrClient: NostrClient) {
       update(state => {
         const newStatuses = new Map<string, RelayStatus>()
         let connected = 0
@@ -140,17 +139,16 @@ function createRelayStore() {
         }
 
         // Update from pool - iterate over actual connected relays
-        for (const relay of ndk.pool.relays.values()) {
+        for (const relay of nostrClient.runtime.getRelayStats()) {
           const normalizedUrl = normalizeRelayUrl(relay.url)
           const configuredUrl = normalizedConfigured.get(normalizedUrl)
           if (!configuredUrl) continue
 
-          // NDKRelayStatus.CONNECTED = 5, also count AUTH states (6, 7, 8)
-          if (relay.status >= NDKRelayStatus.CONNECTED) {
+          // Read the shared runtime connection state.
+          if (relay.connected) {
             newStatuses.set(configuredUrl, 'connected')
             connected++
-          } else if (relay.status === NDKRelayStatus.CONNECTING || relay.status === NDKRelayStatus.RECONNECTING) {
-            newStatuses.set(configuredUrl, 'connecting')
+
           } else {
             newStatuses.set(configuredUrl, 'disconnected')
           }

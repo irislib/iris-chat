@@ -3,41 +3,62 @@ import { readFile } from 'node:fs/promises'
 const root = new URL('../', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
 const lockfile = await readFile(new URL('pnpm-lock.yaml', root), 'utf8')
+const packages = lockfile.split('\nsnapshots:')[0]
 const workspace = await readFile(new URL('pnpm-workspace.yaml', root), 'utf8')
 const pubsubRuntime = await readFile(new URL('src/lib/nostrPubsubRuntime.ts', root), 'utf8')
 const releases = {
-  '@fips/core': {
-    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz',
-    integrity: 'sha512-6zKvgowk5yBa6SVf5MDgOzn9IKVjJGgoa1oXqfv1uHDt7U98JjbIXdUCbMEUMyHX7qoeutH/2Kw+13E5LTB96A==',
+  "@fips/core": {
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz",
+    "integrity": "sha512-6zKvgowk5yBa6SVf5MDgOzn9IKVjJGgoa1oXqfv1uHDt7U98JjbIXdUCbMEUMyHX7qoeutH/2Kw+13E5LTB96A=="
   },
-  '@fips/tcp': {
-    url: 'https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz',
-    integrity: 'sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w==',
+  "@fips/tcp": {
+    "url": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
+    "integrity": "sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w=="
   },
-  '@fips/transport-webrtc': {
-    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz',
-    integrity: 'sha512-lKCTDAiHT0FNo/SR5ebWysc1mesM+ktNlUtoPIWgRz/rw7IGp3MqN1YUfa3gUmGUb8n6B8utpLn82J3oq1SCRg==',
+  "@fips/transport-webrtc": {
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz",
+    "integrity": "sha512-lKCTDAiHT0FNo/SR5ebWysc1mesM+ktNlUtoPIWgRz/rw7IGp3MqN1YUfa3gUmGUb8n6B8utpLn82J3oq1SCRg=="
   },
-  '@fips/transport-websocket': {
-    url: 'https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz',
-    integrity: 'sha512-Qj641P/xa7CQpcVQl52u5PgftzGPtGHIva9mpXRcNgdteB5LlTdCA7/GBfRKtuSxGoNaRi1iKHH4fBHitNe30A==',
+  "@fips/transport-websocket": {
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz",
+    "integrity": "sha512-Qj641P/xa7CQpcVQl52u5PgftzGPtGHIva9mpXRcNgdteB5LlTdCA7/GBfRKtuSxGoNaRi1iKHH4fBHitNe30A=="
   },
-  '@hashtree/core': {
-    url: 'https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.7/hashtree-core-0.3.2.tgz',
-    integrity: 'sha512-DAMUpGBcRk6JgecIU5T3AS18gAiXpiwYG2mULq+mec9noWmaVUFBnkMt+ur12IjKik9G146z1cQV5y/oZ7MgFA==',
+  "@hashtree/core": {
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz",
+    "integrity": "sha512-OLd2ARbYKt9s7wipMX58OhJwZQ6XwIdkuJ+Zfp+NNz3rjXDV8kYl67S9HlrXOj5eSsy5SbN/JuKS8QuwXzEiRQ=="
   },
-  'nostr-pubsub': {
-    url: 'https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz',
-    integrity: 'sha512-8Du8STeYMT98zz00lo3uoETYeWpvVGZO3n0Xi9pZycXWPMxCQP1FwRgl0mrxTMT5KK1xOw4pMnpSGmMeVOidag==',
+  "nostr-pubsub": {
+    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.11/nostr-pubsub-0.5.11.tgz",
+    "integrity": "sha512-wyHDPvyDPSQo6JRuof5tx5Mn2WdA6W6asiGR+VEKF9hRKGNfobAcbWlShGtCmJFLa/tjAVj8vY5tGbxfrgOJrQ=="
   },
   'nostr-double-ratchet': {
     url: 'https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.174/nostr-double-ratchet-0.0.174.tgz',
     integrity: 'sha512-tSWSNsfqbjM9sq7N1A/Sltt9nTO4EYCHUAr7D+k9hWU3s5vNUCtvdcTCXNqzudPddtHwhby57pK9+gvwHKCPRA==',
   },
-  'nostr-social-graph': {
-    url: 'https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz',
-    integrity: 'sha512-7bR840Fmz7wYaHi0P9fXxxKlQSphFARmj2VBMIQdFvrNT584bj6ci18GaeJ49OghutUot/FwHmPOTjYqmg6koA==',
+  "nostr-social-graph": {
+    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz",
+    "integrity": "sha512-7bR840Fmz7wYaHi0P9fXxxKlQSphFARmj2VBMIQdFvrNT584bj6ci18GaeJ49OghutUot/FwHmPOTjYqmg6koA=="
   },
+  "@hashtree/worker": {
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-worker-0.4.5.tgz",
+    "integrity": "sha512-b6DPm6KwiBy31s+Uz6y+MDakp8mP4HLXWi7wxhB8YapbkiRPB9XOdn9eSgPL2sUMkO/uFCKGnqEF6uQ4Et/5Tg=="
+  },
+  "@hashtree/fips-transport": {
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-fips-transport-0.4.12.tgz",
+    "integrity": "sha512-PzJdi3IAnkqQ8H3mDM1WSYBRcdcVYnolQcFEvfeLfsj0JfXIWCBX2gkS53PZvZPPLgDGP/rLY1NBXDFs+a4nqw=="
+  },
+  "@hashtree/nostr-pubsub": {
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-nostr-pubsub-0.1.5.tgz",
+    "integrity": "sha512-vKU/EoxWS23tgl+vOvr1L+L8yjEcbGbraS91esuC0h/AsJ8Zcimhy/5ZO18BLpqtXSOGs+iOWeLoIr8kn1kbbw=="
+  },
+  "@hashtree/dexie": {
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz",
+    "integrity": "sha512-NGe+rKVuyBrhlWeIemO0Hzd/mAcuN+PqpXYeg508dlvwuRrl+0GNIwRwPVh7e7Zg5VlwiKaN6E5itp9W6EZEGg=="
+  },
+  "@iris/identity": {
+    "url": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.5/iris-identity-0.3.1.tgz",
+    "integrity": "sha512-HwLi00j/Buf85f//Q4FsKCzvDcidul2U+rNIkfwHZjusNPfJaw6p/Yk4nlKXGkpN4W+TGVj1tZmHGj9Tz8UBAg=="
+  }
 }
 
 if (manifest.dependencies?.['@iris/nostr-pubsub'] || lockfile.includes('@iris/nostr-pubsub')) {
@@ -55,9 +76,9 @@ for (const [name, release] of Object.entries(releases)) {
   }
   const quotedKey = `  '${name}@${release.url}':`
   const plainKey = `  ${name}@${release.url}:`
-  const start = Math.max(lockfile.indexOf(quotedKey), lockfile.indexOf(plainKey))
-  const end = lockfile.indexOf('\n\n', start)
-  const entry = start >= 0 ? lockfile.slice(start, end < 0 ? undefined : end) : ''
+  const start = Math.max(packages.indexOf(quotedKey), packages.indexOf(plainKey))
+  const end = packages.indexOf('\n\n', start)
+  const entry = start >= 0 ? packages.slice(start, end < 0 ? undefined : end) : ''
   if (!entry.includes(`tarball: ${release.url}`) || !entry.includes(`integrity: ${release.integrity}`)) {
     throw new Error(`${name} lock entry is missing its verified release integrity`)
   }

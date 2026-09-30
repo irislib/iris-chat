@@ -1,7 +1,6 @@
 import { AppKeys } from 'nostr-double-ratchet'
 import { generateSecretKey, getEventHash, getPublicKey, verifyEvent, type Event, type UnsignedEvent, type VerifiedEvent } from 'nostr-tools'
-import { Relay } from 'nostr-tools/relay'
-import { signerRelayUrls } from './remoteSigner'
+import { signerRelayUrls, type SignerRuntime } from './remoteSigner'
 
 const LOOKUP_TIMEOUT = 10_000
 const MAX_EVENTS = 1024
@@ -26,45 +25,18 @@ export function selectSignerRoster(events: Event[], owner: string): VerifiedEven
   return candidates.values().next().value ?? null
 }
 
-export async function fetchSignerRoster(owner: string, urls: string[], signal: AbortSignal): Promise<VerifiedEvent | null> {
+export async function fetchSignerRoster(owner: string, urls: string[], signal: AbortSignal, runtime: SignerRuntime): Promise<VerifiedEvent | null> {
   check(signal)
-  const results = await Promise.all(signerRelayUrls(urls).map(async url => {
-    const relay = new Relay(url)
-    try {
-      await relay.connect({ timeout: LOOKUP_TIMEOUT, abort: signal })
-      check(signal)
-      return await new Promise<Event[]>((resolve, reject) => {
-        const events: Event[] = []
-        let settled = false
-        const finish = (error?: Error) => {
-          if (settled) return
-          settled = true
-          clearTimeout(timer)
-          signal.removeEventListener('abort', abort)
-          subscription.close()
-          if (error) reject(error); else resolve(events)
-        }
-        const abort = () => finish(new Error('Sign-in cancelled.'))
-        const timer = setTimeout(() => finish(new Error('Could not check all message servers. Try again.')), LOOKUP_TIMEOUT)
-        const subscription = relay.subscribe([{ kinds: [37368], authors: [owner], limit: MAX_EVENTS }], {
-          // The library synthesizes EOSE at its deadline. Our earlier deadline
-          // must reject, so an incomplete response can never erase old devices.
-          eoseTimeout: LOOKUP_TIMEOUT + 1000,
-          onevent: event => {
-            events.push(event)
-            if (events.length >= MAX_EVENTS) finish(new Error('Device list is too large.'))
-          },
-          oneose: () => finish(),
-          oninvalidevent: () => finish(new Error('Invalid device list from message server.')),
-          onclose: () => finish(new Error('Could not check all message servers. Try again.')),
-        })
-        signal.addEventListener('abort', abort, { once: true })
-        if (signal.aborted) abort()
-      })
-    } finally { relay.close() }
-  }))
+  const result = await runtime.query([{ kinds: [37368], authors: [owner], limit: MAX_EVENTS }], {
+    relays: signerRelayUrls(urls), sources: [], cache: 'network-only', localEcho: false,
+    // Concurrent signed roster heads must remain visible so conflict checks cannot
+    // mistake the cache's deterministic replaceable winner for server consensus.
+    includeSuperseded: true, deadline: Date.now() + LOOKUP_TIMEOUT, signal,
+  })
   check(signal)
-  return selectSignerRoster(results.flat(), owner)
+  if (!result.complete) throw new Error('Could not check all message servers. Try again.')
+  if (result.events.length >= MAX_EVENTS) throw new Error('Device list is too large.')
+  return selectSignerRoster(result.events, owner)
 }
 
 export function prepareSignerAuthorization(owner: string, device: string, previous: VerifiedEvent | null): UnsignedEvent {
@@ -90,33 +62,27 @@ export function validateSignerAuthorization(expected: UnsignedEvent, event: Even
 
 export async function authorizeSignerDevice(options: {
   owner: string
+  runtime: SignerRuntime
   relays: string[]
   signal: AbortSignal
   signEvent: (event: UnsignedEvent) => Promise<Event>
   onCommitting?: () => void
 }): Promise<{ event: VerifiedEvent; deviceSecret: Uint8Array }> {
-  const { owner, relays, signal } = options
+  const { owner, relays, signal, runtime } = options
   const deviceSecret = generateSecretKey()
   try {
-    const previous = await fetchSignerRoster(owner, relays, signal)
+    const previous = await fetchSignerRoster(owner, relays, signal, runtime)
     const expected = prepareSignerAuthorization(owner, getPublicKey(deviceSecret), previous)
     const event = validateSignerAuthorization(expected, await options.signEvent(expected))
     check(signal)
-    const current = await fetchSignerRoster(owner, relays, signal)
+    const current = await fetchSignerRoster(owner, relays, signal, runtime)
     if (current?.id !== previous?.id) throw new Error('Your device list changed. Sign in again.')
     check(signal)
     // Once servers may accept this authorization, retain its device key and
     // finish local installation. Cancelling here would strand an approved key.
     options.onCommitting?.()
-    const commitSignal = new AbortController().signal
-    await Promise.any(signerRelayUrls(relays).map(async url => {
-      const relay = new Relay(url)
-      try {
-        await relay.connect({ timeout: LOOKUP_TIMEOUT, abort: commitSignal })
-        relay.publishTimeout = LOOKUP_TIMEOUT
-        await relay.publish(event)
-      } finally { relay.close() }
-    })).catch(() => { throw new Error('Could not save device authorization. Try again.') })
+    const receipt = await runtime.publish(event, { relays: signerRelayUrls(relays), sources: [], requireAck: true, queue: false, localEcho: false })
+    if (!receipt.remoteAccepted) throw new Error('Could not save device authorization. Try again.')
     return { event, deviceSecret }
   } catch (error) {
     deviceSecret.fill(0)

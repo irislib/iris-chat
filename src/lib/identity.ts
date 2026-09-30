@@ -1,4 +1,4 @@
-import NDK, { NDKPrivateKeySigner, NDKNip07Signer } from '@nostr-dev-kit/ndk'
+import NostrClient, { SecretKeySigner, ExtensionSigner } from './nostrClient'
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { writable, derived, get } from 'svelte/store'
 import {
@@ -25,7 +25,7 @@ export function hexToBytes(hex: string): Uint8Array {
 
 export interface Identity {
   pubkey: string
-  signer?: NDKPrivateKeySigner | NDKNip07Signer
+  signer?: SecretKeySigner | ExtensionSigner
   displayName: string | null
   isNip07: boolean
   isLinkedDevice?: boolean
@@ -38,35 +38,34 @@ export const identity = writable<Identity | null>(null)
 
 export const isLoggedIn = derived(identity, $identity => $identity !== null)
 
-// Create NDK instance with relays from store
+// Create NostrClient instance with relays from store
 const initialRelays = [...relayStore.getState().relays]
-const ndkInstance = new NDK({
+const client = new NostrClient({
   explicitRelayUrls: initialRelays,
 })
-ndkInstance.connect()
 
-export const ndk = writable<NDK>(ndkInstance)
+export const nostrClient = writable<NostrClient>(client)
 
 // Start relay status polling
 function initRelayTracking() {
   // Poll immediately
-  relayStore.updateStatuses(ndkInstance)
+  relayStore.updateStatuses(client)
 
   // Fast polling for first 5 seconds
   let pollCount = 0
   const fastPoll = setInterval(() => {
     pollCount++
-    relayStore.updateStatuses(ndkInstance)
+    relayStore.updateStatuses(client)
     if (pollCount >= 25) clearInterval(fastPoll)
   }, 200)
 
   // Regular polling
-  setInterval(() => relayStore.updateStatuses(ndkInstance), 2000)
+  setInterval(() => relayStore.updateStatuses(client), 2000)
 }
 
 initRelayTracking()
 
-// Reconnect NDK when relays change
+// Reconnect NostrClient when relays change
 let previousRelays = new Set(initialRelays)
 relayStore.subscribe(state => {
   const newUrls = state.relays
@@ -76,20 +75,7 @@ relayStore.subscribe(state => {
     return
   }
 
-  // Disconnect removed relays
-  for (const url of previousRelays) {
-    if (!newUrls.has(url)) {
-      const relay = ndkInstance.pool.relays.get(url)
-      relay?.disconnect()
-      ndkInstance.pool.relays.delete(url)
-    }
-  }
-  // Add new relays
-  for (const url of newUrls) {
-    if (!previousRelays.has(url)) {
-      ndkInstance.addExplicitRelay(url)
-    }
-  }
+  client.setRelays([...newUrls])
 
   previousRelays = new Set(newUrls)
 })
@@ -153,11 +139,12 @@ export function clearStoredIdentity(): void {
 }
 
 export async function loginWithPrivkey(privkeyHex: string, displayName: string | null = null): Promise<void> {
-  const signer = new NDKPrivateKeySigner(privkeyHex)
+  const signer = new SecretKeySigner(privkeyHex)
   const user = await signer.user()
 
-  // Set signer on existing NDK instance
-  ndkInstance.signer = signer
+  // Set signer on existing NostrClient instance
+  client.runtime.setAccount(user.pubkey)
+  client.signer = signer
 
   identity.set({
     pubkey: user.pubkey,
@@ -172,9 +159,9 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     saveLocalProfile(user.pubkey, displayName)
 
     // Publish kind 0 profile event to relays
-    const ndkUser = ndkInstance.getUser({ pubkey: user.pubkey })
-    ndkUser.profile = { name: displayName, displayName: displayName }
-    await ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
+    const profileUser = client.getUser({ pubkey: user.pubkey })
+    profileUser.profile = { name: displayName, displayName: displayName }
+    await profileUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
   }
 
   saveIdentity(privkeyHex)
@@ -190,19 +177,12 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     throw new Error('No NIP-07 extension found')
   }
 
-  const signer = new NDKNip07Signer(5000)
-  let user = await signer.user().catch(async (err) => {
-    const pubkey = await window.nostr?.getPublicKey?.()
-    if (!pubkey) throw err
-    // Fallback: manually seed signer state for mocked NIP-07 environments
-    ;(signer as unknown as { _pubkey?: string })._pubkey = pubkey
-    const ndkUser = ndkInstance.getUser({ pubkey })
-    ;(signer as unknown as { _user?: typeof ndkUser })._user = ndkUser
-    return ndkUser
-  })
+  const signer = new ExtensionSigner(5000)
+  const user = await signer.user()
 
-  // Set signer on existing NDK instance
-  ndkInstance.signer = signer
+  // Set signer on existing NostrClient instance
+  client.runtime.setAccount(user.pubkey)
+  client.signer = signer
 
   identity.set({
     pubkey: user.pubkey,
@@ -217,9 +197,9 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     saveLocalProfile(user.pubkey, displayName)
 
     // Publish kind 0 profile event to relays
-    const ndkUser = ndkInstance.getUser({ pubkey: user.pubkey })
-    ndkUser.profile = { name: displayName, displayName: displayName }
-    await ndkUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
+    const profileUser = client.getUser({ pubkey: user.pubkey })
+    profileUser.profile = { name: displayName, displayName: displayName }
+    await profileUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
   }
 
   // Save marker to remember NIP-07 login
@@ -230,7 +210,8 @@ export async function loginLinkedDevice(
   ownerPubkey: string,
   displayName: string | null = null
 ): Promise<void> {
-  ndkInstance.signer = undefined
+  client.runtime.setAccount(ownerPubkey)
+  client.signer = undefined
 
   identity.set({
     pubkey: ownerPubkey,
@@ -289,8 +270,8 @@ export async function autoLogin(displayName: string | null = null): Promise<bool
 }
 
 export function logout(): void {
-  const currentIdentity = get(identity)
-  ndkInstance.signer = undefined
+  client.runtime.setAccount()
+  client.signer = undefined
   identity.set(null)
   clearStoredIdentity()
   clearLocalProfile()
@@ -350,19 +331,19 @@ export async function updateOwnProfile(input: {
     }
   })
 
-  const ndkProfile: Record<string, string | number> = {}
+  const eventProfile: Record<string, string | number> = {}
   for (const [key, value] of Object.entries(updatedProfile)) {
     if (key === 'pubkey' || value === undefined) continue
     if (key === 'display_name') {
-      ndkProfile.displayName = value
+      eventProfile.displayName = value
       continue
     }
-    ndkProfile[key] = value
+    eventProfile[key] = value
   }
 
-  const ndkUser = ndkInstance.getUser({ pubkey: currentIdentity.pubkey })
-  ndkUser.profile = ndkProfile
-  await ndkUser.publish()
+  const profileUser = client.getUser({ pubkey: currentIdentity.pubkey })
+  profileUser.profile = eventProfile
+  await profileUser.publish()
 
   return updatedProfile
 }
@@ -384,7 +365,7 @@ export function getPrivkeyHex(): string | null {
   const currentIdentity = get(identity)
   if (!currentIdentity || currentIdentity.isNip07 || !currentIdentity.signer) return null
 
-  const signer = currentIdentity.signer as NDKPrivateKeySigner
+  const signer = currentIdentity.signer as SecretKeySigner
   return signer.privateKey || null
 }
 

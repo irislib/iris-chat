@@ -13,8 +13,8 @@ import { callConnectionSettings } from './callConnectionSettings'
 import { AppKeys } from 'nostr-double-ratchet'
 import { chats, currentChat, type ChatMessage, type ChatSession } from './chat'
 import { devices, type DeviceState } from './devices'
-import { getPubkey, ndk } from './identity'
-import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { getPubkey, nostrClient } from './identity'
+import { AppEvent } from './nostrClient'
 import { notificationSettings } from './notificationStore'
 import { sendCallWakeups } from './callPush'
 import { getNdrRuntime, cancelGroupPublications } from './privateChats'
@@ -29,6 +29,7 @@ import {
 } from './groups'
 import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
+import { activateAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
 import { DeviceSyncTcp } from './deviceSyncTcp'
 import { attachCalls, detachCalls, callOwnerForPeer, knownCallDevices } from './calls'
 import {
@@ -655,6 +656,7 @@ async function stopActiveNode(): Promise<void> {
   activePeers = new Set()
   detachCalls()
   await deactivateNostrPubsub()
+  await deactivateAttachmentPeers()
   await tcp?.dispose().catch(() => undefined)
   await node?.stop().catch(() => undefined)
 }
@@ -751,7 +753,7 @@ async function reconcileRuntime(
       if (peer) await node.connect(peer.remoteAddr)
     }))
   }, call => sendCallWakeups(secretKey, call.peers, call.id, call.video,
-    get(notificationSettings).serverUrl, event => new NDKEvent(get(ndk), event).publish()))
+    get(notificationSettings).serverUrl, event => new AppEvent(get(nostrClient), event).publish()))
   await node.start()
   if (run !== generation) {
     await tcp.dispose()
@@ -764,7 +766,14 @@ async function reconcileRuntime(
   activeOwnerPubkey = ownerPubkey
   activePeers = peers
   // Message synchronization remains restricted to this account's registered devices.
-  await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers))
+  await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers), get(nostrClient).runtime)
+  activateAttachmentPeers(node, () => [...new Set([
+    ...callPeers,
+    ...get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
+    ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
+  ])].filter(peer => peer !== toHex(identity.publicKey) &&
+    (isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer))),
+    peer => isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer))
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {

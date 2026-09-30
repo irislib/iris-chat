@@ -204,7 +204,7 @@ describe('durable runtime publication', () => {
     expect(publish).toHaveBeenCalledOnce()
   })
 
-  it('extracts unique accepted relay URLs from NDK results', () => {
+  it('extracts unique accepted relay URLs from NostrClient results', () => {
     expect(
       getPublishedRelayUrls(
         new Set([

@@ -1,10 +1,9 @@
 import { get } from 'svelte/store'
 import {
-  NDKEvent,
-  NDKRelaySet,
-  NDKSubscriptionCacheUsage,
-  type NDKFilter,
-} from '@nostr-dev-kit/ndk'
+  AppEvent,
+  CacheMode,
+  type EventFilter,
+} from './nostrClient'
 import {
   AppKeys,
   Invite,
@@ -26,7 +25,7 @@ import {
   type NostrPublishContext,
 } from 'nostr-double-ratchet'
 import {
-  ndk,
+  nostrClient,
   identity,
   getPrivkeyHex,
   getPrivkeyBytes,
@@ -42,9 +41,7 @@ import {
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 import { createRuntimePublish } from './runtimePublish'
-import { asNdkEventSubscription } from './ndkSubscription'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
-import { publishNostrPubsub } from './nostrPubsubRuntime'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 import { restoreSignerAuthorization } from './signerAuthorizationStorage'
 
@@ -128,7 +125,7 @@ const verifyCurrentDeviceOnRelay = async (
 
   const relayAppKeys = await AppKeys.waitFor(
     ownerPubkey,
-    createRelayOnlySubscribe(getNDK()),
+    createRelayOnlySubscribe(getNostrClient()),
     timeoutMs
   )
   const relayIncludesDevice =
@@ -187,30 +184,29 @@ const registerCurrentDeviceApproval = async (
 }
 
 const createSubscribe = (
-  ndkInstance: ReturnType<typeof getNDK>,
-  cacheUsage: NDKSubscriptionCacheUsage = NDKSubscriptionCacheUsage.PARALLEL
+  client: ReturnType<typeof getNostrClient>,
+  cacheUsage: CacheMode = CacheMode.PARALLEL
 ): NostrSubscribe => {
-  return createRuntimeSubscribe(ndkInstance, cacheUsage)
+  return createRuntimeSubscribe(client, cacheUsage)
 }
 
 const createRelayOnlySubscribe = (
-  ndkInstance: ReturnType<typeof getNDK>
+  client: ReturnType<typeof getNostrClient>
 ): NostrSubscribe => {
   return (filter, onEvent) => {
     const relayUrls = [...relayStore.getState().relays]
     const relayOptions = relayUrls.length > 0 ? { relayUrls } : {}
-    const subscription = asNdkEventSubscription(
-      ndkInstance.subscribe(
-        filter as NDKFilter,
+    const subscription = client.subscribe(
+        filter as EventFilter,
         {
           closeOnEose: false,
-          cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+          cacheUsage: CacheMode.ONLY_RELAY,
           skipOptimisticPublishEvent: true,
+          sources: [],
           ...relayOptions,
         },
         false
       )
-    )
     subscription.on('event', (event) => {
       onEvent(event.rawEvent() as Parameters<typeof onEvent>[0])
     })
@@ -219,32 +215,31 @@ const createRelayOnlySubscribe = (
   }
 }
 
-const createSign = (ndkInstance: ReturnType<typeof getNDK>) => {
+const createSign = (client: ReturnType<typeof getNostrClient>) => {
   return async (event: UnsignedEvent): Promise<VerifiedEvent> => {
-    const e = new NDKEvent(ndkInstance, event)
+    const e = new AppEvent(client, event)
     await e.sign()
     return e.rawEvent() as VerifiedEvent
   }
 }
 
-const createRelayPublish = (ndkInstance: ReturnType<typeof getNDK>) => {
+const createRelayPublish = (client: ReturnType<typeof getNostrClient>) => {
   return async (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => {
     signal.throwIfAborted()
-    const e = new NDKEvent(ndkInstance, event)
-    void publishNostrPubsub(event).catch((error) => {
-      console.warn('[privateChats] FIPS pubsub publish failed:', error)
-    })
-    const relayUrls = [...relayStore.getState().relays]
-    const relaySet = NDKRelaySet.fromRelayUrls(relayUrls, ndkInstance, true)
+    let relayUrls = [...relayStore.getState().relays].map(url => new URL(url).toString())
     if (context) {
-      // Our durable queue owns retries. NDK must not retain a second group send
-      // waiting for a future connection after membership has been revoked.
-      const connected = new Set(ndkInstance.pool.connectedRelays())
-      for (const relay of relaySet.relays) if (!connected.has(relay)) relaySet.relays.delete(relay)
-      if (!relaySet.size) throw new Error('No connected message server')
+      // Group retries belong to the durable queue, which rechecks membership.
+      const connected = new Set(client.runtime.getRelayStats().filter(relay => relay.connected).map(relay => relay.url))
+      relayUrls = relayUrls.filter(url => connected.has(url))
+      if (!relayUrls.length) throw new Error('No connected message server')
     }
     signal.throwIfAborted()
-    return e.publish(relaySet, 10000, 1)
+    const receipt = await client.runtime.publish(event, {
+      relays: relayUrls, sources: ['fips'], requireAck: true, queue: false, localEcho: false,
+    })
+    // FIPS delivery is queued transport, never evidence of relay acceptance.
+    return new Set(receipt.sources.filter(source => source.accepted && relayUrls.includes(source.id))
+      .map(source => ({ url: source.id })))
   }
 }
 
@@ -259,11 +254,11 @@ identity.subscribe((currentIdentity) => {
 })
 
 const createFetch = (
-  ndkInstance: ReturnType<typeof getNDK>,
+  client: ReturnType<typeof getNostrClient>,
 ): NostrFetch => {
   return (async (filter: Parameters<NostrFetch>[0]) => {
-    const events = await ndkInstance.fetchEvents(filter, {
-      cacheUsage: NDKSubscriptionCacheUsage.PARALLEL,
+    const events = await client.fetchEvents(filter, {
+      cacheUsage: CacheMode.PARALLEL,
     })
     return Array.from(events)
       .map((event) => event.rawEvent() as VerifiedEvent | undefined)
@@ -271,8 +266,8 @@ const createFetch = (
   }) as unknown as NostrFetch
 }
 
-function getNDK() {
-  return get(ndk)
+function getNostrClient() {
+  return get(nostrClient)
 }
 
 const syncDevicesFromRuntime = (state: NdrRuntimeState): void => {
@@ -325,15 +320,15 @@ const getRuntime = (): NdrRuntime => {
   readyDeviceRegistrations.clear()
   activeDeviceRegistration = null
 
-  const ndkInstance = getNDK()
+  const client = getNostrClient()
   const ownerIdentityKey = getPrivkeyBytes()
-  const sign = createSign(ndkInstance)
+  const sign = createSign(client)
   const storage = new DexieStorageAdapter()
   runtimeStorage = storage
   const publication = createRuntimePublish({
     storage,
     owner: ownerPubkey,
-    publish: createRelayPublish(ndkInstance),
+    publish: createRelayPublish(client),
     onAcceptedRelays: notifyMessageRelayPublish,
     canPublish: async ({ groupId }) => {
       const { groups, canSendToGroup } = await import('./groups')
@@ -346,7 +341,7 @@ const getRuntime = (): NdrRuntime => {
   runtimePublication = publication
   runtimeOwnerPubkey = ownerPubkey
   runtime = new NdrRuntime({
-    nostrSubscribe: createSubscribe(ndkInstance),
+    nostrSubscribe: createSubscribe(client),
     nostrSign: sign,
     nostrEnqueue: publication.enqueue,
     nostrPublish: async (event, innerEventId, context) => {
@@ -356,7 +351,7 @@ const getRuntime = (): NdrRuntime => {
       return publication.publish(signed, innerEventId, context)
     },
     onPublishError: ({ error }) => reportPublicationError(error),
-    nostrFetch: createFetch(ndkInstance),
+    nostrFetch: createFetch(client),
     storage,
     appKeysFetchTimeoutMs: APP_KEYS_FETCH_TIMEOUT_MS,
     appKeysFastTimeoutMs: APP_KEYS_FAST_TIMEOUT_MS,
@@ -393,12 +388,6 @@ export const getNdrRuntime = (): NdrRuntime => {
   return getRuntime()
 }
 
-const ensureConnected = async (): Promise<void> => {
-  const ndkInstance = getNDK()
-  if (ndkInstance.pool.connectedRelays().length === 0) {
-    await ndkInstance.pool.connect(5000)
-  }
-}
 
 export const initAppKeysManager = async (): Promise<void> => {
   await getRuntime().initAppKeysManager()
@@ -468,7 +457,7 @@ const refreshRestoredDeviceRegistration = async (
   // receiving capability on startup, without waiting for an outgoing message.
   const published = await AppKeys.waitFor(
     ownerPubkey,
-    createRelayOnlySubscribe(getNDK()),
+    createRelayOnlySubscribe(getNostrClient()),
     APP_KEYS_FETCH_TIMEOUT_MS
   )
   if (published) {
@@ -484,7 +473,6 @@ const refreshRestoredDeviceRegistration = async (
 }
 
 export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
-  await ensureConnected()
 
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
@@ -539,7 +527,6 @@ export const registerDevice = async (): Promise<void> => {
 
   const labels = await getCurrentDeviceRegistrationLabels()
 
-  await ensureConnected()
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
   await registerCurrentDeviceApproval(currentRuntime, ownerPubkey, labels)
@@ -557,7 +544,6 @@ export const registerLinkedDevice = async (identityPubkey: string): Promise<void
 
   const labels = await getLinkedDeviceRegistrationLabels()
 
-  await ensureConnected()
   await getRuntime().initForOwner(ownerPubkey)
   await getRuntime().registerDeviceIdentity({
     ownerPubkey,
@@ -570,7 +556,6 @@ export const registerLinkedDevice = async (identityPubkey: string): Promise<void
 export const startDeviceLink = async (
   onAccepted: (ownerPubkey: string) => void | Promise<void>
 ): Promise<DeviceLinkSession> => {
-  await ensureConnected()
 
   const labels = await getCurrentDeviceRegistrationLabels()
   const localRequest = createDeviceLinkRequest({
@@ -578,13 +563,13 @@ export const startDeviceLink = async (
     ...labels,
   })
   await persistCompactLinkRuntimeDelegate(localRequest)
-  const subscribe = createRelayOnlySubscribe(getNDK())
+  const subscribe = createRelayOnlySubscribe(getNostrClient())
   let stopped = false
   let completed = false
   let timeout: ReturnType<typeof setTimeout>
 
   const unsubscribe = subscribe(
-    buildAppKeysDeviceAuthorizationFilter(localRequest.request.deviceAppKeyPubkey) as NDKFilter,
+    buildAppKeysDeviceAuthorizationFilter(localRequest.request.deviceAppKeyPubkey) as EventFilter,
     async (event) => {
       if (stopped || completed) return
 
@@ -655,13 +640,13 @@ export const listenForLinkInviteAcceptance = (
   }
 
   const inviterPrivateKey = delegateManager.getIdentityKey()
-  const subscribe = createSubscribe(getNDK())
+  const subscribe = createSubscribe(getNostrClient())
 
   return subscribe(
     {
       kinds: [INVITE_RESPONSE_KIND],
       '#p': [invite.inviterEphemeralPublicKey],
-    } as NDKFilter,
+    } as EventFilter,
     async (event) => {
       try {
         if (invite.maxUses && invite.usedBy.length >= invite.maxUses) {
@@ -696,11 +681,15 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
     throw new Error('Owner pubkey not available')
   }
 
-  await ensureConnected()
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
 
   let state = currentRuntime.getState()
+  // Existing signed authorization remains usable offline. The NDR queue keeps
+  // encrypted envelopes durable; receivers still enforce their current rosters.
+  // This never grants a new device or treats cache/peer traffic as relay evidence.
+  if (typeof navigator !== 'undefined' && !navigator.onLine &&
+    state.isCurrentDeviceRegistered && stateIncludesDevice(state, state.currentDevicePubkey)) return
   if (!isSendReadyCurrentDevice(ownerPubkey, state)) {
     if (stateIncludesDevice(state, state.currentDevicePubkey)) {
       try {
@@ -747,7 +736,6 @@ export const revokeDevices = async (identityPubkeys: string[]): Promise<void> =>
   )
   if (uniquePubkeys.length === 0) return
 
-  await ensureConnected()
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(ownerPubkey)
 
@@ -827,7 +815,6 @@ export const resetManagers = (): void => {
 }
 
 export const republishInvite = async (): Promise<void> => {
-  await ensureConnected()
   await getRuntime().republishInvite()
 }
 
@@ -835,7 +822,6 @@ export const rotateDeviceInvite = async (): Promise<void> => {
   if (rotateInvitePromise) return rotateInvitePromise
 
   rotateInvitePromise = (async () => {
-    await ensureConnected()
     await getRuntime().rotateInvite()
   })().finally(() => {
     rotateInvitePromise = null
@@ -865,7 +851,6 @@ export const acceptDeviceLink = async (input: string): Promise<void> => {
 
   const ndrInvite = deterministicLinkInviteForDeviceLinkRequest(parsed)
 
-  await ensureConnected()
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(currentIdentity.pubkey)
   const parsedLabels = parsed as typeof parsed & { deviceLabel?: string; clientLabel?: string }
@@ -896,7 +881,6 @@ export const acceptLinkInvite = async (invite: Invite): Promise<void> => {
     throw new Error('Link invite is for a different account')
   }
 
-  await ensureConnected()
   const currentRuntime = getRuntime()
   await currentRuntime.initForOwner(currentIdentity.pubkey)
   await currentRuntime.acceptLinkInvite(invite, currentIdentity.pubkey)

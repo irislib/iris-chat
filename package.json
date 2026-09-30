@@ -54,20 +54,24 @@
     "@fips/core": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-core-0.0.43.tgz",
     "@fips/tcp": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
     "@fips/transport-webrtc": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.43/fips-transport-webrtc-0.0.48.tgz",
-    "@hashtree/core": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.7/hashtree-core-0.3.2.tgz",
+    "@fips/transport-websocket": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz",
+    "@hashtree/core": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz",
+    "@hashtree/dexie": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz",
+    "@hashtree/fips-transport": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-fips-transport-0.4.12.tgz",
+    "@hashtree/nostr-pubsub": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-nostr-pubsub-0.1.5.tgz",
+    "@iris/identity": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.5/iris-identity-0.3.1.tgz",
     "@noble/hashes": "^2.2.0",
     "@noble/secp256k1": "^3.1.0",
-    "@nostr-dev-kit/ndk": "^2.18.1",
     "dexie": "^4.4.4",
     "dompurify": "^3.4.12",
     "jsqr": "^1.4.0",
     "marked": "^15.0.12",
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.174/nostr-double-ratchet-0.0.174.tgz",
-    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.1/nostr-pubsub-0.5.1.tgz",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.11/nostr-pubsub-0.5.11.tgz",
     "nostr-social-graph": "https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz",
     "nostr-tools": "^2.23.12",
     "qrcode": "^1.5.4",
-    "@fips/transport-websocket": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.31/fips-transport-websocket-0.0.5.tgz"
+    "@hashtree/worker": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-worker-0.4.5.tgz"
   }
 }

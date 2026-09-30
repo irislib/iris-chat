@@ -3,7 +3,7 @@ import { SocialGraph } from 'nostr-social-graph'
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from 'nostr-tools'
 import { writable } from 'svelte/store'
 
-vi.mock('./identity', () => ({ identity: writable(null), ndk: writable(null) }))
+vi.mock('./identity', () => ({ identity: writable(null), nostrClient: writable(null) }))
 vi.mock('./following', () => ({ following: writable(new Set()), followingHead: writable(null) }))
 
 import { PeopleGraphController, graphConsidersUserOvermuted, DEFAULT_DISCOVERY_PUBKEY } from './peopleGraph'

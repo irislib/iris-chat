@@ -1,6 +1,6 @@
 import { getPublicKey } from 'nostr-tools'
 import { db } from './storage'
-import { identity, loginLinkedDevice } from './identity'
+import { identity, loginLinkedDevice, nostrClient } from './identity'
 import { get } from 'svelte/store'
 import { relayStore } from './relayStore'
 import { RemoteSigner, type RemoteSignerOptions } from './remoteSigner'
@@ -9,15 +9,16 @@ import { SIGNER_PROOF_KEY } from './signerAuthorizationStorage'
 
 const DEVICE_PREFIX = 'v1/device-manager'
 
-export async function loginWithRemoteSigner(options: Omit<RemoteSignerOptions, 'relays'> & { onCommitting?: () => void }): Promise<void> {
+export async function loginWithRemoteSigner(options: Omit<RemoteSignerOptions, 'relays' | 'runtime'> & { onCommitting?: () => void }): Promise<void> {
   if (get(identity)) throw new Error('Already signed in.')
   const relays = [...relayStore.getState().relays]
-  const signer = new RemoteSigner({ ...options, relays })
+  const runtime = get(nostrClient).runtime
+  const signer = new RemoteSigner({ ...options, relays, runtime })
   let deviceSecret: Uint8Array | undefined
   try {
     const owner = await signer.connect()
     const authorization = await authorizeSignerDevice({
-      owner, relays, signal: options.signal, signEvent: event => signer.signEvent(event),
+      owner, relays, runtime, signal: options.signal, signEvent: event => signer.signEvent(event),
       onCommitting: () => {
         signer.ensureActive()
         if (get(identity)) throw new Error('Already signed in.')

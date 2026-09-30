@@ -1,18 +1,14 @@
 import { writable, get } from 'svelte/store'
 import { verifyEvent, type Event } from 'nostr-tools'
-import type { NDKEvent, NDKSubscription } from '@nostr-dev-kit/ndk'
-import { identity, ndk } from './identity'
-import {
-  asNdkEventSubscription,
-  type NdkEventSubscription,
-} from './ndkSubscription'
+import type { AppEvent, EventSubscription } from './nostrClient'
+import { identity, nostrClient } from './identity'
 
 // Set of pubkeys we follow (based on kind:3 contact list).
 export const following = writable<Set<string>>(new Set())
 const verifiedFollowingHead = writable<Event | null>(null)
 export const followingHead = { subscribe: verifiedFollowingHead.subscribe }
 
-let sub: NdkEventSubscription | null = null
+let sub: EventSubscription | null = null
 let identityUnsub: (() => void) | null = null
 let lastPubkey: string | null = null
 let latestCreatedAt = 0
@@ -71,16 +67,16 @@ export function initFollowing(): () => void {
       verifiedFollowingHead.set(cached)
       following.set(parseFollowingFromEvent(cached))
     }
-    const ndkInstance = get(ndk)
+    const client = get(nostrClient)
     latestCreatedAt = cached?.created_at ?? 0
 
     // Keep listening; contact list updates should take effect immediately.
-    sub = asNdkEventSubscription(ndkInstance.subscribe(
+    sub = client.subscribe(
       { kinds: [3], authors: [pubkey], limit: 1 },
       { closeOnEose: false }
-    ))
+    )
 
-    sub.on('event', (ev: NDKEvent) => {
+    sub.on('event', (ev: AppEvent) => {
       if (lastPubkey !== pubkey) return
       const raw = ev.rawEvent() as Event
       if (!validFollowEvent(raw, pubkey)) return

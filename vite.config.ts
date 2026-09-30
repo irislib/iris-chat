@@ -21,7 +21,8 @@ export default defineConfig({
       filename: 'service-worker.ts',
       registerType: 'autoUpdate',
       injectManifest: {
-        injectionPoint: undefined
+        globPatterns: ['**/*.{js,css,html,wasm,bin,png,svg,ico,json}'],
+        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024
       },
       devOptions: {
         enabled: true,

@@ -1,5 +1,6 @@
 import { finalizeEvent, generateSecretKey, getPublicKey, nip44, verifyEvent, type Event, type UnsignedEvent } from 'nostr-tools'
-import { Relay, type Subscription } from 'nostr-tools/relay'
+import type { NostrRuntime, RuntimeSubscription } from 'nostr-pubsub'
+export type SignerRuntime = Pick<NostrRuntime, 'subscribe' | 'publish' | 'query'>
 
 const HEX_KEY = /^[a-f0-9]{64}$/
 const TIMEOUT = 120_000
@@ -28,6 +29,7 @@ export function parseBunkerLink(value: string) {
 
 export interface RemoteSignerOptions {
   relays: string[]
+  runtime: SignerRuntime
   bunkerLink?: string
   signal: AbortSignal
   onConnectionLink?: (link: string) => void
@@ -42,8 +44,8 @@ export class RemoteSigner {
   private key = generateSecretKey()
   private publicKey = getPublicKey(this.key)
   private remoteKey = ''
-  private relays: Relay[] = []
-  private subscriptions: Subscription[] = []
+  private relays: string[] = []
+  private subscription?: RuntimeSubscription
   private pending = new Map<string, Pending>()
   private seen = new Set<string>()
   private closed = false
@@ -65,29 +67,14 @@ export class RemoteSigner {
 
   private async listen(urls: string[]) {
     this.check()
-    const opened: Relay[] = []
-    try {
-      const results = await Promise.allSettled(urls.map(async url => {
-        const relay = new Relay(url)
-        opened.push(relay)
-        await relay.connect({ timeout: 10_000, abort: this.options.signal })
-        this.check()
-        return relay
-      }))
-      this.check()
-      const connected = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
-      for (const relay of opened) if (!connected.includes(relay)) relay.close()
-      if (!connected.length) throw new Error('Could not reach signer. Try again.')
-      for (const sub of this.subscriptions) sub.close()
-      for (const relay of this.relays) relay.close()
-      this.relays = connected
-      this.subscriptions = connected.map(relay => relay.subscribe([{
-        kinds: [24133], '#p': [this.publicKey], since: Math.floor(Date.now() / 1000) - 60,
-      }], { onevent: event => this.receive(event) }))
-    } catch (error) {
-      opened.forEach(relay => relay.close())
-      throw error
-    }
+    this.subscription?.close()
+    this.relays = urls
+    this.subscription = this.options.runtime.subscribe([{
+      kinds: [24133], '#p': [this.publicKey], since: Math.floor(Date.now() / 1000) - 60,
+    }], { onEvent: event => this.receive(event) }, {
+      relays: urls, sources: [], cache: 'network-only', localEcho: false,
+      signal: this.options.signal,
+    })
   }
 
   async connect(): Promise<string> {
@@ -100,7 +87,7 @@ export class RemoteSigner {
     } else {
       const connected = new Promise<string>((resolve, reject) => { this.waitingConnection = { resolve, reject } })
       const link = new URL(`nostrconnect://${this.publicKey}`)
-      for (const relay of this.relays) link.searchParams.append('relay', relay.url)
+      for (const relay of this.relays) link.searchParams.append('relay', relay)
       link.searchParams.set('secret', this.challenge)
       link.searchParams.set('perms', 'sign_event:37368')
       link.searchParams.set('name', 'Iris Chat')
@@ -150,14 +137,19 @@ export class RemoteSigner {
       try {
         const conversationKey = nip44.v2.utils.getConversationKey(this.key, this.remoteKey)
         const event = finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [['p', this.remoteKey]], content: nip44.v2.encrypt(JSON.stringify({ id, method, params }), conversationKey) }, this.key)
-        Promise.any(this.relays.map(relay => relay.publish(event))).catch(() => {
+        this.options.runtime.publish(event, { relays: this.relays, sources: [], requireAck: true, queue: false, localEcho: false }).then(result => {
+          if (!result.remoteAccepted) throw new Error('Signer request was not accepted')
+        }).catch(() => {
           if (this.pending.has(id)) fail(new Error('Could not reach signer. Try again.'))
         })
       } catch { fail(new Error('Invalid signer connection.')) }
     })
   }
 
-  private receive(event: Event) {
+  private receive(raw: Event) {
+    // Common-runtime events are immutable; never inherit a public verified marker.
+    const event = { id: raw.id, pubkey: raw.pubkey, sig: raw.sig, kind: raw.kind,
+      created_at: raw.created_at, content: raw.content, tags: raw.tags.map(tag => [...tag]) }
     if (this.closed || this.seen.has(event.id) || event.kind !== 24133 || event.content.length > MAX_MESSAGE || !event.tags.some(tag => tag[0] === 'p' && tag[1] === this.publicKey) || !verifyEvent(event)) return
     if (this.remoteKey && event.pubkey !== this.remoteKey) return
     try {
@@ -201,8 +193,7 @@ export class RemoteSigner {
     this.waitingConnection = undefined
     for (const pending of this.pending.values()) pending.reject(error)
     this.pending.clear()
-    this.subscriptions.forEach(sub => sub.close())
-    this.relays.forEach(relay => relay.close())
+    this.subscription?.close()
     this.key.fill(0)
   }
 }

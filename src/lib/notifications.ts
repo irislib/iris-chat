@@ -1,12 +1,12 @@
 // Notification utilities for iris-chat
 import { get } from 'svelte/store'
-import { identity, ndk } from './identity'
+import { identity, nostrClient } from './identity'
 import { notificationSettings } from './notificationStore'
 import { chatMutes, loadChatMutes } from './chatMuteStore'
 import { mutedMessageFilters } from './chatMutePolicy'
 import { getNotificationSupportError, requestNotificationPermission } from './notificationPermission'
 import { getInviteEphemeralPubkeys } from './chat'
-import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { AppEvent } from './nostrClient'
 import { getNdrRuntime } from './privateChats'
 
 // NIP-98 HTTP Authentication event (KIND 27235)
@@ -93,15 +93,15 @@ export class NotificationService {
     body?: object
   ): Promise<T> {
     const currentIdentity = get(identity)
-    const ndkInstance = get(ndk)
+    const client = get(nostrClient)
 
-    if (!currentIdentity || !ndkInstance.signer || currentIdentity.pubkey !== this.owner) {
+    if (!currentIdentity || !client.signer || currentIdentity.pubkey !== this.owner) {
       throw new Error('Not logged in')
     }
 
     const url = `${this.baseUrl}${path}`
 
-    const event = new NDKEvent(ndkInstance)
+    const event = new AppEvent(client)
     event.kind = KIND_HTTP_AUTH
     event.created_at = Math.floor(Date.now() / 1000)
     event.tags = [

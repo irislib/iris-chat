@@ -1,17 +1,5 @@
-import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
-import NDK, { NDKSubscription, NDKSubscriptionCacheUsage } from '@nostr-dev-kit/ndk'
-
-const pubsub = vi.hoisted(() => ({
-  subscriptions: new Set<{ filter: unknown; onEvent: (event: never) => void }>(),
-}))
-
-vi.mock('./nostrPubsubRuntime', () => ({
-  subscribeNostrPubsub: vi.fn((filter: unknown, onEvent: (event: never) => void) => {
-    const subscription = { filter, onEvent }
-    pubsub.subscriptions.add(subscription)
-    return () => pubsub.subscriptions.delete(subscription)
-  }),
-}))
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import NostrClient, { EventSubscription, CacheMode } from './nostrClient'
 
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 
@@ -34,7 +22,7 @@ const ALICE = 'A'.repeat(64)
 const BOB = 'b'.repeat(64)
 const CAROL = 'c'.repeat(64)
 
-const createNdk = () => {
+const createClient = () => {
   const calls: Array<{
     filter: Record<string, unknown>
     opts: Record<string, unknown>
@@ -43,7 +31,7 @@ const createNdk = () => {
 
   return {
     calls,
-    ndk: {
+    nostrClient: {
       pool: {
         connectedRelays: () => [{ url: 'wss://relay.one' }, { url: 'wss://relay.two' }],
       },
@@ -61,19 +49,18 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-beforeEach(() => pubsub.subscriptions.clear())
 
 describe('createRuntimeSubscribe', () => {
-  it('starts each real NDK subscription once after attaching its handlers', async () => {
+  it('starts each real NostrClient subscription once after attaching its handlers', async () => {
     vi.useFakeTimers()
-    // Keep NDK's real subscribe/autostart scheduling, without opening sockets.
-    const start = vi.spyOn(NDKSubscription.prototype, 'start').mockReturnValue(null)
-    const subscribe = createRuntimeSubscribe(new NDK())
+    // Keep NostrClient's real subscribe/autostart scheduling, without opening sockets.
+    const start = vi.spyOn(EventSubscription.prototype, 'start').mockReturnValue(null)
+    const subscribe = createRuntimeSubscribe(new NostrClient())
     const stop = subscribe({ kinds: [1060], authors: [BOB] }, vi.fn())
     expect(start).toHaveBeenCalledTimes(2) // live + historical backfill
     const subscriptions = [...start.mock.contexts]
     await vi.advanceTimersByTimeAsync(1)
-    expect(start.mock.contexts.filter((subscription: NDKSubscription) =>
+    expect(start.mock.contexts.filter((subscription: EventSubscription) =>
       subscriptions.includes(subscription)
     )).toHaveLength(2)
     stop()
@@ -82,8 +69,8 @@ describe('createRuntimeSubscribe', () => {
   it('starts a relay-only backfill for newly added DM authors', () => {
     vi.spyOn(Date, 'now').mockReturnValue(20_000)
 
-    const { ndk, calls } = createNdk()
-    const subscribe = createRuntimeSubscribe(ndk as never)
+    const { nostrClient, calls } = createClient()
+    const subscribe = createRuntimeSubscribe(nostrClient as never)
     const onEvent = vi.fn()
 
     const unsubscribe = subscribe(
@@ -106,7 +93,7 @@ describe('createRuntimeSubscribe', () => {
     })
     expect(calls[1]?.opts).toMatchObject({
       closeOnEose: true,
-      cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+      cacheUsage: CacheMode.ONLY_RELAY,
       relayUrls: ['wss://relay.one', 'wss://relay.two'],
     })
 
@@ -119,8 +106,8 @@ describe('createRuntimeSubscribe', () => {
   })
 
   it('backfills only authors that were not already tracked', () => {
-    const { ndk, calls } = createNdk()
-    const subscribe = createRuntimeSubscribe(ndk as never)
+    const { nostrClient, calls } = createClient()
+    const subscribe = createRuntimeSubscribe(nostrClient as never)
 
     subscribe({ kinds: [1060], authors: [ALICE, BOB] }, vi.fn())
     subscribe({ kinds: [1060], authors: [BOB, CAROL] }, vi.fn())
@@ -139,8 +126,8 @@ describe('createRuntimeSubscribe', () => {
   })
 
   it('starts a relay-only backfill for newly added AppKeys authors', () => {
-    const { ndk, calls } = createNdk()
-    const subscribe = createRuntimeSubscribe(ndk as never)
+    const { nostrClient, calls } = createClient()
+    const subscribe = createRuntimeSubscribe(nostrClient as never)
     const onEvent = vi.fn()
 
     const unsubscribe = subscribe(
@@ -163,7 +150,7 @@ describe('createRuntimeSubscribe', () => {
     })
     expect(calls[1]?.opts).toMatchObject({
       closeOnEose: true,
-      cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+      cacheUsage: CacheMode.ONLY_RELAY,
       relayUrls: ['wss://relay.one', 'wss://relay.two'],
     })
 
@@ -176,8 +163,8 @@ describe('createRuntimeSubscribe', () => {
   })
 
   it('starts a relay-only backfill for newly added invite response recipients', () => {
-    const { ndk, calls } = createNdk()
-    const subscribe = createRuntimeSubscribe(ndk as never)
+    const { nostrClient, calls } = createClient()
+    const subscribe = createRuntimeSubscribe(nostrClient as never)
     const onEvent = vi.fn()
 
     const unsubscribe = subscribe(
@@ -200,7 +187,7 @@ describe('createRuntimeSubscribe', () => {
     })
     expect(calls[1]?.opts).toMatchObject({
       closeOnEose: true,
-      cacheUsage: NDKSubscriptionCacheUsage.ONLY_RELAY,
+      cacheUsage: CacheMode.ONLY_RELAY,
       relayUrls: ['wss://relay.one', 'wss://relay.two'],
     })
 
@@ -213,8 +200,8 @@ describe('createRuntimeSubscribe', () => {
   })
 
   it('tracks author removal when a subscription is cleaned up', () => {
-    const { ndk, calls } = createNdk()
-    const subscribe = createRuntimeSubscribe(ndk as never)
+    const { nostrClient, calls } = createClient()
+    const subscribe = createRuntimeSubscribe(nostrClient as never)
 
     const unsubscribe = subscribe({ kinds: [1060], authors: [ALICE] }, vi.fn())
     unsubscribe()
@@ -230,8 +217,8 @@ describe('createRuntimeSubscribe', () => {
 
   it('forwards the live FIPS path into the NDR callback once across relay duplicates', () => {
     vi.spyOn(Date, 'now').mockReturnValue(20_000)
-    const { ndk, calls } = createNdk()
-    const subscribe = createRuntimeSubscribe(ndk as never)
+    const { nostrClient, calls } = createClient()
+    const subscribe = createRuntimeSubscribe(nostrClient as never)
     const onEvent = vi.fn()
     const filter = { kinds: [1060], authors: [ALICE] }
     const unsubscribe = subscribe(filter, onEvent)
@@ -244,16 +231,14 @@ describe('createRuntimeSubscribe', () => {
       content: 'ciphertext',
       sig: 'e'.repeat(128),
     }
-    const fipsSubscription = [...pubsub.subscriptions][0]
-
-    expect(fipsSubscription?.filter).toEqual(filter)
-    fipsSubscription?.onEvent(event as never)
+    expect(calls[0]?.opts.sources).toEqual(['fips'])
+    expect(calls[1]?.opts.sources).toEqual([])
+    calls[1]?.subscription.emit(event)
     calls[0]?.subscription.emit(event)
     expect(onEvent).toHaveBeenCalledTimes(1)
     expect(onEvent).toHaveBeenCalledWith(event)
 
     unsubscribe()
-    expect(pubsub.subscriptions).toHaveLength(0)
     expect(onEvent).toHaveBeenCalledTimes(1)
   })
 })

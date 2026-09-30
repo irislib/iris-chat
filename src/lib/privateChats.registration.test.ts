@@ -23,7 +23,7 @@ vi.mock('nostr-double-ratchet', async (original) => {
 })
 vi.mock('./identity', async () => {
   const { writable } = await import('svelte/store')
-  return { ndk: writable({ pool: { connectedRelays: () => [{}] } }),
+  return { nostrClient: writable({ pool: { connectedRelays: () => [{}] } }),
     identity: writable({ pubkey: mocks.owner }), getPrivkeyHex: () => '1'.repeat(64),
     getPrivkeyBytes: () => new Uint8Array(32).fill(1), isLinkedDeviceLogin: () => mocks.linked }
 })
@@ -37,7 +37,7 @@ vi.mock('./messageRelayStatus', () => ({ notifyMessageRelayPublish: vi.fn() }))
 vi.mock('./nostrPubsubRuntime', () => ({ publishNostrPubsub: vi.fn() }))
 vi.mock('./storage', () => ({ deleteSessionManagerValue: vi.fn(), putSessionManagerValue: vi.fn(), getSessionManagerValue: vi.fn(async () => undefined) }))
 
-import { initMultiDevice, resetManagers, waitForSendReadyRuntime } from './privateChats'
+import { initMultiDevice, resetManagers, waitForSendReadyRuntime, ensureDeviceRegistered } from './privateChats'
 
 const roster = (devices: string[]) => ({ getAllDevices: () => devices.map(identityPubkey => ({ identityPubkey, createdAt: 1 })) })
 
@@ -50,7 +50,7 @@ beforeEach(() => {
   mocks.refresh.mockResolvedValue(undefined)
   mocks.invite.mockResolvedValue(undefined)
 })
-afterEach(() => resetManagers())
+afterEach(() => { resetManagers(); vi.restoreAllMocks() })
 
 describe('restored device registration on startup', () => {
   it('republishes a cached registration missing from current server records without sending a message', async () => {
@@ -106,4 +106,18 @@ it('keeps sending blocked when preparing the signed approval fails', async () =>
   mocks.register.mockRejectedValueOnce(new Error('Signing approval failed'))
   await expect(waitForSendReadyRuntime()).rejects.toThrow('Signing approval failed')
   expect(mocks.waitFor).not.toHaveBeenCalled()
+})
+
+it('uses only an already authorized device to enqueue offline after restart', async () => {
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  await ensureDeviceRegistered()
+  expect(mocks.register).not.toHaveBeenCalled()
+  expect(mocks.waitFor).not.toHaveBeenCalled()
+})
+it('does not turn missing offline authorization into a grant', async () => {
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  mocks.state.registeredDevices = []
+  mocks.state.isCurrentDeviceRegistered = false
+  mocks.register.mockRejectedValue(new Error('No message server accepted authorization'))
+  await expect(ensureDeviceRegistered()).rejects.toThrow('No message server accepted authorization')
 })

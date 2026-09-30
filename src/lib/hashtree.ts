@@ -12,7 +12,11 @@ import {
   nhashDecode,
   isNHash,
   type BlossomSigner,
+  type Store,
 } from '@hashtree/core'
+import { DexieStore } from '@hashtree/dexie'
+import { TcpBlobTransport } from '@hashtree/fips-transport'
+import type { FipsDatagramEndpoint } from '@fips/tcp'
 import { getPubkey, getPrivkeyBytes, isNip07Login } from './identity'
 import { finalizeEvent } from 'nostr-tools'
 
@@ -25,6 +29,20 @@ const DEFAULT_BLOSSOM_SERVERS = [
 // Singleton instances
 let blossomStore: BlossomStore | null = null
 let hashTree: HashTree | null = null
+// Only encrypted attachment blocks enter this cache, never the private event index.
+let attachmentCache: Store | undefined
+let attachmentPeers: TcpBlobTransport | undefined
+let peerIds: () => readonly string[] = () => []
+export const getAttachmentCache = (): Store => attachmentCache ??= new DexieStore('iris-chat-attachments')
+export function activateAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean) {
+  void deactivateAttachmentPeers()
+  peerIds = peers
+  attachmentPeers = new TcpBlobTransport({ endpoint: node, localStore: getAttachmentCache(), allowIncomingPeer: allow })
+}
+export async function deactivateAttachmentPeers() {
+  const previous = attachmentPeers; attachmentPeers = undefined; peerIds = () => []
+  await previous?.close()
+}
 
 /**
  * Create a Nostr signer for Blossom NIP-98 auth
@@ -67,7 +85,27 @@ function getHashTree(): HashTree {
       signer: createSigner(),
     })
 
-    hashTree = new HashTree({ store: blossomStore })
+    const blossom = blossomStore, cache = getAttachmentCache()
+    hashTree = new HashTree({ store: {
+      async get(hash) {
+        const cached = await cache.get(hash)
+        if (cached) return cached
+        const peers = peerIds()
+        const data = (peers.length ? await attachmentPeers?.get(hash, peers).catch(() => null) : null)
+          ?? await blossom.get(hash)
+        if (data) await cache.put(hash, data)
+        return data
+      },
+      async put(hash, data) {
+        await cache.put(hash, data)
+        // Offline attachments remain available locally and over authenticated peers.
+        try { await blossom.put(hash, data) }
+        catch (error) { console.warn('[files] Stored locally; upload unavailable:', error) }
+        return true
+      },
+      has: hash => cache.has(hash),
+      delete: hash => cache.delete(hash),
+    } })
   }
 
   return hashTree

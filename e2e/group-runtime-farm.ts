@@ -54,7 +54,7 @@ class RelayClient {
       if (type === 'EVENT') {
         const subscription = this.subscriptions.get(id)
         if (!subscription) return
-        // Model NDK's verification cache independently for every simulated
+        // Model NostrClient's verification cache independently for every simulated
         // device. Historical/live duplicates still reach the real runtime.
         const serialized = JSON.stringify(payload)
         let cached = this.verifiedEvents.get(payload.id)

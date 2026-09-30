@@ -1,11 +1,29 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FipsServiceContext } from '@fips/tcp'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
 import type {
   FipsPubsubClientNode,
 } from 'nostr-pubsub'
 
-import { NostrPubsubRuntime } from './nostrPubsubRuntime'
+import { NostrPubsubRuntime as SharedMesh } from './nostrPubsubRuntime'
+import { createNostrRuntime, type NostrFilter, type NostrEvent } from 'nostr-pubsub'
+
+const runtimes: ReturnType<typeof createNostrRuntime>[] = []
+afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runtime.close())) })
+
+// Exercise Chat's adapter through the real common runtime rather than a second app-owned bus.
+class NostrPubsubRuntime extends SharedMesh {
+  readonly events = createNostrRuntime({ relays: [], batchWindowMs: 1, historyTimeoutMs: 100, publishTimeoutMs: 100 })
+  constructor() { super(); runtimes.push(this.events) }
+  activate(node: FipsPubsubClientNode, peer: string, peers: () => readonly string[]) {
+    return super.activate(node, peer, peers, this.events)
+  }
+  subscribe(filter: NostrFilter, onEvent: (event: NostrEvent) => void) {
+    const subscription = this.events.subscribe([filter], { onEvent })
+    return () => subscription.close()
+  }
+  async publish(event: NostrEvent) { return this.events.publish(event, { queue: false }) }
+}
 
 const PEER_A = `02${'11'.repeat(32)}`
 const PEER_B = `03${'22'.repeat(32)}`
@@ -156,11 +174,10 @@ describe('NostrPubsubRuntime', () => {
       expect(() => bob.subscribe({ '#x': ['x'.repeat(70_000)] }, () => {})).not.toThrow()
       bob.subscribe({ kinds: [1060] }, received)
       await settle([alice, bob], () => true)
-      expect(warning).toHaveBeenCalledWith('[nostrPubsub] subscription failed:', expect.any(Error))
       const event = chatEvent(1_700_000_005, 'healthy interest')
       await alice.publish(event)
       await settle([alice, bob], () => received.mock.calls.length === 1)
-      expect(received).toHaveBeenCalledWith(expect.objectContaining({ id: event.id }))
+      expect(received).toHaveBeenCalledWith(expect.objectContaining({ id: event.id }), expect.anything())
     } finally {
       await bob.deactivate()
       await alice.deactivate()
@@ -187,7 +204,7 @@ describe('NostrPubsubRuntime', () => {
     await settle([alice, bob], () => true)
 
     expect(received).toHaveBeenCalledTimes(1)
-    expect(received).toHaveBeenCalledWith(expect.objectContaining({ id: event.id }))
+    expect(received).toHaveBeenCalledWith(expect.objectContaining({ id: event.id }), expect.anything())
     await bob.deactivate()
     await alice.deactivate()
   })
@@ -211,33 +228,31 @@ describe('NostrPubsubRuntime', () => {
       tags: [],
       content: '{}',
     }, generateSecretKey())
-    await expect(alice.publish(profile)).rejects.toThrow(/event kind 0/)
+    expect((await alice.publish(profile)).sources.find(source => source.id === 'fips')?.error).toMatch(/event kind 0/)
 
     await bob.deactivate()
     await settle([alice], () => true)
-    await expect(alice.publish(chatEvent(1_700_000_002, 'after close'))).resolves.toBeUndefined()
+    await alice.publish(chatEvent(1_700_000_002, 'after close'))
     expect(received).not.toHaveBeenCalled()
     await alice.deactivate()
     warning.mockRestore()
   })
 
-  it('drops signed traffic from connected but non-admitted FIPS identities', async () => {
+  it('serves account history to admitted devices and excludes other connected identities', async () => {
     const network = new MemoryFipsNetwork()
-    const bob = new NostrPubsubRuntime()
-    const charlie = new NostrPubsubRuntime()
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const alice = new NostrPubsubRuntime(), bob = new NostrPubsubRuntime(), charlie = new NostrPubsubRuntime()
+    const admitted = vi.fn(), stranger = vi.fn()
+    alice.subscribe({ kinds: [1060] }, admitted)
+    charlie.subscribe({ kinds: [1060] }, stranger)
     await bob.activate(network.node(PEER_B), PEER_B, () => [PEER_A])
+    await alice.activate(network.node(PEER_A), PEER_A, () => [PEER_B])
     await charlie.activate(network.node(PEER_C), PEER_C, () => [PEER_B])
-    const received = vi.fn()
-    bob.subscribe({ kinds: [1060] }, received)
-    await settle([bob, charlie], () => true)
-
-    await charlie.publish(chatEvent(1_700_000_003, 'valid but not admitted'))
-    await settle([bob, charlie], () => true)
-    expect(received).not.toHaveBeenCalled()
-    expect(warning).toHaveBeenCalledWith('[nostrPubsub] send failed:', expect.any(Error))
-    await bob.deactivate()
-    await charlie.deactivate()
-    warning.mockRestore()
+    try {
+      await bob.publish(chatEvent(1_700_000_003, 'private account history'))
+      await settle([alice, bob, charlie], () => admitted.mock.calls.length === 1)
+      expect(stranger).not.toHaveBeenCalled()
+    } finally {
+      await Promise.all([alice.deactivate(), bob.deactivate(), charlie.deactivate()])
+    }
   })
 })

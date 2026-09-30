@@ -1,4 +1,5 @@
 // @vitest-environment node
+import 'fake-indexeddb/auto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HashTree, MemoryStore, decryptChk, nhashDecode, sha256, toHex, tryDecodeTreeNode } from '@hashtree/core'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'

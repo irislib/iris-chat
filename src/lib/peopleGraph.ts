@@ -2,9 +2,8 @@ import { SocialGraph } from 'nostr-social-graph'
 import { verifyEvent, type Event } from 'nostr-tools'
 import { get, writable } from 'svelte/store'
 import Dexie from 'dexie'
-import { identity, ndk } from './identity'
+import { identity, nostrClient } from './identity'
 import { following, followingHead } from './following'
-import { asNdkEventSubscription } from './ndkSubscription'
 
 const MAX_NEAR_AUTHORS = 512
 const AUTHOR_BATCH_SIZE = 128
@@ -49,7 +48,7 @@ interface PeopleGraphOptions {
 
 function validOpinion(event: Event): boolean {
   try {
-    // Do not inherit nostr-tools' cached verification symbol from an NDK event.
+    // Do not inherit nostr-tools' cached verification symbol from an NostrClient event.
     const wire = { id: event.id, pubkey: event.pubkey, kind: event.kind,
       created_at: event.created_at, tags: event.tags, content: event.content, sig: event.sig }
     return (event.kind === 3 || event.kind === 10000) && PUBKEY.test(event.pubkey) &&
@@ -312,9 +311,9 @@ const controller = new PeopleGraphController({
   saveEvents: async (owner, events) => { await cache.table('accounts').put({ owner, events }) },
   changed: next => state.set(next),
   subscribe: (authors, onEvent, done) => {
-    const sub = asNdkEventSubscription(get(ndk).subscribe(
+    const sub = get(nostrClient).subscribe(
       { kinds: [3, 10000], authors, limit: authors.length * 2 }, { closeOnEose: false },
-    ))
+    )
     sub.on('event', event => onEvent(event.rawEvent() as Event))
     sub.on('eose', done)
     sub.on('close', done)

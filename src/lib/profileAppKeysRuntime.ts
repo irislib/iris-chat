@@ -1,20 +1,17 @@
-import { NDKEvent } from '@nostr-dev-kit/ndk'
+import { AppEvent } from './nostrClient'
 import type { PeopleSubscribe } from './messagingPeople'
 import { get } from 'svelte/store'
-import { ndk } from './identity'
-import { asNdkEventSubscription } from './ndkSubscription'
+import { nostrClient } from './identity'
 import { getNdrRuntime } from './privateChats'
 import { createProfileAppKeysStore } from './profileAppKeys'
 
 export const createNostrSubscribe = (): PeopleSubscribe => {
-  const ndkInstance = get(ndk)
+  const client = get(nostrClient)
 
   return (filter, onEvent, onEose) => {
-    const subscription = asNdkEventSubscription(
-      ndkInstance.subscribe(filter, { closeOnEose: false }, false)
-    )
+    const subscription = client.subscribe(filter, { closeOnEose: false }, false)
 
-    subscription.on('event', (event: NDKEvent) => {
+    subscription.on('event', (event: AppEvent) => {
       onEvent(event.rawEvent() as Parameters<typeof onEvent>[0])
     })
     if (onEose) subscription.on('eose', onEose)
