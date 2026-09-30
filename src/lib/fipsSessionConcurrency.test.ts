@@ -97,6 +97,7 @@ describe("FspSessionManager", () => {
     const responderIdentity = await identityFromSecretKey(new Uint8Array(32).fill(0x67));
     let completeSetup = false;
     let setupAttempts = 0;
+    const setups: Uint8Array[] = [];
     let responder: FspSession | undefined;
     const peer = {
       pubkey: responderIdentity.publicKey,
@@ -112,6 +113,7 @@ describe("FspSessionManager", () => {
           const phase = peekFspPhase(frame);
           if (phase === 1) {
             setupAttempts += 1;
+            setups.push(new Uint8Array(frame));
             if (!completeSetup) return;
             responder = new FspSession({
               identity: responderIdentity,
@@ -157,13 +159,21 @@ describe("FspSessionManager", () => {
       .rejects.toThrow("FSP handshake timeout");
     const concurrentSend = expect(manager.sendDatagram(datagram))
       .rejects.toThrow("FSP handshake timeout");
-    await vi.advanceTimersByTimeAsync(15_000);
-    await Promise.all([firstSend, concurrentSend]);
+    await vi.advanceTimersByTimeAsync(0);
     expect(setupAttempts).toBe(1);
+    // Concurrent callers share one Noise setup and its bounded 1/3/7s retries.
+    for (const [delay, attempts] of [[1_000, 2], [2_000, 3], [4_000, 4]] as const) {
+      await vi.advanceTimersByTimeAsync(delay);
+      expect(setupAttempts).toBe(attempts);
+      expect(setups.at(-1)).toEqual(setups[0]);
+    }
+    await vi.advanceTimersByTimeAsync(8_000);
+    await Promise.all([firstSend, concurrentSend]);
+    expect(setupAttempts).toBe(4);
     completeSetup = true;
 
     await expect(manager.sendDatagram(datagram)).resolves.toBeUndefined();
-    expect(setupAttempts).toBe(2);
+    expect(setupAttempts).toBe(5);
     expect(responder?.state).toBe("established");
   });
   it("keeps an incoming handshake created while an outgoing route lookup waits", async () => {
