@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pinnedChatIds } from '../lib/chatPinStore'
   import { callHistoryLabel } from '../lib/callHistory'
   import type { ChatSession } from '../lib/chat'
   import { isTyping } from '../lib/typingState'
@@ -43,6 +44,7 @@
     <div class="flex-1 min-w-0 leading-tight">
       <div class="flex items-center justify-between gap-2">
         <span class="font-medium text-sm truncate"><Name pubkey={chat.recipientPubkey} /></span>
+        {#if $pinnedChatIds.has(chat.id)}<span class="i-carbon-pin-filled text-gray-500 flex-shrink-0" role="img" aria-label="Pinned chat"></span>{/if}
         <div class="flex flex-col items-end flex-shrink-0 gap-0.5">
           {#if lastMessage}
             <div class="flex items-center gap-1.5">

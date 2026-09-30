@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChatPinButton from './ChatPinButton.svelte'
   import { onDestroy } from 'svelte'
   import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
   import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
@@ -368,7 +369,7 @@
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-panel">
     {#if showBackButton}
       <button
-        class="btn-ghost p-2 rounded-full"
+        class="chat-header-button"
         onclick={onleave}
         aria-label="Back"
       >
@@ -390,11 +391,11 @@
     </button>
 
     {#if !isRequest}
-      {#if $callSettings.voice}
-        <button class="btn-ghost p-2 rounded-full" aria-label="Voice call" disabled={!!$callState && $callState.status !== 'ended'} onclick={() => startCall(chat.recipientPubkey, false)}><span class="i-carbon-phone-filled text-xl"></span></button>
-      {/if}
       {#if $callSettings.video}
-        <button class="btn-ghost p-2 rounded-full" aria-label="Video call" disabled={!!$callState && $callState.status !== 'ended'} onclick={() => startCall(chat.recipientPubkey, true)}><span class="i-carbon-video-filled text-xl"></span></button>
+        <button class="chat-header-button" aria-label="Video call" title="Video call" disabled={!!$callState && $callState.status !== 'ended'} onclick={() => startCall(chat.recipientPubkey, true)}><span class="i-carbon-video-filled text-xl"></span></button>
+      {/if}
+      {#if $callSettings.voice}
+        <button class="chat-header-button" aria-label="Voice call" title="Voice call" disabled={!!$callState && $callState.status !== 'ended'} onclick={() => startCall(chat.recipientPubkey, false)}><span class="i-carbon-phone-filled text-xl"></span></button>
       {/if}
     {/if}
 
@@ -410,6 +411,7 @@
 
       {#if showMenu}
         <div class="absolute right-0 top-full mt-1 w-56 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50">
+          <ChatPinButton chatId={chat.id} />
           <button class="btn-ghost w-full text-left flex items-center gap-2" onclick={() => { showMenu = false; showMuteModal = true }}>
             <span class="i-carbon-notification-off"></span>
             {isChatMuted($chatMutes, chat.id) ? 'Muted notifications' : 'Mute notifications'}

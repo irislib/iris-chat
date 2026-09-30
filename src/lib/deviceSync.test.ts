@@ -135,6 +135,7 @@ vi.mock('./storage', () => ({
 
 import {
   buildDeviceSyncSnapshots,
+  mergeDeviceDescriptions,
   buildDeviceSyncReplyPackets,
   DEVICE_SYNC_MAX_PACKET_BYTES,
   DEVICE_SYNC_PAGE_MESSAGES,
@@ -155,6 +156,7 @@ import { chats } from './chat'
 import { groups } from './groups'
 import { nostrClient } from './identity'
 import { chatMutes, clearChatMutes } from './chatMuteStore'
+import { pinnedChatIds, clearChatPins } from './chatPinStore'
 
 const owner = 'a'.repeat(64)
 const device = 'b'.repeat(64)
@@ -199,22 +201,38 @@ function appKeys(
 }
 
 describe('device sync', () => {
-  it('includes mutes predating the new device and applies mute-only metadata', async () => {
+  it('merges newer descriptions from an old roster without restoring removed devices', () => {
+    const current = new AppKeys([{ identityPubkey: device, createdAt: 90 }])
+    current.setDeviceLabels(device, { deviceLabel: 'Old name' }, 110)
+    const merged = mergeDeviceDescriptions({ ownerPubkey: owner, createdAt: 100, devices: [
+      { identityPubkey: device, createdAt: 90, deviceLabel: 'Study laptop', clientLabel: 'Iris Chat macOS', labelUpdatedAt: 200 },
+      { identityPubkey: unrelatedOwner, createdAt: 90, deviceLabel: 'Removed device', labelUpdatedAt: 201 },
+    ] }, { createdAt: 150, appKeys: current })
+    expect(merged.createdAt).toBe(150)
+    expect(merged.appKeys.getAllDevices()).toEqual(current.getAllDevices())
+    expect(merged.appKeys.getDeviceLabels(device)?.deviceLabel).toBe('Study laptop')
+  })
+
+  it('includes mute and pin settings predating the new device without requiring history', async () => {
     await clearChatMutes()
     const until = Math.floor(Date.now() / 1000) + 3600
     const chatMutesState = [
       { chatId: peerOwner, untilSecs: until, updatedAtMs: Date.now() - 1000 },
       { chatId: 'group:friends', untilSecs: 0, updatedAtMs: 1 },
     ]
+    await clearChatPins()
+    const pins = [{ chatId: peerOwner, pinned: true, updatedAtMs: 1 }, { chatId: 'group:friends', pinned: false, updatedAtMs: 2 }]
     const packets = buildDeviceSyncReplyPackets({
       requestRosterAt: Math.floor(Date.now() / 1000), localRosterAt: 100, ownerPubkey: owner,
-      appKeys: [], chats: [], groups: [], groupMessages: new Map(), chatMutes: chatMutesState,
+      appKeys: [], chats: [], groups: [], groupMessages: new Map(), chatMutes: chatMutesState, chatPins: pins,
     })
     const packet = packets.find(packet => packet.type === 'snapshot')!
-    expect(packet).toMatchObject({ chatMutes: chatMutesState })
+    expect(packet).toMatchObject({ chatMutes: chatMutesState, chatPins: pins })
     if (packet.type !== 'snapshot') throw new Error('Expected metadata snapshot')
     await applyDeviceSyncSnapshot(packet, owner)
     expect(get(chatMutes)).toEqual({ [peerOwner]: until, 'group:friends': 0 })
+    expect([...get(pinnedChatIds)]).toEqual([peerOwner])
+    await clearChatPins()
     await clearChatMutes()
   })
 

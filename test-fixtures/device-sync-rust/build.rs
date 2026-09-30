@@ -11,6 +11,7 @@ fn main() {
     let body_path = core.join("src/core/device_sync/body.rs");
     let model_path = core.join("src/core/model.rs");
     let mute_path = core.join("src/core/chat_mute_sync.rs");
+    let pin_path = core.join("src/core/chat_pin_sync.rs");
     let contact_path = core.join("src/core/contact_details.rs");
     for path in [
         &protocol_path,
@@ -20,6 +21,7 @@ fn main() {
         &model_path,
         &contact_path,
         &mute_path,
+        &pin_path,
     ] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
@@ -44,10 +46,11 @@ fn main() {
         .expect("DeviceSyncPage enum");
     let contract_end = item_end(&protocol, page_at);
     let contract = format!(
-        "{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
         derived_item(&read(model_path), "struct ChatReadState").replace("pub(super) ", ""),
         derived_item(&read(contact_path), "struct ContactDetails").replace("pub(super) ", ""),
         derived_item(&read(mute_path), "struct ChatMuteState").replace("pub(crate) ", ""),
+        derived_item(&read(pin_path), "struct ChatPinState").replace("pub(crate) ", ""),
         protocol[contract_start..contract_end]
             .replace("super::contact_details::ContactDetails", "ContactDetails"),
     );

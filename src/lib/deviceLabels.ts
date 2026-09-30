@@ -1,5 +1,3 @@
-import { nip19 } from 'nostr-tools'
-
 export interface DeviceLabels {
   deviceLabel?: string
   clientLabel?: string
@@ -41,14 +39,6 @@ interface PlatformInfo {
 const normalizeLabel = (value?: string | null): string | undefined => {
   const normalized = value?.trim()
   return normalized ? normalized : undefined
-}
-
-export function formatDeviceIdentifier(pubkey: string): string {
-  try {
-    return nip19.npubEncode(pubkey)
-  } catch {
-    return pubkey.trim() || 'Unknown device'
-  }
 }
 
 const cleanLabelPart = (value?: string | null): string | undefined => {
@@ -301,68 +291,44 @@ export const getLinkedDeviceRegistrationLabels = async (
   const deviceLabel = normalizeLabel(requestedLabels?.deviceLabel)
   const clientLabel = normalizeLabel(requestedLabels?.clientLabel)
   return {
-    deviceLabel: deviceLabel || 'Linked device',
+    ...(deviceLabel && { deviceLabel }),
     clientLabel: clientLabel || 'Iris Chat',
   }
 }
 
+// Keep the vocabulary and FNV-1a mapping aligned with native/device_names.rs.
+const adjectives = 'Amber Bright Calm Clever Cosmic Cozy Curious Dancing Dapper Dreamy Gentle Golden Happy Jolly Kind Lively Lucky Lunar Mellow Merry Misty Nimble Noble Quiet Silver Sleepy Snowy Solar Sunny Swift Velvet Wise'.split(' ')
+const animals = 'Badger Bear Beaver Bison Cat Crane Deer Dolphin Dove Falcon Finch Fox Gecko Heron Koala Lemur Lynx Marten Moth Otter Owl Panda Puffin Rabbit Robin Seal Sparrow Swan Tiger Turtle Whale Wren'.split(' ')
+
+export function meaningfulDeviceName(label?: string): string | undefined {
+  const name = normalizeLabel(label)
+  return name && !['linked device', 'this device', 'unnamed device'].includes(name.toLowerCase()) ? name : undefined
+}
+
+export function unnamedDeviceName(identityPubkey: string): string {
+  let hash = 2_166_136_261
+  for (const character of identityPubkey.toLowerCase()) hash = Math.imul(hash ^ character.charCodeAt(0), 16_777_619) >>> 0
+  return `${adjectives[hash & 31]} ${animals[(hash >>> 5) & 31]}`
+}
+
 export const describeRegisteredDevice = (
   identityPubkey: string,
-  labels?: DeviceLabels
+  labels?: DeviceLabels,
+  unnamedPeers: string[] = [],
 ): RegisteredDeviceDisplay => {
-  const fallback = formatDeviceIdentifier(identityPubkey)
-  const deviceLabel = normalizeLabel(labels?.deviceLabel)
+  const name = unnamedDeviceName(identityPubkey)
+  const collision = unnamedPeers.some(peer => peer !== identityPubkey && unnamedDeviceName(peer) === name)
+  const fallback = `${name}${collision ? ` ${identityPubkey.slice(-8)}` : ''} (unnamed device)`
   const clientLabel = normalizeLabel(labels?.clientLabel)
-
-  if (deviceLabel) {
-    return {
-      title: deviceLabel,
-      subtitle: clientLabel,
-    }
+  return {
+    title: meaningfulDeviceName(labels?.deviceLabel) || fallback,
+    ...(clientLabel && clientLabel !== 'Iris Chat' && { subtitle: clientLabel }),
   }
-
-  if (clientLabel) {
-    return {
-      title: clientLabel,
-      subtitle: fallback,
-    }
-  }
-
-  return { title: fallback }
 }
 
 export const describeDeviceRosterDevice = (
   identityPubkey: string,
   labels: DeviceLabels | undefined,
-  isCurrentDevice: boolean
-): RegisteredDeviceDisplay => {
-  const fallback = formatDeviceIdentifier(identityPubkey)
-  const deviceLabel = normalizeLabel(labels?.deviceLabel)
-  const clientLabel = normalizeLabel(labels?.clientLabel)
-
-  if (isCurrentDevice) {
-    return {
-      title: 'This device',
-      subtitle: [deviceLabel, clientLabel].filter(Boolean).join(' · ') || undefined,
-    }
-  }
-
-  if (deviceLabel) {
-    return {
-      title: deviceLabel,
-      subtitle: clientLabel,
-    }
-  }
-
-  if (clientLabel) {
-    return {
-      title: 'Linked device',
-      subtitle: clientLabel,
-    }
-  }
-
-  return {
-    title: 'Linked device',
-    subtitle: fallback,
-  }
-}
+  _isCurrentDevice: boolean,
+  unnamedPeers: string[] = [],
+): RegisteredDeviceDisplay => describeRegisteredDevice(identityPubkey, labels, unnamedPeers)

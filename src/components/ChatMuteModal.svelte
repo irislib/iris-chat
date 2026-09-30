@@ -17,6 +17,7 @@
   <div class="bg-surface rounded-2xl p-6 max-w-sm w-full relative z-10 max-h-full overflow-y-auto">
     <h3 class="text-lg font-semibold mb-4">Mute notifications</h3>
     {#if isChatMuted($chatMutes, chatId)}
+      <p class="text-sm text-gray-400 mb-2">{$chatMutes[chatId] === 0 ? 'Muted always' : `Muted until ${new Date($chatMutes[chatId] * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`}</p>
       <button class="btn-ghost w-full text-left" disabled={saving} onclick={() => select(null)}>Unmute</button>
     {/if}
     {#each CHAT_MUTE_DURATIONS as duration}

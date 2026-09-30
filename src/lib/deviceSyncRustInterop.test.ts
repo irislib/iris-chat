@@ -58,7 +58,7 @@ interop('iris-chat-rs device-sync interop', () => {
   it('accepts native chat metadata extensions without losing the shared snapshot', () => {
     const snapshot: DeviceSyncSnapshot = {
       v: 1, type: 'snapshot', rosterAt: 42,
-      chats: [{ id: peer, updatedAt: 43 }], appKeys: [], groups: [], messages: [],
+      chats: [{ id: peer, updatedAt: 43 }], appKeys: [{ ownerPubkey: owner, createdAt: 42, devices: [{ identityPubkey: peer, createdAt: 40, deviceLabel: 'Study laptop', clientLabel: 'Iris Chat macOS', labelUpdatedAt: 43 }] }], groups: [], messages: [],
     }
     const nativeSnapshot = {
       ...snapshot,
@@ -77,6 +77,7 @@ interop('iris-chat-rs device-sync interop', () => {
     const snapshot: DeviceSyncSnapshot = {
       v: 1, type: 'snapshot', rosterAt: 100,
       appKeys: [], chats: [], groups: [], messages: [],
+      chatPins: [{ chatId: peer, pinned: true, updatedAtMs: 1_800_000_000_001 }, { chatId: owner, pinned: false, updatedAtMs: 1_800_000_000_002 }],
       chatMutes: [
         { chatId: peer, untilSecs: 1_900_000_000, updatedAtMs: 1_800_000_000_001 },
         { chatId: 'group:friends', untilSecs: 0, updatedAtMs: 1_800_000_000_002 },

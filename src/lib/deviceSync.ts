@@ -1,3 +1,6 @@
+import { chatPinStates, loadChatPins, mergeChatPins } from './chatPinStore'
+import type { ChatPinState } from './chatPinSync'
+import { getCurrentDeviceRegistrationLabels, meaningfulDeviceName } from './deviceLabels'
 import { chatMuteStates, loadChatMutes, mergeChatMutes } from './chatMuteStore'
 import type { ChatMuteState } from './chatMuteSync'
 import { get } from 'svelte/store'
@@ -87,6 +90,7 @@ export interface DeviceSyncSnapshotSource {
   appKeys: DeviceSyncAppKeys[]
   chats: ChatSession[]
   chatMutes?: ChatMuteState[]
+  chatPins?: ChatPinState[]
   groups: Group[]
   groupMessages: Map<string, GroupMessage[]>
 }
@@ -150,18 +154,18 @@ function emptySnapshot(rosterAt: number): DeviceSyncSnapshot {
 }
 
 function hasSnapshotData(packet: DeviceSyncSnapshot): boolean {
-  return (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
+  return (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
 }
 
 function chunkSnapshot(
   rosterAt: number,
-  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes'>,
+  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins'>,
   maxBytes: number,
 ): DeviceSyncSnapshot[] {
   const packets: DeviceSyncSnapshot[] = []
   let packet = emptySnapshot(rosterAt)
 
-  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes'>(
+  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins'>(
     key: K,
     value: NonNullable<DeviceSyncSnapshot[K]>[number],
   ) => {
@@ -178,6 +182,7 @@ function chunkSnapshot(
     packet = single
   }
 
+  for (const pin of items.chatPins ?? []) append('chatPins', pin)
   for (const mute of items.chatMutes ?? []) append('chatMutes', mute)
   for (const chat of items.chats) append('chats', chat)
   for (const appKeys of items.appKeys) append('appKeys', appKeys)
@@ -197,13 +202,12 @@ function rememberAppKeys(
   const devices = current?.createdAt === snapshot.createdAt
     ? [...current.devices, ...snapshot.devices]
     : snapshot.devices
-  const unique = new Map<string, { identityPubkey: string; createdAt: number }>()
+  const unique = new Map<string, DeviceSyncAppKeys['devices'][number]>()
   for (const device of devices) {
     const identityPubkey = device.identityPubkey.toLowerCase()
     const known = unique.get(identityPubkey)
-    if (!known || device.createdAt < known.createdAt) {
-      unique.set(identityPubkey, { identityPubkey, createdAt: device.createdAt })
-    }
+    const labels = !known || (device.labelUpdatedAt ?? 0) >= (known.labelUpdatedAt ?? 0) ? device : known
+    unique.set(identityPubkey, { ...labels, identityPubkey, createdAt: Math.min(device.createdAt, known?.createdAt ?? device.createdAt) })
   }
   snapshots.set(ownerPubkey, {
     ownerPubkey,
@@ -265,7 +269,7 @@ export function buildDeviceSyncSnapshots(
 
   return chunkSnapshot(
     rosterAt,
-    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages, chatMutes: source.chatMutes },
+    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages, chatMutes: source.chatMutes, chatPins: source.chatPins },
     maxBytes,
   )
 }
@@ -440,6 +444,7 @@ export async function applyDeviceSyncSnapshot(
   packet: DeviceSyncSnapshot,
   ownerPubkey = getPubkey() || '',
 ): Promise<void> {
+  if (packet.chatPins?.length) await mergeChatPins(packet.chatPins, ownerPubkey)
   if (packet.chatMutes?.length) await mergeChatMutes(packet.chatMutes, ownerPubkey)
   const additions = selectDeviceSyncAdditions(packet, currentMergeState())
   if (!hasSnapshotData({ ...packet, ...additions })) return
@@ -448,8 +453,7 @@ export async function applyDeviceSyncSnapshot(
   for (const snapshot of additions.appKeys) {
     await runtime.applyTrustedAppKeysSnapshot({
       ownerPubkey: snapshot.ownerPubkey,
-      createdAt: snapshot.createdAt,
-      appKeys: new AppKeys(snapshot.devices),
+      ...mergeDeviceDescriptions(snapshot, runtime.getKnownAppKeysSnapshots().find(known => known.ownerPubkey === snapshot.ownerPubkey)),
     })
   }
 
@@ -557,13 +561,14 @@ function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyn
     appKeys: getNdrRuntime().getKnownAppKeysSnapshots().map((snapshot) => ({
       ownerPubkey: snapshot.ownerPubkey,
       createdAt: snapshot.createdAt,
-      devices: snapshot.appKeys.getAllDevices().map(({ identityPubkey, createdAt }) => ({
-        identityPubkey,
-        createdAt,
-      })),
+      devices: snapshot.appKeys.getAllDevices().map(({ identityPubkey, createdAt }) => {
+        const labels = snapshot.appKeys.getDeviceLabels(identityPubkey)
+        return { identityPubkey, createdAt, ...(labels && { deviceLabel: labels.deviceLabel, clientLabel: labels.clientLabel, labelUpdatedAt: labels.updatedAt }) }
+      }),
     })),
     chats: Array.from(get(chats).values()),
     chatMutes: Object.values(get(chatMuteStates)),
+    chatPins: Object.values(get(chatPinStates)),
     groups: Array.from(get(groups).values()),
     groupMessages: get(groupMessages),
   }
@@ -785,8 +790,9 @@ async function reconcileRuntime(
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {
   deviceUnsubscribe?.()
   for (const unsubscribe of storeUnsubscribers) unsubscribe()
+  void loadChatPins(ownerPubkey).catch(error => console.warn('Could not load pin settings', error))
   void loadChatMutes(ownerPubkey).catch(error => console.warn('Could not load mute settings', error))
-  storeUnsubscribers = [chats, groups, chatMuteStates].map((store) =>
+  storeUnsubscribers = [chats, groups, chatMuteStates, chatPinStates].map((store) =>
     store.subscribe(scheduleSnapshotPush)
   )
   const key = new Uint8Array(secretKey)
@@ -794,6 +800,7 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
     void reconcileRuntime(ownerPubkey, key, get(devices)).catch(error => console.warn('[calls] Connection failed:', error))
   }))
   deviceUnsubscribe = devices.subscribe((state) => {
+    void refreshCurrentDeviceDescription(ownerPubkey).catch(error => console.warn('Could not sync device name', error))
     void reconcileRuntime(ownerPubkey, key, state).catch((error) =>
       console.warn('[deviceSync] Runtime start failed:', error)
     )
@@ -809,4 +816,52 @@ export async function stopDeviceSync(): Promise<void> {
   if (pushTimer) clearTimeout(pushTimer)
   pushTimer = null
   await stopActiveNode()
+}
+
+// Match Rust's optional-string ordering without locale-sensitive collation.
+function compareDeviceDescriptions(a: { deviceLabel?: string; clientLabel?: string }, b?: { deviceLabel?: string; clientLabel?: string }): number {
+  for (const key of ['deviceLabel', 'clientLabel'] as const) {
+    if (a[key] === b?.[key]) continue
+    if (a[key] === undefined) return -1
+    if (b?.[key] === undefined) return 1
+    const left = new TextEncoder().encode(a[key])
+    const right = new TextEncoder().encode(b[key])
+    for (let i = 0; i < Math.min(left.length, right.length); i++) if (left[i] !== right[i]) return left[i] - right[i]
+    if (left.length !== right.length) return left.length - right.length
+  }
+  return 0
+}
+
+// Descriptions may arrive with an older roster. Keep membership from the newest
+// roster and merge names only for devices that remain in that roster.
+export function mergeDeviceDescriptions(snapshot: DeviceSyncAppKeys, current?: { createdAt: number; appKeys: AppKeys }): { createdAt: number; appKeys: AppKeys } {
+  const appKeys = new AppKeys(current && current.createdAt > snapshot.createdAt ? current.appKeys.getAllDevices() : snapshot.devices)
+  for (const device of appKeys.getAllDevices()) {
+    const known = current?.appKeys.getDeviceLabels(device.identityPubkey)
+    const incoming = snapshot.devices.find(entry => entry.identityPubkey === device.identityPubkey)
+    const incomingAt = incoming?.labelUpdatedAt ?? 0
+    if (incoming && incomingAt <= Math.floor(Date.now() / 1000) + 300 &&
+      (incoming.deviceLabel || incoming.clientLabel) && (
+        incomingAt > (known?.updatedAt ?? 0) || (incomingAt === (known?.updatedAt ?? 0) &&
+          compareDeviceDescriptions(incoming, known) > 0))) {
+      appKeys.setDeviceLabels(device.identityPubkey, incoming, incomingAt)
+    } else if (known) appKeys.setDeviceLabels(device.identityPubkey, known, known.updatedAt)
+  }
+  return { createdAt: Math.max(snapshot.createdAt, current?.createdAt ?? 0), appKeys }
+}
+
+async function refreshCurrentDeviceDescription(ownerPubkey: string): Promise<void> {
+  const labels = await getCurrentDeviceRegistrationLabels()
+  if (getPubkey() !== ownerPubkey) return
+  const runtime = getNdrRuntime()
+  const current = runtime.getKnownAppKeysSnapshots().find(snapshot => snapshot.ownerPubkey === ownerPubkey)
+  const device = get(devices).identityPubkey
+  if (!current || !device || !current.appKeys.getDevice(device)) return
+  const known = current.appKeys.getDeviceLabels(device)
+  labels.deviceLabel = meaningfulDeviceName(known?.deviceLabel) || labels.deviceLabel
+  if (known?.deviceLabel === labels.deviceLabel && known?.clientLabel === labels.clientLabel) return
+  const appKeys = new AppKeys(current.appKeys.getAllDevices(), current.appKeys.getAllDeviceLabels())
+  appKeys.setDeviceLabels(device, labels, Math.max(Math.floor(Date.now() / 1000), (known?.updatedAt ?? 0) + 1))
+  await runtime.applyTrustedAppKeysSnapshot({ ...current, appKeys })
+  scheduleSnapshotPush()
 }

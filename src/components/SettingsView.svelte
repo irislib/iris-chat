@@ -26,7 +26,7 @@
   $effect(() => { callServers = $callConnectionSettings.servers.join('\n') })
   import { messageRequestSettings, setReceiveMessageRequests } from '../lib/messageRequestSettings'
   import { devices } from '../lib/devices'
-  import { describeDeviceRosterDevice } from '../lib/deviceLabels'
+  import { describeDeviceRosterDevice, meaningfulDeviceName } from '../lib/deviceLabels'
   import { setThemePreference, themePreference, type ThemePreference } from '../lib/theme'
   import {
     acceptDeviceLink,
@@ -554,7 +554,8 @@
       return describeDeviceRosterDevice(
         identityPubkey,
         getAppKeysManager().getDeviceLabels(identityPubkey),
-        isCurrentDevice
+        isCurrentDevice,
+        deviceState.registeredDevices.filter(device => !meaningfulDeviceName(getAppKeysManager().getDeviceLabels(device.identityPubkey)?.deviceLabel)).map(device => device.identityPubkey)
       )
     } catch {
       return describeDeviceRosterDevice(identityPubkey, undefined, isCurrentDevice)

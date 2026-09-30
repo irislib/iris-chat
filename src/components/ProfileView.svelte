@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChatPinButton from './ChatPinButton.svelte'
   import { nip19 } from 'nostr-tools'
   import Avatar from './Avatar.svelte'
   import CopyButton from './CopyButton.svelte'
@@ -96,7 +97,7 @@
   <!-- Header -->
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-surface">
     <button
-      class="btn-ghost p-2"
+      class="chat-header-button"
       onclick={onBack}
       aria-label="Back"
     >
@@ -148,6 +149,8 @@
               {profile.about}
             </p>
           {/if}
+
+          {#if hasExistingChat}<ChatPinButton chatId={pubkey} />{/if}
 
           <!-- npub Copy Button -->
           <div class="mb-4 flex">

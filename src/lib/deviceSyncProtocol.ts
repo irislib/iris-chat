@@ -1,3 +1,4 @@
+import { isChatPinState, type ChatPinState } from './chatPinSync'
 import { isChatMuteState, type ChatMuteState } from './chatMuteSync'
 export const DEVICE_SYNC_PORT = 7369
 export const DEVICE_SYNC_MAX_PACKET_BYTES = 64 * 1024
@@ -12,7 +13,7 @@ export interface DeviceSyncChat {
 export interface DeviceSyncAppKeys {
   ownerPubkey: string
   createdAt: number
-  devices: Array<{ identityPubkey: string; createdAt: number }>
+  devices: Array<{ identityPubkey: string; createdAt: number; deviceLabel?: string; clientLabel?: string; labelUpdatedAt?: number }>
 }
 
 export interface DeviceSyncGroup {
@@ -75,6 +76,7 @@ export interface DeviceSyncSnapshot {
   appKeys: DeviceSyncAppKeys[]
   chats: DeviceSyncChat[]
   chatMutes?: ChatMuteState[]
+  chatPins?: ChatPinState[]
   groups: DeviceSyncGroup[]
   messages: DeviceSyncMessage[]
 }
@@ -189,6 +191,8 @@ function parseSnapshot(value: Record<string, unknown>): DeviceSyncSnapshot {
   if (!isTime(value.rosterAt)) fail('snapshot rosterAt is invalid')
   const appKeys = defaultArray(value.appKeys, 'appKeys')
   const chats = defaultArray(value.chats, 'chats')
+  const chatPins = defaultArray(value.chatPins, 'chatPins')
+  if (!chatPins.every(isChatPinState)) fail('snapshot chatPins are invalid')
   const chatMutes = defaultArray(value.chatMutes, 'chatMutes')
   if (!chatMutes.every(isChatMuteState)) fail('snapshot chatMutes are invalid')
   const groups = defaultArray(value.groups, 'groups')
@@ -207,6 +211,7 @@ function parseSnapshot(value: Record<string, unknown>): DeviceSyncSnapshot {
     rosterAt: value.rosterAt,
     appKeys: appKeys as unknown as DeviceSyncAppKeys[],
     chats: chats as unknown as DeviceSyncChat[],
+    ...(chatPins.length && { chatPins: chatPins as ChatPinState[] }),
     ...(chatMutes.length && { chatMutes: chatMutes as ChatMuteState[] }),
     groups: groups as unknown as DeviceSyncGroup[],
     messages: decodedMessages,
@@ -225,6 +230,9 @@ function validAppKeys(value: unknown): boolean {
     if (!isObject(device) || !isPubkey(device.identityPubkey) || !isTime(device.createdAt)) {
       return false
     }
+    if ((device.deviceLabel !== undefined && (typeof device.deviceLabel !== 'string' || device.deviceLabel.length > 128)) ||
+      (device.clientLabel !== undefined && (typeof device.clientLabel !== 'string' || device.clientLabel.length > 128)) ||
+      (device.labelUpdatedAt !== undefined && !isTime(device.labelUpdatedAt))) return false
     const identity = device.identityPubkey.toLowerCase()
     if (identities.has(identity)) return false
     identities.add(identity)

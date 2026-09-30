@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest'
 
 import {
   describeDeviceRosterDevice,
+  unnamedDeviceName,
   describeRegisteredDevice,
   getLinkedDeviceRegistrationLabels,
   inferBrowserDeviceLabel,
@@ -21,24 +22,24 @@ describe('deviceLabels', () => {
     expect(`${display.title} ${display.subtitle}`).not.toContain(pubkey.slice(0, 8))
   })
 
-  it('falls back to an npub identifier instead of truncated hex', () => {
+  it('falls back to a friendly device name', () => {
     const pubkey = '1f1e1d1c1b1a19181716151413121110ffeeddccbbaa99887766554433221100'
 
     const display = describeRegisteredDevice(pubkey)
 
-    expect(display.title).toMatch(/^npub1/)
+    expect(display.title).toBe(`${unnamedDeviceName(pubkey)} (unnamed device)`)
     expect(display.title).not.toContain(pubkey.slice(0, 8))
   })
 
-  it('keeps client-only labels and uses npub as the identifier', () => {
+  it('keeps client-only labels below a friendly device name', () => {
     const pubkey = '2f1e1d1c1b1a19181716151413121110ffeeddccbbaa99887766554433221100'
 
     const display = describeRegisteredDevice(pubkey, {
       clientLabel: 'Iris Chat Web',
     })
 
-    expect(display.title).toBe('Iris Chat Web')
-    expect(display.subtitle).toMatch(/^npub1/)
+    expect(display.title).toBe(`${unnamedDeviceName(pubkey)} (unnamed device)`)
+    expect(display.subtitle).toBe('Iris Chat Web')
     expect(display.subtitle).not.toContain(pubkey.slice(0, 8))
   })
 
@@ -69,7 +70,6 @@ describe('deviceLabels', () => {
 
   it('uses a generic label for linked devices', async () => {
     await expect(getLinkedDeviceRegistrationLabels()).resolves.toEqual({
-      deviceLabel: 'Linked device',
       clientLabel: 'Iris Chat',
     })
     await expect(
@@ -83,7 +83,7 @@ describe('deviceLabels', () => {
     })
   })
 
-  it('shows the current device role with its label as supporting text', () => {
+  it('uses the device name as the current device title', () => {
     const pubkey = '3f1e1d1c1b1a19181716151413121110ffeeddccbbaa99887766554433221100'
 
     const display = describeDeviceRosterDevice(
@@ -96,18 +96,24 @@ describe('deviceLabels', () => {
     )
 
     expect(display).toEqual({
-      title: 'This device',
-      subtitle: 'Safari on Mac · Iris Chat Web',
+      title: 'Safari on Mac',
+      subtitle: 'Iris Chat Web',
     })
   })
 
-  it('uses a linked-device role with an npub fallback when labels are absent', () => {
+  it('uses a stable friendly placeholder when names are absent', () => {
     const pubkey = '4f1e1d1c1b1a19181716151413121110ffeeddccbbaa99887766554433221100'
 
     const display = describeDeviceRosterDevice(pubkey, undefined, false)
 
-    expect(display.title).toBe('Linked device')
-    expect(display.subtitle).toMatch(/^npub1/)
-    expect(display.subtitle).not.toContain(pubkey.slice(0, 8))
+    expect(display.title).toBe(`${unnamedDeviceName(pubkey)} (unnamed device)`)
+    expect(display.subtitle).toBeUndefined()
   })
+})
+
+it('matches native placeholder names without registering them as real names', () => {
+  expect(unnamedDeviceName('a'.repeat(64))).toBe('Cozy Tiger')
+  expect(unnamedDeviceName('B'.repeat(64))).toBe('Cozy Koala')
+  expect(describeDeviceRosterDevice('a'.repeat(64), { deviceLabel: 'Linked device', clientLabel: 'Iris Chat' }, false))
+    .toEqual({ title: 'Cozy Tiger (unnamed device)' })
 })

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pinnedChatIds } from '../lib/chatPinStore'
   import { identity } from '../lib/identity'
   import { chats, deleteChat, type ChatSession } from '../lib/chat'
   import { groups, groupMessages } from '../lib/groups'
@@ -70,7 +71,8 @@
       }
     }
 
-    return items.sort((a, b) => b.lastTime - a.lastTime)
+    const id = (item: SidebarItem) => item.type === 'dm' ? item.chat.id : `group:${item.groupId}`
+    return items.sort((a, b) => Number($pinnedChatIds.has(id(b))) - Number($pinnedChatIds.has(id(a))) || b.lastTime - a.lastTime || id(a).localeCompare(id(b)))
   })
 </script>
 

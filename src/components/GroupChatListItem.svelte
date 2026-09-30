@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pinnedChatIds } from '../lib/chatPinStore'
   import type { Group, GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
   import { countUnseenMessages, formatUnseenCount } from '../lib/unseenCount'
@@ -38,6 +39,7 @@
   <div class="flex-1 min-w-0 leading-tight">
     <div class="flex items-center justify-between gap-2">
       <span class="font-medium text-sm truncate">{group.name}</span>
+        {#if $pinnedChatIds.has(`group:${group.id}`)}<span class="i-carbon-pin-filled text-gray-500 flex-shrink-0" role="img" aria-label="Pinned chat"></span>{/if}
       <div class="flex items-center gap-1.5 flex-shrink-0">
         {#if group.accepted !== true}
           <span class="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">invite</span>

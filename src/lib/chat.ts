@@ -1,3 +1,5 @@
+import { CHAT_PIN_KIND } from './chatPinSync'
+import { receiveChatPinControl } from './chatPinControl'
 import { CHAT_MUTE_KIND } from './chatMuteSync'
 import { receiveChatMuteControl } from './chatMuteControl'
 import { callHistoryLabel, restoredCallHistory, type CallHistory } from './callHistory'
@@ -1092,6 +1094,10 @@ export async function handleManagerEvent(
 
   if (rumor.kind === CHAT_MUTE_KIND) {
     await receiveChatMuteControl(rumor, meta)
+    return
+  }
+  if (rumor.kind === CHAT_PIN_KIND) {
+    await receiveChatPinControl(rumor, meta)
     return
   }
 

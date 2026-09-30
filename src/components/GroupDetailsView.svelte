@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChatPinButton from './ChatPinButton.svelte'
   import { groups, deleteGroup, isAdmin, canSendToGroup, addGroupMember, removeGroupMember, updateGroupInfo, addGroupAdmin, removeGroupAdmin, type Group } from '../lib/groups'
   import { chats } from '../lib/chat'
   import { getPubkey } from '../lib/identity'
@@ -115,7 +116,7 @@
   <!-- Header -->
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-panel">
     <button
-      class="btn-ghost p-2 rounded-full"
+      class="chat-header-button"
       onclick={onBack}
       aria-label="Back"
     >
@@ -125,6 +126,7 @@
   </header>
 
   <div class="flex-1 overflow-y-auto overscroll-contain">
+    <div class="px-4 py-2"><ChatPinButton chatId={`group:${group.id}`} /></div>
     <!-- Group info -->
     <div class="p-6 flex flex-col items-center border-b border-surface-lighter">
       <!-- Group picture -->

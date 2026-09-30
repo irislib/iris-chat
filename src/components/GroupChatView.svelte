@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChatPinButton from './ChatPinButton.svelte'
   import { onDestroy } from 'svelte'
   import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
   import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, isAdmin, canSendToGroup, type Group, type GroupMessage } from '../lib/groups'
@@ -351,7 +352,7 @@
   <header class="h-16 px-4 flex items-center gap-3 border-b border-surface-lighter flex-shrink-0 bg-panel">
     {#if showBackButton}
       <button
-        class="btn-ghost p-2 rounded-full"
+        class="chat-header-button"
         onclick={onleave}
         aria-label="Back"
       >
@@ -383,6 +384,7 @@
 
       {#if showMenu}
         <div class="absolute right-0 top-full mt-1 w-56 bg-surface border border-surface-lighter rounded-lg shadow-xl z-50">
+          <ChatPinButton chatId={`group:${group.id}`} />
           <button class="btn-ghost w-full text-left flex items-center gap-2" onclick={() => { showMenu = false; showMuteModal = true }}>
             <span class="i-carbon-notification-off"></span>
             {isChatMuted($chatMutes, `group:${group.id}`) ? 'Muted notifications' : 'Mute notifications'}
