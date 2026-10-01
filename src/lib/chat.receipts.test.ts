@@ -421,7 +421,7 @@ describe('manager receipts', () => {
 
 
 describe('durable private control registration admission', () => {
-  it.each([false, true])('retains a control until this device is registered (sender cached: %s)', async (senderCached: boolean) => {
+  it.each([[false, false], [false, true], [true, false], [true, true]])('retains a control until this device is registered (sender cached: %s, recipient tag: %s)', async (senderCached: boolean, recipientTag: boolean) => {
     await clearChatData()
     mocks.receivePrivateContact.mockReset().mockResolvedValue(undefined)
     const currentDevice = 'c'.repeat(64), sibling = 'd'.repeat(64)
@@ -431,7 +431,7 @@ describe('durable private control registration admission', () => {
     devices.setHasLocalAppKeys(true)
     devices.setRegisteredDevices(senderCached ? [{ identityPubkey: sibling, createdAt: 1 }] : [], 1)
     const rumor: Rumor = { id: 'e'.repeat(64), kind: 10452, pubkey: MY_PUBKEY,
-      created_at: 1, content: '{}', tags: [['p', MY_PUBKEY]] }
+      created_at: 1, content: '{}', tags: recipientTag ? [['p', MY_PUBKEY]] : [] }
     const meta = { senderOwnerPubkey: MY_PUBKEY, senderDevicePubkey: sibling }
     const acknowledge = vi.fn()
     vi.useFakeTimers()
@@ -444,6 +444,9 @@ describe('durable private control registration admission', () => {
       expect(acknowledge).not.toHaveBeenCalled()
       expect(mocks.receivePrivateContact).not.toHaveBeenCalled()
 
+      await callback({ ...rumor, tags: [['p', THEIR_PUBKEY]] }, MY_PUBKEY, meta)
+      await callback({ ...rumor, tags: [['p', MY_PUBKEY], ['p', THEIR_PUBKEY]] }, MY_PUBKEY, meta)
+      expect(mocks.receivePrivateContact).not.toHaveBeenCalled()
       devices.setRegisteredDevices([
         { identityPubkey: currentDevice, createdAt: 2 },
         { identityPubkey: sibling, createdAt: 1 },

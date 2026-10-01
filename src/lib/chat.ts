@@ -1,3 +1,4 @@
+import { registerPrivateControlEvents } from './privateControlEvents'
 import { DEVICE_LABEL_CONTROL_KIND, receivePrivateDeviceLabel } from './privateDeviceLabels'
 import { CHAT_PIN_KIND } from './chatPinSync'
 import { PRIVATE_CONTACT_CONTROL_KIND, receivePrivateContactControl } from './privateContactControl'
@@ -364,29 +365,14 @@ function markMessageSentToRelays(messageId: string, relayUrls: string[]): void {
 
 onMessageRelayPublish(markMessageSentToRelays)
 
-const pendingPrivateRosterReads = new Map<string, number>()
 function subscribeToNdrRuntimeEvents(): void {
   if (runtimeSessionSubscribed) return
   runtimeSessionSubscribed = true
   const durableKinds = [PRIVATE_CONTACT_CONTROL_KIND, DEVICE_LABEL_CONTROL_KIND, CHAT_MUTE_KIND, CHAT_PIN_KIND]
   const runtime = getNdrRuntime()
   const account = getPubkey()
-  const stopDurable = runtime.onDurableSessionEvent(durableKinds, async (rumor, from, meta) => {
-    if (!account || getPubkey() !== account) throw new Error('Private account is not ready')
-    const state = get(devices)
-    if (!state.sessionManagerReady || !state.appKeysManagerReady || (!state.hasLocalAppKeys && state.lastEventTimestamp <= 0)) throw new Error('Device list is not ready')
-    const sender = meta?.senderDevicePubkey || meta?.fromDeviceId
-    if (meta?.senderOwnerPubkey === account && sender && sender !== state.identityPubkey &&
-      (!state.isCurrentDeviceRegistered || !state.registeredDevices.some(device => device.identityPubkey === sender))) {
-      // A cached roster can precede the sending device's approval. Never ACK that gap.
-      if (Date.now() - (pendingPrivateRosterReads.get(account) ?? 0) > 30_000) {
-        pendingPrivateRosterReads.set(account, Date.now())
-        void runtime.refreshOwnAppKeysFromRelay(account).catch(() => {})
-      }
-      throw new Error('Waiting for the linked device list')
-    }
-    await handleManagerEvent(rumor, from, meta)
-    if (getPubkey() !== account) throw new Error('Account changed')
+  const stopDurable = registerPrivateControlEvents(runtime, {
+    account, getAccount: getPubkey, getState: () => get(devices), receive: handleManagerEvent,
   })
   const stopEvents = runtime.onSessionEvent((rumor, from, meta) => {
     if (durableKinds.includes(rumor.kind)) return
