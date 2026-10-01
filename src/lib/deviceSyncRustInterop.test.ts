@@ -54,7 +54,7 @@ controlInterop('native-generated private control admission', () => {
     expect(controls.cases.map(entry => entry.kind).sort()).toEqual([10449, 10450, 10452, 10453])
   })
 
-  it.each(['event', 'legacyEvent'] as const)('dispatches native %s controls through the production durable callback', async variant => {
+  it.each(['event', 'legacyEvent'] as const)('dispatches native %s controls through the production durable callback', async (variant: 'event' | 'legacyEvent') => {
     const received: Rumor[] = []
     const receiver = nativeControlReceiver(controls, async event => {
       assertNativeControlPayload(event, controls)

@@ -14,6 +14,7 @@ jobs:
     env:
       IRIS_CHAT_RS_CORE_DIR: ${{ github.workspace }}/iris-chat-rs/core
       IRIS_DIRECT_FILES_TARGET_DIR: ${{ github.workspace }}/iris-chat-rs/core/target
+      IRIS_PRIVATE_CONTROL_FIXTURE_INPUT: ${{ github.workspace }}/iris-chat/test-results/private-controls/native-private-controls.json
     defaults:
       run:
         working-directory: iris-chat
@@ -26,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: irislib/iris-chat-rs
-          ref: 6e8f94c9905f33192c3be41e829331ece6739566
+          ref: 58652fe066c52ecef898efdb826128b118984866
           path: iris-chat-rs
           persist-credentials: false
 
@@ -59,6 +60,17 @@ jobs:
 
       - name: Build locked native core
         run: cargo build --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" --bin iris
+
+      - name: Generate controls through the native app
+        run: |
+          mkdir -p "$(dirname "$IRIS_PRIVATE_CONTROL_FIXTURE_INPUT")"
+          IRIS_PRIVATE_CONTROL_FIXTURE_OUTPUT="$IRIS_PRIVATE_CONTROL_FIXTURE_INPUT" \
+            cargo test --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" \
+            --lib native_private_control_interop_fixture -- --nocapture
+          test -s "$IRIS_PRIVATE_CONTROL_FIXTURE_INPUT"
+          git -C "$IRIS_CHAT_RS_CORE_DIR" rev-parse HEAD > test-results/private-controls/source-commit.txt
+          cd test-results/private-controls
+          sha256sum native-private-controls.json > SHA256SUMS
 
       - name: Build locked native direct-file fixture
         id: direct_fixture
