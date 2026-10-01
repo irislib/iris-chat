@@ -421,7 +421,7 @@ describe('manager receipts', () => {
 
 
 describe('durable private control registration admission', () => {
-  it.each([false, true])('retains a control until this device is registered (sender cached: %s)', async (senderCached) => {
+  it.each([false, true])('retains a control until this device is registered (sender cached: %s)', async (senderCached: boolean) => {
     await clearChatData()
     mocks.receivePrivateContact.mockReset().mockResolvedValue(undefined)
     const currentDevice = 'c'.repeat(64), sibling = 'd'.repeat(64)
