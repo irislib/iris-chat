@@ -35,6 +35,11 @@ const ndr = vi.hoisted(() => ({
   applyTrustedAppKeysSnapshot: vi.fn(async () => 'advanced'),
 }))
 
+vi.mock('./directFiles', () => ({
+  attachDirectFiles: vi.fn(async () => undefined),
+  detachDirectFiles: vi.fn(async () => undefined),
+}))
+
 vi.mock('@fips/core', () => ({
   FipsNode: class {
     private listeners = new Map<string, Set<(value: unknown) => void>>()

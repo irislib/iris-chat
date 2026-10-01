@@ -9,6 +9,9 @@
   import Name from './Name.svelte'
   import MessageInfoModal from './MessageInfoModal.svelte'
   import EmojiPicker from './EmojiPicker.svelte'
+  import DirectFileTransferCard from './DirectFileTransferCard.svelte'
+  import { directFileTransfers } from '../lib/directFiles'
+  import { directFilePreview, parseDirectFileOffer } from '../lib/directFileProtocol'
 
   interface Props {
     message: ChatMessage
@@ -73,6 +76,8 @@
   let menuButton = $state<HTMLButtonElement | null>(null)
   let menuContent = $state<HTMLDivElement | null>(null)
   let emojiContainer = $state<HTMLDivElement | null>(null)
+  let directTransfer = $derived(message.directTransferId ? $directFileTransfers.get(message.directTransferId) : undefined)
+  let displayContent = $derived(message.directTransferId ? parseDirectFileOffer(message.content)?.caption ?? '' : message.content)
 
 
   function checkDirection(e: MouseEvent, popupWidth = 288) {
@@ -99,10 +104,10 @@
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(message.content)
+      await navigator.clipboard.writeText(directFilePreview(message.content))
     } catch {
       const textarea = document.createElement('textarea')
-      textarea.value = message.content
+      textarea.value = directFilePreview(message.content)
       textarea.setAttribute('readonly', '')
       textarea.style.position = 'fixed'
       textarea.style.opacity = '0'
@@ -150,9 +155,10 @@
   // Extract file links from content
   let fileLinks = $derived.by(() => {
     const links: { nhash: string; filename: string }[] = []
+    if (message.directTransferId) return links
     const regex = new RegExp(FILE_LINK_REGEX.source, 'gi')
     let match
-    while ((match = regex.exec(message.content)) !== null) {
+    while ((match = regex.exec(displayContent)) !== null) {
       // Decode URL-encoded filename
       links.push({ nhash: match[1], filename: decodeURIComponent(match[2]) })
     }
@@ -161,7 +167,7 @@
 
   // Remove file links from content for display (they'll be rendered separately)
   let textContent = $derived.by(() => {
-    return message.content.replace(FILE_LINK_REGEX, '').trim()
+    return message.directTransferId ? displayContent.trim() : displayContent.replace(FILE_LINK_REGEX, '').trim()
   })
 
   // Render markdown content safely
@@ -406,7 +412,7 @@
       <!-- Message bubble -->
       <div class="flex-1 min-w-0">
         <div class="overflow-hidden">
-          {#if replyToMessage || htmlContent}
+          {#if replyToMessage || htmlContent || message.directTransferId}
             <div
               class="{getBubbleClass(message.isMine, styleFirst, styleLast)} {message.isMine ? 'prose-invert' : ''} overflow-hidden"
               data-testid="message-bubble-body"
@@ -418,8 +424,17 @@
                   onclick={() => scrollToMessage(replyToMessage.id)}
                 >
                   <div class="font-semibold mb-0.5">{replyToMessage.isMine ? 'You' : 'Them'}</div>
-                  <div class="truncate">{replyToMessage.content}</div>
+                  <div class="truncate">{directFilePreview(replyToMessage.content)}</div>
                 </button>
+              {/if}
+              {#if message.directTransferId}
+                <div class="px-3 pt-3 pb-1">
+                  {#if directTransfer}
+                    <DirectFileTransferCard transfer={directTransfer} />
+                  {:else}
+                    <p class="text-sm">Files unavailable</p>
+                  {/if}
+                </div>
               {/if}
               {#if showCombinedTextAndFiles}
                 <div class="px-3 pt-1.5">

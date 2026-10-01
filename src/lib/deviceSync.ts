@@ -37,6 +37,8 @@ import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime
 import { activateAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
 import { DeviceSyncTcp } from './deviceSyncTcp'
 import { attachCalls, detachCalls, callOwnerForPeer, knownCallDevices } from './calls'
+import { attachDirectFiles, detachDirectFiles } from './directFiles'
+import { directFileMessageFields } from './directFileProtocol'
 import {
   saveGroup,
   saveMessage,
@@ -507,6 +509,7 @@ export async function applyDeviceSyncSnapshot(
     const local: ChatMessage = {
       id: message.id,
       content: message.body,
+      ...(!message.chatId.startsWith('group:') ? directFileMessageFields(message.body) : {}),
       timestamp: message.createdAt * 1000,
       isMine,
       senderPubkey: message.author,
@@ -667,6 +670,7 @@ async function stopActiveNode(): Promise<void> {
   activeOwnerPubkey = ''
   activePeers = new Set()
   detachCalls()
+  await detachDirectFiles()
   await deactivateNostrPubsub()
   await deactivateAttachmentPeers()
   await tcp?.dispose().catch(() => undefined)
@@ -795,6 +799,10 @@ async function updateRuntime(
   activeKey = key
   activeOwnerPubkey = ownerPubkey
   activePeers = peers
+  await attachDirectFiles(node, ownerPubkey, secretKey, async device => {
+    const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
+    if (peer) await node.connect(peer.remoteAddr)
+  })
   // Message synchronization remains restricted to this account's registered devices.
   await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers), get(nostrClient).runtime)
   activateAttachmentPeers(node, () => [...new Set([

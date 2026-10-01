@@ -3,6 +3,7 @@ import { receiveChatPinControl } from './chatPinControl'
 import { CHAT_MUTE_KIND } from './chatMuteSync'
 import { receiveChatMuteControl } from './chatMuteControl'
 import { callHistoryLabel, restoredCallHistory, type CallHistory } from './callHistory'
+import { directFileMessageFields, directFilePreview } from './directFileProtocol'
 import { messagingDeviceList, type MessagingSupportEvent } from './messagingPeople'
 import { writable, get } from 'svelte/store'
 import {
@@ -83,6 +84,7 @@ export type { RecipientDeliveryStatus } from './messageRelayStatus'
 import { rememberContact } from './contactMemory'
 
 export interface ChatMessage {
+  directTransferId?: string
   call?: CallHistory
   id: string
   content: string
@@ -1382,6 +1384,7 @@ function handleIncomingRumor(
   const message: ChatMessage = {
     id: processedId,
     content: rumor.content,
+    ...directFileMessageFields(rumor.content),
     timestamp: rumor.created_at * 1000,
     isMine,
     ...(replyTag && { replyTo: replyTag }),
@@ -1391,7 +1394,7 @@ function handleIncomingRumor(
     ...(expiresAt !== undefined && { expiresAt }),
   }
 
-  saveProcessedRumor(message.content)
+  saveProcessedRumor(directFilePreview(message.content))
 
   // Check if message already exists
   const updatedSession = updateChatSession(sessionId, (latestSession) => {
@@ -1615,7 +1618,8 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
 }
 
 // Send a message
-export async function sendMessage(chatSession: ChatSession, text: string, replyTo?: string): Promise<void> {
+export async function sendMessage(chatSession: ChatSession, text: string, replyTo?: string, isCurrent?: () => boolean): Promise<void> {
+  if (isCurrent && !isCurrent()) throw new Error('The sending device has changed. Try again.')
   const tags: string[][] = []
   if (replyTo) {
     tags.push(['e', replyTo, '', 'reply'])
@@ -1642,6 +1646,7 @@ export async function sendMessage(chatSession: ChatSession, text: string, replyT
   const message: ChatMessage = {
     id: messageId,
     content: text,
+    ...directFileMessageFields(text),
     timestamp: Date.now(),
     isMine: true,
     ...(replyTo && { replyTo }),
@@ -1649,6 +1654,7 @@ export async function sendMessage(chatSession: ChatSession, text: string, replyT
 
   // A rendered pending message must survive a reload, including while offline.
   await Promise.all([saveMessageToStorage(chatSession.id, message), saveSessionToStorage(currentSession)])
+  if (isCurrent && !isCurrent()) throw new Error('The sending device has changed. Try again.')
   sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send message')
 
   const updatedSession = updateChatSession(chatSession.id, (latestSession) => ({
@@ -1857,6 +1863,7 @@ export async function loadChatsFromStorage(): Promise<void> {
           .map(m => ({
             id: m.id,
             content: m.content,
+            ...directFileMessageFields(m.content),
             timestamp: m.timestamp,
             isMine: m.isMine,
             ...(m.replyTo && { replyTo: m.replyTo }),
