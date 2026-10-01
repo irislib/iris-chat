@@ -13,9 +13,10 @@
     pubkey: string
     size?: number
     loadProfile?: boolean
+    showBadge?: boolean
   }
 
-  let { pubkey, size = 32, loadProfile = true }: Props = $props()
+  let { pubkey, size = 32, loadProfile = true, showBadge = true }: Props = $props()
 
   let profileStore = $derived(pubkey ? createProfileStore(pubkey, loadProfile) : undefined)
   let profile = $derived(profileStore ? $profileStore : undefined)
@@ -70,7 +71,7 @@
     class="rounded-full"
   />
 {/if}
-{#if $identity}
+{#if $identity && showBadge}
   <span class="absolute -right-1 -top-1 leading-none">
     <SocialDistanceBadge {distance} followedByFriends={signals.friendsFollowing}
       muted={signals.mutedByYou} overmuted={signals.overmuted} size={size < 40 ? 12 : 16} />

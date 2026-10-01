@@ -2,6 +2,7 @@
   import ChatPinButton from './ChatPinButton.svelte'
   import { nip19 } from 'nostr-tools'
   import Avatar from './Avatar.svelte'
+  import SocialDistanceBadge from '@iris/svelte-ui/SocialDistanceBadge.svelte'
   import CopyButton from './CopyButton.svelte'
   import MediaModal from './MediaModal.svelte'
   import { createProfileStore, getProfileName } from '../lib/profile'
@@ -147,10 +148,10 @@
                 onclick={handleAvatarClick}
                 aria-label="View profile picture"
               >
-                <Avatar {pubkey} size={96} />
+                <Avatar {pubkey} size={96} showBadge={false} />
               </button>
             {:else}
-              <Avatar {pubkey} size={96} />
+              <Avatar {pubkey} size={96} showBadge={false} />
             {/if}
           </div>
 
@@ -159,16 +160,25 @@
             <Name {pubkey} />
           </h2>
 
-          {#if $identity && $identity.pubkey !== pubkey}
-            <p class="text-sm text-gray-400 mt-3" data-testid="follow-distance">
-              {#if graphSignals.mutedByYou}Muted by you
-              {:else if graphSignals.overmuted}More mutes than follows in your network
+          {#if $identity}
+            <p class="flex items-center justify-center gap-2 text-sm text-gray-400 mt-3" data-testid="follow-distance">
+              <SocialDistanceBadge
+                distance={pubkey === $identity.pubkey ? 0 : $following.has(pubkey) ? 1 : graphSignals.hasPublicPath ? graphSignals.followDistance : null}
+                followedByFriends={graphSignals.friendsFollowing}
+                muted={graphSignals.mutedByYou} overmuted={graphSignals.overmuted} />
+              <span>
+              {#if $identity.pubkey === pubkey}You
+              {:else if graphSignals.mutedByYou}Muted by you
               {:else if $following.has(pubkey)}Followed by you
+              {:else if graphSignals.overmuted}More mutes than follows in your network
               {:else if graphSignals.hasPublicPath && graphSignals.friendsFollowing > 0}
                 Followed by {graphSignals.friendsFollowing} {graphSignals.friendsFollowing === 1 ? 'person you follow' : 'people you follow'}
               {:else if graphSignals.hasPublicPath && graphSignals.followDistance === 3}Followed by friends of friends
               {:else}Not followed by anyone you follow{/if}
+              </span>
             </p>
+          {/if}
+          {#if $identity && $identity.pubkey !== pubkey}
             <div class="my-4">
               <button class="btn-secondary text-sm" disabled={followBusy || !$identity.signer}
                 title={$identity.signer ? 'Your follows are public' : 'Use your main device to follow'}
