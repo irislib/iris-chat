@@ -1027,7 +1027,7 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('pastes a clipboard image into the draft and sends only on request', async ({ browser, testRelayUrl }) => {
+    test('pastes a clipboard image into the draft and sends only on request', async ({ browser, testRelayUrl }, testInfo) => {
       const context1 = await createContext(browser, testRelayUrl)
       const context2 = await createContext(browser, testRelayUrl)
 
@@ -1056,6 +1056,7 @@ test.describe('iris chat', () => {
         await expect(page1.getByRole('button', { name: 'Send' })).toBeEnabled({ timeout: 30000 })
         await expect(input).toHaveValue('Clipboard caption')
         await expect(page2.locator('.file-attachment')).toHaveCount(0)
+        await testInfo.attach('clipboard-image-draft', { body: await page1.screenshot(), contentType: 'image/png' })
 
         await page1.getByRole('button', { name: 'Send' }).click()
         await expect(page2.locator('.file-attachment')).toBeVisible({ timeout: 30000 })
