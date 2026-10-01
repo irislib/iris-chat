@@ -105,20 +105,19 @@ async function dispatchFileDrop(target: Locator, filePath: string, mimeType: str
   }, { bytes, fileName, mimeType })
 }
 
-async function dispatchFilePaste(target: Locator, filePath: string, mimeType: string): Promise<void> {
-  const bytes = Array.from(readFileSync(filePath))
-  const fileName = filePath.split('/').pop() || 'attachment'
-
-  await target.evaluate((element, payload) => {
-    const dt = new DataTransfer()
-    dt.items.add(new File([new Uint8Array(payload.bytes)], payload.fileName, { type: payload.mimeType }))
-    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
-    Object.defineProperty(pasteEvent, 'clipboardData', {
-      value: dt,
-      configurable: true,
-    })
-    element.dispatchEvent(pasteEvent)
-  }, { bytes, fileName, mimeType })
+async function pasteClipboardImage(page: Page, target: Locator, filePath: string): Promise<void> {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.bringToFront()
+  await page.evaluate(async bytes => {
+    const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }))
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0)
+    bitmap.close()
+    const png = await canvas.convertToBlob({ type: 'image/png' })
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+  }, Array.from(readFileSync(filePath)))
+  // Exercise the browser's real clipboard event and file representation.
+  await target.press('ControlOrMeta+V')
 }
 
 async function openChatFromList(page: Page, message: string): Promise<void> {
@@ -1028,7 +1027,7 @@ test.describe('iris chat', () => {
       }
     })
 
-    test('should attach a file when pasted into chat input', async ({ browser, testRelayUrl }) => {
+    test('pastes a clipboard image into the draft and sends only on request', async ({ browser, testRelayUrl }) => {
       const context1 = await createContext(browser, testRelayUrl)
       const context2 = await createContext(browser, testRelayUrl)
 
@@ -1050,17 +1049,55 @@ test.describe('iris chat', () => {
 
         const fixturePath = fileURLToPath(new URL('./fixtures/test-blob.jpeg', import.meta.url))
         const input = page1.getByPlaceholder('Type a message...')
-        await input.focus()
-        await dispatchFilePaste(input, fixturePath, 'image/jpeg')
+        await input.fill('Clipboard caption')
+        await pasteClipboardImage(page1, input, fixturePath)
 
         await expect(page1.getByRole('button', { name: 'Remove attachment' })).toBeVisible()
         await expect(page1.getByRole('button', { name: 'Send' })).toBeEnabled({ timeout: 30000 })
+        await expect(input).toHaveValue('Clipboard caption')
+        await expect(page2.locator('.file-attachment')).toHaveCount(0)
 
         await page1.getByRole('button', { name: 'Send' }).click()
         await expect(page2.locator('.file-attachment')).toBeVisible({ timeout: 30000 })
+        await expect(page2.getByText('Clipboard caption', { exact: true })).toBeVisible()
       } finally {
         await context1.close()
         await context2.close()
+      }
+    })
+
+    test('keeps multiple pasted files in a direct-send draft without uploading or sending', async ({ browser, testRelayUrl }) => {
+      const context = await createContext(browser, testRelayUrl)
+      const page = await context.newPage()
+      try {
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Go' }).click()
+        await registerDevice(page)
+        await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+        await page.getByRole('button', { name: 'Note to self', exact: true }).click()
+        const input = page.getByPlaceholder('Type a message...')
+        const uploads: string[] = []
+        page.on('request', request => {
+          if (['PUT', 'POST'].includes(request.method()) && new URL(request.url()).pathname === '/upload') uploads.push(request.url())
+        })
+        await input.fill('Keep this draft')
+        await page.getByTestId('direct-file-input').setInputFiles({ name: 'First.txt', mimeType: 'text/plain', buffer: Buffer.from('first') })
+        await input.evaluate(element => {
+          const transfer = new DataTransfer()
+          transfer.items.add(new File(['second'], 'Second.txt', { type: 'text/plain' }))
+          transfer.items.add(new File(['third'], 'Third.pdf', { type: 'application/pdf' }))
+          transfer.setData('text/plain', 'clipboard file names must not replace the draft')
+          element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+        })
+        await expect(page.getByTestId('direct-file-preview')).toHaveCount(3)
+        await expect(page.getByTestId('direct-file-preview')).toContainText(['First.txt', 'Second.txt', 'Third.pdf'])
+        await expect(input).toHaveValue('Keep this draft')
+        await expect(page.getByTestId('direct-file-mode')).toContainText('Send directly')
+        await expect(page.getByRole('button', { name: 'Remove attachment' })).toHaveCount(0)
+        await expect(page.locator('[data-testid^="direct-file-transfer-"]')).toHaveCount(0)
+        expect(uploads).toEqual([])
+      } finally {
+        await context.close()
       }
     })
 

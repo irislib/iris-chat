@@ -93,6 +93,19 @@ describe('attachment draft uploads', () => {
 })
 
 describe('file transfer selection', () => {
+  it('accepts clipboard file items alongside text without duplicating their file-list entries', () => {
+    const image = new File(['png'], 'image.png', { type: 'image/png' })
+    const document = new File(['document'], 'Notes.txt', { type: 'text/plain' })
+    const items = [
+      { kind: 'string', type: 'text/plain', getAsFile: () => null },
+      ...[image, document].map(file => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    ]
+    for (const files of [[image, document], []]) {
+      const clipboard = { files, types: ['Files', 'text/plain'], items } as unknown as DataTransfer
+      expect(filesFromTransfer(clipboard)).toEqual([image, document])
+    }
+  })
+
   it('preserves all actual files and ignores ordinary text and URL drags', () => {
     const files = [file('First.txt'), file('Second.pdf')]
     const data = { files, types: ['Files'], items: [] } as unknown as DataTransfer
