@@ -1,8 +1,10 @@
 # Changelog
 
-## 2.6.36 - 2026-10-01
+## 2.6.36 - 2026-10-02
 
 - Keep direct calls connected when devices start connecting to each other at the same time.
+- Improve privacy when syncing favorites, nicknames, notes, device names, and muted chats.
+- Update your other devices and calling contacts too. Calls to an older app may not ring while it is closed. Existing chats and linked devices stay connected.
 
 ## 2.6.35 - 2026-10-01
 
