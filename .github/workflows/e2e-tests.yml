@@ -13,6 +13,7 @@ jobs:
     timeout-minutes: 30
     env:
       IRIS_CHAT_RS_CORE_DIR: ${{ github.workspace }}/iris-chat-rs/core
+      IRIS_DIRECT_FILES_TARGET_DIR: ${{ github.workspace }}/iris-chat-rs/core/target
     defaults:
       run:
         working-directory: iris-chat
@@ -59,15 +60,26 @@ jobs:
       - name: Build locked native core
         run: cargo build --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" --bin iris
 
+      - name: Build locked native direct-file fixture
+        run: cargo build --quiet --locked --manifest-path test-fixtures/direct-files-rust/Cargo.toml --target-dir "$IRIS_DIRECT_FILES_TARGET_DIR"
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_BUILD_JOBS: '2'
+
       - name: Verify web and native messaging and device sync
         run: pnpm test:interop
 
-      - name: Upload interop failures
+      - name: Verify web and native direct files
+        run: pnpm test:direct-file-interop
+
+      - name: Upload interop test results
         uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
           name: native-interop-test-results
-          path: iris-chat/test-results/
+          path: |
+            iris-chat/test-results/
+            iris-chat/work/direct-file-interop/
           retention-days: 14
 
   e2e:
@@ -103,6 +115,8 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-report
-          path: playwright-report/
+          name: playwright-test-results
+          path: |
+            test-results/
+            work/calls-routed/
           retention-days: 30
