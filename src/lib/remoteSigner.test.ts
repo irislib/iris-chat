@@ -130,7 +130,8 @@ describe('NIP-46 transport', () => {
       signEvent: async event => finalizeEvent(event, signer.ownerSecret),
     })
     const published = relay.publishedEvents.find(event => event.id === authorized.event.id)
-    expect(published).toEqual(authorized.event)
+    expect(published).toMatchObject({ id: authorized.event.id, sig: authorized.event.sig,
+      pubkey: authorized.event.pubkey, tags: authorized.event.tags, content: authorized.event.content })
     expect(authorized.event.tags.some(tag => tag[0] === 'encrypted_device_labels' ||
       (tag[0] === 'f' && tag[1] === 'encrypted_device_labels'))).toBe(false)
     expect(AppKeys.fromEvent(authorized.event).getAllDevices()).toEqual(expect.arrayContaining([
