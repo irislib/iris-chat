@@ -61,16 +61,22 @@ jobs:
         run: cargo build --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" --bin iris
 
       - name: Build locked native direct-file fixture
+        id: direct_fixture
         run: cargo build --quiet --locked --manifest-path test-fixtures/direct-files-rust/Cargo.toml --target-dir "$IRIS_DIRECT_FILES_TARGET_DIR"
         env:
           CARGO_INCREMENTAL: '0'
           CARGO_BUILD_JOBS: '2'
 
       - name: Verify web and native messaging and device sync
-        run: pnpm test:interop
+        run: pnpm test:interop --output=test-results/native-messaging --trace=retain-on-failure --reporter=list,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/native-messaging.json
 
       - name: Verify web and native direct files
-        run: pnpm test:direct-file-interop
+        if: ${{ !cancelled() && steps.direct_fixture.outcome == 'success' }}
+        run: pnpm test:direct-file-interop --output=test-results/direct-files --trace=retain-on-failure --reporter=list,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/direct-files.json
 
       - name: Upload interop test results
         uses: actions/upload-artifact@v4
@@ -83,8 +89,13 @@ jobs:
           retention-days: 14
 
   e2e:
+    name: Browser tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     steps:
       - uses: actions/checkout@v4
@@ -107,16 +118,19 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Run E2E tests
-        run: pnpm run test:e2e
+        run: pnpm run test:e2e --shard=${{ matrix.shard }}/4 --workers=1 --retries=0 --trace=retain-on-failure --reporter=list,json
         env:
           CI: true
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/report.json
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-test-results
+          name: playwright-test-results-${{ matrix.shard }}
           path: |
             test-results/
+            work/calls/
             work/calls-routed/
+            work/web-screen-sharing/
           retention-days: 30
