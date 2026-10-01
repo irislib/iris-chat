@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { createPrivateContactSync, editPrivateContact, privateContactDocuments } from 'nostr-social-graph/privateContactSync'
+import { createPrivateContactSync, editPrivateContact, privateContactDocuments } from 'nostr-social-graph/privateContactSyncV2'
 import {
   DEVICE_SYNC_MAX_PACKET_BYTES,
   DEVICE_SYNC_PAGE_MESSAGES,
@@ -56,7 +56,7 @@ interop('iris-chat-rs device-sync interop', () => {
     })
   })
 
-  it('accepts native chat metadata extensions without losing the shared snapshot', () => {
+  it('preserves native read state while retiring legacy private metadata on serialization', () => {
     const snapshot: DeviceSyncSnapshot = {
       v: 1, type: 'snapshot', rosterAt: 42,
       chats: [{ id: peer, updatedAt: 43 }], appKeys: [{ ownerPubkey: owner, createdAt: 42, devices: [{ identityPubkey: peer, createdAt: 40, deviceLabel: 'Study laptop', clientLabel: 'Iris Chat macOS', labelUpdatedAt: 43 }] }], groups: [], messages: [],
@@ -70,8 +70,12 @@ interop('iris-chat-rs device-sync interop', () => {
       }],
     }
     const nativeBytes = runNative('roundtrip', encodeDeviceSyncPacket(nativeSnapshot))
-    expect(JSON.parse(new TextDecoder().decode(nativeBytes))).toEqual(nativeSnapshot)
-    expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(nativeSnapshot)
+    const expected = { ...snapshot,
+      appKeys: snapshot.appKeys.map(keys => ({ ...keys, devices: keys.devices.map(({ identityPubkey, createdAt }) => ({ identityPubkey, createdAt })) })),
+      chats: [{ ...snapshot.chats[0], readState: nativeSnapshot.chats[0].readState }],
+    }
+    expect(JSON.parse(new TextDecoder().decode(nativeBytes))).toEqual(expected)
+    expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(expected)
   })
 
   it('preserves timed, forever, and unmuted states across native and web chat sync', () => {
@@ -91,14 +95,16 @@ interop('iris-chat-rs device-sync interop', () => {
 
   it('preserves private contact registers and explicit clears across native and web sync', () => {
     const initial = editPrivateContact(createPrivateContactSync(owner, '1'.repeat(32)), peer, {
-      favorite: true, nickname: 'Café friend', note: 'Meet tomorrow\nBring tea ☕',
-    }, '2'.repeat(32))
-    const cleared = editPrivateContact(initial, peer, { favorite: false, nickname: null, note: null })
+      favorite: true, muted: true, nickname: 'Café friend', note: 'Meet tomorrow\nBring tea ☕',
+    })
+    const cleared = editPrivateContact(initial, peer, { favorite: false, muted: false, nickname: null, note: null })
     for (const state of [initial, cleared]) {
       const snapshot: DeviceSyncSnapshot = {
         v: 1, type: 'snapshot', rosterAt: 100,
         appKeys: [], chats: [], groups: [], messages: [],
-        privateContacts: privateContactDocuments(state),
+        privateContactsV2: privateContactDocuments(state),
+        privateDeviceLabelsV2: [{ type: 'device-labels', v: 2, owner, device: peer,
+          deviceLabel: '💚 tablet', clientLabel: null, updatedAtSecs: 1 }],
       }
       const nativeBytes = runNative('roundtrip', encodeDeviceSyncPacket(snapshot))
       expect(JSON.parse(new TextDecoder().decode(nativeBytes))).toEqual(snapshot)
@@ -108,12 +114,12 @@ interop('iris-chat-rs device-sync interop', () => {
 
   it('agrees with Rust when rejecting a negative private contact register counter', () => {
     const documents = privateContactDocuments(editPrivateContact(
-      createPrivateContactSync(owner, '1'.repeat(32)), peer, { favorite: true }, '2'.repeat(32),
+      createPrivateContactSync(owner, '1'.repeat(32)), peer, { favorite: true },
     ))
     documents[0].fields.favorite!.counter = -1
     const payload = encodeDeviceSyncPacket({
       v: 1, type: 'snapshot', rosterAt: 100,
-      appKeys: [], chats: [], groups: [], messages: [], privateContacts: documents,
+      appKeys: [], chats: [], groups: [], messages: [], privateContactsV2: documents,
     })
     expect(invokeNative('roundtrip', payload).status).not.toBe(0)
     expect(() => parseDeviceSyncPacket(payload, owner)).toThrow(DeviceSyncProtocolError)

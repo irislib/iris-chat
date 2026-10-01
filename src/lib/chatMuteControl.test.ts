@@ -8,7 +8,7 @@ const owner = 'a'.repeat(64)
 const sibling = 'b'.repeat(64)
 const local = 'c'.repeat(64)
 const peer = 'd'.repeat(64)
-const transport = vi.hoisted(() => ({ sendEvent: vi.fn(async () => undefined) }))
+const transport = vi.hoisted(() => ({ sendEvent: vi.fn(async (_owner: string, event: Rumor): Promise<Rumor | undefined> => event) }))
 vi.mock('./identity', () => ({
   identity: writable({ pubkey: 'a'.repeat(64) }),
   getPubkey: () => 'a'.repeat(64),
@@ -22,7 +22,7 @@ vi.mock('./notifications', () => ({ updateDMSubscription: vi.fn(async () => {}) 
 
 import { chatMutes, chatMuteStates, clearChatMutes, loadChatMutes, mergeChatMutes, setChatMute } from './chatMuteStore'
 import { CHAT_MUTE_KIND } from './chatMuteSync'
-import { receiveChatMuteControl } from './chatMuteControl'
+import { receiveChatMuteControl, startChatMuteSync } from './chatMuteControl'
 import { clearAllData } from './storage'
 import { devices, type DeviceState } from './devices'
 const deviceStore = devices as unknown as Writable<DeviceState>
@@ -95,4 +95,25 @@ it('converges concurrent changes and keeps expired deadlines as revisions', asyn
   expect(get(chatMutes)).toEqual({})
   await mergeChatMutes([{ ...forever, updatedAtMs: at + 600_000 }], owner)
   expect(get(chatMuteStates)[peer]).toEqual(timed)
+})
+
+it('replays persisted timed mutes and unmute tombstones after restart and a failed handoff', async () => {
+  const deadline = Math.floor(Date.now() / 1000) + 3600
+  await mergeChatMutes([{ chatId: peer, untilSecs: deadline, updatedAtMs: Date.now() },
+    { chatId: 'group:cleared', untilSecs: null, updatedAtMs: Date.now() }], owner)
+  await loadChatMutes(null)
+  transport.sendEvent.mockResolvedValueOnce(undefined)
+  const stop = startChatMuteSync(owner)
+  try {
+    await vi.waitFor(() => expect(transport.sendEvent).toHaveBeenCalledTimes(1))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    window.dispatchEvent(new Event('online'))
+    await vi.waitFor(() => expect(transport.sendEvent).toHaveBeenCalledTimes(3))
+    const controls = transport.sendEvent.mock.calls.slice(1).map(([, event]: [string, Rumor]) => JSON.parse(event.content).mute)
+    expect(controls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ chatId: peer, untilSecs: deadline }),
+      expect.objectContaining({ chatId: 'group:cleared', untilSecs: null }),
+    ]))
+    expect(transport.sendEvent.mock.calls.every(([target]: [string, Rumor]) => target === owner)).toBe(true)
+  } finally { stop() }
 })

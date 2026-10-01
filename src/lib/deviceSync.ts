@@ -1,6 +1,8 @@
-import type { PrivateContactDocument } from 'nostr-social-graph/privateContactSync'
+import { getPrivateDeviceLabels, mergePrivateDeviceLabels, sendPrivateDeviceLabels, type PrivateDeviceLabel } from './privateDeviceLabels'
+import type { PrivateContactDocument } from 'nostr-social-graph/privateContactSyncV2'
 import { getPrivateContactDocuments, mergePrivateContacts, privateContactsVersion } from './privateContactSync'
 import { requestPrivateContactSync } from './privateContactControl'
+import { startChatMuteSync } from './chatMuteControl'
 import { chatPinStates, loadChatPins, mergeChatPins } from './chatPinStore'
 import type { ChatPinState } from './chatPinSync'
 import { getCurrentDeviceRegistrationLabels, meaningfulDeviceName } from './deviceLabels'
@@ -96,7 +98,8 @@ export interface DeviceSyncSnapshotSource {
   chats: ChatSession[]
   chatMutes?: ChatMuteState[]
   chatPins?: ChatPinState[]
-  privateContacts?: PrivateContactDocument[]
+  privateContactsV2?: PrivateContactDocument[]
+  privateDeviceLabelsV2?: PrivateDeviceLabel[]
   groups: Group[]
   groupMessages: Map<string, GroupMessage[]>
 }
@@ -161,18 +164,18 @@ function emptySnapshot(rosterAt: number): DeviceSyncSnapshot {
 }
 
 function hasSnapshotData(packet: DeviceSyncSnapshot): boolean {
-  return (packet.privateContacts?.length ?? 0) + (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
+  return (packet.privateDeviceLabelsV2?.length ?? 0) + (packet.privateContactsV2?.length ?? 0) + (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
 }
 
 function chunkSnapshot(
   rosterAt: number,
-  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContacts'>,
+  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContactsV2' | 'privateDeviceLabelsV2'>,
   maxBytes: number,
 ): DeviceSyncSnapshot[] {
   const packets: DeviceSyncSnapshot[] = []
   let packet = emptySnapshot(rosterAt)
 
-  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContacts'>(
+  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContactsV2' | 'privateDeviceLabelsV2'>(
     key: K,
     value: NonNullable<DeviceSyncSnapshot[K]>[number],
   ) => {
@@ -189,7 +192,8 @@ function chunkSnapshot(
     packet = single
   }
 
-  for (const contact of items.privateContacts ?? []) append('privateContacts', contact)
+  for (const label of items.privateDeviceLabelsV2 ?? []) append('privateDeviceLabelsV2', label)
+  for (const contact of items.privateContactsV2 ?? []) append('privateContactsV2', contact)
   for (const pin of items.chatPins ?? []) append('chatPins', pin)
   for (const mute of items.chatMutes ?? []) append('chatMutes', mute)
   for (const chat of items.chats) append('chats', chat)
@@ -243,7 +247,9 @@ export function buildDeviceSyncSnapshots(
   includeMessages = true,
 ): DeviceSyncSnapshot[] {
   const rosterAt = Math.max(source.requestRosterAt, source.localRosterAt)
-  const wireAppKeys = scopedAppKeys(source)
+  const wireAppKeys = scopedAppKeys(source).map(snapshot => ({ ...snapshot,
+    devices: snapshot.devices.map(device => ({ identityPubkey: device.identityPubkey, createdAt: device.createdAt })),
+  }))
   const wireChats = source.chats.map((chat) => ({
     id: chat.id,
     updatedAt: chat.messages.reduce(
@@ -277,7 +283,7 @@ export function buildDeviceSyncSnapshots(
 
   return chunkSnapshot(
     rosterAt,
-    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages, chatMutes: source.chatMutes, chatPins: source.chatPins, privateContacts: source.privateContacts },
+    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages, chatMutes: source.chatMutes, chatPins: source.chatPins, privateContactsV2: source.privateContactsV2, privateDeviceLabelsV2: source.privateDeviceLabelsV2 },
     maxBytes,
   )
 }
@@ -452,7 +458,7 @@ export async function applyDeviceSyncSnapshot(
   packet: DeviceSyncSnapshot,
   ownerPubkey = getPubkey() || '',
 ): Promise<void> {
-  if (packet.privateContacts?.length) await mergePrivateContacts(ownerPubkey, packet.privateContacts)
+  if (packet.privateContactsV2?.length) await mergePrivateContacts(ownerPubkey, packet.privateContactsV2)
   if (packet.chatPins?.length) await mergeChatPins(packet.chatPins, ownerPubkey)
   if (packet.chatMutes?.length) await mergeChatMutes(packet.chatMutes, ownerPubkey)
   const additions = selectDeviceSyncAdditions(packet, currentMergeState())
@@ -465,6 +471,8 @@ export async function applyDeviceSyncSnapshot(
       ...mergeDeviceDescriptions(snapshot, runtime.getKnownAppKeysSnapshots().find(known => known.ownerPubkey === snapshot.ownerPubkey)),
     })
   }
+
+  if (packet.privateDeviceLabelsV2?.length) await mergePrivateDeviceLabels(ownerPubkey, packet.privateDeviceLabelsV2)
 
   for (const chat of additions.chats) {
     const session: ChatSession = {
@@ -571,15 +579,14 @@ function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyn
     appKeys: getNdrRuntime().getKnownAppKeysSnapshots().map((snapshot) => ({
       ownerPubkey: snapshot.ownerPubkey,
       createdAt: snapshot.createdAt,
-      devices: snapshot.appKeys.getAllDevices().map(({ identityPubkey, createdAt }) => {
-        const labels = snapshot.appKeys.getDeviceLabels(identityPubkey)
-        return { identityPubkey, createdAt, ...(labels && { deviceLabel: labels.deviceLabel, clientLabel: labels.clientLabel, labelUpdatedAt: labels.updatedAt }) }
-      }),
+      // Legacy roster fields contain only public authorization, never private names.
+      devices: snapshot.appKeys.getAllDevices().map(({ identityPubkey, createdAt }) => ({ identityPubkey, createdAt })),
     })),
     chats: Array.from(get(chats).values()),
     chatMutes: Object.values(get(chatMuteStates)),
     chatPins: Object.values(get(chatPinStates)),
-    privateContacts: getPrivateContactDocuments(),
+    privateContactsV2: getPrivateContactDocuments(),
+    privateDeviceLabelsV2: getPrivateDeviceLabels(ownerPubkey),
     groups: Array.from(get(groups).values()),
     groupMessages: get(groupMessages),
   }
@@ -786,8 +793,14 @@ async function updateRuntime(
       const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
       if (peer) await node.connect(peer.remoteAddr)
     }))
-  }, call => sendCallWakeups(secretKey, call.peers, call.id, call.video,
-    get(notificationSettings).serverUrl, event => new AppEvent(get(nostrClient), event).publish()))
+  }, async call => {
+    const { preparePeerNdrRuntime } = await import('./privateChats')
+    const runtime = await preparePeerNdrRuntime(call.owner)
+    await sendCallWakeups(secretKey, ownerPubkey, call.peers, call.id, call.video,
+      get(notificationSettings).serverUrl, event => new AppEvent(get(nostrClient), event).publish(),
+      rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
+      () => run === generation && getPubkey() === ownerPubkey)
+  })
   try {
     await node.start()
   } catch (error) {
@@ -829,17 +842,24 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
   storeUnsubscribers = [chats, groups, chatMuteStates, chatPinStates, privateContactsVersion].map((store) =>
     store.subscribe(scheduleSnapshotPush)
   )
+  storeUnsubscribers.push(startChatMuteSync(ownerPubkey))
   const key = new Uint8Array(secretKey)
   storeUnsubscribers.push(callConnectionSettings.subscribe(() => {
     void reconcileRuntime(ownerPubkey, key, get(devices)).catch(error => console.warn('[calls] Connection failed:', error))
   }))
   let requestedRoster = ''
-  deviceUnsubscribe = devices.subscribe((state) => {
+  const reconcilePrivateContacts = (state: DeviceState) => {
+    if (getPubkey() !== ownerPubkey) return
     const roster = state.isCurrentDeviceRegistered ? state.registeredDevices.map(device => device.identityPubkey).sort().join(',') : ''
     if (roster && roster !== requestedRoster) {
       requestedRoster = roster
-      void requestPrivateContactSync(ownerPubkey).catch(() => {})
+      void requestPrivateContactSync(ownerPubkey).catch(() => { requestedRoster = '' })
     }
+  }
+  const contactsTimer = setInterval(() => reconcilePrivateContacts(get(devices)), 5000)
+  storeUnsubscribers.push(() => clearInterval(contactsTimer))
+  deviceUnsubscribe = devices.subscribe((state) => {
+    reconcilePrivateContacts(state)
     void refreshCurrentDeviceDescription(ownerPubkey).catch(error => console.warn('Could not sync device name', error))
     void reconcileRuntime(ownerPubkey, key, state).catch((error) =>
       console.warn('[deviceSync] Runtime start failed:', error)
@@ -859,34 +879,12 @@ export async function stopDeviceSync(): Promise<void> {
   await stopActiveNode()
 }
 
-// Match Rust's optional-string ordering without locale-sensitive collation.
-function compareDeviceDescriptions(a: { deviceLabel?: string; clientLabel?: string }, b?: { deviceLabel?: string; clientLabel?: string }): number {
-  for (const key of ['deviceLabel', 'clientLabel'] as const) {
-    if (a[key] === b?.[key]) continue
-    if (a[key] === undefined) return -1
-    if (b?.[key] === undefined) return 1
-    const left = new TextEncoder().encode(a[key])
-    const right = new TextEncoder().encode(b[key])
-    for (let i = 0; i < Math.min(left.length, right.length); i++) if (left[i] !== right[i]) return left[i] - right[i]
-    if (left.length !== right.length) return left.length - right.length
-  }
-  return 0
-}
-
-// Descriptions may arrive with an older roster. Keep membership from the newest
-// roster and merge names only for devices that remain in that roster.
+// Legacy roster snapshots cannot import private names into the new sync channel.
 export function mergeDeviceDescriptions(snapshot: DeviceSyncAppKeys, current?: { createdAt: number; appKeys: AppKeys }): { createdAt: number; appKeys: AppKeys } {
   const appKeys = new AppKeys(current && current.createdAt > snapshot.createdAt ? current.appKeys.getAllDevices() : snapshot.devices)
   for (const device of appKeys.getAllDevices()) {
     const known = current?.appKeys.getDeviceLabels(device.identityPubkey)
-    const incoming = snapshot.devices.find(entry => entry.identityPubkey === device.identityPubkey)
-    const incomingAt = incoming?.labelUpdatedAt ?? 0
-    if (incoming && incomingAt <= Math.floor(Date.now() / 1000) + 300 &&
-      (incoming.deviceLabel || incoming.clientLabel) && (
-        incomingAt > (known?.updatedAt ?? 0) || (incomingAt === (known?.updatedAt ?? 0) &&
-          compareDeviceDescriptions(incoming, known) > 0))) {
-      appKeys.setDeviceLabels(device.identityPubkey, incoming, incomingAt)
-    } else if (known) appKeys.setDeviceLabels(device.identityPubkey, known, known.updatedAt)
+    if (known) appKeys.setDeviceLabels(device.identityPubkey, known, known.updatedAt)
   }
   return { createdAt: Math.max(snapshot.createdAt, current?.createdAt ?? 0), appKeys }
 }
@@ -905,4 +903,5 @@ async function refreshCurrentDeviceDescription(ownerPubkey: string): Promise<voi
   appKeys.setDeviceLabels(device, labels, Math.max(Math.floor(Date.now() / 1000), (known?.updatedAt ?? 0) + 1))
   await runtime.applyTrustedAppKeysSnapshot({ ...current, appKeys })
   scheduleSnapshotPush()
+  await sendPrivateDeviceLabels(ownerPubkey)
 }

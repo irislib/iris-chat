@@ -12,15 +12,15 @@ fn main() {
     let model_path = core.join("src/core/model.rs");
     let mute_path = core.join("src/core/chat_mute_sync.rs");
     let pin_path = core.join("src/core/chat_pin_sync.rs");
-    let contact_path = core.join("src/core/contact_details.rs");
-    let private_contact_path = core.join("src/private_contact_sync.rs");
+    let label_path = core.join("src/core/private_device_labels.rs");
+    let private_contact_path = core.join("src/private_contact_sync_v2.rs");
     for path in [
         &protocol_path,
         &tcp_path,
         &framing_path,
         &body_path,
         &model_path,
-        &contact_path,
+        &label_path,
         &private_contact_path,
         &mute_path,
         &pin_path,
@@ -48,13 +48,12 @@ fn main() {
         .expect("DeviceSyncPage enum");
     let contract_end = item_end(&protocol, page_at);
     let contract = format!(
-        "{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         derived_item(&read(model_path), "struct ChatReadState").replace("pub(super) ", ""),
-        derived_item(&read(contact_path), "struct ContactDetails").replace("pub(super) ", ""),
         derived_item(&read(mute_path), "struct ChatMuteState").replace("pub(crate) ", ""),
         derived_item(&read(pin_path), "struct ChatPinState").replace("pub(crate) ", ""),
         protocol[contract_start..contract_end]
-            .replace("super::contact_details::ContactDetails", "ContactDetails"),
+            .replace("super::private_device_labels::PrivateDeviceLabel", "crate::private_device_labels::PrivateDeviceLabel"),
     );
 
     let framing = read(framing_path);
@@ -72,11 +71,18 @@ fn main() {
         out.join("native_private_contacts.rs"),
         derived_items(
             &read(private_contact_path),
-            "struct PrivateContactRegister",
-            "struct PrivateContactDocument",
+            "struct PrivateContactRegisterV2",
+            "struct PrivateContactDocumentV2",
         ),
     )
     .expect("write private contact contract");
+    let labels = read(label_path);
+    let label_fn = labels.find("fn required_label").expect("native label deserializer");
+    fs::write(
+        out.join("native_private_device_labels.rs"),
+        format!("{}\n{}", derived_item(&labels, "struct PrivateDeviceLabel"),
+            &labels[label_fn..item_end(&labels, label_fn)]),
+    ).expect("write private device label contract");
     fs::write(
         out.join("native_framing.rs"),
         framing[framing_start..framing_end].replace("pub(super) ", ""),

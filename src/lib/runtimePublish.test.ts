@@ -216,3 +216,33 @@ describe('durable runtime publication', () => {
     ).toEqual(['wss://relay.one', 'wss://relay.two'])
   })
 })
+
+ it('blocks legacy private payloads while other ciphertext drains, and requires exact authorization coverage before retirement', async () => {
+  const blocked = { ...event('b'), kind: 37368, tags: [['d', 'devices'], ['device', 'new-device'], ['encrypted_device_labels', 'old-private-ciphertext']] }
+  const key = 'v1/runtime-outbox/owner-a/' + blocked.id
+  await storage.put(key, { event: blocked })
+  const publish = vi.fn(async (_event: VerifiedEvent) => new Set([{ url: 'wss://relay.example' }]))
+  const queue = queueFor(publish)
+  queue.start()
+  await queue.publish(event('a'))
+  expect(publish.mock.calls.every(([item]: [VerifiedEvent]) => item.kind === 1060)).toBe(true)
+  expect(await storage.get(key)).toEqual({ event: blocked })
+  const changedAuthorization = { ...event('c'), kind: 37368, created_at: 101, tags: [['d', 'devices'], ['device', 'other-device']], content: blocked.content }
+  await queue.publish(changedAuthorization)
+  expect(await storage.get(key)).toEqual({ event: blocked })
+  const replacement = { ...event('d'), kind: 37368, created_at: 101, tags: blocked.tags.filter(tag => tag[0] !== 'encrypted_device_labels'), content: blocked.content }
+  publish.mockResolvedValueOnce(new Set())
+  await expect(queue.publish(replacement)).rejects.toThrow('not accepted')
+  expect(await storage.get(key)).toEqual({ event: blocked })
+  await queue.publish(replacement)
+  expect(await storage.get(key)).toBeUndefined()
+ })
+ it('never queues bare private controls or old self-encrypted contact records', async () => {
+  const publish = vi.fn(async (_event: VerifiedEvent) => new Set([{ url: 'wss://relay.example' }]))
+  const queue = queueFor(publish)
+  for (const kind of [10449, 10450, 10451, 10452, 10453, 21112]) {
+    await expect(queue.enqueue({ ...event('a'), kind })).rejects.toThrow('encrypted device queue')
+  }
+  await expect(queue.enqueue({ ...event('a'), kind: 30078, tags: [['t', 'nostr-social-memory/v1']] })).rejects.toThrow('encrypted device queue')
+  expect(publish).not.toHaveBeenCalled()
+ })

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { editPrivateContact, privateContactsStatus, privateContactsNeedSigner, resumePrivateContactSync } from '../lib/privateContactSync'
+  import { editPrivateContact, privateContactsStatus, resumePrivateContactSync } from '../lib/privateContactSync'
   let { pubkey, nickname = null, note = null }: { pubkey: string; nickname?: string | null; note?: string | null } = $props()
   let nameInput = $state(''), noteInput = $state(''), nameDirty = $state(false), noteDirty = $state(false)
   let context = $state(''), saving = $state(false), error = $state('')
@@ -31,8 +31,8 @@
     </label>
     <div class="flex items-center gap-3">
       <button type="submit" class="btn-secondary" disabled={saving || (!nameDirty && !noteDirty)}>{saving ? 'Saving…' : 'Save'}</button>
-      {#if ['error', 'pending', 'loading', 'syncing'].includes($privateContactsStatus)}<span class="text-xs text-gray-400">Waiting to sync</span>{/if}
-      {#if $privateContactsNeedSigner}<button type="button" class="text-sm underline" onclick={resumePrivateContactSync}>Retry sync</button>{/if}
+      {#if ['error', 'pending', 'queueing'].includes($privateContactsStatus)}<span class="text-xs text-gray-400">Waiting to sync</span>{/if}
+      {#if $privateContactsStatus === 'error'}<button type="button" class="text-sm underline" onclick={resumePrivateContactSync}>Retry sync</button>{/if}
     </div>
     {#if error}<p role="alert" class="text-red-400">{error}</p>{/if}
   </form>

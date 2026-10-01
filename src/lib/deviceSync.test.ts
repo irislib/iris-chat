@@ -208,7 +208,7 @@ function appKeys(
 }
 
 describe('device sync', () => {
-  it('merges newer descriptions from an old roster without restoring removed devices', () => {
+  it('ignores legacy description fields while preserving local names and removed-device state', () => {
     const current = new AppKeys([{ identityPubkey: device, createdAt: 90 }])
     current.setDeviceLabels(device, { deviceLabel: 'Old name' }, 110)
     const merged = mergeDeviceDescriptions({ ownerPubkey: owner, createdAt: 100, devices: [
@@ -217,7 +217,7 @@ describe('device sync', () => {
     ] }, { createdAt: 150, appKeys: current })
     expect(merged.createdAt).toBe(150)
     expect(merged.appKeys.getAllDevices()).toEqual(current.getAllDevices())
-    expect(merged.appKeys.getDeviceLabels(device)?.deviceLabel).toBe('Study laptop')
+    expect(merged.appKeys.getDeviceLabels(device)?.deviceLabel).toBe('Old name')
   })
 
   it('includes mute and pin settings predating the new device without requiring history', async () => {

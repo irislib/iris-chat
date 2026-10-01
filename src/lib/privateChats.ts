@@ -1,3 +1,5 @@
+import { migrateStoredPrivateContacts } from './privateContactMigration'
+import { queuedCallWakeEnvelope, observeCallWakeInvite, acceptedCallWakeBootstrap } from './callPush'
 import { get } from 'svelte/store'
 import {
   AppEvent,
@@ -187,7 +189,11 @@ const createSubscribe = (
   client: ReturnType<typeof getNostrClient>,
   cacheUsage: CacheMode = CacheMode.PARALLEL
 ): NostrSubscribe => {
-  return createRuntimeSubscribe(client, cacheUsage)
+  const subscribe = createRuntimeSubscribe(client, cacheUsage)
+  return (filter, onEvent) => subscribe(filter, event => {
+    observeCallWakeInvite(event)
+    onEvent(event)
+  })
 }
 
 const createRelayOnlySubscribe = (
@@ -263,6 +269,7 @@ const createFetch = (
     return Array.from(events)
       .map((event) => event.rawEvent() as VerifiedEvent | undefined)
       .filter((event): event is VerifiedEvent => !!event)
+      .map(event => { observeCallWakeInvite(event); return event })
   }) as unknown as NostrFetch
 }
 
@@ -292,6 +299,22 @@ const republishInviteWithRetry = async (reason: string): Promise<void> => {
       console.warn(`[privateChats] Deferred invite republish failed (${reason}):`, e)
     })
   }, LINKED_INVITE_REPUBLISH_RETRY_MS)
+}
+
+const privateRuntimeMigration = new WeakMap<NdrRuntime, Promise<void>>()
+const initializePrivateRuntime = async (instance: NdrRuntime, owner: string) => {
+  let ready = privateRuntimeMigration.get(instance)
+  if (!ready) {
+    ready = (async () => {
+      await migrateStoredPrivateContacts(owner)
+      await instance.retireLegacyPrivateContactSync(owner)
+    })()
+    privateRuntimeMigration.set(instance, ready)
+    void ready.catch(() => privateRuntimeMigration.delete(instance))
+  }
+  await ready
+  if (get(identity)?.pubkey !== owner) throw new Error('Account changed')
+  return instance.initForOwner(owner)
 }
 
 const getRuntime = (): NdrRuntime => {
@@ -330,6 +353,7 @@ const getRuntime = (): NdrRuntime => {
     owner: ownerPubkey,
     publish: createRelayPublish(client),
     onAcceptedRelays: notifyMessageRelayPublish,
+    onAcceptedEvent: acceptedCallWakeBootstrap,
     canPublish: async ({ groupId }) => {
       const { groups, canSendToGroup } = await import('./groups')
       const { db } = await import('./storage')
@@ -343,7 +367,12 @@ const getRuntime = (): NdrRuntime => {
   runtime = new NdrRuntime({
     nostrSubscribe: createSubscribe(client),
     nostrSign: sign,
-    nostrEnqueue: publication.enqueue,
+    nostrEnqueue: async (event, innerEventId, context) => {
+      await publication.enqueue(event, innerEventId, context)
+      if (get(identity)?.pubkey === ownerPubkey) {
+        void queuedCallWakeEnvelope(event, innerEventId).catch(error => console.warn('Call wake could not be sent', error))
+      }
+    },
     nostrPublish: async (event, innerEventId, context) => {
       const signed = 'sig' in event && event.sig
         ? event as VerifiedEvent
@@ -398,7 +427,7 @@ export const initDelegateManager = async (): Promise<void> => {
 }
 
 export const initNdrRuntime = async (ownerPubkey: string): Promise<void> => {
-  await getRuntime().initForOwner(ownerPubkey)
+  await initializePrivateRuntime(getRuntime(), ownerPubkey)
 }
 
 export const waitForNdrRuntime = async (): Promise<NdrRuntime> => {
@@ -411,7 +440,7 @@ export const waitForNdrRuntime = async (): Promise<NdrRuntime> => {
   if (!ownerPubkey) {
     throw new Error('NdrRuntime owner not initialized')
   }
-  await currentRuntime.initForOwner(ownerPubkey)
+  await initializePrivateRuntime(currentRuntime, ownerPubkey)
   return currentRuntime
 }
 
@@ -475,7 +504,7 @@ const refreshRestoredDeviceRegistration = async (
 export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
 
   const currentRuntime = getRuntime()
-  await currentRuntime.initForOwner(ownerPubkey)
+  await initializePrivateRuntime(currentRuntime, ownerPubkey)
 
   if (isLinkedDeviceLogin()) await restoreSignerAuthorization(currentRuntime, ownerPubkey)
 
@@ -528,7 +557,7 @@ export const registerDevice = async (): Promise<void> => {
   const labels = await getCurrentDeviceRegistrationLabels()
 
   const currentRuntime = getRuntime()
-  await currentRuntime.initForOwner(ownerPubkey)
+  await initializePrivateRuntime(currentRuntime, ownerPubkey)
   await registerCurrentDeviceApproval(currentRuntime, ownerPubkey, labels)
 }
 
@@ -544,7 +573,7 @@ export const registerLinkedDevice = async (identityPubkey: string): Promise<void
 
   const labels = await getLinkedDeviceRegistrationLabels()
 
-  await getRuntime().initForOwner(ownerPubkey)
+  await initializePrivateRuntime(getRuntime(), ownerPubkey)
   await getRuntime().registerDeviceIdentity({
     ownerPubkey,
     identityPubkey,
@@ -682,7 +711,7 @@ export const ensureDeviceRegistered = async (): Promise<void> => {
   }
 
   const currentRuntime = getRuntime()
-  await currentRuntime.initForOwner(ownerPubkey)
+  await initializePrivateRuntime(currentRuntime, ownerPubkey)
 
   let state = currentRuntime.getState()
   // Existing signed authorization remains usable offline. The NDR queue keeps
@@ -737,7 +766,7 @@ export const revokeDevices = async (identityPubkeys: string[]): Promise<void> =>
   if (uniquePubkeys.length === 0) return
 
   const currentRuntime = getRuntime()
-  await currentRuntime.initForOwner(ownerPubkey)
+  await initializePrivateRuntime(currentRuntime, ownerPubkey)
 
   const currentDevicePubkey = currentRuntime.getState().currentDevicePubkey
   const revocablePubkeys = uniquePubkeys.filter(
@@ -852,7 +881,7 @@ export const acceptDeviceLink = async (input: string): Promise<void> => {
   const ndrInvite = deterministicLinkInviteForDeviceLinkRequest(parsed)
 
   const currentRuntime = getRuntime()
-  await currentRuntime.initForOwner(currentIdentity.pubkey)
+  await initializePrivateRuntime(currentRuntime, currentIdentity.pubkey)
   const parsedLabels = parsed as typeof parsed & { deviceLabel?: string; clientLabel?: string }
   const labels = await getLinkedDeviceRegistrationLabels({
     deviceLabel: parsedLabels.deviceLabel,
@@ -882,6 +911,6 @@ export const acceptLinkInvite = async (invite: Invite): Promise<void> => {
   }
 
   const currentRuntime = getRuntime()
-  await currentRuntime.initForOwner(currentIdentity.pubkey)
+  await initializePrivateRuntime(currentRuntime, currentIdentity.pubkey)
   await currentRuntime.acceptLinkInvite(invite, currentIdentity.pubkey)
 }

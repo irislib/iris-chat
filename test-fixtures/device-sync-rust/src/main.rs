@@ -15,12 +15,17 @@ mod body {
     ));
 }
 
-mod private_contact_sync {
+mod private_contact_sync_v2 {
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
     use std::collections::BTreeMap;
 
     include!(concat!(env!("OUT_DIR"), "/native_private_contacts.rs"));
+}
+
+mod private_device_labels {
+    use serde::{Deserialize, Serialize};
+    include!(concat!(env!("OUT_DIR"), "/native_private_device_labels.rs"));
 }
 
 include!(concat!(env!("OUT_DIR"), "/native_contract.rs"));

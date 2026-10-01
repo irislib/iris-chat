@@ -123,10 +123,10 @@ describe('native device-sync protocol', () => {
 })
 
 it('preserves private contact registers in snapshots and refuses another account', async () => {
-  const { createPrivateContactSync, editPrivateContact, privateContactDocuments } = await import('nostr-social-graph/privateContactSync')
+  const { createPrivateContactSync, editPrivateContact, privateContactDocuments } = await import('nostr-social-graph/privateContactSyncV2')
   const account = 'a'.repeat(64), contact = 'b'.repeat(64)
-  const documents = privateContactDocuments(editPrivateContact(createPrivateContactSync(account, '1'.repeat(32)), contact, { favorite: true, note: 'Private note' }, '2'.repeat(32)))
-  const packet = { v: 1 as const, type: 'snapshot' as const, rosterAt: 100, appKeys: [], chats: [], groups: [], messages: [], privateContacts: documents }
+  const documents = privateContactDocuments(editPrivateContact(createPrivateContactSync(account, '1'.repeat(32)), contact, { favorite: true, note: 'Private note' }))
+  const packet = { v: 1 as const, type: 'snapshot' as const, rosterAt: 100, appKeys: [], chats: [], groups: [], messages: [], privateContactsV2: documents }
   expect(parseDeviceSyncPacket(encodeDeviceSyncPacket(packet), account)).toEqual(packet)
-  expect(() => parseDeviceSyncPacket(encodeDeviceSyncPacket(packet), contact)).toThrow('privateContacts')
+  expect(() => parseDeviceSyncPacket(encodeDeviceSyncPacket(packet), contact)).toThrow('privateContactsV2')
 })

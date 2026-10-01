@@ -13,6 +13,14 @@ test('private details sync across devices, retain offline clears, and stay accou
     await context.addInitScript(value => localStorage.setItem('iris-chat-identity', value), Buffer.from(key).toString('hex'))
     const page = await context.newPage()
     await page.route(/https:\/\/(cdn|upload|hashtree)\.iris\.to\//, route => route.abort())
+    await page.goto(`${baseURL}/`)
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
+    const registered = page.getByText('This device', { exact: true }).first()
+    const register = page.getByRole('button', { name: 'Register this device', exact: true })
+    await expect(registered.or(register).first()).toBeVisible()
+    if (!await registered.isVisible()) await register.click()
+    await expect(registered).toBeVisible()
     await page.goto(`${baseURL}/#profile-${person}`)
     await expect(page.getByRole('button', { name: 'Favorite', exact: true })).toBeVisible()
     await page.getByText('Private details', { exact: true }).click()
@@ -28,9 +36,10 @@ test('private details sync across devices, retain offline clears, and stay accou
     await expect(b.getByLabel('Nickname', {exact: true})).toHaveValue('Private Alice')
     await expect(b.getByLabel('Note', {exact: true})).toHaveValue('Met at the quiet garden')
     await expect(b.getByRole('heading', {name: 'Private Alice', exact: true})).toBeVisible()
-    const syncEvents = () => testRelay.publishedEvents.filter(event => event.kind === 30078 && event.pubkey === account)
+    const syncEvents = () => testRelay.publishedEvents.filter(event => event.kind === 1060)
     await expect.poll(() => syncEvents().length).toBeGreaterThan(0)
     expect(JSON.stringify(syncEvents())).not.toContain(person)
+    expect(testRelay.publishedEvents.some(event => event.kind === 10452 || (event.kind === 30078 && event.tags.some(tag => tag[0] === 't' && tag[1] === 'nostr-social-memory/v1')))).toBe(false)
     expect(JSON.stringify(testRelay.publishedEvents)).not.toContain('Private Alice')
     expect(JSON.stringify(testRelay.publishedEvents)).not.toContain('Met at the quiet garden')
 
@@ -61,41 +70,32 @@ test('private details sync across devices, retain offline clears, and stay accou
   }
 })
 
-test('a declined signer pauses automatic prompts until Retry sync', async ({ browser, testRelayUrl, baseURL }) => {
-  const { finalizeEvent, nip44 } = await import('nostr-tools')
+test('private edits never request long-lived account encryption from an external signer', async ({ browser, testRelay, testRelayUrl, baseURL }) => {
+  const { finalizeEvent } = await import('nostr-tools')
   const secret = generateSecretKey(), account = getPublicKey(secret), person = getPublicKey(generateSecretKey())
   const context = await browser.newContext()
-  let prompts = 0, approve = false
+  let encryptions = 0
   try {
     await useTestRelay(context, testRelayUrl)
     await context.exposeBinding('contactSignerSign', (_source, draft) => finalizeEvent(draft, secret))
-    await context.exposeBinding('contactSignerEncrypt', (_source, peer, plaintext) => {
-      prompts++
-      if (!approve) throw new Error('User declined')
-      return nip44.v2.encrypt(plaintext, nip44.v2.utils.getConversationKey(secret, peer))
-    })
-    await context.exposeBinding('contactSignerDecrypt', (_source, peer, ciphertext) => nip44.v2.decrypt(ciphertext, nip44.v2.utils.getConversationKey(secret, peer)))
+    await context.exposeBinding('contactSignerEncrypt', () => { encryptions++; throw new Error('Private data must use device sessions') })
     await context.addInitScript(owner => {
-      const bridge = window as unknown as { contactSignerSign: (draft: unknown) => Promise<any>; contactSignerEncrypt: (peer: string, text: string) => Promise<string>; contactSignerDecrypt: (peer: string, text: string) => Promise<string> }
+      const bridge = window as unknown as { contactSignerSign: (draft: Parameters<NonNullable<Window['nostr']>['signEvent']>[0]) => ReturnType<NonNullable<Window['nostr']>['signEvent']>; contactSignerEncrypt: (peer: string, text: string) => Promise<string> }
       window.nostr = { getPublicKey: async () => owner, signEvent: draft => bridge.contactSignerSign(draft),
-        nip44: { encrypt: (peer, text) => bridge.contactSignerEncrypt(peer, text), decrypt: (peer, text) => bridge.contactSignerDecrypt(peer, text) } }
+        nip44: { encrypt: (peer, text) => bridge.contactSignerEncrypt(peer, text), decrypt: (peer, text) => bridge.contactSignerEncrypt(peer, text) } }
       localStorage.setItem('iris-chat-identity', 'nip07')
     }, account)
     const page = await context.newPage()
     await page.goto(`${baseURL}/#profile-${person}`)
     await page.getByText('Private details', {exact: true}).click()
     await page.getByRole('button', {name: 'Favorite', exact: true}).click()
-    await expect(page.getByRole('button', {name: 'Retry sync', exact: true})).toBeVisible()
-    expect(prompts).toBe(1)
-    // Local edits and reconnect signals cannot reopen a declined permission prompt.
-    await page.getByLabel('Nickname', {exact: true}).fill('Saved while paused')
+    await page.getByLabel('Nickname', {exact: true}).fill('Private external account')
     await page.getByRole('button', {name: 'Save', exact: true}).click()
-    await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect(page.getByRole('heading', {name: 'Saved while paused', exact: true})).toBeVisible()
-    expect(prompts).toBe(1)
-    approve = true
-    await page.getByRole('button', {name: 'Retry sync', exact: true}).click()
-    await expect.poll(() => prompts).toBe(2)
-    await expect(page.getByRole('button', {name: 'Retry sync', exact: true})).toHaveCount(0)
+    await expect(page.getByRole('heading', {name: 'Private external account', exact: true})).toBeVisible()
+    await page.reload()
+    await page.getByText('Private details', {exact: true}).click()
+    await expect(page.getByLabel('Nickname', {exact: true})).toHaveValue('Private external account')
+    expect(encryptions).toBe(0)
+    expect(testRelay.publishedEvents.some(event => event.kind === 30078 && event.tags.some(tag => tag[0] === 't' && tag[1] === 'nostr-social-memory/v1'))).toBe(false)
   } finally { await context.close() }
 })

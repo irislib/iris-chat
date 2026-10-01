@@ -1,3 +1,4 @@
+import { assertPrivatePublicationPolicy, coversLegacyPrivateRoster } from './privatePublishPolicy'
 import type { NostrPublishContext, StorageAdapter } from 'nostr-double-ratchet'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import type { VerifiedEvent } from 'nostr-tools'
@@ -12,6 +13,7 @@ interface RuntimePublishOptions {
   /** Public identity key whose outgoing envelopes this queue may publish. */
   owner: string
   publish: (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => Promise<RuntimePublishResult>
+  onAcceptedEvent?: (event: VerifiedEvent) => void | Promise<void>
   onAcceptedRelays?: (
     innerEventId: string | undefined,
     relayUrls: string[]
@@ -44,6 +46,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
   ): Promise<void> => {
     signal.throwIfAborted()
     if (!event.id || !event.sig) throw new Error('Cannot queue an unsigned event')
+    assertPrivatePublicationPolicy(event)
     const key = prefix + event.id
     const pending = enqueuing.get(key)
     if (pending) return pending
@@ -70,6 +73,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       const row = await storage.get<PendingPublication>(key)
       signal.throwIfAborted()
       if (!row) return
+      assertPrivatePublicationPolicy(row.event)
       if (row.context && options.canPublish && !await options.canPublish(row.context)) {
         await storage.del(key)
         return
@@ -92,9 +96,17 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
         row.innerEventId,
         getPublishedRelayUrls(accepted)
       )
+      await options.onAcceptedEvent?.(row.event)
       // Keep retries until the ACK and host callback succeed for the active account.
       signal.throwIfAborted()
       await storage.del(key)
+      if (row.event.kind === 37368) {
+        for (const blockedKey of await storage.list(prefix)) {
+          const blocked = await storage.get<PendingPublication>(blockedKey)
+          signal.throwIfAborted()
+          if (blocked && coversLegacyPrivateRoster(row.event, blocked.event)) await storage.del(blockedKey)
+        }
+      }
       return row.event
     })().finally(() => inFlight.delete(key))
     inFlight.set(key, publishing)

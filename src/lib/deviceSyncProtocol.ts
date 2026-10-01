@@ -1,4 +1,5 @@
-import { validatePrivateContactDocument, type PrivateContactDocument } from 'nostr-social-graph/privateContactSync'
+import { validPrivateDeviceLabel, type PrivateDeviceLabel } from './privateDeviceLabelProtocol'
+import { validatePrivateContactDocument, type PrivateContactDocument } from 'nostr-social-graph/privateContactSyncV2'
 import { isChatPinState, type ChatPinState } from './chatPinSync'
 import { isChatMuteState, type ChatMuteState } from './chatMuteSync'
 export const DEVICE_SYNC_PORT = 7369
@@ -78,7 +79,8 @@ export interface DeviceSyncSnapshot {
   chats: DeviceSyncChat[]
   chatMutes?: ChatMuteState[]
   chatPins?: ChatPinState[]
-  privateContacts?: PrivateContactDocument[]
+  privateContactsV2?: PrivateContactDocument[]
+  privateDeviceLabelsV2?: PrivateDeviceLabel[]
   groups: DeviceSyncGroup[]
   messages: DeviceSyncMessage[]
 }
@@ -191,9 +193,11 @@ function parsePage(value: unknown): DeviceSyncPage {
 
 function parseSnapshot(value: Record<string, unknown>, owner: string): DeviceSyncSnapshot {
   if (!isTime(value.rosterAt)) fail('snapshot rosterAt is invalid')
-  const privateContacts = defaultArray(value.privateContacts, 'privateContacts')
-  try { privateContacts.forEach(document => validatePrivateContactDocument(document, owner)) }
-  catch { fail('snapshot privateContacts are invalid') }
+  const privateDeviceLabelsV2 = defaultArray(value.privateDeviceLabelsV2, 'privateDeviceLabelsV2')
+  if (!privateDeviceLabelsV2.every(item => validPrivateDeviceLabel(item, owner))) fail('snapshot privateDeviceLabelsV2 are invalid')
+  const privateContactsV2 = defaultArray(value.privateContactsV2, 'privateContactsV2')
+  try { privateContactsV2.forEach(document => validatePrivateContactDocument(document, owner)) }
+  catch { fail('snapshot privateContactsV2 are invalid') }
   const appKeys = defaultArray(value.appKeys, 'appKeys')
   const chats = defaultArray(value.chats, 'chats')
   const chatPins = defaultArray(value.chatPins, 'chatPins')
@@ -217,7 +221,8 @@ function parseSnapshot(value: Record<string, unknown>, owner: string): DeviceSyn
     appKeys: appKeys as unknown as DeviceSyncAppKeys[],
     chats: chats as unknown as DeviceSyncChat[],
     ...(chatPins.length && { chatPins: chatPins as ChatPinState[] }),
-    ...(privateContacts.length && { privateContacts: privateContacts as PrivateContactDocument[] }),
+    ...(privateDeviceLabelsV2.length && { privateDeviceLabelsV2: privateDeviceLabelsV2 as PrivateDeviceLabel[] }),
+    ...(privateContactsV2.length && { privateContactsV2: privateContactsV2 as PrivateContactDocument[] }),
     ...(chatMutes.length && { chatMutes: chatMutes as ChatMuteState[] }),
     groups: groups as unknown as DeviceSyncGroup[],
     messages: decodedMessages,

@@ -122,7 +122,10 @@ export async function setChatMute(chatId: string, durationSeconds: number | null
   await mergeChatMutes([mute], account)
   if (owner !== account || get(identity)?.pubkey !== account) return
   void import('./chatMuteControl').then(({ sendChatMuteControl }) => sendChatMuteControl(account, mute))
-    .catch(error => console.warn('Could not send mute setting to linked devices', error))
+    .catch(error => {
+      console.warn('Mute setting remains queued for linked devices', error)
+      void import('./chatMuteControl').then(({ retryChatMuteSync }) => retryChatMuteSync(account))
+    })
 }
 
 /** Drain earlier writes before normal logout clears the shared database. */

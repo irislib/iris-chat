@@ -1,3 +1,4 @@
+vi.mock('./privateContactMigration', () => ({ migrateStoredPrivateContacts: vi.fn(async () => {}) }))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +12,7 @@ vi.mock('nostr-double-ratchet', async (original) => {
     AppKeys: class extends actual.AppKeys { static waitFor = mocks.waitFor },
     NdrRuntime: class {
       getState() { return mocks.state }
+      retireLegacyPrivateContactSync = vi.fn().mockResolvedValue(undefined)
       initForOwner = vi.fn().mockResolvedValue(undefined)
       prepareRegistration = vi.fn(async () => ({ newDeviceIdentity: mocks.device }))
       publishPreparedRegistration = mocks.register
