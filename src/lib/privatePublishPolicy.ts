@@ -5,7 +5,7 @@ export function hasLegacyPrivateRoster(event: VerifiedEvent): boolean {
   return event.kind === 37368 && event.tags.some(labelTag)
 }
 /** Signing a public roster is allowed; persisting ordinary private data with a static key is not. */
-export function assertPrivatePublicationPolicy(event: VerifiedEvent): void {
+export function assertPrivatePublicationPolicy(event: Pick<VerifiedEvent, 'kind' | 'tags'>): void {
   if (hasLegacyPrivateRoster(event)) throw new Error('Device list update needs confirmation; old private names remain local')
   if ([10449, 10450, 10451, 10452, 10453, 21112].includes(event.kind) ||
     (event.kind === 30078 && event.tags.some(tag => tag[0] === 't' && tag[1] === 'nostr-social-memory/v1'))) {
