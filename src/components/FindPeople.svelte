@@ -9,7 +9,7 @@
   import { createRuntimePeopleProfilesStore } from '../lib/peopleProfilesRuntime'
   import { mergePeopleProfiles, peopleSearchKey, peopleSearchScore } from '../lib/peopleSearch'
   import { peopleGraph, initPeopleGraph, getPeopleGraphCandidates, getPeopleGraphSignals } from '../lib/peopleGraph'
-  import { startChatWithPerson, type ChatSession } from '../lib/chat'
+  import { acceptInvite, chats, startChatWithPerson, type ChatSession } from '../lib/chat'
   import { getErrorMessage } from '../lib/utils'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
@@ -20,6 +20,8 @@
   let opening = $state(false)
   onMount(initPeopleGraph)
   let exactKey = $derived(peopleSearchKey(query))
+  let showNoteToSelf = $derived(!!$identity && (!query.trim() || exactKey === $identity.pubkey ||
+    'note to self'.includes(query.trim().toLowerCase())))
   let socialKeys = $derived.by(() => {
     $peopleGraph.version
     return [...new Set([...(exactKey ? [exactKey] : []), ...$following, ...getPeopleGraphCandidates(MAX_MESSAGING_PEOPLE)])]
@@ -69,11 +71,28 @@
       error = getErrorMessage(cause, 'Couldn’t start chat')
     } finally { opening = false }
   }
+  async function openNoteToSelf() {
+    const pubkey = $identity?.pubkey
+    if (!pubkey || opening) return
+    opening = true
+    error = ''
+    try {
+      const chat = $chats.get(pubkey) ?? await acceptInvite({ type: 'pubkey', pubkey })
+      if ($identity?.pubkey === pubkey) onjoin(new CustomEvent('join', { detail: { chat } }))
+    } catch { error = 'Couldn’t open Note to self. Try again.' }
+    finally { opening = false }
+  }
 </script>
 
 <section class="w-full max-w-md p-6 bg-surface rounded-2xl shadow-xl overflow-hidden" aria-label="Find people">
   <h2 class="text-2xl font-bold text-white mb-4 text-center">Find people</h2>
   <input class="input-field" aria-label="Search people" placeholder="Search people or paste a user ID" bind:value={query} />
+  {#if showNoteToSelf}
+    <button class="w-full flex items-center gap-3 p-3 mt-2 rounded-lg hover:bg-surface-light text-left" disabled={opening} onclick={openNoteToSelf}>
+      <span class="w-10 h-10 flex items-center justify-center rounded-full bg-primary/15 text-primary flex-shrink-0"><span class="i-carbon-notebook text-xl" aria-hidden="true"></span></span>
+      <span class="font-medium text-sm">Note to self</span>
+    </button>
+  {/if}
   {#if query.trim()}
     <div class="mt-3 max-h-64 overflow-y-auto" aria-live="polite">
       {#each results as key (key)}
@@ -92,7 +111,7 @@
           </a>
         {/if}
       {:else}
-        <p class="text-gray-400 text-sm py-3">{loading ? 'Finding people…' : $remoteProfiles.unavailable ? 'Search is unavailable. Try again.' : 'No people found'}</p>
+        {#if !showNoteToSelf}<p class="text-gray-400 text-sm py-3">{loading ? 'Finding people…' : $remoteProfiles.unavailable ? 'Search is unavailable. Try again.' : 'No people found'}</p>{/if}
       {/each}
     </div>
   {/if}

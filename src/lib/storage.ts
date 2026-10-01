@@ -3,6 +3,7 @@
 import type { CallHistory } from './callHistory'
 import Dexie, { type Table } from 'dexie'
 import { mergeUniqueStrings } from './messageRelayStatus'
+import { clearDirectFileStorage } from './directFileStorage'
 
 // Re-export serialization functions from nostr-double-ratchet
 export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet'
@@ -316,6 +317,7 @@ export async function deleteGroupFromDb(id: string): Promise<void> {
 // Clear all data (for logout)
 export async function clearAllData(): Promise<void> {
   await Promise.all([
+    clearDirectFileStorage(),
     db.sessions.clear(),
     db.messages.clear(),
     db.profiles.clear(),

@@ -25,6 +25,7 @@ dev-dist
 /playwright/.cache/
 /work/
 /test-fixtures/device-sync-rust/target/
+/test-fixtures/direct-files-rust/target/
 .vitest-localstorage*
 
 # Environment

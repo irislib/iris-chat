@@ -2,6 +2,9 @@
   import ChatPinButton from './ChatPinButton.svelte'
   import { onDestroy } from 'svelte'
   import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
+  import { createDirectFileDraft, directFileSelectionMode, formatDirectFileSize } from '../lib/directFileDraft'
+  import { sendDirectFiles } from '../lib/directFiles'
+  import { directFilePreview } from '../lib/directFileProtocol'
   import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
   import { identity } from '../lib/identity'
   import { following } from '../lib/following'
@@ -12,7 +15,7 @@
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
   import { getDraft, setDraft, clearDraft } from '../lib/drafts'
-  import { formatDayLabel, isDifferentDay } from '../lib/utils'
+  import { formatDayLabel, getErrorMessage, isDifferentDay } from '../lib/utils'
   import { mediaModal, closeMediaModal } from '../lib/mediaModal'
   import { expirationStore } from '../lib/expirationStore'
   import { setDmDisappearingMessages } from '../lib/disappearingMessages'
@@ -51,6 +54,10 @@
   let messagesContainer = $state<HTMLDivElement | null>(null)
   let inputRef = $state<HTMLTextAreaElement | null>(null)
   let fileInputRef = $state<HTMLInputElement | null>(null)
+  let directFileInputRef = $state<HTMLInputElement | null>(null)
+  let showAttachmentMenu = $state(false)
+  let attachmentMenuRef = $state<HTMLDivElement | null>(null)
+  let sendingDirectFiles = $state(false)
   let showMenu = $state(false)
   let showMuteModal = $state(false)
   const attachmentContext = () => `${$identity?.pubkey || ''}:chat:${chat.id}`
@@ -59,10 +66,22 @@
     upload: uploadFile,
     canPreview: file => file.size < 10 * 1024 * 1024 && (isImageFile(file.name) || isVideoFile(file.name)),
   })
+  const directFileDraft = createDirectFileDraft(attachmentContext)
   let isFileDrag = $state(false)
   let attachmentError = $state<string | null>(null)
   let uploadingAttachments = $derived($attachmentDraft.some(item => item.uploading))
-  $effect(() => { attachmentDraft.setContext(attachmentContext()) })
+  $effect(() => {
+    attachmentDraft.setContext(attachmentContext())
+    directFileDraft.setContext(attachmentContext())
+  })
+  $effect(() => {
+    if (!showAttachmentMenu) return
+    const close = (event: PointerEvent) => {
+      if (!attachmentMenuRef?.contains(event.target as Node)) showAttachmentMenu = false
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  })
   let isRecordingVoice = $state(false)
   let recordingContext: string | null = null
   // svelte-ignore state_referenced_locally
@@ -93,10 +112,12 @@
   let effectiveChat = $derived($currentChat || chat)
   let isRequest = $derived(isMessageRequestChat(effectiveChat, policyCtx))
   let attachmentAllowed = $derived(!!$identity && !isRequest && !$messageRequests.rejectedChats[chat.recipientPubkey])
-  let canAttach = $derived(attachmentAllowed && !isRecordingVoice)
+  let canAttach = $derived(attachmentAllowed && !isRecordingVoice && !sendingDirectFiles)
   $effect(() => {
     if (!attachmentAllowed) {
       attachmentDraft.clear()
+      directFileDraft.clear()
+      showAttachmentMenu = false
       isRecordingVoice = false
       recordingContext = null
       isFileDrag = false
@@ -126,6 +147,7 @@
       replyingTo = null
       isFileDrag = false
       attachmentError = null
+      showAttachmentMenu = false
       activeChatId = newChatId
     }
   })
@@ -154,6 +176,7 @@
 
   function handleSend() {
     if (!canSend) return
+    if ($directFileDraft.length) { void handleSendDirectFiles(); return }
     // Build message with attachment link if present
     let text = messageText.trim()
 
@@ -177,11 +200,30 @@
     requestAnimationFrame(() => inputRef?.focus())
   }
 
+  async function handleSendDirectFiles() {
+    const context = attachmentContext()
+    const caption = messageText
+    sendingDirectFiles = true
+    attachmentError = null
+    try {
+      await sendDirectFiles(chat, $directFileDraft.map(item => item.file), caption.trim())
+      if (context !== attachmentContext()) return
+      if (messageText === caption) { messageText = ''; clearDraft(chat.id) }
+      clearAttachment()
+      replyingTo = null
+      sendThrottledTyping.reset()
+      requestAnimationFrame(() => inputRef?.focus())
+    } catch (error) {
+      if (context === attachmentContext()) attachmentError = getErrorMessage(error, 'Couldn’t offer files. Try again.')
+    } finally { sendingDirectFiles = false }
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     } else if (e.key === 'Escape') {
+      showAttachmentMenu = false
       if (replyingTo) {
         replyingTo = null
       } else {
@@ -209,6 +251,7 @@
 
   function clearAttachment() {
     attachmentDraft.clear()
+    directFileDraft.clear()
     attachmentError = null
   }
 
@@ -233,10 +276,14 @@
 
   function handleVoiceCancel() { isRecordingVoice = false; recordingContext = null }
 
-  function attachFiles(files: File[]) {
+  function attachFiles(files: File[], selectedDirectly = false) {
     if (!canAttach || files.length === 0) return
     attachmentError = null
-    void attachmentDraft.add(files)
+    if (directFileSelectionMode($directFileDraft.length, $attachmentDraft.length, selectedDirectly)) {
+      directFileDraft.add(files)
+    } else {
+      void attachmentDraft.add(files)
+    }
     inputRef?.focus()
   }
 
@@ -245,6 +292,15 @@
     const files = Array.from(input.files || [])
     input.value = ''
     attachFiles(files)
+  }
+
+  function handleDirectFileSelect(e: Event) {
+    const input = e.target as HTMLInputElement
+    const files = Array.from(input.files || [])
+    input.value = ''
+    // An upload draft cannot become a private direct selection after upload.
+    if ($attachmentDraft.length) return
+    attachFiles(files, true)
   }
 
   function handleDrop(e: DragEvent) {
@@ -288,6 +344,7 @@
   onDestroy(() => {
     recordingContext = null
     attachmentDraft.clear()
+    directFileDraft.clear()
     if (disappearingNoticeTimer) {
       clearTimeout(disappearingNoticeTimer)
       disappearingNoticeTimer = null
@@ -364,9 +421,9 @@
   let messageMap = $derived(new Map(messages.map(m => [m.id, m])))
 
   let canSend = $derived(
-    !!$identity && !$messageRequests.rejectedChats[chat.recipientPubkey] &&
-    ($attachmentDraft.length === 0 || attachmentAllowed) &&
-    !!(messageText.trim() || $attachmentDraft.length) &&
+    !!$identity && !sendingDirectFiles && !$messageRequests.rejectedChats[chat.recipientPubkey] &&
+    ($attachmentDraft.length + $directFileDraft.length === 0 || attachmentAllowed) &&
+    !!(messageText.trim() || $attachmentDraft.length || $directFileDraft.length) &&
     $attachmentDraft.every(item => !!item.nhash && !item.uploading && !item.error)
   )
 </script>
@@ -397,7 +454,7 @@
       <Avatar pubkey={chat.recipientPubkey} size={40} />
       <div class="flex-1 min-w-0 text-left">
         <p class="font-medium truncate">
-          <Name pubkey={chat.recipientPubkey} />
+          {#if chat.recipientPubkey === myPubkey}Note to self{:else}<Name pubkey={chat.recipientPubkey} />{/if}
         </p>
       </div>
     </button>
@@ -583,7 +640,7 @@
               <Name pubkey={chat.recipientPubkey} />
             {/if}
           </div>
-          <div class="text-sm text-gray-400 truncate">{replyingTo.content}</div>
+          <div class="text-sm text-gray-400 truncate">{directFilePreview(replyingTo.content)}</div>
         </div>
         <button
           class="w-7 h-7 flex-shrink-0 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
@@ -596,6 +653,26 @@
     {/if}
 
     <!-- Attachment preview -->
+    {#if $directFileDraft.length}
+      <div class="px-4 pt-3 pb-2">
+        <p class="text-xs text-gray-400 mb-2" data-testid="direct-file-mode">{sendingDirectFiles ? 'Preparing files…' : 'Send directly'} · Keep this tab open</p>
+        <div class="flex gap-3 overflow-x-auto py-1">
+          {#each $directFileDraft as item (item.id)}
+            <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-light flex-shrink-0" data-testid="direct-file-preview">
+              <span class="i-carbon-document text-xl text-gray-400" aria-hidden="true"></span>
+              <div class="min-w-0">
+                <div class="text-sm max-w-40 truncate">{item.file.name}</div>
+                <div class="text-xs text-gray-400">{formatDirectFileSize(item.file.size)}</div>
+              </div>
+              <button class="p-1 rounded-full hover:bg-surface-lighter disabled:opacity-50" disabled={sendingDirectFiles}
+                aria-label={`Remove ${item.file.name}`} onclick={() => directFileDraft.remove(item.id)}>
+                <span class="i-carbon-close" aria-hidden="true"></span>
+              </button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
     {#if $attachmentDraft.length}
       <div class="px-4 pt-3 pb-2 flex gap-4 overflow-x-auto">
         {#each $attachmentDraft as pendingAttachment (pendingAttachment.id)}
@@ -674,6 +751,8 @@
         onchange={handleFileSelect}
         accept="image/*,video/*,audio/*,.pdf,.txt,.json,.md"
       />
+      <input bind:this={directFileInputRef} type="file" multiple class="hidden"
+        data-testid="direct-file-input" onchange={handleDirectFileSelect} />
 
       {#if isRecordingVoice}
         <!-- Voice recording UI -->
@@ -702,14 +781,24 @@
         {/if}
 
         <!-- Attachment button -->
-        <button
-          class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
-          onclick={() => fileInputRef?.click()}
-          disabled={!canAttach || uploadingAttachments}
-          aria-label="Attach file"
-        >
-          <span class="i-carbon-attachment text-xl"></span>
-        </button>
+        <div class="relative flex-shrink-0" bind:this={attachmentMenuRef}>
+          <button
+            class="w-11 h-11 p-0 flex items-center justify-center text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
+            onclick={() => showAttachmentMenu = !showAttachmentMenu}
+            disabled={!canAttach || uploadingAttachments}
+            aria-label="Attach file" aria-expanded={showAttachmentMenu}
+          >
+            <span class="i-carbon-attachment text-xl"></span>
+          </button>
+          {#if showAttachmentMenu}
+            <div class="absolute bottom-full left-0 mb-2 py-1 min-w-40 bg-surface border border-surface-lighter rounded-lg shadow-xl z-30">
+              <button class="w-full px-4 py-2 text-left text-sm hover:bg-surface-light" onclick={() => { showAttachmentMenu = false; fileInputRef?.click() }}>Files</button>
+              <button class="w-full px-4 py-2 text-left text-sm hover:bg-surface-light disabled:opacity-40" disabled={$attachmentDraft.length > 0}
+                title={$attachmentDraft.length ? 'Remove the uploaded files first' : undefined}
+                onclick={() => { showAttachmentMenu = false; directFileInputRef?.click() }}>Send directly</button>
+            </div>
+          {/if}
+        </div>
 
         <!-- svelte-ignore a11y_autofocus -->
         <textarea
@@ -725,7 +814,7 @@
         ></textarea>
 
         <!-- Voice/Send button -->
-        {#if messageText.trim() || $attachmentDraft.length}
+        {#if messageText.trim() || $attachmentDraft.length || $directFileDraft.length}
           <button
             class="btn-primary w-11 h-11 p-0 flex items-center justify-center flex-shrink-0"
             onclick={handleSend}

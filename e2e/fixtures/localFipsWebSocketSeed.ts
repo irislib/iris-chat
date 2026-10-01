@@ -6,6 +6,7 @@ import {
   type Transport,
   type TransportAddress,
   type TransportContext,
+  type PeerEvent,
 } from '@fips/core';
 import {
   decodeLocalKeyHint,
@@ -21,6 +22,7 @@ export interface LocalFipsWebSocketSeed {
   url: string;
   close(): Promise<void>;
   shape(bytesPerSecond: number, dropEvery?: number): void;
+  connectedPeers(): string[];
 }
 
 class InboundWebSocketTransport implements Transport {
@@ -163,10 +165,17 @@ export async function startLocalFipsWebSocketSeed(): Promise<LocalFipsWebSocketS
     forwarding: true,
     routingMode: 'reply_learned',
   });
+  const peers = new Set<string>();
+  node.on('peer', (value) => {
+    const event = value as PeerEvent;
+    if (event.state === 'connected') peers.add(event.remotePubkey);
+    else if (event.state === 'disconnected') peers.delete(event.remotePubkey);
+  });
   await node.start();
   return {
     url: transport.url,
     close: () => node.stop(),
     shape: (rate, dropEvery = 0) => { transport.rate = rate; transport.dropEvery = dropEvery; },
+    connectedPeers: () => [...peers],
   };
 }

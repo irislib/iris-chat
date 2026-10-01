@@ -1,0 +1,18 @@
+[package]
+name = "iris-chat-direct-files-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22.1"
+fips-core = { package = "nvpn-fips-core", version = "=0.4.83", features = ["webrtc-transport", "host-ble-transport"] }
+fips-tcp = { package = "nvpn-fips-tcp", version = "=0.2.2" }
+fips-tcp-endpoint = { package = "nvpn-fips-tcp-endpoint", version = "=0.2.18" }
+flume = "0.11"
+nostr = { version = "0.44.7", default-features = false, features = ["std", "nip44"] }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "fs"] }

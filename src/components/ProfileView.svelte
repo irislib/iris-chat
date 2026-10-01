@@ -280,7 +280,7 @@
             disabled={chatBusy}
           >
             <span class="i-carbon-chat"></span>
-            {hasExistingChat ? 'Open Chat' : 'Start Chat'}
+            {$identity?.pubkey === pubkey ? 'Message' : hasExistingChat ? 'Open Chat' : 'Start Chat'}
           </button>
           {#if chatError}<p role="alert" class="text-sm text-red-400 mt-2">{chatError}</p>{/if}
         </div>

@@ -7,6 +7,8 @@
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
+  import { identity } from '../lib/identity'
+  import { directFilePreview } from '../lib/directFileProtocol'
 
   interface Props {
     chat: ChatSession
@@ -43,7 +45,7 @@
 
     <div class="flex-1 min-w-0 leading-tight">
       <div class="flex items-center justify-between gap-2">
-        <span class="font-medium text-sm truncate"><Name pubkey={chat.recipientPubkey} /></span>
+        <span class="font-medium text-sm truncate">{#if chat.recipientPubkey === $identity?.pubkey}Note to self{:else}<Name pubkey={chat.recipientPubkey} />{/if}</span>
         {#if $pinnedChatIds.has(chat.id)}<span class="i-carbon-pin-filled text-gray-500 flex-shrink-0" role="img" aria-label="Pinned chat"></span>{/if}
         <div class="flex flex-col items-end flex-shrink-0 gap-0.5">
           {#if lastMessage}
@@ -72,7 +74,7 @@
             <span class={lastMessage.call.video ? 'i-carbon-video-filled align-middle mr-1' : 'i-carbon-phone-filled align-middle mr-1'} aria-hidden="true"></span>
             {callHistoryLabel(lastMessage.call)}
           {:else}
-            {lastMessage.isMine ? 'You: ' : ''}{lastMessage.content}
+            {lastMessage.isMine ? 'You: ' : ''}{directFilePreview(lastMessage.content)}
           {/if}
         </div>
       {:else}
