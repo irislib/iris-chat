@@ -114,6 +114,10 @@ jobs:
       - name: Type check
         run: pnpm run check
 
+      - name: Unit tests
+        if: matrix.shard == 1
+        run: pnpm test
+
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium webkit
 
