@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
+import { createPrivateContactSync, editPrivateContact, privateContactDocuments } from 'nostr-social-graph/privateContactSync'
 import {
   DEVICE_SYNC_MAX_PACKET_BYTES,
   DEVICE_SYNC_PAGE_MESSAGES,
@@ -86,6 +87,36 @@ interop('iris-chat-rs device-sync interop', () => {
     }
     const nativeBytes = runNative('roundtrip', encodeDeviceSyncPacket(snapshot))
     expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(snapshot)
+  })
+
+  it('preserves private contact registers and explicit clears across native and web sync', () => {
+    const initial = editPrivateContact(createPrivateContactSync(owner, '1'.repeat(32)), peer, {
+      favorite: true, nickname: 'Café friend', note: 'Meet tomorrow\nBring tea ☕',
+    }, '2'.repeat(32))
+    const cleared = editPrivateContact(initial, peer, { favorite: false, nickname: null, note: null })
+    for (const state of [initial, cleared]) {
+      const snapshot: DeviceSyncSnapshot = {
+        v: 1, type: 'snapshot', rosterAt: 100,
+        appKeys: [], chats: [], groups: [], messages: [],
+        privateContacts: privateContactDocuments(state),
+      }
+      const nativeBytes = runNative('roundtrip', encodeDeviceSyncPacket(snapshot))
+      expect(JSON.parse(new TextDecoder().decode(nativeBytes))).toEqual(snapshot)
+      expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(snapshot)
+    }
+  })
+
+  it('agrees with Rust when rejecting a negative private contact register counter', () => {
+    const documents = privateContactDocuments(editPrivateContact(
+      createPrivateContactSync(owner, '1'.repeat(32)), peer, { favorite: true }, '2'.repeat(32),
+    ))
+    documents[0].fields.favorite!.counter = -1
+    const payload = encodeDeviceSyncPacket({
+      v: 1, type: 'snapshot', rosterAt: 100,
+      appKeys: [], chats: [], groups: [], messages: [], privateContacts: documents,
+    })
+    expect(invokeNative('roundtrip', payload).status).not.toBe(0)
+    expect(() => parseDeviceSyncPacket(payload, owner)).toThrow(DeviceSyncProtocolError)
   })
 
   it('lets Rust decode TS and TS decode Rust for every paged packet shape', () => {

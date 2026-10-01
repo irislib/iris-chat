@@ -13,6 +13,7 @@ fn main() {
     let mute_path = core.join("src/core/chat_mute_sync.rs");
     let pin_path = core.join("src/core/chat_pin_sync.rs");
     let contact_path = core.join("src/core/contact_details.rs");
+    let private_contact_path = core.join("src/private_contact_sync.rs");
     for path in [
         &protocol_path,
         &tcp_path,
@@ -20,6 +21,7 @@ fn main() {
         &body_path,
         &model_path,
         &contact_path,
+        &private_contact_path,
         &mute_path,
         &pin_path,
     ] {
@@ -64,6 +66,17 @@ fn main() {
 
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     fs::write(out.join("native_contract.rs"), contract).expect("write contract");
+    // Preserve the production wire declarations and aliases verbatim, without
+    // importing the unrelated event encryption and storage implementation.
+    fs::write(
+        out.join("native_private_contacts.rs"),
+        derived_items(
+            &read(private_contact_path),
+            "struct PrivateContactRegister",
+            "struct PrivateContactDocument",
+        ),
+    )
+    .expect("write private contact contract");
     fs::write(
         out.join("native_framing.rs"),
         framing[framing_start..framing_end].replace("pub(super) ", ""),
@@ -88,11 +101,19 @@ fn read(path: PathBuf) -> String {
 }
 
 fn derived_item<'a>(source: &'a str, name: &str) -> &'a str {
+    derived_items(source, name, name)
+}
+
+fn derived_items<'a>(source: &'a str, first: &str, last: &str) -> &'a str {
     let item = source
-        .find(name)
-        .unwrap_or_else(|| panic!("missing native {name}"));
+        .find(first)
+        .unwrap_or_else(|| panic!("missing native {first}"));
     let start = source[..item].rfind("#[derive").expect("item derive");
-    &source[start..item_end(source, item)]
+    let end = source[item..]
+        .find(last)
+        .map(|offset| item + offset)
+        .unwrap_or_else(|| panic!("missing native {last}"));
+    &source[start..item_end(source, end)]
 }
 
 fn constant(source: &str, name: &str) -> String {
