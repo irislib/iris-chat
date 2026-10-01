@@ -14,12 +14,14 @@ beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now * 1000) })
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('one-time signer authorization', () => {
-  it('preserves existing devices and every opaque label tag', () => {
+  it('preserves existing devices without copying old static-encrypted names', () => {
     const original = roster()
     const previous = finalizeEvent({ ...original, tags: [...original.tags, ['encrypted_device_labels', 'opaque-one'], ['encrypted_device_labels', 'opaque-two']] }, secret)
     const expected = prepareSignerAuthorization(owner, newDevice, previous)
     expect(expected.created_at).toBeGreaterThan(previous.created_at)
-    expect(expected.tags.filter(tag => tag[0] === 'encrypted_device_labels')).toEqual(previous.tags.filter(tag => tag[0] === 'encrypted_device_labels'))
+    expect(expected.tags.some(tag => tag[0] === 'encrypted_device_labels')).toBe(false)
+    expect(expected.tags.some(tag => tag[0] === 'f' && tag[1] === 'encrypted_device_labels')).toBe(false)
+    expect(previous.tags.filter(tag => tag[0] === 'encrypted_device_labels')).toHaveLength(2)
     const approved = validateSignerAuthorization(expected, finalizeEvent(expected, secret))
     expect(AppKeys.fromEvent(approved).getAllDevices()).toEqual(expect.arrayContaining([
       { identityPubkey: oldDevice, createdAt: 123 },

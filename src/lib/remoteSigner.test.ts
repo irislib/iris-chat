@@ -5,7 +5,8 @@ import { TestRemoteSigner } from '../../e2e/nip46-signer'
 import { RemoteSigner, parseBunkerLink } from './remoteSigner'
 import { authorizeSignerDevice, fetchSignerRoster } from './signerAuthorization'
 import { SilentTestRelay } from '../../e2e/test-relay'
-import { finalizeEvent, getPublicKey } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
+import { AppKeys } from 'nostr-double-ratchet'
 
 import { createNostrRuntime } from 'nostr-pubsub'
 let runtime: ReturnType<typeof createNostrRuntime>
@@ -113,6 +114,30 @@ describe('NIP-46 transport', () => {
     cleanups.push(() => silent.stop())
     await expect(fetchSignerRoster(signer.ownerPubkey, [relay.url, silent.url], controller.signal, runtime)).rejects.toThrow('Could not check all message servers')
   }, 15_000)
+
+  it('publishes only public authorization when a signer links to an old labeled roster', async () => {
+    const { relay, signer, controller } = await setup()
+    const oldDevice = getPublicKey(generateSecretKey())
+    const previous = new AppKeys([{ identityPubkey: oldDevice, createdAt: 123 }]).getEvent({
+      ownerPubkey: signer.ownerPubkey, createdAt: Math.floor(Date.now() / 1000) - 1,
+    })
+    previous.tags.push(['encrypted_device_labels', 'old-private-names'])
+    await runtime.publish(finalizeEvent(previous, signer.ownerSecret), {
+      relays: [relay.url], sources: [], requireAck: true, queue: false, localEcho: false,
+    })
+    const authorized = await authorizeSignerDevice({ runtime,
+      owner: signer.ownerPubkey, relays: [relay.url], signal: controller.signal,
+      signEvent: async event => finalizeEvent(event, signer.ownerSecret),
+    })
+    const published = relay.publishedEvents.find(event => event.id === authorized.event.id)
+    expect(published).toEqual(authorized.event)
+    expect(authorized.event.tags.some(tag => tag[0] === 'encrypted_device_labels' ||
+      (tag[0] === 'f' && tag[1] === 'encrypted_device_labels'))).toBe(false)
+    expect(AppKeys.fromEvent(authorized.event).getAllDevices()).toEqual(expect.arrayContaining([
+      { identityPubkey: oldDevice, createdAt: 123 },
+      expect.objectContaining({ identityPubkey: getPublicKey(authorized.deviceSecret) }),
+    ]))
+  })
 
   it('never queues a rejected authorization after discarding its device key', async () => {
     const { relay, signer, controller } = await setup()

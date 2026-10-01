@@ -48,7 +48,7 @@ export function prepareSignerAuthorization(owner: string, device: string, previo
   if (appKeys.getAllDevices().length > 64) throw new Error('Too many linked devices.')
   const event = appKeys.getEvent({ ownerPubkey: owner, createdAt })
   event.pubkey = owner
-  event.tags.push(...(previous?.tags.filter(tag => tag[0] === 'encrypted_device_labels').map(tag => [...tag]) ?? []))
+  // Retain public authorization only; old encrypted names remain in local state.
   if (JSON.stringify(event).length > 32 * 1024 - 256) throw new Error('Device list is too large.')
   return event
 }
