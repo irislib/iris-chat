@@ -3,6 +3,7 @@ import { chromium, type BrowserContext, type Page } from '@playwright/test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { TestRelay } from './test-relay'
+import { observeCallMedia, writeCallMediaDiagnostics } from './fixtures/callMediaDiagnostics'
 
 declare global {
   interface Window {
@@ -10,7 +11,7 @@ declare global {
   }
 }
 
-test('shares selected screen pixels over the existing call and restores camera state safely', async ({ baseURL }) => {
+test('shares selected screen pixels over the existing call and restores camera state safely', async ({ baseURL }, testInfo) => {
   test.setTimeout(150000)
   const seed = await startLocalFipsWebSocketSeed()
   const relay = new TestRelay()
@@ -22,6 +23,7 @@ test('shares selected screen pixels over the existing call and restores camera s
   async function user() {
     const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera'], serviceWorkers: 'block', viewport: { width: 1100, height: 780 } })
     contexts.push(context)
+    await observeCallMedia(context)
     await useTestRelay(context, relay.url)
     await context.addInitScript(seed => {
       localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed], stunServers: [] }))
@@ -192,6 +194,7 @@ test('shares selected screen pixels over the existing call and restores camera s
     await expect(b.getByTestId('call-screen')).toBeHidden()
     evidence.push({ phase: 'screen-shared-audio-continued-camera-restored-late-picker-released', audioIdentityUnchanged: true })
   } finally {
+    await writeCallMediaDiagnostics(contexts, logs, testInfo)
     await mkdir('work/web-screen-sharing', { recursive: true })
     await writeFile('work/web-screen-sharing/browser.log', logs.join('\n'))
     await writeFile('work/web-screen-sharing/evidence.json', JSON.stringify(evidence, null, 2))

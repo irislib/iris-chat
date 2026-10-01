@@ -4,8 +4,9 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { startSilentStunServer } from './fixtures/silentStunServer'
 import { TestRelay } from './test-relay'
+import { observeCallMedia, writeCallMediaDiagnostics } from './fixtures/callMediaDiagnostics'
 
-test('voice and video continue directly over FIPS with STUN unavailable and servers stopped', async ({ baseURL }) => {
+test('voice and video continue directly over FIPS with STUN unavailable and servers stopped', async ({ baseURL }, testInfo) => {
   test.setTimeout(240000)
   const bandwidth: Record<string, unknown>[] = []
   const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--disable-features=WebRtcHideLocalIpsWithMdns'] })
@@ -24,6 +25,7 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
   async function user() {
     const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera', 'notifications'], viewport: { width: 1100, height: 780 }, serviceWorkers: 'block' })
     contexts.push(context)
+    await observeCallMedia(context)
     await useTestRelay(context, testRelayUrl)
     await context.addInitScript(({ seed, stun }) => {
       localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed], stunServers: [stun] }))
@@ -388,6 +390,7 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     await expect(b.getByRole('switch', { name: 'Voice calls', exact: true })).toHaveAttribute('aria-checked', 'false')
     await expect(b.getByRole('switch', { name: 'Video calls', exact: true })).toHaveAttribute('aria-checked', 'false')
   } finally {
+    await writeCallMediaDiagnostics(contexts, logs, testInfo)
     await mkdir('work/calls', { recursive: true })
     directEvidence.push({ phase: 'finished', stunRequests: stun.requests(), relayStopped, seedStopped })
     const finalRtc = await Promise.all(contexts.map(async context => {

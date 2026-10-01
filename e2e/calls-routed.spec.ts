@@ -3,8 +3,9 @@ import { chromium, type BrowserContext, type Page } from '@playwright/test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { TestRelay } from './test-relay'
+import { observeCallMedia, writeCallMediaDiagnostics } from './fixtures/callMediaDiagnostics'
 
-test('two browsers route voice and video through an intermediate FIPS node when direct connections are unavailable', async ({ baseURL }) => {
+test('two browsers route voice and video through an intermediate FIPS node when direct connections are unavailable', async ({ baseURL }, testInfo) => {
   test.setTimeout(120000)
   const seed = await startLocalFipsWebSocketSeed()
   const relay = new TestRelay()
@@ -17,6 +18,7 @@ test('two browsers route voice and video through an intermediate FIPS node when 
   async function user() {
     const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera'], serviceWorkers: 'block', viewport: { width: 1100, height: 780 } })
     contexts.push(context)
+    await observeCallMedia(context)
     await useTestRelay(context, relay.url)
     await context.addInitScript(seed => {
       localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed], stunServers: [] }))
@@ -122,6 +124,7 @@ test('two browsers route voice and video through an intermediate FIPS node when 
     await expect(a.getByTestId('call-history-row')).toContainText('Outgoing video call')
     await expect(b.getByTestId('call-history-row')).toContainText('Incoming video call')
   } finally {
+    await writeCallMediaDiagnostics(contexts, logs, testInfo)
     await mkdir('work/calls-routed', { recursive: true })
     await writeFile('work/calls-routed/browser.log', logs.join('\n'))
     await writeFile('work/calls-routed/evidence.json', JSON.stringify(evidence, null, 2))
