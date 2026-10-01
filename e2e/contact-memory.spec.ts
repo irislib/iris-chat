@@ -73,6 +73,13 @@ test('private contact memory, public follows and network warnings stay separate'
   await expect(page.getByText('First known as Alice Original')).toBeVisible()
   await page.getByRole('button', {name: 'Follow (public)', exact: true}).click()
   await expect(avatar.getByLabel('Following', {exact: true})).toBeVisible()
+  const graphBadge = avatar.getByLabel('Following', {exact: true})
+  await expect(graphBadge).toHaveCSS('background-color', 'rgb(10, 132, 255)')
+  const badgeBounds = await graphBadge.boundingBox()
+  const avatarBounds = await avatar.locator('img').boundingBox()
+  expect(badgeBounds && avatarBounds).toBeTruthy()
+  expect(badgeBounds!.y + badgeBounds!.height / 2).toBeLessThan(avatarBounds!.y + avatarBounds!.height / 2)
+  expect(badgeBounds!.x + badgeBounds!.width / 2).toBeGreaterThan(avatarBounds!.x + avatarBounds!.width / 2)
   const followHead = testRelay.publishedEvents.filter(item => item.pubkey === account && item.kind === 3).sort((a,b) => b.created_at - a.created_at)[0]
   expect(followHead.tags).toEqual([...originalTags, ['p', person]])
   expect(followHead.content).toBe('{"existing":"content"}')
