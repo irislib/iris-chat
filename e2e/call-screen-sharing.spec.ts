@@ -97,6 +97,17 @@ test('shares selected screen pixels over the existing call and restores camera s
       }),
     }
   }
+  async function remoteVideoPixel(page: Page) {
+    return page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => {
+      if (canvas.width < 2 || canvas.height < 2) return { opaque: false, screen: false }
+      // Adaptive video can shrink below 640px. Sample inside the received
+      // frame, away from the screen fixture's title, at every supported size.
+      const [r, g, b, alpha] = canvas.getContext('2d')!.getImageData(
+        Math.floor(canvas.width * 0.5), Math.floor(canvas.height * 0.6), 1, 1,
+      ).data
+      return { opaque: alpha === 255, screen: alpha === 255 && r > 150 && r < 210 && g < 70 && b > 50 && b < 120 }
+    })
+  }
   try {
     const a = await user(), b = await user()
     await a.getByRole('button', { name: 'New Chat', exact: true }).click()
@@ -123,7 +134,7 @@ test('shares selected screen pixels over the existing call and restores camera s
       await expect.poll(async () => (await sample(page)).video).toBeGreaterThan(10)
       await expect.poll(async () => (await sample(page)).energy).toBeGreaterThan(0.01)
       expect((await sample(page)).rtcProhibited).toBe(true)
-      await expect.poll(() => page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBeGreaterThanOrEqual(640)
+      await expect.poll(async () => (await remoteVideoPixel(page)).opaque).toBe(true)
     }
     expect(await a.evaluate(() => window.screenShareProbe.requests.length)).toBe(0)
     const audioIdentity = await a.evaluate(() => window.screenShareProbe.streams[0].getAudioTracks()[0].id)
@@ -140,10 +151,7 @@ test('shares selected screen pixels over the existing call and restores camera s
     await expect(a.getByText('Sharing your screen', { exact: true })).toBeVisible()
     await expect(a.getByRole('button', { name: 'Stop sharing to use the camera' })).toBeDisabled()
     await expect(a.getByLabel('Your screen')).toHaveCSS('transform', 'none')
-    await expect.poll(() => b.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => {
-      const [r, g, b] = canvas.getContext('2d')!.getImageData(320, 300, 1, 1).data
-      return r > 150 && r < 210 && g < 70 && b > 50 && b < 120
-    })).toBe(true)
+    await expect.poll(() => remoteVideoPixel(b)).toEqual({ opaque: true, screen: true })
     await expect.poll(async () => (await sample(b)).audio).toBeGreaterThan(beforeSharing.audio + 50)
     await expect.poll(async () => (await sample(b)).energy).toBeGreaterThan(beforeSharing.energy)
     expect(await a.evaluate(() => {
@@ -168,13 +176,11 @@ test('shares selected screen pixels over the existing call and restores camera s
     await a.getByRole('button', { name: 'Turn camera on' }).click()
     await a.getByRole('button', { name: 'Share screen', exact: true }).click()
     await expect(a.getByRole('button', { name: 'Stop sharing', exact: true })).toBeVisible()
+    await expect.poll(() => remoteVideoPixel(b)).toEqual({ opaque: true, screen: true })
     await a.evaluate(() => { const track = window.screenShareProbe.selected.at(-1)!.getVideoTracks()[0]; track.stop(); track.dispatchEvent(new Event('ended')) })
     await expect(a.getByRole('button', { name: 'Turn camera off' })).toBeEnabled()
     await expect(a.getByLabel('Your camera')).toBeVisible()
-    await expect.poll(() => b.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => {
-      const [r, g, b] = canvas.getContext('2d')!.getImageData(320, 300, 1, 1).data
-      return !(r > 150 && r < 210 && g < 70 && b > 50 && b < 120)
-    })).toBe(true)
+    await expect.poll(() => remoteVideoPixel(b)).toEqual({ opaque: true, screen: false })
     // A picker completing after Hang up must release the selected display.
     await a.evaluate(() => { window.screenShareProbe.mode = 'pending' })
     await a.getByRole('button', { name: 'Share screen', exact: true }).click()

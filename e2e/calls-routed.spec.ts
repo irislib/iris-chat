@@ -88,7 +88,14 @@ test('two browsers route voice and video through an intermediate FIPS node when 
       await expect.poll(async () => (await sample(page)).video).toBeGreaterThan(10)
       await expect.poll(async () => (await sample(page)).energy).toBeGreaterThan(0.01)
       expect((await sample(page)).rtcProhibited).toBe(true)
-      await expect.poll(() => page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBeGreaterThanOrEqual(640)
+      await expect.poll(() => page.getByLabel('Caller video').locator('canvas').evaluate((canvas: HTMLCanvasElement) => {
+        if (canvas.width < 2 || canvas.height < 2) return false
+        // Decoded frames must reach the canvas even when adaptation lowers
+        // resolution. An untouched or cleared canvas remains transparent.
+        return canvas.getContext('2d')!.getImageData(
+          Math.floor(canvas.width * 0.5), Math.floor(canvas.height * 0.6), 1, 1,
+        ).data[3] === 255
+      })).toBe(true)
     }
     // Only the caller may attempt a direct upgrade; the callee can remain routed.
     await expect.poll(async () => (await Promise.all([a, b].map(sample))).reduce((sum, peer) => sum + peer.blockedRtc, 0)).toBeGreaterThan(0)
