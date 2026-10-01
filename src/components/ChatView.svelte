@@ -791,11 +791,16 @@
             <span class="i-carbon-attachment text-xl"></span>
           </button>
           {#if showAttachmentMenu}
-            <div class="absolute bottom-full left-0 mb-2 py-1 min-w-40 bg-surface border border-surface-lighter rounded-lg shadow-xl z-30">
-              <button class="w-full px-4 py-2 text-left text-sm hover:bg-surface-light" onclick={() => { showAttachmentMenu = false; fileInputRef?.click() }}>Files</button>
-              <button class="w-full px-4 py-2 text-left text-sm hover:bg-surface-light disabled:opacity-40" disabled={$attachmentDraft.length > 0}
+            <div data-testid="attachment-source-row"
+              class="absolute bottom-full left-0 mb-2 bg-surface border border-surface-lighter rounded-lg shadow-xl z-30 flex gap-2 p-3 max-w-[calc(100vw-2rem)] overflow-x-auto sm:block sm:py-1 sm:px-0 sm:min-w-40 sm:max-w-none sm:overflow-x-visible">
+              <button class="text-sm hover:bg-surface-light flex flex-col items-center gap-2 px-3 py-2 min-w-24 flex-shrink-0 rounded-lg sm:block sm:w-full sm:px-4 sm:min-w-0 sm:rounded-none sm:text-left" onclick={() => { showAttachmentMenu = false; fileInputRef?.click() }}>
+                <span class="i-carbon-document text-2xl sm:hidden" aria-hidden="true"></span>Files
+              </button>
+              <button class="text-sm hover:bg-surface-light disabled:opacity-40 flex flex-col items-center gap-2 px-3 py-2 min-w-24 flex-shrink-0 rounded-lg whitespace-nowrap sm:block sm:w-full sm:px-4 sm:min-w-0 sm:rounded-none sm:text-left" disabled={$attachmentDraft.length > 0}
                 title={$attachmentDraft.length ? 'Remove the uploaded files first' : undefined}
-                onclick={() => { showAttachmentMenu = false; directFileInputRef?.click() }}>Send directly</button>
+                onclick={() => { showAttachmentMenu = false; directFileInputRef?.click() }}>
+                <span class="i-carbon-arrows-vertical text-2xl sm:hidden" aria-hidden="true"></span>Send directly
+              </button>
             </div>
           {/if}
         </div>

@@ -74,6 +74,7 @@ describe('direct-file app consent and device roles', () => {
   beforeEach(async () => {
     state.owner = 'ab'.repeat(32)
     state.blocked = false; state.saved.clear(); state.transports.length = 0
+    state.readFile.mockReset().mockRejectedValue(new Error('File not found'))
     vi.mocked(sendMessage).mockClear(); connect.mockClear()
     ;(devices as unknown as Writable<unknown>).set({ identityPubkey: local,
       registeredDevices: [local, sibling].map(identityPubkey => ({ identityPubkey })) })
@@ -181,5 +182,54 @@ describe('direct-file app consent and device roles', () => {
     state.transports[0]!.options.onEvent({ type: 'failed', transferId: id, peer: sibling,
       error: `no route to ${sibling}` })
     expect(get(directFileTransfers).get(id)?.error).toBe('Couldn’t reach the other device. Keep both apps open.')
+  })
+
+  it('keeps sent files in chat history after reopening without the original browser files', async () => {
+    await sendDirectFiles(chat(), [new File(['hello'], 'notes.txt')] as unknown as globalThis.File[])
+    const message = get(chats).get(state.owner)!.messages[0]!
+    const id = parseDirectFileOffer(message.content)!.id
+    state.transports[0]!.options.onEvent({ type: 'completed', transferId: id, peer: sibling })
+    await detachDirectFiles()
+    await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
+    await vi.waitFor(() => expect(get(directFileTransfers).get(id)?.status).toBe('completed'))
+    expect(get(chats).get(state.owner)!.messages).toEqual([message])
+    expect(get(directFileTransfers).get(id)).toMatchObject({ isSender: true, transferredBytes: 5,
+      files: [{ filename: 'notes.txt', sizeBytes: 5, canDownload: false }] })
+  })
+
+  it.each([true, false])('keeps failed transfer history after reopening (sender=%s)', async (isSender: boolean) => {
+    let id: string
+    if (isSender) {
+      await sendDirectFiles(chat(), [new File(['hello'], 'notes.txt')] as unknown as globalThis.File[])
+      id = parseDirectFileOffer(get(chats).get(state.owner)!.messages[0]!.content)!.id
+    } else id = await receiveOffer()
+    const messages = get(chats).get(state.owner)!.messages
+    state.transports[0]!.options.onEvent({ type: 'failed', transferId: id, peer: sibling,
+      error: 'Received file did not match the offer' })
+    await detachDirectFiles()
+    await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
+    await vi.waitFor(() => expect(get(directFileTransfers).get(id)?.status).toBe('failed'))
+    expect(get(chats).get(state.owner)!.messages).toEqual(messages)
+    expect(get(directFileTransfers).get(id)).toMatchObject({ isSender,
+      error: 'These files could not be verified. Please send them again.',
+      files: [{ filename: 'notes.txt', sizeBytes: 5, canDownload: false }] })
+  })
+
+  it('keeps received history even when a saved local file is no longer available', async () => {
+    const id = await receiveOffer()
+    await acceptDirectFiles(id)
+    state.transports[0]!.options.onEvent({ type: 'completed', transferId: id, peer: sibling,
+      files: [{ filename: 'notes.txt', blob: new Blob(['hello']) }] })
+    state.readFile.mockResolvedValue(new Blob(['hello']))
+    await detachDirectFiles()
+    await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
+    await vi.waitFor(() => expect(get(directFileTransfers).get(id)?.files[0]?.canDownload).toBe(true))
+    state.readFile.mockRejectedValue(new Error('File not found'))
+    await detachDirectFiles()
+    await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
+    await vi.waitFor(() => expect(get(directFileTransfers).get(id)?.status).toBe('completed'))
+    expect(get(chats).get(state.owner)!.messages).toHaveLength(1)
+    expect(get(directFileTransfers).get(id)).toMatchObject({ isSender: false, transferredBytes: 5,
+      files: [{ filename: 'notes.txt', sizeBytes: 5, canDownload: false }] })
   })
 })

@@ -57,7 +57,7 @@
         <div class="text-sm break-words">{file.filename}</div>
         <div class="text-xs opacity-70">{formatDirectFileSize(file.sizeBytes)}</div>
       </div>
-      {#if transfer.status === 'completed'}
+      {#if transfer.status === 'completed' && file.canDownload}
         <button class="p-2 rounded-full hover:bg-black/10 disabled:opacity-50" disabled={busy}
           aria-label={`Download ${file.filename}`} onclick={() => act(() => downloadDirectFile(transfer.id, index))}>
           <span class="i-carbon-download text-lg" aria-hidden="true"></span>

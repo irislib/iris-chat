@@ -7,6 +7,7 @@ import { test, expect, useTestRelay } from './fixtures'
 import { GroupFarmDevice } from './group-runtime-farm'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { buildNativeDirectFiles, NativeDirectFiles } from './fixtures/nativeDirectFiles'
+import { verifyDirectFileHistory } from './fixtures/directFileHistory'
 
 const payloads = [
   { filename: 'empty.txt', bytes: Buffer.alloc(0) },
@@ -27,8 +28,8 @@ test.describe('browser ↔ native direct files', () => {
   })
 
   for (const sameOwner of [false, true]) {
-    test(`${sameOwner ? 'own distinct devices' : 'different accounts'} transfer multiple files in both directions after acceptance`, async ({ browser, testRelay, testRelayUrl, baseURL }) => {
-      test.setTimeout(150000)
+    test(`${sameOwner ? 'own distinct devices' : 'different accounts'} transfer files and retain completed/failed history after reopening`, async ({ browser, testRelay, testRelayUrl, baseURL }) => {
+      test.setTimeout(180000)
       const seed = await startLocalFipsWebSocketSeed()
       const webKey = generateSecretKey(), webOwner = getPublicKey(webKey)
       const nativeKey = sameOwner ? webKey : generateSecretKey()
@@ -157,6 +158,12 @@ test.describe('browser ↔ native direct files', () => {
           files: payloads.map(file => ({ filename: file.filename, bytes: file.bytes.length, sha256: hash(file.bytes) })),
         }, null, 2))
         await capture(page, sameOwner, 'both-directions-complete')
+        const history = await verifyDirectFileHistory({
+          page, native, control, webOwner, nativeOwner, webDevice,
+          receivedId: outgoing.offer.id, sentId: parsed.id, payloads,
+          capture: stage => capture(page, sameOwner, stage), openChat: () => openChat(page, 'Direct files'),
+        })
+        writeFileSync(`work/direct-file-interop/${sameOwner ? 'self' : 'contact'}-history-evidence.json`, JSON.stringify(history, null, 2))
         await test.info().attach('native-transfer-events', { body: JSON.stringify(native.events, null, 2), contentType: 'application/json' })
       } finally {
         logs.push(`Seed peers at teardown: ${JSON.stringify(seed.connectedPeers())}`)

@@ -37,7 +37,8 @@ describe('direct file offer card', () => {
     expect(active).toContain('File transfer progress')
     expect(active).toContain('Receiving…')
     expect(active).toContain('>Cancel</button>')
-    const completed = html({ status: 'completed', transferredBytes: 2071 })
+    const completed = html({ status: 'completed', transferredBytes: 2071,
+      files: transfer.files.map(file => ({ ...file, canDownload: true })) })
     expect(completed).toContain('aria-label="Download Notes.txt"')
     expect(completed).toContain('aria-label="Download Photo.jpg"')
     expect(completed).not.toContain('>Accept</button>')
@@ -48,5 +49,14 @@ describe('direct file offer card', () => {
     const body = html({ status: 'failed', error: 'The sending device is no longer available.' })
     expect(body).toContain('The sending device is no longer available.')
     expect(body).not.toContain('>Accept</button>')
+  })
+
+  it('keeps completed file names and outcome when local files are gone', () => {
+    const body = html({ status: 'completed', isSender: true,
+      files: transfer.files.map(file => ({ ...file, canDownload: false })) })
+    expect(body).toContain('Notes.txt')
+    expect(body).toContain('Photo.jpg')
+    expect(body).toContain('>Sent</p>')
+    expect(body).not.toContain('aria-label="Download')
   })
 })

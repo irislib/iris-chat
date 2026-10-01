@@ -18,7 +18,7 @@ export type DirectFileStatus = 'offered' | 'connecting' | 'transferring' | 'comp
   'declined' | 'cancelled' | 'failed' | 'unavailable'
 export interface DirectFileTransfer {
   id: string
-  files: { filename: string; sizeBytes: number }[]
+  files: { filename: string; sizeBytes: number; canDownload?: boolean }[]
   status: DirectFileStatus
   isSender: boolean
   transferredBytes: number
@@ -69,6 +69,10 @@ function transferError(error: unknown): string {
 }
 
 function publish(record: TransferRecord, persist = true, runtime = active): void {
+  record = { ...record, files: record.files.map((file, index) => ({ ...file,
+    canDownload: record.status === 'completed' &&
+      (record.blobs?.[index]?.size === file.sizeBytes || file.canDownload === true),
+  })) }
   records.set(record.id, record)
   const { wire: _wire, chatId: _chatId, offer: _offer, blobs: _blobs, ...snapshot } = record
   directFileTransfers.update(all => new Map(all).set(record.id, snapshot))
@@ -110,9 +114,15 @@ async function ingest(runtime: Runtime, chat: ChatSession, wire: string, isMine:
       status = isActive(previous.status)
         ? previous.status === 'offered' && !isSender ? status : 'unavailable'
         : previous.status
-      if (isSender && status === 'completed') status = 'unavailable'
     }
-    publish({ id: offer.id, wire, chatId: chat.id, offer, files: specs(offer), isSender, status,
+    // The result belongs to chat history. Local file availability is independent
+    // and may change after a reload, browser cleanup, or source-file removal.
+    const files = await Promise.all(specs(offer).map(async (file, index) => ({ ...file,
+      canDownload: status === 'completed' && !isSender &&
+        await runtime.storage.getFile(offer.id, index).then(blob => blob.size === file.sizeBytes, () => false),
+    })))
+    if (active !== runtime) return
+    publish({ id: offer.id, wire, chatId: chat.id, offer, files, isSender, status,
       transferredBytes: previous?.wire === wire ? previous.transferredBytes : 0,
       totalBytes: offer.files.reduce((sum, file) => sum + file.size_bytes, 0),
       ...(previous?.wire === wire && previous.error ? { error: previous.error } : {}),
