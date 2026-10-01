@@ -1086,7 +1086,7 @@ test.describe('iris chat', () => {
           const probe = { inputs: 0, paintMs: null as number | null }
           field.pasteProbe = probe
           let started = 0
-          field.addEventListener('paste', () => { started = performance.now() }, { once: true })
+          field.addEventListener('paste', () => { started = performance.now() }, { once: true, capture: true })
           field.addEventListener('input', () => {
             probe.inputs++
             if (probe.inputs === 1) requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1134,13 +1134,14 @@ test.describe('iris chat', () => {
         })
         await input.fill('Keep this draft')
         await page.getByTestId('direct-file-input').setInputFiles({ name: 'First.txt', mimeType: 'text/plain', buffer: Buffer.from('first') })
-        await input.evaluate(element => {
+        const cancelledTextPaste = await input.evaluate(element => {
           const transfer = new DataTransfer()
           transfer.items.add(new File(['second'], 'Second.txt', { type: 'text/plain' }))
           transfer.items.add(new File(['third'], 'Third.pdf', { type: 'application/pdf' }))
           transfer.setData('text/plain', 'clipboard file names must not replace the draft')
-          element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
+          return !element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }))
         })
+        expect(cancelledTextPaste).toBe(true)
         await expect(page.getByTestId('direct-file-preview')).toHaveCount(3)
         await expect(page.getByTestId('direct-file-preview')).toContainText(['First.txt', 'Second.txt', 'Third.pdf'])
         await expect(input).toHaveValue('Keep this draft')
