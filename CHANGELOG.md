@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.6.36 - 2026-10-01
+
+- Keep direct calls connected when devices start connecting to each other at the same time.
+
 ## 2.6.35 - 2026-10-01
 
 - Sync private favorites, nicknames, and notes between your devices and compatible Iris apps.

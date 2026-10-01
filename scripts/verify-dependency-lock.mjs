@@ -15,8 +15,8 @@ const releases = {
     "integrity": "sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w=="
   },
   "@fips/transport-webrtc": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.48/fips-transport-webrtc-0.0.51.tgz",
-    "integrity": "sha512-hDUvPHo7wolA/unWR8xiPpR2lLl7ECq4ut29QhdMxcEAeKNN03aBVe2BAyMWzRSdZmt3K6P1cbixSvuoQK2oAw=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.49/fips-transport-webrtc-0.0.52.tgz",
+    "integrity": "sha512-VT22nF8LqxjXcl8cVq/8k7xcK8c0QNXoxB3pXZ7yMI+da7LkUACjc8pIkYPCZYuIjuXuIhNzNEFYbYalGRyzTw=="
   },
   "@fips/transport-websocket": {
     "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.48/fips-transport-websocket-0.0.8.tgz",
