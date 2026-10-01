@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { beforeAll, beforeEach, afterEach, expect, it, vi } from 'vitest'
-import { clearAllData, putSessionManagerValue, saveProcessedEvent } from './lib/storage'
+import { clearAllData, putSessionManagerValue, saveProcessedEvent, saveProfileToStorage } from './lib/storage'
 import { chatMutesKey } from './lib/chatMutePolicy'
 
 const handlers = new Map<string, (event: unknown) => void>()
@@ -32,6 +32,20 @@ it('background worker resumes at expiry and ignores an unrelated muted chat', as
   await receivePush()
   expect(showNotification).toHaveBeenCalledOnce()
   expect(showNotification.mock.calls[0]).toEqual(expect.arrayContaining([expect.any(String), expect.objectContaining({ body: 'Hello' })]))
+})
+
+it('notifications keep the locally accepted name while the public profile has changed', async () => {
+  const person = 'a'.repeat(64)
+  await saveProfileToStorage({ pubkey: person, name: 'Alicia Updated', updatedAt: Date.now() })
+  await putSessionManagerValue(`iris-contact-memory:v1:profile:${person}`, {
+    first_seen_name: 'Alice Original', accepted_name: 'Alice Original', favorite: false, name_changes: [],
+  })
+  await receivePush()
+  expect(showNotification.mock.calls[0]).toEqual(expect.arrayContaining(['Alice Original', expect.objectContaining({ body: 'Hello' })]))
+  showNotification.mockClear()
+  await putSessionManagerValue('v1/device-manager/owner-pubkey', 'other-account')
+  await receivePush()
+  expect(showNotification.mock.calls[0]).toEqual(expect.arrayContaining(['Alicia Updated', expect.objectContaining({ body: 'Hello' })]))
 })
 
 it('group mute suppresses an identified group without silencing that member’s direct chat', async () => {

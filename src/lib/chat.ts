@@ -80,6 +80,7 @@ import {
 } from './messageRelayStatus'
 
 export type { RecipientDeliveryStatus } from './messageRelayStatus'
+import { rememberContact } from './contactMemory'
 
 export interface ChatMessage {
   call?: CallHistory
@@ -954,6 +955,7 @@ async function ensureManagerChat(
   options: { bootstrap?: boolean } = {}
 ): Promise<ChatSession> {
   const { bootstrap = true } = options
+  try { rememberContact(getPubkey() ?? '', recipientPubkey) } catch { /* Messaging remains available if local storage is full. */ }
   const existing = get(chats).get(recipientPubkey)
   if (existing) return existing
 

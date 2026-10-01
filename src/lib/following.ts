@@ -1,7 +1,8 @@
 import { writable, get } from 'svelte/store'
 import { verifyEvent, type Event } from 'nostr-tools'
-import type { AppEvent, EventSubscription } from './nostrClient'
+import { AppEvent, CacheMode, type EventSubscription } from './nostrClient'
 import { identity, nostrClient } from './identity'
+import { followListUpdate } from './followListUpdate'
 
 // Set of pubkeys we follow (based on kind:3 contact list).
 export const following = writable<Set<string>>(new Set())
@@ -34,6 +35,37 @@ function parseFollowingFromEvent(raw: Event): Set<string> {
 }
 
 const FOLLOWING_CACHE_PREFIX = 'iris-chat-following:'
+
+function applyFollowing(event: Event) {
+  if (get(identity)?.pubkey !== event.pubkey || event.created_at < latestCreatedAt) return
+  latestCreatedAt = event.created_at
+  verifiedFollowingHead.set(event)
+  following.set(parseFollowingFromEvent(event))
+  try { localStorage.setItem(FOLLOWING_CACHE_PREFIX + event.pubkey, JSON.stringify(event)) } catch { /* Storage may be unavailable. */ }
+}
+
+let followingWrites: Promise<void> = Promise.resolve()
+export function setPublicFollow(pubkey: string, follow: boolean): Promise<void> {
+  const account = get(identity)
+  if (!account?.signer) return Promise.reject(new Error('Use your main device to follow'))
+  const write = followingWrites.then(async () => {
+    const client = get(nostrClient)
+    if (get(identity)?.pubkey !== account.pubkey) throw new Error('Account changed')
+    const heads = await client.fetchEvents({ kinds: [3], authors: [account.pubkey], limit: 1 }, { cacheUsage: CacheMode.ONLY_RELAY })
+    for (const item of heads) {
+      const raw = item.rawEvent() as Event
+      if (validFollowEvent(raw, account.pubkey)) applyFollowing(raw)
+    }
+    const head = get(verifiedFollowingHead)
+    const draft = new AppEvent(client, followListUpdate(head, pubkey, follow, Math.floor(Date.now() / 1000)))
+    await draft.sign(account.signer)
+    if (get(identity)?.pubkey !== account.pubkey) throw new Error('Account changed')
+    await draft.publish()
+    applyFollowing(draft.rawEvent())
+  })
+  followingWrites = write.catch(() => {})
+  return write
+}
 function validFollowEvent(event: Event, owner: string): boolean {
   try {
     return event?.kind === 3 && event.pubkey === owner &&
@@ -82,10 +114,7 @@ export function initFollowing(): () => void {
       if (!validFollowEvent(raw, pubkey)) return
       const createdAt = raw.created_at
       if (createdAt && createdAt < latestCreatedAt) return
-      latestCreatedAt = createdAt
-      verifiedFollowingHead.set(raw)
-      following.set(parseFollowingFromEvent(raw))
-      try { localStorage.setItem(FOLLOWING_CACHE_PREFIX + pubkey, JSON.stringify(raw)) } catch { /* Storage can be unavailable. */ }
+      applyFollowing(raw)
     })
   })
 

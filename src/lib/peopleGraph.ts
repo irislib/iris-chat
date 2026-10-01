@@ -24,6 +24,8 @@ export interface PeopleGraphSignals {
   followDistance: number
   friendsFollowing: number
   overmuted: boolean
+  mutedByYou: boolean
+  hasPublicPath: boolean
 }
 
 /** Ordinary people search uses threshold 1; the stricter feed policy is different. */
@@ -231,7 +233,9 @@ export class PeopleGraphController {
       followDistance: this.graph.getFollowDistance(pubkey),
       friendsFollowing: this.graph.followedByFriends(pubkey).size,
       overmuted: graphConsidersUserOvermuted(this.graph, pubkey),
-    } : { followDistance: 1000, friendsFollowing: 0, overmuted: false }
+      mutedByYou: this.graph.getMutedByUser(this.graph.getRoot()).has(pubkey),
+      hasPublicPath: !this.discoveryEdge,
+    } : { followDistance: 1000, friendsFollowing: 0, overmuted: false, mutedByYou: false, hasPublicPath: false }
     if (this.signalCache.size < 4096) this.signalCache.set(pubkey, signals)
     return signals
   }

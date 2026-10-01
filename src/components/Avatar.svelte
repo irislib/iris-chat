@@ -3,6 +3,11 @@
   import { createProfileStore, getProfileName } from '../lib/profile'
   import { getAnimalName } from '../lib/animalNames'
   import { resolvePictureUrl } from '../lib/profilePicture'
+  import SocialDistanceBadge from '@iris/svelte-ui/SocialDistanceBadge.svelte'
+  import { identity } from '../lib/identity'
+  import { following } from '../lib/following'
+  import { contactMemory } from '../lib/contactMemory'
+  import { peopleGraph, getPeopleGraphSignals } from '../lib/peopleGraph'
 
   interface Props {
     pubkey: string
@@ -14,7 +19,9 @@
 
   let profileStore = $derived(pubkey ? createProfileStore(pubkey, loadProfile) : undefined)
   let profile = $derived(profileStore ? $profileStore : undefined)
-  let name = $derived(getProfileName(profile) || getAnimalName(pubkey))
+  let name = $derived.by(() => { $contactMemory; return contactMemory.get($identity?.pubkey ?? '', pubkey)?.accepted_name || getProfileName(profile) || getAnimalName(pubkey) })
+  let signals = $derived.by(() => { $peopleGraph.version; return getPeopleGraphSignals(pubkey) })
+  let distance = $derived(pubkey === $identity?.pubkey ? 0 : $following.has(pubkey) ? 1 : signals.hasPublicPath ? signals.followDistance : null)
 
   let imgError = $state(false)
   let proxiedSrc = $state<string | null>(null)
@@ -42,6 +49,7 @@
   let identicon = $derived(minidenticon(pubkey, 90, 50))
 </script>
 
+<span class="relative inline-flex shrink-0" style:width="{size}px" style:height="{size}px">
 {#if proxiedSrc && !imgError}
   <img
     src={proxiedSrc}
@@ -62,3 +70,10 @@
     class="rounded-full"
   />
 {/if}
+{#if $identity}
+  <span class="absolute -right-1 -top-1 leading-none">
+    <SocialDistanceBadge {distance} followedByFriends={signals.friendsFollowing}
+      muted={signals.mutedByYou} overmuted={signals.overmuted} size={size < 40 ? 12 : 16} />
+  </span>
+{/if}
+</span>

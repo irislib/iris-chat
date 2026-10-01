@@ -1,6 +1,8 @@
-import { writable, type Readable, get } from 'svelte/store'
-import { nostrClient } from './identity'
+import { readable, type Readable, get } from 'svelte/store'
+import type { EventSubscription } from './nostrClient'
+import { identity, nostrClient } from './identity'
 import { saveProfileToStorage, getProfileFromStorage } from './storage'
+import { observeContactProfile } from './contactMemory'
 
 export interface Profile {
   pubkey: string
@@ -150,8 +152,8 @@ if (localProfile) {
   profileCache.set(localProfile.pubkey, localProfile)
 }
 
-// Track in-flight fetches
-const pendingFetches = new Set<string>()
+// One live metadata subscription per visible contact.
+const activeProfiles = new Map<string, { refs: number; sub: EventSubscription }>()
 
 // Listeners for profile updates
 type ProfileListener = (profile: Profile) => void
@@ -171,83 +173,58 @@ function subscribe(pubkey: string, listener: ProfileListener): () => void {
 }
 
 function notifyListeners(pubkey: string, profile: Profile) {
+  observeContactProfile(get(identity)?.pubkey ?? '', pubkey, getProfileName(profile) ?? null)
   const set = listeners.get(pubkey)
   if (set) {
     set.forEach(fn => fn(profile))
   }
 }
 
-async function fetchProfile(pubkey: string, retryCount = 0): Promise<void> {
-  if (pendingFetches.has(pubkey)) return
-
-  pendingFetches.add(pubkey)
-
-  // Show the last known name while message servers are offline or reconnecting.
-  if (!profileCache.has(pubkey)) {
-    try {
-      const cached = await getProfileFromStorage(pubkey)
-      if (cached && !profileCache.has(pubkey)) {
-        profileCache.set(pubkey, cached)
-        notifyListeners(pubkey, cached)
-      }
-    } catch { /* Continue with the network lookup if local storage is unavailable. */ }
-  }
-
-  try {
-    const client = get(nostrClient)
-    const events = await client.fetchEvents({ kinds: [0], authors: [pubkey], limit: 1 })
-
-    if (events.size > 0) {
-      const eventsArray = Array.from(events)
-      const event = eventsArray.sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0]
-      try {
-        const profile = JSON.parse(event.content) as Profile
-        profile.pubkey = event.pubkey
-        profile.eventCreatedAt = event.created_at
-        addProfileToCache(profile)
-      } catch (e) {
-        console.error('[profile] JSON parse error', e)
-      }
-    } else if (retryCount < 3 && !profileCache.has(pubkey)) {
-      // Profile not on relay yet, retry with backoff
-      setTimeout(() => fetchProfile(pubkey, retryCount + 1), 2000 * (retryCount + 1))
+function keepProfileLoaded(pubkey: string): () => void {
+  const existing = activeProfiles.get(pubkey)
+  if (existing) {
+    existing.refs++
+  } else {
+    if (!profileCache.has(pubkey)) {
+      void getProfileFromStorage(pubkey).then(cached => {
+        if (cached) addProfileToCache(cached, false)
+      }).catch(() => {})
     }
-  } catch (e) {
-    console.error('[profile] fetch error', e)
-  } finally {
-    pendingFetches.delete(pubkey)
+    const sub = get(nostrClient).subscribe(
+      { kinds: [0], authors: [pubkey], limit: 1 }, { closeOnEose: false },
+    )
+    activeProfiles.set(pubkey, { refs: 1, sub })
+    sub.on('event', event => {
+      if (event.pubkey !== pubkey || event.kind !== 0 || event.content.length > 16384) return
+      try {
+        const data = JSON.parse(event.content)
+        const profile: Profile = { pubkey, eventCreatedAt: event.created_at }
+        for (const field of ['name', 'display_name', 'username', 'picture', 'nip05', 'about'] as const) {
+          if (typeof data?.[field] === 'string') profile[field] = data[field]
+        }
+        addProfileToCache(profile)
+      } catch { /* Ignore malformed profile metadata. */ }
+    })
+  }
+  return () => {
+    const active = activeProfiles.get(pubkey)
+    if (active && --active.refs === 0) { active.sub.stop(); activeProfiles.delete(pubkey) }
   }
 }
 
 export function createProfileStore(pubkey: string | undefined, load = true): Readable<Profile | undefined> {
-  if (!pubkey) {
-    const store = writable<Profile | undefined>(undefined)
-    return { subscribe: store.subscribe }
-  }
-
-  const store = writable<Profile | undefined>(profileCache.get(pubkey))
-
-  const unsubListener = subscribe(pubkey, (profile) => {
-    store.set(profile)
+  return readable<Profile | undefined>(pubkey ? profileCache.get(pubkey) : undefined, set => {
+    if (!pubkey) return
+    set(profileCache.get(pubkey))
+    const stopListener = subscribe(pubkey, set)
+    const stopLoading = load ? keepProfileLoaded(pubkey) : undefined
+    return () => { stopListener(); stopLoading?.() }
   })
-
-  if (load && !profileCache.get(pubkey)) {
-    fetchProfile(pubkey)
-  }
-
-  return {
-    subscribe: (run, invalidate) => {
-      const unsubStore = store.subscribe(run, invalidate)
-      return () => {
-        unsubStore()
-        unsubListener()
-      }
-    },
-  }
 }
 
 export function getProfileName(profile?: Profile): string | undefined {
   if (!profile) return undefined
-  return profile.display_name || profile.name || profile.username ||
-         (profile.nip05 ? profile.nip05.split('@')[0] : undefined)
+  return [profile.display_name, profile.name, profile.username,
+    typeof profile.nip05 === 'string' ? profile.nip05.split('@')[0] : undefined]
+    .find(value => typeof value === 'string' && !!value.trim())
 }

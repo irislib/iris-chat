@@ -43,6 +43,9 @@ importers:
       '@iris/identity':
         specifier: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz
         version: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz(typescript@5.9.3))(typescript@5.9.3)
+      '@iris/svelte-ui':
+        specifier: file:vendor/iris-svelte-ui-2659887.tgz
+        version: file:vendor/iris-svelte-ui-2659887.tgz(svelte@5.56.5)
       '@noble/hashes':
         specifier: ^2.2.0
         version: 2.2.0
@@ -931,6 +934,12 @@ packages:
     version: 0.3.1
     peerDependencies:
       nostr-social-graph: '*'
+
+  '@iris/svelte-ui@file:vendor/iris-svelte-ui-2659887.tgz':
+    resolution: {integrity: sha512-XjyLTnVeTfJFPDUFP0ZJtfwQ5kQlvX+sjtqNYUBFcBDqvLv6P3Adexk/ASH2/bcBSt0mC2XKPnmTlog9/jgpiQ==, tarball: file:vendor/iris-svelte-ui-2659887.tgz}
+    version: 0.1.2
+    peerDependencies:
+      svelte: ^5.0.0
 
   '@isaacs/cliui@9.0.0':
     resolution: {integrity: sha512-AokJm4tuBHillT+FpMtxQ60n8ObyXBatq7jD2/JA9dxbDDokKQm8KMht5ibGzLVU9IJDIKK4TPKgMHEYMn3lMg==}
@@ -3959,6 +3968,11 @@ snapshots:
       nostr-tools: 2.23.5(typescript@5.9.3)
     transitivePeerDependencies:
       - typescript
+
+  '@iris/svelte-ui@file:vendor/iris-svelte-ui-2659887.tgz(svelte@5.56.5)':
+    dependencies:
+      minidenticons: 4.2.1
+      svelte: 5.56.5
 
   '@isaacs/cliui@9.0.0': {}
 

@@ -13,14 +13,35 @@
   import { createRuntimeProfileAppKeysStore } from '../lib/profileAppKeysRuntime'
   import type { ProfileAppKeyDevice, ProfileAppKeysState } from '../lib/profileAppKeys'
   import { describeRegisteredDevice } from '../lib/deviceLabels'
+  import Name from './Name.svelte'
+  import ContactMemory from './ContactMemory.svelte'
+  import { identity } from '../lib/identity'
+  import { rememberContact } from '../lib/contactMemory'
+  import { following, setPublicFollow } from '../lib/following'
+  import { peopleGraph, getPeopleGraphSignals } from '../lib/peopleGraph'
 
   interface Props {
     pubkey: string
     onBack: () => void
-    onOpenChat: (pubkey: string) => void
+    onOpenChat: (pubkey: string) => void | Promise<void>
   }
 
   let { pubkey, onBack, onOpenChat }: Props = $props()
+  let followBusy = $state(false)
+  let followError = $state('')
+  let chatBusy = $state(false)
+  let chatError = $state('')
+  let graphSignals = $derived.by(() => { $peopleGraph.version; return getPeopleGraphSignals(pubkey) })
+  async function toggleFollow() {
+    followBusy = true
+    followError = ''
+    try {
+      const next = !$following.has(pubkey)
+      await setPublicFollow(pubkey, next)
+      if (next) rememberContact($identity?.pubkey ?? '', pubkey)
+    } catch (error) { followError = error instanceof Error ? error.message : 'Could not update follows' }
+    finally { followBusy = false }
+  }
 
   // Validate pubkey is a valid hex string
   let isValidPubkey = $derived(typeof pubkey === 'string' && /^[0-9a-f]{64}$/i.test(pubkey))
@@ -61,8 +82,14 @@
     }
   })
 
-  function handleOpenChat() {
-    onOpenChat(pubkey)
+  async function handleOpenChat() {
+    chatBusy = true
+    chatError = ''
+    try {
+      rememberContact($identity?.pubkey ?? '', pubkey)
+      await onOpenChat(pubkey)
+    } catch { chatError = 'Could not start chat. Try again.' }
+    finally { chatBusy = false }
   }
 
   function handleAvatarClick() {
@@ -113,10 +140,10 @@
         <!-- Profile Card -->
         <div class="bg-surface rounded-2xl p-6 text-center">
           <!-- Avatar -->
-          <div class="flex justify-center mb-4">
+          <div class="flex justify-center mb-4" data-testid="profile-avatar">
             {#if profilePicture}
               <button
-                class="rounded-full overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+                class="rounded-full cursor-pointer hover:opacity-90 transition-opacity"
                 onclick={handleAvatarClick}
                 aria-label="View profile picture"
               >
@@ -129,12 +156,27 @@
 
           <!-- Name -->
           <h2 class="text-2xl font-bold mb-1">
-            {#if profileName}
-              {profileName}
-            {:else}
-              <span class="italic opacity-70">{animalName}</span>
-            {/if}
+            <Name {pubkey} />
           </h2>
+
+          {#if $identity && $identity.pubkey !== pubkey}
+            <p class="text-sm text-gray-400 mt-3" data-testid="follow-distance">
+              {#if graphSignals.mutedByYou}Muted by you
+              {:else if graphSignals.overmuted}More mutes than follows in your network
+              {:else if $following.has(pubkey)}Followed by you
+              {:else if graphSignals.hasPublicPath && graphSignals.friendsFollowing > 0}
+                Followed by {graphSignals.friendsFollowing} {graphSignals.friendsFollowing === 1 ? 'person you follow' : 'people you follow'}
+              {:else if graphSignals.hasPublicPath && graphSignals.followDistance === 3}Followed by friends of friends
+              {:else}Not followed by anyone you follow{/if}
+            </p>
+            <div class="my-4">
+              <button class="btn-secondary text-sm" disabled={followBusy || !$identity.signer}
+                title={$identity.signer ? 'Your follows are public' : 'Use your main device to follow'}
+                onclick={toggleFollow}>{$following.has(pubkey) ? 'Unfollow' : 'Follow'} (public)</button>
+              {#if followError}<p role="alert" class="text-sm text-red-400 mt-2">{followError}</p>{/if}
+              <ContactMemory {pubkey} />
+            </div>
+          {/if}
 
           <!-- NIP-05 -->
           {#if profile?.nip05}
@@ -225,10 +267,12 @@
           <button
             class="w-full btn-primary flex items-center justify-center gap-2"
             onclick={handleOpenChat}
+            disabled={chatBusy}
           >
             <span class="i-carbon-chat"></span>
             {hasExistingChat ? 'Open Chat' : 'Start Chat'}
           </button>
+          {#if chatError}<p role="alert" class="text-sm text-red-400 mt-2">{chatError}</p>{/if}
         </div>
       </div>
     {:else}

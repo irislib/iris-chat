@@ -18,7 +18,7 @@
   import { clearMessageRequestDecisions } from './lib/messageRequests'
   import { expirationStore } from './lib/expirationStore'
   import { closeMediaModal } from './lib/mediaModal'
-  import { parseInviteFromHash, isLinkInvite, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
+  import { acceptInvite, parseInviteFromHash, isLinkInvite, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToNdrRuntime } from './lib/disappearingMessages'
   import type { ChatSession } from './lib/chat'
@@ -29,6 +29,8 @@
   import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
   import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
   import { initFollowing, clearFollowingCache } from './lib/following'
+  import { initPeopleGraph } from './lib/peopleGraph'
+  import { restoreContactNamesForNotifications } from './lib/contactMemory'
   import CreateGroup from './components/CreateGroup.svelte'
   import GroupChatView from './components/GroupChatView.svelte'
   import GroupDetailsView from './components/GroupDetailsView.svelte'
@@ -173,11 +175,13 @@
     window.addEventListener('hashchange', handleNotificationHash)
     let cleanup: (() => void) | undefined
     const stopFollowing = initFollowing()
+    const stopPeopleGraph = initPeopleGraph()
     const stopCurrentDeviceRemovalLogout = onCurrentDeviceRemovedFromRoster(() => {
       requestDeviceRemovalLogout()
     })
     cleanup = () => {
       stopFollowing()
+      stopPeopleGraph()
       stopCurrentDeviceRemovalLogout()
     }
 
@@ -521,24 +525,18 @@
     history.back()
   }
 
-  function handleOpenChatFromProfile(pubkey: string) {
-    // Check if we have an existing chat with this user
-    const chatMap = get(chats)
-    const existingChat = chatMap.get(pubkey)
-    if (existingChat) {
-      selectedChat = existingChat
-      currentChat.set(existingChat)
-    } else {
-      // No existing chat - just go back to chat view
-      // The user would need to receive an invite from this person to chat
-      selectedChat = null
-      currentChat.set(null)
-    }
+  async function handleOpenChatFromProfile(pubkey: string) {
+    const account = get(identity)?.pubkey
+    const chat = get(chats).get(pubkey) ?? await acceptInvite({ type: 'pubkey', pubkey })
+    if (get(identity)?.pubkey !== account) return
+    selectedChat = chat
+    currentChat.set(chat)
     navigateTo('chat')
     mobileView = 'main'
   }
 
   $effect(() => { void loadChatMutes($identity?.pubkey ?? null); void loadChatPins($identity?.pubkey ?? null) })
+  $effect(() => { restoreContactNamesForNotifications($identity?.pubkey ?? null) })
 
   async function handleLogout() {
     const owner = get(identity)?.pubkey

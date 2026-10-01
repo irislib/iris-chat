@@ -31,6 +31,9 @@
   import { isChatMuted } from '../lib/chatMutePolicy'
   import DisappearingMessagesModal from './DisappearingMessagesModal.svelte'
   import EmojiPicker from './EmojiPicker.svelte'
+  import ContactMemory from './ContactMemory.svelte'
+  import { contactMemory, rememberContact } from '../lib/contactMemory'
+  import type { AcceptedNameChange } from '@iris/svelte-ui/contactMemory'
 
   interface Props {
     chat: ChatSession
@@ -72,6 +75,8 @@
   let lastSeenDisappearingTtl = $state<number | null | undefined>(undefined)
   let disappearingNoticeTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   let myPubkey = $derived($identity?.pubkey || null)
+  let memory = $derived.by(() => { $contactMemory; return contactMemory.get(myPubkey ?? '', chat.recipientPubkey) })
+  $effect(() => { if (myPubkey) { try { rememberContact(myPubkey, chat.recipientPubkey) } catch { /* Local storage can be unavailable. */ } } })
 
   async function handleSetDisappearing(ttlSeconds: number | null) {
     await setDmDisappearingMessages(chat.id, ttlSeconds)
@@ -347,7 +352,14 @@
     }
   })
 
-  let messages = $derived($currentChat?.messages || chat.messages)
+  type TimelineMessage = ChatMessage & { nameChange?: AcceptedNameChange }
+  let messages: TimelineMessage[] = $derived([
+    ...($currentChat?.messages || chat.messages),
+    ...(memory?.name_changes ?? []).map((change, index) => ({
+      id: `local-name-change-${index}`, content: '', timestamp: change.accepted_at_secs * 1000,
+      isMine: true, nameChange: change,
+    })),
+  ].sort((a, b) => a.timestamp - b.timestamp))
   // Build a map for quick reply lookups
   let messageMap = $derived(new Map(messages.map(m => [m.id, m])))
 
@@ -498,8 +510,8 @@
         {@const newDay = !prevMsg || isDifferentDay(prevMsg.timestamp, message.timestamp)}
         {@const timeGapPrev = prevMsg ? (message.timestamp - prevMsg.timestamp) > 3 * 60 * 1000 : false}
         {@const timeGapNext = nextMsg ? (nextMsg.timestamp - message.timestamp) > 3 * 60 * 1000 : false}
-        {@const isFirst = !!prevMsg?.call || prevMsg?.isMine !== message.isMine || timeGapPrev || newDay}
-        {@const isLast = !!nextMsg?.call || nextMsg?.isMine !== message.isMine || timeGapNext || (nextMsg && isDifferentDay(message.timestamp, nextMsg.timestamp))}
+        {@const isFirst = !!prevMsg?.nameChange || !!prevMsg?.call || prevMsg?.isMine !== message.isMine || timeGapPrev || newDay}
+        {@const isLast = !!nextMsg?.nameChange || !!nextMsg?.call || nextMsg?.isMine !== message.isMine || timeGapNext || (nextMsg && isDifferentDay(message.timestamp, nextMsg.timestamp))}
         {@const prevHasReactions = prevMsg?.reactions && Object.keys(prevMsg.reactions).length > 0}
         {@const hasReactions = message.reactions && Object.keys(message.reactions).length > 0}
         {@const replyToMessage = message.replyTo ? messageMap.get(message.replyTo) ?? null : null}
@@ -510,7 +522,11 @@
             </span>
           </div>
         {/if}
-        {#if message.call}
+        {#if message.nameChange}
+          <p class="text-center text-xs text-gray-400 py-3 break-words" data-testid="contact-name-history">
+            You approved the name change: {message.nameChange.previous_name} → {message.nameChange.accepted_name} · Only you
+          </p>
+        {:else if message.call}
           <CallHistoryRow call={message.call} />
         {:else}
         <MessageBubble
@@ -529,6 +545,7 @@
         {/if}
       {/each}
     {/if}
+    <ContactMemory pubkey={chat.recipientPubkey} compact />
 
     {#if $isTyping.get(chat.id)}
       <div class="flex items-end gap-2 mt-1">

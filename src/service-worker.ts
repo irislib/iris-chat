@@ -257,15 +257,19 @@ async function getSessionManagerStates(): Promise<SessionManagerStateEntry[]> {
 async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: string }> {
   const fallbackIcon = appLogoUrl
   try {
+    const owner = await getOwnerPubkeyFromSessionManager()
+    const memory = owner ? (await db.sessionManager.get(`iris-contact-memory:v1:${owner}:${pubkey}`))?.value as { accepted_name?: unknown } | undefined : undefined
+    const acceptedName = typeof memory?.accepted_name === 'string' ? memory.accepted_name : undefined
     const profile = await db.profiles.get(pubkey)
     if (profile) {
-      const name = profile.display_name || profile.name || getAnimalName(pubkey)
+      const name = acceptedName || profile.display_name || profile.name || getAnimalName(pubkey)
       // htree:// pictures require hashtree decryption which isn't wired into the SW; fall back to the app icon.
       const icon = profile.picture && !isHashtreePicture(profile.picture)
         ? await generateProxyUrl(profile.picture, { width: 96, height: 96, square: true })
         : fallbackIcon
       return { name, icon }
     }
+    if (acceptedName) return { name: acceptedName, icon: fallbackIcon }
   } catch (err) {
     console.error('[sw] error fetching profile:', err)
   }

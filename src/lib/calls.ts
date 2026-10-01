@@ -14,6 +14,7 @@ import { CallNotification } from './callNotification'
 import { createProfileStore, getProfileName } from './profile'
 import { getAnimalName } from './animalNames'
 import { getPubkey } from './identity'
+import { contactMemory } from './contactMemory'
 const ringtone = new CallRingtone()
 const callNotification = new CallNotification()
 
@@ -115,7 +116,7 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
     else ringtone.stop()
     const chat = state && Array.from(get(chats).values()).find(c => c.recipientPubkey === state.owner)
     callNotification.update(state?.direction === 'incoming' && state.status === 'ringing' && !answersInFlight.has(state.id) && get(callSettings).notifications !== false
-      ? { id: state.id, name: getProfileName(get(createProfileStore(state.owner, false))) || getAnimalName(state.owner), video: state.video, chatId: chat?.id, ownerPubkey: getPubkey() ?? undefined } : null)
+      ? { id: state.id, name: contactMemory.get(getPubkey() ?? '', state.owner)?.accepted_name || getProfileName(get(createProfileStore(state.owner, false))) || getAnimalName(state.owner), video: state.video, chatId: chat?.id, ownerPubkey: getPubkey() ?? undefined } : null)
     if (state) media?.setState(state.status === 'active', state.muted, state.camera, state.video)
     if (state?.status !== 'ended' || state.id !== dismissalCallId) cancelDismissal()
     if (state?.status === 'ended') {
