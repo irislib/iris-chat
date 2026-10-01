@@ -575,7 +575,9 @@ async function ensureNdrBinary(): Promise<void> {
 async function runNdr(args: string[], dataDir: string): Promise<any> {
   await ensureNdrBinary()
   return new Promise((resolve, reject) => {
-    const child = spawn(NDR_BIN, ['--json', '--data-dir', dataDir, ...args], {
+    // Each operation below owns the test data folder until it exits. Detached
+    // delivery workers would race the next CLI invocation for that same lock.
+    const child = spawn(NDR_BIN, ['--json', '--no-background-sync', '--data-dir', dataDir, ...args], {
       cwd: NDR_CWD,
       env: nativeCliEnv(dataDir),
       stdio: ['ignore', 'pipe', 'pipe'],
