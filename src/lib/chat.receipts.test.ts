@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
-import { CHAT_MESSAGE_KIND, RECEIPT_KIND } from 'nostr-double-ratchet'
+import { CHAT_MESSAGE_KIND, RECEIPT_KIND, type Rumor, type OnEventMeta } from 'nostr-double-ratchet'
 
 const MY_PUBKEY = 'a'.repeat(64)
 const THEIR_PUBKEY = 'b'.repeat(64)
@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => {
   }
 
   return {
+    durableCallback: undefined as ((event: Rumor, from: string, meta?: OnEventMeta) => Promise<void>) | undefined,
+    receivePrivateContact: vi.fn(async () => {}),
+    refreshRoster: vi.fn(async () => false),
     parseReceipt: vi.fn((rumor: { kind?: number; content?: string; tags?: string[][] }) => {
       if (rumor.kind !== 15) return null
       if (rumor.content !== 'delivered' && rumor.content !== 'seen') return null
@@ -42,6 +45,11 @@ const mocks = vi.hoisted(() => {
     },
   }
 })
+
+vi.mock('./privateContactControl', () => ({
+  PRIVATE_CONTACT_CONTROL_KIND: 10452,
+  receivePrivateContactControl: mocks.receivePrivateContact,
+}))
 
 vi.mock('./identity', () => {
   const { writable } = require('svelte/store')
@@ -97,6 +105,12 @@ vi.mock('./privateChats', () => ({
     getState: () => ({ currentDevicePubkey: MY_PUBKEY, sessionManagerReady: true }),
     getSessionUserRecords: () => mocks.getUserRecords(),
     onGroupEvent: () => () => {},
+    onDurableSessionEvent: (_kinds: readonly number[], callback: NonNullable<typeof mocks.durableCallback>) => {
+      mocks.durableCallback = callback
+      return () => { mocks.durableCallback = undefined }
+    },
+    onSessionEvent: () => () => {},
+    refreshOwnAppKeysFromRelay: mocks.refreshRoster,
   }),
   republishInvite: vi.fn().mockResolvedValue(undefined),
 }))
@@ -141,7 +155,7 @@ vi.mock('./receipts', () => ({
     mocks.shouldAdvanceStatus(...args),
 }))
 
-import { chats, currentChat, handleManagerEvent, invites, type ChatSession } from './chat'
+import { chats, clearChatData, currentChat, handleManagerEvent, initNdrRuntimeEvents, invites, type ChatSession } from './chat'
 import { devices } from './devices'
 import { following } from './following'
 import { messageRequests } from './messageRequests'
@@ -402,5 +416,50 @@ describe('manager receipts', () => {
     })
     expect(decisions.acceptedChats[THEIR_PUBKEY]).toBe(true)
     expect(isMessageRequestChat(chat!, getMessageRequestPolicyContext())).toBe(false)
+  })
+})
+
+
+describe('durable private control registration admission', () => {
+  it.each([false, true])('retains a control until this device is registered (sender cached: %s)', async (senderCached) => {
+    await clearChatData()
+    mocks.receivePrivateContact.mockReset().mockResolvedValue(undefined)
+    const currentDevice = 'c'.repeat(64), sibling = 'd'.repeat(64)
+    devices.setIdentityPubkey(currentDevice)
+    devices.setAppKeysManagerReady(true)
+    devices.setSessionManagerReady(true)
+    devices.setHasLocalAppKeys(true)
+    devices.setRegisteredDevices(senderCached ? [{ identityPubkey: sibling, createdAt: 1 }] : [], 1)
+    const rumor: Rumor = { id: 'e'.repeat(64), kind: 10452, pubkey: MY_PUBKEY,
+      created_at: 1, content: '{}', tags: [['p', MY_PUBKEY]] }
+    const meta = { senderOwnerPubkey: MY_PUBKEY, senderDevicePubkey: sibling }
+    const acknowledge = vi.fn()
+    vi.useFakeTimers()
+    try {
+      await initNdrRuntimeEvents()
+      const callback = mocks.durableCallback
+      if (!callback) throw new Error('Missing durable listener')
+      const replay = async () => { await callback(rumor, MY_PUBKEY, meta); acknowledge() }
+      await expect(replay()).rejects.toThrow('linked device list')
+      expect(acknowledge).not.toHaveBeenCalled()
+      expect(mocks.receivePrivateContact).not.toHaveBeenCalled()
+
+      devices.setRegisteredDevices([
+        { identityPubkey: currentDevice, createdAt: 2 },
+        { identityPubkey: sibling, createdAt: 1 },
+      ], 2)
+      let finishSave: (() => void) | undefined
+      mocks.receivePrivateContact.mockImplementationOnce(() => new Promise<void>((resolve) => { finishSave = resolve }))
+      const delivery = replay()
+      expect(mocks.receivePrivateContact).toHaveBeenCalledTimes(1)
+      expect(acknowledge).not.toHaveBeenCalled()
+      if (!finishSave) throw new Error('Durable save was not started')
+      finishSave()
+      await delivery
+      expect(acknowledge).toHaveBeenCalledTimes(1)
+    } finally {
+      await clearChatData()
+      vi.useRealTimers()
+    }
   })
 })

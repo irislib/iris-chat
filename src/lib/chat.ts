@@ -377,7 +377,7 @@ function subscribeToNdrRuntimeEvents(): void {
     if (!state.sessionManagerReady || !state.appKeysManagerReady || (!state.hasLocalAppKeys && state.lastEventTimestamp <= 0)) throw new Error('Device list is not ready')
     const sender = meta?.senderDevicePubkey || meta?.fromDeviceId
     if (meta?.senderOwnerPubkey === account && sender && sender !== state.identityPubkey &&
-      state.isCurrentDeviceRegistered && !state.registeredDevices.some(device => device.identityPubkey === sender)) {
+      (!state.isCurrentDeviceRegistered || !state.registeredDevices.some(device => device.identityPubkey === sender))) {
       // A cached roster can precede the sending device's approval. Never ACK that gap.
       if (Date.now() - (pendingPrivateRosterReads.get(account) ?? 0) > 30_000) {
         pendingPrivateRosterReads.set(account, Date.now())
