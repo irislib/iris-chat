@@ -1,10 +1,13 @@
 // @vitest-environment node
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createReleasePlan, defaultSiteTreeName, parseArgs, runRelease } from '../scripts/release-site.mjs'
 
 describe('release site config', () => {
+  beforeEach(() => vi.stubEnv('HTREE_BIN', ''))
+  afterEach(() => vi.unstubAllEnvs())
+
   it('uses a dedicated mutable tree for the published site by default', () => {
     const parsed = parseArgs([])
 
@@ -47,6 +50,12 @@ describe('release site config', () => {
       'test',
       'e2e/nip07.spec.ts',
     ])
+  })
+
+  it('uses an explicitly configured publisher binary', () => {
+    vi.stubEnv('HTREE_BIN', '/configured/htree')
+    const plan = createReleasePlan(parseArgs([]))
+    expect(plan.steps.find((step) => step.id === 'publish')?.command[0]).toBe('/configured/htree')
   })
 
   it('runs hashtree publish and Cloudflare deploy in parallel after tests', async () => {
