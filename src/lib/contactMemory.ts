@@ -8,9 +8,11 @@ const localMemory = createContactMemoryStore({
   getItem: key => localStorage.getItem(key),
   setItem: (key, value) => {
     localStorage.setItem(key, value)
-    // Notifications run in a worker without localStorage. Mirror the private
-    // record into its existing local database, never onto the network.
-    void putSessionManagerValue(key, JSON.parse(value)).catch(() => {})
+    // Notifications run in a worker without localStorage. Preserve the synced
+    // nickname when a local observed-name update refreshes that worker's copy.
+    const [, account, contact] = key.match(/^iris-contact-memory:v1:([a-f0-9]{64}):([a-f0-9]{64})$/) ?? []
+    const synced = account && contact ? getPrivateContact(account, contact) : undefined
+    void putSessionManagerValue(key, { ...JSON.parse(value), ...synced }).catch(() => {})
   },
 })
 export const contactMemory = {

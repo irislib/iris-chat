@@ -1,12 +1,17 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 vi.mock('./privateContactSync', async () => {
   const { writable } = await import('svelte/store')
-  return { editPrivateContact: vi.fn(async () => {}), getPrivateContact: () => undefined, privateContactsVersion: writable(0) }
+  return { editPrivateContact: vi.fn(async () => {}), getPrivateContact: vi.fn(() => undefined), privateContactsVersion: writable(0) }
 })
+vi.mock('./storage', () => ({ putSessionManagerValue: vi.fn(async () => {}) }))
+import { getPrivateContact } from './privateContactSync'
+import { putSessionManagerValue } from './storage'
 import { approveContactName, contactMemory, favoriteContact, observeContactProfile, rememberContact } from './contactMemory'
 
 const account = 'a'.repeat(64), other = 'b'.repeat(64), person = 'c'.repeat(64)
 beforeEach(() => {
+  vi.mocked(getPrivateContact).mockReset()
+  vi.mocked(putSessionManagerValue).mockClear()
   for (const owner of [account, other]) localStorage.removeItem(`iris-contact-memory:v1:${owner}:${person}`)
 })
 
@@ -37,4 +42,15 @@ it('scopes private favorites and names to each account and accepts metadata arri
   expect(contactMemory.get(account, person)?.favorite).toBe(true)
   expect(contactMemory.get(other, person)?.accepted_name).toBe('Alicia')
   expect(contactMemory.get(other, person)?.favorite).toBe(false)
+})
+
+it('keeps a synced nickname in notifications when a public name changes', () => {
+  vi.mocked(getPrivateContact).mockReturnValue({favorite: true, nickname: 'Private Alice', note: 'Private note'})
+  observeContactProfile(account, person, 'Alice')
+  rememberContact(account, person)
+  observeContactProfile(account, person, 'Alicia')
+  expect(putSessionManagerValue).toHaveBeenLastCalledWith(
+    `iris-contact-memory:v1:${account}:${person}`,
+    expect.objectContaining({accepted_name: 'Alice', nickname: 'Private Alice', favorite: true})
+  )
 })
