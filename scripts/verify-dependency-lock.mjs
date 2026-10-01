@@ -81,6 +81,10 @@ for (const [name, release] of Object.entries(releases)) {
   if (!entry.includes(`tarball: ${release.url}`) || !entry.includes(`integrity: ${release.integrity}`)) {
     throw new Error(`${name} lock entry is missing its verified release integrity`)
   }
+  const version = new URL(release.url).pathname.match(/-(\d+\.\d+\.\d+(?:-[\w.-]+)?)\.tgz$/)?.[1]
+  if (!version || entry.match(/^    version: (.+)$/m)?.[1] !== version) {
+    throw new Error(`${name} lock metadata must match release version ${version}`)
+  }
 }
 if ((packages.match(/^  ['"]?@fips\/core@/gm) ?? []).length !== 1) {
   throw new Error('The dependency graph must contain one audited @fips/core release')
