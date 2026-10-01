@@ -7,11 +7,19 @@ const MAX_EVENTS = 1024
 
 function check(signal: AbortSignal) { signal.throwIfAborted() }
 
+// Runtime relay/cache events are immutable; verifiers add their own cache symbol.
+// Copy only signed fields so caller-owned verification flags cannot be trusted.
+function canonicalEvent(event: Event): Event {
+  return { id: event.id, pubkey: event.pubkey, created_at: event.created_at, kind: event.kind,
+    tags: event.tags.map(tag => [...tag]), content: event.content, sig: event.sig }
+}
+
 export function selectSignerRoster(events: Event[], owner: string): VerifiedEvent | null {
   const candidates = new Map<string, VerifiedEvent>()
   let latest = 0
-  for (const event of events) {
-    if (event.pubkey !== owner || event.kind !== 37368 || !event.tags.some(tag => tag[0] === 'type' && tag[1] === 'app_keys_roster_snapshot')) continue
+  for (const incoming of events) {
+    if (incoming.pubkey !== owner || incoming.kind !== 37368 || !incoming.tags.some(tag => tag[0] === 'type' && tag[1] === 'app_keys_roster_snapshot')) continue
+    const event = canonicalEvent(incoming)
     const appKeys = AppKeys.fromEvent(event as VerifiedEvent)
     if (event.created_at > Math.floor(Date.now() / 1000) + 300 || appKeys.getAllDevices().length > 64) throw new Error('Invalid device list from message server.')
     for (const tag of event.tags.filter(tag => tag[0] === 'device')) {
@@ -41,7 +49,7 @@ export async function fetchSignerRoster(owner: string, urls: string[], signal: A
 
 export function prepareSignerAuthorization(owner: string, device: string, previous: VerifiedEvent | null): UnsignedEvent {
   const now = Math.floor(Date.now() / 1000)
-  const appKeys = previous ? AppKeys.fromEvent(previous) : new AppKeys()
+  const appKeys = previous ? AppKeys.fromEvent(canonicalEvent(previous) as VerifiedEvent) : new AppKeys()
   const createdAt = Math.max(now, (previous?.created_at ?? 0) + 1)
   if (createdAt > now + 300) throw new Error('Device list is dated too far ahead. Try again later.')
   appKeys.addDevice({ identityPubkey: device, createdAt: now })
@@ -53,7 +61,8 @@ export function prepareSignerAuthorization(owner: string, device: string, previo
   return event
 }
 
-export function validateSignerAuthorization(expected: UnsignedEvent, event: Event): VerifiedEvent {
+export function validateSignerAuthorization(expected: UnsignedEvent, incoming: Event): VerifiedEvent {
+  const event = canonicalEvent(incoming)
   if (event.pubkey !== expected.pubkey || event.kind !== expected.kind || event.created_at !== expected.created_at || event.content !== expected.content || JSON.stringify(event.tags) !== JSON.stringify(expected.tags) || event.id !== getEventHash(expected)) throw new Error('Signer changed the device authorization. Try again.')
   if (!verifyEvent(event)) throw new Error('Invalid signer signature.')
   AppKeys.fromEvent(event as VerifiedEvent)
