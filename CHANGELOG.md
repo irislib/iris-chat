@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.35 - 2026-10-01
+
+- Sync private favorites, nicknames, and notes between your devices and compatible Iris apps.
+- Keep offline edits and clears until saved, and include private details when recovering an approved linked device.
+- Retry declined signer requests only when you choose Retry sync.
+
 ## 2.6.34 - 2026-10-01
 
 - Send multiple files directly in a chat after the recipient accepts, including between the web and native apps.

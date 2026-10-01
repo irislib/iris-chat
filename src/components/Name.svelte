@@ -15,7 +15,7 @@
   let profile = $derived(profileStore ? $profileStore : undefined)
   let profileName = $derived.by(() => {
     $contactMemory
-    return contactMemory.get($identity?.pubkey ?? '', pubkey)?.accepted_name || getProfileName(profile)
+    return contactMemory.get($identity?.pubkey ?? '', pubkey)?.nickname || contactMemory.get($identity?.pubkey ?? '', pubkey)?.accepted_name || getProfileName(profile)
   })
   let animalName = $derived(getAnimalName(pubkey))
 </script>

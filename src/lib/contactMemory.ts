@@ -1,8 +1,10 @@
 import { createContactMemoryStore } from '@iris/svelte-ui/contactMemoryStore'
 import { putSessionManagerValue } from './storage'
+import { emptyContactMemory } from '@iris/svelte-ui/contactMemory'
+import { editPrivateContact, getPrivateContact, privateContactsVersion } from './privateContactSync'
 
 // Iris Kit owns the portable memory policy and account-scoped persistence.
-export const contactMemory = createContactMemoryStore({
+const localMemory = createContactMemoryStore({
   getItem: key => localStorage.getItem(key),
   setItem: (key, value) => {
     localStorage.setItem(key, value)
@@ -11,6 +13,20 @@ export const contactMemory = createContactMemoryStore({
     void putSessionManagerValue(key, JSON.parse(value)).catch(() => {})
   },
 })
+export const contactMemory = {
+  ...localMemory,
+  get(account: string, pubkey: string) {
+    const local = localMemory.get(account, pubkey)
+    const synced = getPrivateContact(account, pubkey)
+    return synced ? { ...(local ?? emptyContactMemory()), ...synced } : local ? { ...local, nickname: null, note: null } : null
+  },
+  subscribe(run: (version: number) => void) {
+    let version = 0
+    const a = localMemory.subscribe(() => run(++version))
+    const b = privateContactsVersion.subscribe(() => run(++version))
+    return () => { a(); b() }
+  },
+}
 const publicNames = new Map<string, string | null>()
 
 export function restoreContactNamesForNotifications(account: string | null) {
@@ -24,6 +40,17 @@ export function restoreContactNamesForNotifications(account: string | null) {
   }
 }
 
+export function projectPrivateContacts(account: string, pubkeys: string[]) {
+  for (const pubkey of pubkeys) {
+    const synced = getPrivateContact(account, pubkey)
+    if (!synced) continue
+    const local = localMemory.get(account, pubkey)
+    if (!local || local.favorite !== synced.favorite) localMemory.setFavorite(account, pubkey, synced.favorite, null)
+    const memory = contactMemory.get(account, pubkey)
+    if (memory) void putSessionManagerValue(`iris-contact-memory:v1:${account}:${pubkey}`, memory).catch(() => {})
+  }
+}
+
 export function observeContactProfile(account: string, pubkey: string, name: string | null) {
   publicNames.set(pubkey, name)
   if (account) contactMemory.observeKnown(account, pubkey, name)
@@ -34,8 +61,9 @@ export function rememberContact(account: string, pubkey: string) {
   contactMemory.remember(account, pubkey, publicNames.get(pubkey) ?? null)
 }
 
-export function favoriteContact(account: string, pubkey: string, favorite: boolean) {
-  contactMemory.setFavorite(account, pubkey, favorite, publicNames.get(pubkey) ?? null)
+export async function favoriteContact(account: string, pubkey: string, favorite: boolean) {
+  await editPrivateContact(pubkey, { favorite })
+  localMemory.setFavorite(account, pubkey, favorite, publicNames.get(pubkey) ?? null)
 }
 
 export function approveContactName(account: string, pubkey: string, expected: string) {

@@ -4,6 +4,7 @@
   import { contactMemory, favoriteContact, approveContactName } from '../lib/contactMemory'
   import { createProfileStore, getProfileName } from '../lib/profile'
   import { pendingContactName } from '@iris/svelte-ui/contactMemory'
+  import PrivateContactDetails from './PrivateContactDetails.svelte'
 
   let { pubkey, compact = false }: { pubkey: string; compact?: boolean } = $props()
   let profileStore = $derived(createProfileStore(pubkey))
@@ -14,6 +15,11 @@
   function approve(expected: string) {
     error = ''
     try { approveContactName($identity?.pubkey ?? '', pubkey, expected) }
+    catch { error = 'Could not save. Try again.' }
+  }
+  async function favorite(value: boolean) {
+    error = ''
+    try { await favoriteContact($identity!.pubkey, pubkey, value) }
     catch { error = 'Could not save. Try again.' }
   }
 </script>
@@ -29,10 +35,14 @@
     {/if}
   {:else}
     <ContactMemoryPanel {memory} {currentName}
-      onFavoriteChange={favorite => favoriteContact($identity!.pubkey, pubkey, favorite)}
+      onFavoriteChange={value => { void favorite(value) }}
       onApproveName={expected => { approveContactName($identity!.pubkey, pubkey, expected) }} />
     {#if memory?.first_seen_name && memory.first_seen_name !== memory.accepted_name}
       <p class="text-xs text-gray-400 mt-3">First known as {memory.first_seen_name}</p>
     {/if}
+    {#key `${$identity.pubkey}:${pubkey}`}
+      <PrivateContactDetails {pubkey} nickname={memory?.nickname} note={memory?.note} />
+    {/key}
+    {#if error}<p role="alert">{error}</p>{/if}
   {/if}
 {/if}

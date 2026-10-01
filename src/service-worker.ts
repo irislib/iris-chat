@@ -258,8 +258,8 @@ async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: stri
   const fallbackIcon = appLogoUrl
   try {
     const owner = await getOwnerPubkeyFromSessionManager()
-    const memory = owner ? (await db.sessionManager.get(`iris-contact-memory:v1:${owner}:${pubkey}`))?.value as { accepted_name?: unknown } | undefined : undefined
-    const acceptedName = typeof memory?.accepted_name === 'string' ? memory.accepted_name : undefined
+    const memory = owner ? (await db.sessionManager.get(`iris-contact-memory:v1:${owner}:${pubkey}`))?.value as { accepted_name?: unknown; nickname?: unknown } | undefined : undefined
+    const acceptedName = typeof memory?.nickname === 'string' && memory.nickname ? memory.nickname : typeof memory?.accepted_name === 'string' ? memory.accepted_name : undefined
     const profile = await db.profiles.get(pubkey)
     if (profile) {
       const name = acceptedName || profile.display_name || profile.name || getAnimalName(pubkey)

@@ -1,3 +1,4 @@
+import { validatePrivateContactDocument, type PrivateContactDocument } from 'nostr-social-graph/privateContactSync'
 import { isChatPinState, type ChatPinState } from './chatPinSync'
 import { isChatMuteState, type ChatMuteState } from './chatMuteSync'
 export const DEVICE_SYNC_PORT = 7369
@@ -77,6 +78,7 @@ export interface DeviceSyncSnapshot {
   chats: DeviceSyncChat[]
   chatMutes?: ChatMuteState[]
   chatPins?: ChatPinState[]
+  privateContacts?: PrivateContactDocument[]
   groups: DeviceSyncGroup[]
   messages: DeviceSyncMessage[]
 }
@@ -124,7 +126,7 @@ function serializedPacket(packet: DeviceSyncPacket): Uint8Array {
 
 export function parseDeviceSyncPacket(
   payload: Uint8Array,
-  _ownerPubkey: string,
+  ownerPubkey: string,
 ): DeviceSyncPacket {
   if (payload.byteLength > DEVICE_SYNC_MAX_PACKET_BYTES) fail('record exceeds 64 KiB')
 
@@ -153,7 +155,7 @@ export function parseDeviceSyncPacket(
       if (!isTime(value.rosterAt)) fail('pageEnd rosterAt is invalid')
       return { v: 1, type: 'pageEnd', rosterAt: value.rosterAt, next: parsePage(value.next) }
     case 'snapshot':
-      return parseSnapshot(value)
+      return parseSnapshot(value, ownerPubkey)
     default:
       fail(`unknown packet type ${value.type}`)
   }
@@ -187,8 +189,11 @@ function parsePage(value: unknown): DeviceSyncPage {
   fail('page kind is unsupported')
 }
 
-function parseSnapshot(value: Record<string, unknown>): DeviceSyncSnapshot {
+function parseSnapshot(value: Record<string, unknown>, owner: string): DeviceSyncSnapshot {
   if (!isTime(value.rosterAt)) fail('snapshot rosterAt is invalid')
+  const privateContacts = defaultArray(value.privateContacts, 'privateContacts')
+  try { privateContacts.forEach(document => validatePrivateContactDocument(document, owner)) }
+  catch { fail('snapshot privateContacts are invalid') }
   const appKeys = defaultArray(value.appKeys, 'appKeys')
   const chats = defaultArray(value.chats, 'chats')
   const chatPins = defaultArray(value.chatPins, 'chatPins')
@@ -212,6 +217,7 @@ function parseSnapshot(value: Record<string, unknown>): DeviceSyncSnapshot {
     appKeys: appKeys as unknown as DeviceSyncAppKeys[],
     chats: chats as unknown as DeviceSyncChat[],
     ...(chatPins.length && { chatPins: chatPins as ChatPinState[] }),
+    ...(privateContacts.length && { privateContacts: privateContacts as PrivateContactDocument[] }),
     ...(chatMutes.length && { chatMutes: chatMutes as ChatMuteState[] }),
     groups: groups as unknown as DeviceSyncGroup[],
     messages: decodedMessages,

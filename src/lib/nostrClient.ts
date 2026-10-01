@@ -10,6 +10,8 @@ export interface Signer {
   pubkey?: string
   user(): Promise<{ pubkey: string }>
   signEvent(event: EventTemplate): Promise<Event>
+  nip44Encrypt?(recipient: string, plaintext: string): Promise<string>
+  nip44Decrypt?(sender: string, ciphertext: string): Promise<string>
 }
 
 export class SecretKeySigner implements Signer {
@@ -23,6 +25,8 @@ export class SecretKeySigner implements Signer {
   }
   async user() { return { pubkey: this.pubkey } }
   async signEvent(event: EventTemplate) { return this.signer.signEvent(event) }
+  async nip44Encrypt(recipient: string, plaintext: string) { return this.signer.nip44Encrypt!(recipient, plaintext) }
+  async nip44Decrypt(sender: string, ciphertext: string) { return this.signer.nip44Decrypt!(sender, ciphertext) }
 }
 
 export class ExtensionSigner implements Signer {
@@ -37,6 +41,16 @@ export class ExtensionSigner implements Signer {
     return { pubkey: this.pubkey }
   }
   async signEvent(event: EventTemplate) { return this.extension().signEvent(event) }
+  async nip44Encrypt(recipient: string, plaintext: string) {
+    const signer = this.extension()
+    if (!signer.nip44Encrypt) throw new Error('Private sync needs an updated signer')
+    return signer.nip44Encrypt(recipient, plaintext)
+  }
+  async nip44Decrypt(sender: string, ciphertext: string) {
+    const signer = this.extension()
+    if (!signer.nip44Decrypt) throw new Error('Private sync needs an updated signer')
+    return signer.nip44Decrypt(sender, ciphertext)
+  }
 }
 
 /** Chat's editable event draft. Signing and networking use the shared libraries. */

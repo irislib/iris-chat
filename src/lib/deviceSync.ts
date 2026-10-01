@@ -1,3 +1,6 @@
+import type { PrivateContactDocument } from 'nostr-social-graph/privateContactSync'
+import { getPrivateContactDocuments, mergePrivateContacts, privateContactsVersion } from './privateContactSync'
+import { requestPrivateContactSync } from './privateContactControl'
 import { chatPinStates, loadChatPins, mergeChatPins } from './chatPinStore'
 import type { ChatPinState } from './chatPinSync'
 import { getCurrentDeviceRegistrationLabels, meaningfulDeviceName } from './deviceLabels'
@@ -93,6 +96,7 @@ export interface DeviceSyncSnapshotSource {
   chats: ChatSession[]
   chatMutes?: ChatMuteState[]
   chatPins?: ChatPinState[]
+  privateContacts?: PrivateContactDocument[]
   groups: Group[]
   groupMessages: Map<string, GroupMessage[]>
 }
@@ -157,18 +161,18 @@ function emptySnapshot(rosterAt: number): DeviceSyncSnapshot {
 }
 
 function hasSnapshotData(packet: DeviceSyncSnapshot): boolean {
-  return (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
+  return (packet.privateContacts?.length ?? 0) + (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
 }
 
 function chunkSnapshot(
   rosterAt: number,
-  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins'>,
+  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContacts'>,
   maxBytes: number,
 ): DeviceSyncSnapshot[] {
   const packets: DeviceSyncSnapshot[] = []
   let packet = emptySnapshot(rosterAt)
 
-  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins'>(
+  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContacts'>(
     key: K,
     value: NonNullable<DeviceSyncSnapshot[K]>[number],
   ) => {
@@ -185,6 +189,7 @@ function chunkSnapshot(
     packet = single
   }
 
+  for (const contact of items.privateContacts ?? []) append('privateContacts', contact)
   for (const pin of items.chatPins ?? []) append('chatPins', pin)
   for (const mute of items.chatMutes ?? []) append('chatMutes', mute)
   for (const chat of items.chats) append('chats', chat)
@@ -272,7 +277,7 @@ export function buildDeviceSyncSnapshots(
 
   return chunkSnapshot(
     rosterAt,
-    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages, chatMutes: source.chatMutes, chatPins: source.chatPins },
+    { appKeys: wireAppKeys, chats: wireChats, groups: wireGroups, messages: wireMessages, chatMutes: source.chatMutes, chatPins: source.chatPins, privateContacts: source.privateContacts },
     maxBytes,
   )
 }
@@ -447,6 +452,7 @@ export async function applyDeviceSyncSnapshot(
   packet: DeviceSyncSnapshot,
   ownerPubkey = getPubkey() || '',
 ): Promise<void> {
+  if (packet.privateContacts?.length) await mergePrivateContacts(ownerPubkey, packet.privateContacts)
   if (packet.chatPins?.length) await mergeChatPins(packet.chatPins, ownerPubkey)
   if (packet.chatMutes?.length) await mergeChatMutes(packet.chatMutes, ownerPubkey)
   const additions = selectDeviceSyncAdditions(packet, currentMergeState())
@@ -573,6 +579,7 @@ function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyn
     chats: Array.from(get(chats).values()),
     chatMutes: Object.values(get(chatMuteStates)),
     chatPins: Object.values(get(chatPinStates)),
+    privateContacts: getPrivateContactDocuments(),
     groups: Array.from(get(groups).values()),
     groupMessages: get(groupMessages),
   }
@@ -819,14 +826,20 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
   for (const unsubscribe of storeUnsubscribers) unsubscribe()
   void loadChatPins(ownerPubkey).catch(error => console.warn('Could not load pin settings', error))
   void loadChatMutes(ownerPubkey).catch(error => console.warn('Could not load mute settings', error))
-  storeUnsubscribers = [chats, groups, chatMuteStates, chatPinStates].map((store) =>
+  storeUnsubscribers = [chats, groups, chatMuteStates, chatPinStates, privateContactsVersion].map((store) =>
     store.subscribe(scheduleSnapshotPush)
   )
   const key = new Uint8Array(secretKey)
   storeUnsubscribers.push(callConnectionSettings.subscribe(() => {
     void reconcileRuntime(ownerPubkey, key, get(devices)).catch(error => console.warn('[calls] Connection failed:', error))
   }))
+  let requestedRoster = ''
   deviceUnsubscribe = devices.subscribe((state) => {
+    const roster = state.isCurrentDeviceRegistered ? state.registeredDevices.map(device => device.identityPubkey).sort().join(',') : ''
+    if (roster && roster !== requestedRoster) {
+      requestedRoster = roster
+      void requestPrivateContactSync(ownerPubkey).catch(() => {})
+    }
     void refreshCurrentDeviceDescription(ownerPubkey).catch(error => console.warn('Could not sync device name', error))
     void reconcileRuntime(ownerPubkey, key, state).catch((error) =>
       console.warn('[deviceSync] Runtime start failed:', error)

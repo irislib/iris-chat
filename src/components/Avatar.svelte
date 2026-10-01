@@ -20,7 +20,7 @@
 
   let profileStore = $derived(pubkey ? createProfileStore(pubkey, loadProfile) : undefined)
   let profile = $derived(profileStore ? $profileStore : undefined)
-  let name = $derived.by(() => { $contactMemory; return contactMemory.get($identity?.pubkey ?? '', pubkey)?.accepted_name || getProfileName(profile) || getAnimalName(pubkey) })
+  let name = $derived.by(() => { $contactMemory; return contactMemory.get($identity?.pubkey ?? '', pubkey)?.nickname || contactMemory.get($identity?.pubkey ?? '', pubkey)?.accepted_name || getProfileName(profile) || getAnimalName(pubkey) })
   let signals = $derived.by(() => { $peopleGraph.version; return getPeopleGraphSignals(pubkey) })
   let distance = $derived(pubkey === $identity?.pubkey ? 0 : $following.has(pubkey) ? 1 : signals.hasPublicPath ? signals.followDistance : null)
 

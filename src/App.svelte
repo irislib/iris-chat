@@ -31,11 +31,14 @@
   import { initFollowing, clearFollowingCache } from './lib/following'
   import { initPeopleGraph } from './lib/peopleGraph'
   import { restoreContactNamesForNotifications } from './lib/contactMemory'
+  import { startPrivateContactSync } from './lib/privateContactSync'
   import CreateGroup from './components/CreateGroup.svelte'
   import GroupChatView from './components/GroupChatView.svelte'
   import GroupDetailsView from './components/GroupDetailsView.svelte'
 
   // Send message to service worker
+  onMount(startPrivateContactSync)
+
   function postToServiceWorker(message: object) {
     console.log('[app] posting to service worker:', message)
     navigator.serviceWorker?.ready.then(reg => {

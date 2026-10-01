@@ -219,8 +219,8 @@ export function createReleasePlan(options) {
     },
     {
       id: 'test-e2e-nip07',
-      label: `E2E-test ${profile.appName} NIP-07 invite flow`,
-      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/nip07.spec.ts'],
+      label: `E2E-test ${profile.appName} invites and private contacts`,
+      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/nip07.spec.ts', 'e2e/contact-memory.spec.ts', 'e2e/private-contact-sync.spec.ts'],
       cwd: appDir,
     },
     {

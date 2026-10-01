@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "2.6.34",
+  "version": "2.6.35",
   "type": "module",
   "description": "Decentralized encrypted messaging over Nostr",
   "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
@@ -60,6 +60,7 @@
     "@hashtree/dexie": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz",
     "@hashtree/fips-transport": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.14/hashtree-fips-transport-0.4.17.tgz",
     "@hashtree/nostr-pubsub": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-nostr-pubsub-0.1.7.tgz",
+    "@hashtree/worker": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-worker-0.4.7.tgz",
     "@iris/identity": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz",
     "@iris/svelte-ui": "file:vendor/iris-svelte-ui-3d26f8c.tgz",
     "@noble/hashes": "^2.2.0",
@@ -71,9 +72,8 @@
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.175/nostr-double-ratchet-0.0.175.tgz",
     "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.13/nostr-pubsub-0.5.13.tgz",
-    "nostr-social-graph": "https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.1/nostr-social-graph-2.0.1.tgz",
+    "nostr-social-graph": "https://github.com/mmalmi/nostr-social-graph/releases/download/v2.0.2/nostr-social-graph-2.0.2.tgz",
     "nostr-tools": "^2.23.12",
-    "qrcode": "^1.5.4",
-    "@hashtree/worker": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.11/hashtree-worker-0.4.7.tgz"
+    "qrcode": "^1.5.4"
   }
 }

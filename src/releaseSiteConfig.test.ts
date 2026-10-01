@@ -49,6 +49,8 @@ describe('release site config', () => {
       'playwright',
       'test',
       'e2e/nip07.spec.ts',
+      'e2e/contact-memory.spec.ts',
+      'e2e/private-contact-sync.spec.ts',
     ])
   })
 

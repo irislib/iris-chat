@@ -1,4 +1,5 @@
 import { CHAT_PIN_KIND } from './chatPinSync'
+import { PRIVATE_CONTACT_CONTROL_KIND, receivePrivateContactControl } from './privateContactControl'
 import { receiveChatPinControl } from './chatPinControl'
 import { CHAT_MUTE_KIND } from './chatMuteSync'
 import { receiveChatMuteControl } from './chatMuteControl'
@@ -1096,6 +1097,10 @@ export async function handleManagerEvent(
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
+  if (rumor.kind === PRIVATE_CONTACT_CONTROL_KIND) {
+    await receivePrivateContactControl(rumor, meta)
+    return
+  }
   if (rumor.kind === CHAT_MUTE_KIND) {
     await receiveChatMuteControl(rumor, meta)
     return

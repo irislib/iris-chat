@@ -1,4 +1,8 @@
-import { beforeEach, expect, it } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
+vi.mock('./privateContactSync', async () => {
+  const { writable } = await import('svelte/store')
+  return { editPrivateContact: vi.fn(async () => {}), getPrivateContact: () => undefined, privateContactsVersion: writable(0) }
+})
 import { approveContactName, contactMemory, favoriteContact, observeContactProfile, rememberContact } from './contactMemory'
 
 const account = 'a'.repeat(64), other = 'b'.repeat(64), person = 'c'.repeat(64)
@@ -22,11 +26,11 @@ it('remembers only after interaction, keeps the first name, and refuses stale ap
   expect(approveContactName(account, person, 'Alice Again')).toBe(false)
 })
 
-it('scopes private favorites and names to each account and accepts metadata arriving later', () => {
+it('scopes private favorites and names to each account and accepts metadata arriving later', async () => {
   observeContactProfile(account, person, null)
   rememberContact(account, person)
   observeContactProfile(account, person, 'Alice')
-  favoriteContact(account, person, true)
+  await favoriteContact(account, person, true)
   observeContactProfile(other, person, 'Alicia')
   rememberContact(other, person)
   expect(contactMemory.get(account, person)?.first_seen_name).toBe('Alice')
