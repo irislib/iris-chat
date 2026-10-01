@@ -19,7 +19,12 @@ test.describe('browser ↔ native direct files', () => {
   test.skip(!process.env.IRIS_CHAT_RS_CORE_DIR && process.env.REQUIRE_DIRECT_FILE_INTEROP !== '1',
     'Set IRIS_CHAT_RS_CORE_DIR to run against the native production source')
   let binary: string
-  test.beforeAll(async () => { binary = await buildNativeDirectFiles() }, 180000)
+  test.beforeAll(async ({}, testInfo) => {
+    // Compiling the native fixture has its own budget; Playwright does not
+    // accept a timeout as the second argument to beforeAll.
+    testInfo.setTimeout(180000)
+    binary = await buildNativeDirectFiles()
+  })
 
   for (const sameOwner of [false, true]) {
     test(`${sameOwner ? 'own distinct devices' : 'different accounts'} transfer multiple files in both directions after acceptance`, async ({ browser, testRelay, testRelayUrl, baseURL }) => {

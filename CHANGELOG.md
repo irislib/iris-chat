@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.6.34 - 2026-10-01
+
+- Send multiple files directly in a chat after the recipient accepts, including between the web and native apps.
+- Keep saved contact names until you approve changes, with private favorites and public follows on profiles.
+- Show blue, gold, and gray checkmarks beside profile follow explanations and at the upper-right of other avatars.
+
 ## 2.6.33 - 2026-09-30
 
 - Reduce unnecessary routing traffic and recover peer sessions reliably with the audited FIPS runtime.
