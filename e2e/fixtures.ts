@@ -1,7 +1,7 @@
 /**
- * Playwright fixtures: one test relay per worker + auto-configured pages.
+ * Playwright fixtures: one test relay per test + auto-configured pages.
  *
- * - testRelay: one relay per worker (isolated, no cross-talk between tests)
+ * - testRelay: one relay per test, shared by its browser contexts
  * - testRelayUrl: relay URL for manual context creation
  * - page: overridden to configure relay via context init script
  *
@@ -34,25 +34,25 @@ export async function useTestRelay(context: BrowserContext, relayUrlOrUrls: stri
 }
 
 export const test = base.extend<
-  { testRelayUrl: string; silentRelayUrl: string; testRelayUrls: string[]; showNativeAppSuggestion: boolean },
-  { testRelay: TestRelay; silentRelay: SilentTestRelay }
+  { testRelayUrl: string; silentRelayUrl: string; testRelayUrls: string[]; showNativeAppSuggestion: boolean;
+    testRelay: TestRelay; silentRelay: SilentTestRelay }
 >({
   showNativeAppSuggestion: [false, { option: true }],
-  // One relay per worker (isolated)
+  // Fresh history and hooks prevent unrelated prior tests from delaying admission.
   testRelay: [async ({}, use) => {
     const relay = new TestRelay()
     relay.debug = process.env.TEST_RELAY_DEBUG === '1'
     await relay.start()
     await use(relay)
     await relay.stop()
-  }, { scope: 'worker' }],
+  }, { scope: 'test' }],
 
   silentRelay: [async ({}, use) => {
     const relay = new SilentTestRelay()
     await relay.start()
     await use(relay)
     await relay.stop()
-  }, { scope: 'worker' }],
+  }, { scope: 'test' }],
 
   testRelayUrl: async ({ testRelay }, use) => {
     await use(testRelay.url)
