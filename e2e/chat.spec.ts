@@ -1066,6 +1066,57 @@ test.describe('iris chat', () => {
       }
     })
 
+    test('pastes large plain text in one edit and keeps the composer responsive', async ({ browser, testRelayUrl }, testInfo) => {
+      const context = await createContext(browser, testRelayUrl)
+      const page = await context.newPage()
+      try {
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Go' }).click()
+        await registerDevice(page)
+        await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+        await page.getByRole('button', { name: 'Note to self', exact: true }).click()
+        const input = page.getByPlaceholder('Type a message...')
+        const text = 'A copied paragraph with emoji 🙂 and code: const value = 42;\n'.repeat(4000)
+        await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+        await page.bringToFront()
+        await page.evaluate(value => navigator.clipboard.writeText(value), text)
+        await input.evaluate(element => {
+          const field = element as HTMLTextAreaElement & { pasteProbe?: { inputs: number, paintMs: number | null } }
+          const probe = { inputs: 0, paintMs: null as number | null }
+          field.pasteProbe = probe
+          let started = 0
+          field.addEventListener('paste', () => { started = performance.now() }, { once: true })
+          field.addEventListener('input', () => {
+            probe.inputs++
+            if (probe.inputs === 1) requestAnimationFrame(() => requestAnimationFrame(() => {
+              probe.paintMs = performance.now() - started
+            }))
+          })
+        })
+        await input.press('ControlOrMeta+V')
+        await expect(input).toHaveValue(text)
+        await expect.poll(() => input.evaluate(element =>
+          (element as HTMLTextAreaElement & { pasteProbe: { paintMs: number | null } }).pasteProbe.paintMs
+        )).not.toBeNull()
+        const timing = await input.evaluate(element =>
+          (element as HTMLTextAreaElement & { pasteProbe: { inputs: number, paintMs: number } }).pasteProbe
+        )
+        await testInfo.attach('plain-text-paste', { body: JSON.stringify({ bytes: Buffer.byteLength(text), ...timing }), contentType: 'application/json' })
+        expect(timing.inputs).toBe(1)
+        // A generous hosted-runner budget catches a frozen composer, while the
+        // receipt keeps the actual latency visible instead of hiding retries.
+        expect(timing.paintMs).toBeLessThan(1500)
+        await input.press('End')
+        await input.press('x')
+        await expect(input).toHaveValue(`${text}x`)
+        await expect(page.getByRole('button', { name: 'Remove attachment' })).toHaveCount(0)
+        await expect(page.getByTestId('direct-file-preview')).toHaveCount(0)
+        await expect(page.getByTestId('message-bubble-body')).toHaveCount(0)
+      } finally {
+        await context.close()
+      }
+    })
+
     test('keeps multiple pasted files in a direct-send draft without uploading or sending', async ({ browser, testRelayUrl }) => {
       const context = await createContext(browser, testRelayUrl)
       const page = await context.newPage()
