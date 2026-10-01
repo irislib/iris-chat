@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { TestRelay } from './test-relay'
 import { observeCallMedia, writeCallMediaDiagnostics } from './fixtures/callMediaDiagnostics'
+import { blockOtherWebSockets } from './fixtures/webSocketIsolation'
 
 declare global {
   interface Window {
@@ -65,11 +66,7 @@ test('shares selected screen pixels over the existing call and restores camera s
       }
     })
     await context.route('**/*', route => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort())
-    const allowedSockets = [new URL(seed.url).origin, new URL(relay.url).origin]
-    await context.routeWebSocket('**/*', socket => {
-      if (allowedSockets.includes(new URL(socket.url()).origin)) socket.connectToServer()
-      else socket.close()
-    })
+    await blockOtherWebSockets(context, [seed.url, relay.url])
     const page = await context.newPage()
     const index = contexts.length
     page.on('console', message => logs.push(`${index}: ${message.text()}`))
