@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { BrowserContext } from '@playwright/test'
 import { blockOtherWebSockets, forbiddenWebSocketOrigins } from '../../e2e/fixtures/webSocketIsolation'
 
 describe('call fixture WebSocket isolation', () => {
@@ -45,7 +44,7 @@ describe('call fixture WebSocket isolation', () => {
   })
 
   it('registers only a serializable blocking pattern and closes matched sockets', async () => {
-    const routeWebSocket = vi.fn<BrowserContext['routeWebSocket']>().mockResolvedValue(undefined)
+    const routeWebSocket = vi.fn<Parameters<typeof blockOtherWebSockets>[0]['routeWebSocket']>().mockResolvedValue(undefined)
     await blockOtherWebSockets({ routeWebSocket }, allowed)
     expect(routeWebSocket).toHaveBeenCalledTimes(1)
     const [matcher, handler] = routeWebSocket.mock.calls[0]

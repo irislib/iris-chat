@@ -1,4 +1,6 @@
-import type { BrowserContext } from '@playwright/test'
+interface SocketBlockingContext {
+  routeWebSocket(pattern: RegExp, handler: (socket: { close(): Promise<void> }) => Promise<void>): Promise<void>
+}
 
 export function forbiddenWebSocketOrigins(allowedUrls: readonly string[]): RegExp {
   const origins = [...new Set(allowedUrls.map(value => {
@@ -11,7 +13,7 @@ export function forbiddenWebSocketOrigins(allowedUrls: readonly string[]): RegEx
   return origins.length ? new RegExp(`^(?!(?:${origins.join('|')})(?:/|$))`) : /^/
 }
 
-export async function blockOtherWebSockets(context: Pick<BrowserContext, 'routeWebSocket'>, allowedUrls: readonly string[]) {
+export async function blockOtherWebSockets(context: SocketBlockingContext, allowedUrls: readonly string[]) {
   // A serializable RegExp lets Playwright pass allowed sockets through inside
   // the browser. A URL predicate becomes a catch-all interception pattern;
   // connectToServer then sends every media packet through the test driver.
