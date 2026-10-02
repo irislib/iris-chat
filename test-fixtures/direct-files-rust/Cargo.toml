@@ -6,9 +6,9 @@ publish = false
 
 [dependencies]
 base64 = "0.22.1"
-fips-core = { package = "nvpn-fips-core", version = "=0.4.89", features = ["webrtc-transport", "host-ble-transport"] }
-fips-tcp = { package = "nvpn-fips-tcp", version = "=0.2.2" }
-fips-tcp-endpoint = { package = "nvpn-fips-tcp-endpoint", version = "=0.2.22" }
+nvpn-fips-core = { version = "=0.4.89", features = ["webrtc-transport", "host-ble-transport"] }
+nvpn-fips-tcp = { version = "=0.2.2" }
+nvpn-fips-tcp-endpoint = { version = "=0.2.22" }
 flume = "0.11"
 nostr = { version = "0.44.7", default-features = false, features = ["std", "nip44"] }
 rand = "0.8"
