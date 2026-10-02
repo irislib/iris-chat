@@ -1102,14 +1102,51 @@ test.describe('iris chat', () => {
         const timing = await input.evaluate(element =>
           (element as HTMLTextAreaElement & { pasteProbe: { inputs: number, paintMs: number } }).pasteProbe
         )
-        await testInfo.attach('plain-text-paste', { body: JSON.stringify({ bytes: Buffer.byteLength(text), ...timing }), contentType: 'application/json' })
+        await testInfo.attach('plain-text-paste', {
+          body: JSON.stringify({ bytes: Buffer.byteLength(text), ...timing,
+            boundary: 'Native clipboard paste event through two animation-frame callbacks after its input event.' }),
+          contentType: 'application/json',
+        })
         expect(timing.inputs).toBe(1)
         // A generous hosted-runner budget catches a frozen composer, while the
         // receipt keeps the actual latency visible instead of hiding retries.
         expect(timing.paintMs).toBeLessThan(1500)
         await input.press('End')
+        await input.evaluate(element => {
+          const field = element as HTMLTextAreaElement & {
+            pasteProbe: { inputs: number },
+            editProbe?: { paintMs: number | null, inputsBefore: number, additionalInputs: number, selectionStart: number, selectionEnd: number },
+          }
+          const probe = { paintMs: null as number | null, inputsBefore: field.pasteProbe.inputs,
+            additionalInputs: 0, selectionStart: -1, selectionEnd: -1 }
+          field.editProbe = probe
+          let started = 0
+          field.addEventListener('keydown', () => { started = performance.now() }, { once: true, capture: true })
+          field.addEventListener('input', () => requestAnimationFrame(() => requestAnimationFrame(() => {
+            probe.paintMs = performance.now() - started
+            probe.additionalInputs = field.pasteProbe.inputs - probe.inputsBefore
+            probe.selectionStart = field.selectionStart
+            probe.selectionEnd = field.selectionEnd
+          })), { once: true })
+        })
         await input.press('x')
         await expect(input).toHaveValue(`${text}x`)
+        await expect.poll(() => input.evaluate(element =>
+          (element as HTMLTextAreaElement & { editProbe: { paintMs: number | null } }).editProbe.paintMs
+        )).not.toBeNull()
+        const editTiming = await input.evaluate(element =>
+          (element as HTMLTextAreaElement & { editProbe: { paintMs: number, inputsBefore: number, additionalInputs: number, selectionStart: number, selectionEnd: number } }).editProbe
+        )
+        await testInfo.attach('plain-text-next-edit', {
+          body: JSON.stringify({ bytes: Buffer.byteLength(`${text}x`), ...editTiming,
+            boundary: 'Native x keydown through two animation-frame callbacks after its input event; clipboard paste and End key precede this measurement.' }),
+          contentType: 'application/json',
+        })
+        expect(editTiming.inputsBefore).toBe(1)
+        expect(editTiming.additionalInputs).toBe(1)
+        expect(editTiming.selectionStart).toBe(text.length + 1)
+        expect(editTiming.selectionEnd).toBe(text.length + 1)
+        expect(editTiming.paintMs).toBeLessThan(1500)
         await expect(page.getByRole('button', { name: 'Remove attachment' })).toHaveCount(0)
         await expect(page.getByTestId('direct-file-preview')).toHaveCount(0)
         await expect(page.getByTestId('message-bubble-body')).toHaveCount(0)
