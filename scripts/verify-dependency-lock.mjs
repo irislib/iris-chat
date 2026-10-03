@@ -11,8 +11,8 @@ const releases = {
     "integrity": "sha512-F1UToi75yYrZpt5KFocPUlQH4MeU/J9A/aJBndWUuDvzx1WdQtF99tNxD3KnH2x81R4oaT721hf5OcTdSv8hRg=="
   },
   "@fips/core": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.50/fips-core-0.0.49.tgz",
-    "integrity": "sha512-kTCB8jZ5scSYzfZnLT3ysIH8IDxkjcGCNJOiNiY1yhFAL7o1JlG4WgbplThRJMEMDwcK+urGfkhjlV3jMF0PlA=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.52/fips-core-0.0.50.tgz",
+    "integrity": "sha512-3eNbcTgKCevylkdwAx2Qgbs8FLGQq4WXkyZ4IDiNSi2i7+iLmCwtRJ4Pf03wtwx64DMWuhkT2Gy4zDmDdjLE0Q=="
   },
   "@fips/tcp": {
     "url": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
