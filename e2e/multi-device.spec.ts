@@ -5,7 +5,7 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
+const DEVICE_LINK_PATTERN = /^nostrconnect:\/\//
 
 async function setIdentity(context: import('@playwright/test').BrowserContext, privkeyHex: string) {
   await context.addInitScript((key: string) => {
@@ -186,11 +186,11 @@ async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<
     const count = await buttons.count()
     for (let index = 0; index < count; index += 1) {
       const url = await buttons.nth(index).getAttribute('title')
-      if (url?.match(COMPACT_LINK_CODE_PATTERN)) return url
+      if (url?.match(DEVICE_LINK_PATTERN)) return url
     }
     await page.waitForTimeout(100)
   }
-  throw new Error('Could not get compact link invite code')
+  throw new Error('Could not get device link')
 }
 
 async function openLinkThisDevice(page: import('@playwright/test').Page): Promise<void> {
@@ -216,8 +216,9 @@ async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link code').fill(inviteUrl)
+  await page.getByRole('button', { name: 'Chats and groups only', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Link another device' })).toBeHidden({
-    timeout: 750,
+    timeout: 10_000,
   })
   await page.getByRole('button', { name: 'Back' }).click()
   await expect(page).toHaveURL(/#settings$/)

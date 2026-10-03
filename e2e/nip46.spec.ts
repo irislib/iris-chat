@@ -6,7 +6,7 @@ import type { Page } from '@playwright/test'
 
 async function openSigner(page: Page) {
   await page.goto('/')
-  await page.getByRole('button', { name: 'Signer app/device' }).click()
+  await page.getByRole('button', { name: 'Link this device' }).click()
   const code = page.locator('button[title^="nostrconnect://"]')
   await expect(code).toBeVisible()
   return (await code.getAttribute('title'))!
@@ -46,7 +46,7 @@ test('scan signer authorizes only a device, preserves roster, reloads and messag
     await page.screenshot({ path: testInfo.outputPath('signer-scan-mobile.png') })
     await page.setViewportSize({ width: 1280, height: 900 })
     await signer.acceptConnection(link, 'wrong-secret')
-    await expect(page.getByRole('heading', { name: 'Signer app/device' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Link this device' })).toBeVisible()
     expect(signer.requests).toHaveLength(0)
     await signer.acceptConnection(link)
     await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible()
@@ -120,7 +120,7 @@ for (const behavior of ['deny', 'mutate', 'cancel'] as const) {
         await expect.poll(() => signer.requests.includes('sign_event')).toBe(true)
         await page.getByRole('button', { name: 'Cancel', exact: true }).click()
         await signer.releaseSigning()
-        await expect(page.getByRole('button', { name: 'Signer app/device' })).toBeVisible()
+        await expect(page.getByRole('button', { name: 'Link this device' })).toBeVisible()
       } else {
         await expect(page.getByRole('alert')).toContainText(behavior === 'deny' ? 'declined' : 'changed')
       }

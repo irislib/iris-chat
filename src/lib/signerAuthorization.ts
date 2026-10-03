@@ -75,6 +75,7 @@ export async function authorizeSignerDevice(options: {
   relays: string[]
   signal: AbortSignal
   signEvent: (event: UnsignedEvent) => Promise<Event>
+  onAuthorized?: (event: VerifiedEvent, device: string) => void
   onCommitting?: () => void
 }): Promise<{ event: VerifiedEvent; deviceSecret: Uint8Array }> {
   const { owner, relays, signal, runtime } = options
@@ -83,6 +84,7 @@ export async function authorizeSignerDevice(options: {
     const previous = await fetchSignerRoster(owner, relays, signal, runtime)
     const expected = prepareSignerAuthorization(owner, getPublicKey(deviceSecret), previous)
     const event = validateSignerAuthorization(expected, await options.signEvent(expected))
+    options.onAuthorized?.(event, getPublicKey(deviceSecret))
     check(signal)
     const current = await fetchSignerRoster(owner, relays, signal, runtime)
     if (current?.id !== previous?.id) throw new Error('Your device list changed. Sign in again.')

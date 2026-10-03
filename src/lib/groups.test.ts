@@ -131,6 +131,7 @@ vi.mock('./privateChats', () => ({
       return Promise.resolve(undefined)
     },
   })),
+  waitForNdrRuntime: async () => (await import('./privateChats')).getNdrRuntime(),
   getNdrRuntime: () => ({
     getState: () => ({ sessionManagerReady: true }),
     sendEvent: (recipient: string, event: unknown) => {

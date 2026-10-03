@@ -169,7 +169,11 @@ export async function getMessagesForSession(sessionId: string): Promise<StoredMe
 }
 
 export async function deleteMessagesForSession(sessionId: string): Promise<void> {
-  await db.messages.where('sessionId').equals(sessionId).delete()
+  await db.transaction('rw', db.messages, db.sessionManager, async () => {
+    await db.sessionManager.put({ key: `history-deleted-chat:${sessionId}`, value: Math.floor(Date.now() / 1000) })
+    for (const message of await db.messages.where('sessionId').equals(sessionId).toArray()) await rememberHistoryDeletion(message)
+    await db.messages.where('sessionId').equals(sessionId).delete()
+  })
 }
 
 export async function getMessageById(id: string): Promise<StoredMessage | undefined> {
@@ -177,7 +181,49 @@ export async function getMessageById(id: string): Promise<StoredMessage | undefi
 }
 
 export async function deleteMessage(id: string): Promise<void> {
-  await db.messages.delete(id)
+  await db.transaction('rw', db.messages, db.sessionManager, async () => {
+    const message = await db.messages.get(id)
+    await db.sessionManager.put({ key: `history-deleted-message:${id}`, value: message
+      ? { chatId: message.sessionId, id, createdAt: Math.floor(message.timestamp / 1000) } : null })
+    await db.messages.delete(id)
+  })
+}
+
+async function rememberHistoryDeletion(message: StoredMessage): Promise<void> {
+  await db.sessionManager.put({ key: `history-deleted-message:${message.id}`,
+    value: { chatId: message.sessionId, id: message.id, createdAt: Math.floor(message.timestamp / 1000) } })
+}
+
+export async function deletedHistoryRecords(): Promise<Array<{ chatId: string; id: string; createdAt: number }>> {
+  const records = await db.sessionManager.where('key').startsWith('history-deleted-message:').toArray()
+  return records.flatMap(record => record.value ? [record.value as { chatId: string; id: string; createdAt: number }] : [])
+}
+
+export async function isHistoryChatDeleted(chatId: string): Promise<boolean> {
+  return !!await db.sessionManager.get(`history-deleted-chat:${chatId}`)
+}
+
+/** A transfer may complete only after storage contains the row or a durable suppression. */
+export async function isHistoryMessageSettled(message: { id: string; chatId: string; createdAt: number; expiresAt?: number }): Promise<boolean> {
+  if (message.expiresAt !== undefined && message.expiresAt <= Math.floor(Date.now() / 1000)) return true
+  const stored = await db.messages.get(message.id)
+  if (stored?.sessionId === message.chatId) return true
+  if (await db.sessionManager.get(`history-deleted-message:${message.id}`)) return true
+  const deleted = await db.sessionManager.get(`history-deleted-chat:${message.chatId}`)
+  return !!deleted && message.createdAt <= (deleted.value as number)
+}
+
+/** Check deletion suppression and save in one transaction, before updating UI. */
+export async function admitHistoryMessage(message: StoredMessage, authorized: () => boolean = () => true): Promise<boolean> {
+  return db.transaction('rw', db.messages, db.sessionManager, async () => {
+    if (!authorized() || await db.sessionManager.get(`history-deleted-message:${message.id}`)) return false
+    const removedChat = await db.sessionManager.get(`history-deleted-chat:${message.sessionId}`)
+    if (removedChat && Math.floor(message.timestamp / 1000) <= (removedChat.value as number)) return false
+    if (await db.messages.get(message.id)) return false
+    if (!authorized()) return false
+    await db.messages.put(message)
+    return true
+  })
 }
 
 export async function updateMessageStatus(id: string, status: 'delivered' | 'seen'): Promise<void> {

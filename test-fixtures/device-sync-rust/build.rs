@@ -9,6 +9,7 @@ fn main() {
     let tcp_path = core.join("src/core/device_sync_tcp.rs");
     let framing_path = core.join("src/core/device_sync_tcp/framing.rs");
     let body_path = core.join("src/core/device_sync/body.rs");
+    let history_path = core.join("src/core/device_sync/history.rs");
     let model_path = core.join("src/core/model.rs");
     let mute_path = core.join("src/core/chat_mute_sync.rs");
     let pin_path = core.join("src/core/chat_pin_sync.rs");
@@ -19,6 +20,7 @@ fn main() {
         &tcp_path,
         &framing_path,
         &body_path,
+        &history_path,
         &model_path,
         &label_path,
         &private_contact_path,
@@ -64,6 +66,10 @@ fn main() {
     let framing_end = item_end(&framing, frame_at);
 
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let history = read(history_path);
+    let record_at = history.find("pub(super) fn record_id").expect("native history record identity");
+    fs::write(out.join("native_history_record.rs"), history[record_at..item_end(&history, record_at)].replace("pub(super) ", ""))
+        .expect("write native history record identity");
     fs::write(out.join("native_contract.rs"), contract).expect("write contract");
     // Preserve the production wire declarations and aliases verbatim, without
     // importing the unrelated event encryption and storage implementation.

@@ -1,3 +1,4 @@
+import { parseLinkInviteInput } from './linkInvites'
 import { migrateStoredPrivateContacts } from './privateContactMigration'
 import { queuedCallWakeEnvelope, observeCallWakeInvite, acceptedCallWakeBootstrap } from './callPush'
 import { get } from 'svelte/store'
@@ -597,28 +598,47 @@ export const startDeviceLink = async (
   let completed = false
   let timeout: ReturnType<typeof setTimeout>
 
-  const unsubscribe = subscribe(
+  const invite = deterministicLinkInviteForDeviceLinkRequest(localRequest.request)
+  let authorization: { owner: string; entries: DeviceEntry[] } | undefined
+  let approver: { owner: string; device: string } | undefined
+  const finish = async () => {
+    if (stopped || completed || !authorization || !approver || authorization.owner !== approver.owner ||
+      !authorization.entries.some(device => device.identityPubkey === approver!.device)) return
+    const own = authorization.entries.find(device => device.identityPubkey === localRequest.request.deviceAppKeyPubkey)
+    if (!own) return
+    completed = true
+    const { saveDeviceHistoryPair } = await import('./deviceHistoryPolicy')
+    await saveDeviceHistoryPair(authorization.owner, own.identityPubkey, { peer: approver.device, linkAt: own.createdAt, linkId: localRequest.request.requestPubkey,
+      since: null, role: 'inbound', complete: false })
+    clearTimeout(timeout)
+    unsubscribe()
+    await onAccepted(authorization.owner)
+  }
+  const stopAuthorization = subscribe(
     buildAppKeysDeviceAuthorizationFilter(localRequest.request.deviceAppKeyPubkey) as EventFilter,
-    async (event) => {
+    async event => {
       if (stopped || completed) return
-
-      let ownerPubkey: string | null = null
       try {
-        ownerPubkey = resolveAppKeysOwnerForDevice(
-          event as unknown as Parameters<typeof resolveAppKeysOwnerForDevice>[0],
-          localRequest.request.deviceAppKeyPubkey
-        )
-      } catch {
-        return
-      }
-      if (!ownerPubkey) return
-
-      completed = true
-      clearTimeout(timeout)
-      unsubscribe()
-      await onAccepted(ownerPubkey)
-    }
+        const verified = event as unknown as VerifiedEvent
+        const owner = resolveAppKeysOwnerForDevice(verified, localRequest.request.deviceAppKeyPubkey)
+        if (!owner) return
+        authorization = { owner, entries: AppKeys.fromEvent(verified).getAllDevices() }
+        await finish()
+      } catch { /* Ignore unrelated or invalid authorization. */ }
+    },
   )
+  const stopResponse = subscribe({ kinds: [INVITE_RESPONSE_KIND], '#p': [invite.inviterEphemeralPublicKey] } as EventFilter,
+    async event => {
+      if (stopped || completed) return
+      try {
+        const response = await decryptInviteResponse({ envelopeContent: event.content, envelopeSenderPubkey: event.pubkey,
+          inviterEphemeralPrivateKey: invite.inviterEphemeralPrivateKey!, inviterPrivateKey: localRequest.deviceAppKeySecretKey,
+          sharedSecret: invite.sharedSecret })
+        approver = { owner: response.ownerPublicKey || response.inviteeIdentity, device: response.inviteeIdentity }
+        await finish()
+      } catch { /* Only an authenticated invite response can identify the approving device. */ }
+    })
+  const unsubscribe = () => { stopAuthorization(); stopResponse() }
 
   timeout = setTimeout(() => {
     stopped = true
@@ -863,36 +883,40 @@ export const getRegisteredDevices = (): DeviceEntry[] => {
   return getRuntime().getState().registeredDevices
 }
 
-export const acceptDeviceLink = async (input: string): Promise<void> => {
+export const acceptDeviceLink = async (input: string, historyChoice: import('./deviceHistoryPolicy').DeviceHistoryChoice = 'chats'): Promise<void> => {
   if (isLinkedDeviceLogin()) {
     throw new Error('Linked devices cannot add devices')
   }
 
-  const parsed = parseCompactDeviceLinkRequest(input)
-  if (!parsed) {
-    throw new Error('Invalid link code')
-  }
-
   const currentIdentity = get(identity)
-  if (!currentIdentity?.pubkey) {
-    throw new Error('Owner pubkey not available')
-  }
-
-  const ndrInvite = deterministicLinkInviteForDeviceLinkRequest(parsed)
+  if (!currentIdentity?.pubkey) throw new Error('Sign in before linking a device.')
+  const parsed = parseCompactDeviceLinkRequest(input)
+  const now = Math.floor(Date.now() / 1000)
+  if (parsed?.requestedAt && (parsed.requestedAt < now - 180 || parsed.requestedAt > now + 300)) throw new Error('This device link has expired. Create a new one.')
+  const ndrInvite = parsed ? deterministicLinkInviteForDeviceLinkRequest(parsed) : parseLinkInviteInput(input, currentIdentity.pubkey)
+  if (!ndrInvite) throw new Error('Invalid device link. Copy a new link from your other device.')
+  const target = parsed?.deviceAppKeyPubkey ?? ndrInvite.inviter
+  const linkId = parsed?.requestPubkey ?? ndrInvite.inviterEphemeralPublicKey
 
   const currentRuntime = getRuntime()
   await initializePrivateRuntime(currentRuntime, currentIdentity.pubkey)
   const parsedLabels = parsed as typeof parsed & { deviceLabel?: string; clientLabel?: string }
   const labels = await getLinkedDeviceRegistrationLabels({
-    deviceLabel: parsedLabels.deviceLabel,
-    clientLabel: parsedLabels.clientLabel,
+    deviceLabel: parsedLabels?.deviceLabel,
+    clientLabel: parsedLabels?.clientLabel,
   })
   const preparedRegistration = await currentRuntime.prepareRegistrationForIdentity({
     ownerPubkey: currentIdentity.pubkey,
-    identityPubkey: parsed.deviceAppKeyPubkey,
+    identityPubkey: target,
     timeoutMs: 0,
     ...labels,
   })
+  const { saveDeviceHistoryPair } = await import('./deviceHistoryPolicy')
+  const linkAt = preparedRegistration.devices.find(device => device.identityPubkey === target)?.createdAt
+  const local = currentRuntime.getState().currentDevicePubkey
+  if (!linkAt || !local) throw new Error('Device approval is not ready')
+  await saveDeviceHistoryPair(currentIdentity.pubkey, local, { peer: target, linkAt, linkId,
+    since: historyChoice === 'history' ? 0 : linkAt, role: 'outbound', complete: historyChoice === 'chats' })
   await currentRuntime.publishPreparedRegistration(preparedRegistration)
   await currentRuntime.acceptLinkInvite(ndrInvite, currentIdentity.pubkey)
 }

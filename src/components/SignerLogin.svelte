@@ -56,14 +56,14 @@
 </script>
 
 <div class="space-y-3">
-  <h2 class="text-2xl font-bold text-white text-center">Signer app/device</h2>
+  <h2 class="text-2xl font-bold text-white text-center">Link this device</h2>
   {#if pasting}
     <form class="space-y-3" onsubmit={event => { event.preventDefault(); void start(pastedLink) }}>
       <input class="input-field" aria-label="Signer link" placeholder="Paste signer link" bind:value={pastedLink} disabled={busy} autocomplete="off" spellcheck="false" />
       <button class="btn-primary w-full" disabled={busy || !pastedLink.trim()}>{busy ? 'Connecting…' : 'Connect'}</button>
     </form>
   {:else}
-    <p class="text-sm text-gray-400 text-center">Scan with your signer app.</p>
+    <p class="text-sm text-gray-400 text-center">Scan with your other device or signer app.</p>
     <div class="flex justify-center">
       <div class="p-4 bg-white rounded-xl">
         {#if link}

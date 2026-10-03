@@ -41,6 +41,7 @@ type Pending = { method?: string; resolve: (value: string) => void; reject: (err
 
 /** An ephemeral signing channel. Its key is never an account or device key. */
 export class RemoteSigner {
+  linkInfo?: unknown
   private key = generateSecretKey()
   private publicKey = getPublicKey(this.key)
   private remoteKey = ''
@@ -117,8 +118,19 @@ export class RemoteSigner {
   async signEvent(event: UnsignedEvent): Promise<Event> {
     const response = await this.request('sign_event', [JSON.stringify(event)])
     if (response.length > 32 * 1024) throw new Error('Invalid signer response.')
-    try { return JSON.parse(response) as Event } catch { throw new Error('Invalid signer response.') }
+    let signed: Event
+    try { signed = JSON.parse(response) as Event } catch { throw new Error('Invalid signer response.') }
+    try {
+      const info = await this.request('iris_get_link_info', [], 3000)
+      this.linkInfo = JSON.parse(info)
+    } catch (error) {
+      this.check()
+      if (!(error instanceof SignerDeniedError && error.unsupported) && !(error instanceof SignerRequestTimeout)) throw new Error('Invalid device-link information.')
+    }
+    return signed
   }
+
+  get transportPubkey(): string { return this.publicKey }
 
   private request(method: string, params: string[], timeoutMs = 90_000): Promise<string> {
     this.check()
@@ -146,6 +158,11 @@ export class RemoteSigner {
     })
   }
 
+  private remember(id: string) {
+    this.seen.add(id)
+    if (this.seen.size > 128) this.seen.delete(this.seen.values().next().value!)
+  }
+
   private receive(raw: Event) {
     // Common-runtime events are immutable; never inherit a public verified marker.
     const event = { id: raw.id, pubkey: raw.pubkey, sig: raw.sig, kind: raw.kind,
@@ -159,14 +176,14 @@ export class RemoteSigner {
       if (!this.remoteKey) {
         if (!this.waitingConnection || response.result !== this.challenge || response.error) return
         this.remoteKey = event.pubkey
-        this.seen.add(event.id)
+        this.remember(event.id)
         this.waitingConnection.resolve(this.remoteKey)
         this.waitingConnection = undefined
         return
       }
       const pending = this.pending.get(response.id)
       if (!pending) return
-      this.seen.add(event.id)
+      this.remember(event.id)
       if (response.result === 'auth_url') {
         const url = new URL(String(response.error))
         if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid signer approval link.')

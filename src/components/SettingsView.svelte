@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, onDestroy } from 'svelte'
   import { SETTINGS_PAGES, settingsHref, type SettingsPage } from '../lib/settingsNavigation'
   import { notificationSettings } from '../lib/notificationStore'
   import { getNotificationSupportError, requestNotificationPermission } from '../lib/notificationPermission'
@@ -35,6 +35,8 @@
     revokeDevice,
     revokeDevices,
   } from '../lib/privateChats'
+  import { approveDeviceConnectLink, parseDeviceConnectLink } from '../lib/deviceLinkSigner'
+  import { parseLinkInviteInput } from '../lib/linkInvites'
   import { parseCompactDeviceLinkRequest } from 'nostr-double-ratchet'
   import { getErrorMessage } from '../lib/utils'
   import { NATIVE_APP_DOWNLOAD_URL } from '../lib/nativeApp'
@@ -84,12 +86,17 @@
   let showPrivateKey = $state(false)
   let registeringDevice = $state(false)
   let deviceError = $state('')
+  let linkApproval: AbortController | undefined
+  onDestroy(() => linkApproval?.abort())
+  function linkKind(raw: string): 'connect' | 'legacy' | null {
+    try { parseDeviceConnectLink(raw); return 'connect' } catch { /* Other supported links follow. */ }
+    return parseCompactDeviceLinkRequest(raw) || ($identity?.pubkey && parseLinkInviteInput(raw, $identity.pubkey)) ? 'legacy' : null
+  }
   let linkInviteModalOpen = $state(false)
   let linkInviteInput = $state('')
   let linkInviteStatus = $state<'idle' | 'accepting' | 'linked' | 'error'>('idle')
   let linkInviteError = $state('')
   let linkInviteShowScanner = $state(false)
-  let linkInviteLastAutoAttempt = $state('')
   let showPictureModal = $state(false)
   let proxiedFullPicture = $state<string | null>(null)
   let profileNameInput = $state('')
@@ -273,11 +280,12 @@
   })
 
   function resetLinkInviteState() {
+    linkApproval?.abort()
+    linkApproval = undefined
     linkInviteInput = ''
     linkInviteShowScanner = false
     linkInviteStatus = 'idle'
     linkInviteError = ''
-    linkInviteLastAutoAttempt = ''
   }
 
   function closeLinkInviteModal() {
@@ -291,10 +299,10 @@
     linkInviteModalOpen = true
   }
 
-  async function handleAcceptLinkInvite(raw: string) {
+  async function handleAcceptLinkInvite(raw: string, historyChoice: 'chats' | 'history') {
     if (!$identity?.pubkey) return
-    const deviceLinkRequest = parseCompactDeviceLinkRequest(raw)
-    if (!deviceLinkRequest) {
+    const kind = linkKind(raw)
+    if (!kind) {
       linkInviteError = 'Invalid link code'
       linkInviteStatus = 'error'
       return
@@ -304,7 +312,9 @@
     linkInviteError = ''
 
     try {
-      await acceptDeviceLink(raw)
+      linkApproval = new AbortController()
+      if (kind === 'connect') await approveDeviceConnectLink(raw, historyChoice, linkApproval.signal)
+      else await acceptDeviceLink(raw, historyChoice)
       linkInviteStatus = 'linked'
       closeLinkInviteModal()
     } catch (e) {
@@ -316,22 +326,7 @@
   function handleLinkInviteScan(data: string) {
     linkInviteShowScanner = false
     linkInviteInput = data
-    void handleAcceptLinkInvite(data)
   }
-
-  $effect(() => {
-    if (!linkInviteModalOpen) return
-    if (!$identity?.pubkey) return
-    if (!linkInviteInput) return
-    if (linkInviteStatus !== 'idle') return
-    if (linkInviteInput === linkInviteLastAutoAttempt) return
-
-    const deviceLinkRequest = parseCompactDeviceLinkRequest(linkInviteInput)
-    if (!deviceLinkRequest) return
-
-    linkInviteLastAutoAttempt = linkInviteInput
-    void handleAcceptLinkInvite(linkInviteInput)
-  })
 
   $effect(() => {
     const pic = profilePicture
@@ -1435,7 +1430,6 @@
                   if (linkInviteStatus === 'error') {
                     linkInviteStatus = 'idle'
                     linkInviteError = ''
-                    linkInviteLastAutoAttempt = ''
                   }
                 }}
                 disabled={linkInviteStatus === 'accepting'}
@@ -1452,10 +1446,23 @@
               </button>
             {/if}
 
+            {#if linkKind(linkInviteInput)}
+              <div class="space-y-3 mt-4">
+                <button class="btn-primary w-full" disabled={linkInviteStatus === 'accepting'}
+                  onclick={() => handleAcceptLinkInvite(linkInviteInput, 'history')}>Include message history</button>
+                <button class="btn-secondary w-full" disabled={linkInviteStatus === 'accepting'}
+                  onclick={() => handleAcceptLinkInvite(linkInviteInput, 'chats')}>Chats and groups only</button>
+              </div>
+            {/if}
+
+            {#if linkInviteInput.trim() && !linkKind(linkInviteInput)}
+              <p class="text-sm text-red-400 mt-4 text-center" role="alert">Invalid device link. Copy a new link from your other device.</p>
+            {/if}
+
             {#if linkInviteStatus === 'linked'}
               <p class="text-sm text-green-400 mt-4 text-center">Device linked</p>
             {:else if linkInviteStatus === 'error'}
-              <p class="text-sm text-red-400 mt-4 text-center">{linkInviteError}</p>
+              <p role="alert" class="text-sm text-red-400 mt-4 text-center">{linkInviteError}</p>
             {/if}
           </div>
         </div>

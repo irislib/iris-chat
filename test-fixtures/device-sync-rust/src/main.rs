@@ -5,6 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 include!(concat!(env!("OUT_DIR"), "/native_constants.rs"));
 
@@ -30,6 +31,7 @@ mod private_device_labels {
 
 include!(concat!(env!("OUT_DIR"), "/native_contract.rs"));
 include!(concat!(env!("OUT_DIR"), "/native_framing.rs"));
+include!(concat!(env!("OUT_DIR"), "/native_history_record.rs"));
 
 fn main() -> Result<(), Box<dyn Error>> {
     let operation = env::args().nth(1).unwrap_or_else(|| "contract".to_string());
@@ -43,6 +45,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut input = Vec::new();
     io::stdin().read_to_end(&mut input)?;
     match operation.as_str() {
+        "history-id" => {
+            let (chat, id): (String, String) = serde_json::from_slice(&input)?;
+            write_packet(record_id(&chat, &id).iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_bytes())
+        }
         "roundtrip" => write_packet(roundtrip(&input)?),
         "frame" => write_packet(frame(&roundtrip(&input)?)),
         "read" => {

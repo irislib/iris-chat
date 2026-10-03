@@ -41,12 +41,17 @@ import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
 import { activateAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
 import { DeviceSyncTcp } from './deviceSyncTcp'
+import { DeviceHistorySync, type HistoryRecord } from './deviceHistorySync'
+import { closeRevokedDeviceHistoryPairs, deviceHistoryPair, deviceHistoryProgress, loadDeviceHistoryPairs, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { attachCalls, detachCalls, callOwnerForPeer, knownCallDevices } from './calls'
 import { attachDirectFiles, detachDirectFiles } from './directFiles'
 import { directFileMessageFields } from './directFileProtocol'
 import {
   saveGroup,
-  saveMessage,
+  admitHistoryMessage,
+  isHistoryMessageSettled,
+  deletedHistoryRecords,
+  isHistoryChatDeleted,
   saveSession,
   type StoredGroup,
   type StoredMessage,
@@ -113,6 +118,8 @@ export interface DeviceSyncMergeState {
 
 let activeNode: FipsNode | null = null
 let activeTcp: DeviceSyncTcp | null = null
+let activeHistory: DeviceHistorySync | null = null
+const historyPeers = new Set<string>()
 let activeKey = ''
 let pendingReconcile: { key: string; promise: Promise<void> } | null = null
 let activeOwnerPubkey = ''
@@ -122,7 +129,7 @@ let storeUnsubscribers: Array<() => void> = []
 let pushTimer: ReturnType<typeof setTimeout> | null = null
 let suppressSnapshotPush = false
 let generation = 0
-let applyQueue = Promise.resolve()
+let applyQueue: Promise<unknown> = Promise.resolve()
 
 function applyStoreUpdate(update: () => void): void {
   suppressSnapshotPush = true
@@ -457,12 +464,18 @@ function storedMessage(message: DeviceSyncMessage, isMine: boolean): StoredMessa
 export async function applyDeviceSyncSnapshot(
   packet: DeviceSyncSnapshot,
   ownerPubkey = getPubkey() || '',
-): Promise<void> {
+  historySince?: number,
+  authorized: () => boolean = () => true,
+): Promise<number> {
+  let imported = 0
+  if (!authorized()) return imported
   if (packet.privateContactsV2?.length) await mergePrivateContacts(ownerPubkey, packet.privateContactsV2)
   if (packet.chatPins?.length) await mergeChatPins(packet.chatPins, ownerPubkey)
   if (packet.chatMutes?.length) await mergeChatMutes(packet.chatMutes, ownerPubkey)
-  const additions = selectDeviceSyncAdditions(packet, currentMergeState())
-  if (!hasSnapshotData({ ...packet, ...additions })) return
+  const mergeState = currentMergeState()
+  mergeState.rosterAt = historySince ?? localDeviceJoinedAt()
+  const additions = selectDeviceSyncAdditions(packet, mergeState)
+  if (!hasSnapshotData({ ...packet, ...additions })) return imported
 
   const runtime = getNdrRuntime()
   for (const snapshot of additions.appKeys) {
@@ -472,9 +485,13 @@ export async function applyDeviceSyncSnapshot(
     })
   }
 
+  if (!authorized()) return imported
+
   if (packet.privateDeviceLabelsV2?.length) await mergePrivateDeviceLabels(ownerPubkey, packet.privateDeviceLabelsV2)
 
   for (const chat of additions.chats) {
+    if (!authorized()) return imported
+    if (await isHistoryChatDeleted(chat.id)) continue
     const session: ChatSession = {
       id: chat.id,
       recipientPubkey: chat.id,
@@ -491,6 +508,8 @@ export async function applyDeviceSyncSnapshot(
   }
 
   for (const group of additions.groups) {
+    if (!authorized()) return imported
+    if (await isHistoryChatDeleted(`group:${group.id}`)) continue
     const existing = get(groups).get(group.id)
     if (!existing && !group.members.includes(ownerPubkey)) continue
     const local: Group = {
@@ -519,7 +538,15 @@ export async function applyDeviceSyncSnapshot(
   if (additions.groups[0]) syncNativeGroupTransport(additions.groups[0].id)
 
   for (const message of additions.messages) {
+    if (!authorized()) return imported
     const isMine = message.author.toLowerCase() === ownerPubkey.toLowerCase()
+    if (message.chatId.startsWith('group:')) {
+      const group = get(groups).get(message.chatId.slice(6))
+      if (!group?.members.includes(ownerPubkey) || !group.members.includes(message.author)) continue
+    } else if (message.author !== ownerPubkey && message.author !== message.chatId) continue
+    if (!await admitHistoryMessage(storedMessage(message, isMine), authorized)) continue
+    if (!authorized()) return imported
+    imported += 1
     const local: ChatMessage = {
       id: message.id,
       content: message.body,
@@ -566,8 +593,8 @@ export async function applyDeviceSyncSnapshot(
         })
       }
     }
-    await saveMessage(storedMessage(message, isMine))
   }
+  return imported
 }
 
 function snapshotSource(requestRosterAt: number, ownerPubkey: string): DeviceSyncSnapshotSource {
@@ -599,7 +626,10 @@ async function sendPackets(
 ): Promise<void> {
   try {
     const reply = typeof packets === 'function' ? packets() : packets
-    for (const packet of reply) await tcp.send(peer, encodeDeviceSyncPacket(packet))
+    for (const packet of reply) {
+      if (!isAuthorizedDeviceSyncSource(peer, get(devices))) return
+      await tcp.send(peer, encodeDeviceSyncPacket(packet))
+    }
   } catch (error) {
     await tcp.sendFirst(peer, encodeDeviceSyncPacket({ v: 1, type: 'resyncRequired' }))
     throw error
@@ -615,7 +645,9 @@ async function pushCurrentSnapshot(): Promise<void> {
   )
   await Promise.all(Array.from(activePeers).map(async (peer) => {
     if (!isAuthorizedDeviceSyncSource(peer, state)) return
-    await sendPackets(tcp, peer, packets)
+    if (historyPeers.has(peer)) {
+      await tcp.send(peer, encodeDeviceSyncPacket(historyRequest(activeOwnerPubkey)))
+    } else await sendPackets(tcp, peer, packets)
   }))
 }
 
@@ -630,37 +662,139 @@ function scheduleSnapshotPush(): void {
   }, 100)
 }
 
+function localDeviceJoinedAt(): number {
+  const state = get(devices)
+  return state.registeredDevices.find(device => device.identityPubkey === state.identityPubkey)?.createdAt ?? state.lastEventTimestamp
+}
+function regularHistorySince(peer: string): number {
+  const state = get(devices)
+  return Math.max(localDeviceJoinedAt(), state.registeredDevices.find(device => device.identityPubkey === normalizedXOnly(peer))?.createdAt ?? state.lastEventTimestamp)
+}
+function currentHistoryPair(owner: string, peer: string) {
+  const state = get(devices)
+  const pair = deviceHistoryPair(owner, state.identityPubkey ?? '', normalizedXOnly(peer))
+  const target = pair?.role === 'outbound' ? normalizedXOnly(peer) : state.identityPubkey
+  return pair && pair.linkAt === state.registeredDevices.find(device => device.identityPubkey === target)?.createdAt ? pair : undefined
+}
+
+function historyRequest(owner: string, page?: DeviceSyncPage, peer?: string): DeviceSyncRequest {
+  const state = get(devices)
+  const pair = peer ? currentHistoryPair(owner, peer) : undefined
+  return { v: 1, type: 'request', rosterAt: state.lastEventTimestamp, historyReconcile: 1,
+    ...(page && { page }), ...(pair?.role === 'inbound' && !pair.complete && pair.fallback && { linkId: pair.linkId }) }
+}
+
+function historyMessages(owner: string, since: number, until: number, requested?: HistoryRecord[]): DeviceSyncMessage[] {
+  const source = snapshotSource(since, owner)
+  if (requested) {
+    const selected = new Map<string, Set<string>>()
+    for (const record of requested) {
+      const ids = selected.get(record.chatId) ?? new Set<string>()
+      ids.add(record.id); selected.set(record.chatId, ids)
+    }
+    source.chats = source.chats.filter(chat => selected.has(chat.id)).map(chat => ({ ...chat, messages: chat.messages.filter(message => selected.get(chat.id)!.has(message.id)) }))
+    source.groups = source.groups.filter(group => selected.has(`group:${group.id}`))
+    source.groupMessages = new Map(source.groups.map(group => [group.id, (source.groupMessages.get(group.id) ?? []).filter(message => selected.get(`group:${group.id}`)!.has(message.id))]))
+  }
+  return collectDeviceSyncMessages(source, since).filter(message => message.createdAt <= until &&
+    deviceSyncPacketByteLength({ v: 1, type: 'historyMessages', session: '0'.repeat(32), requested: [], messages: [message] }) <= DEVICE_SYNC_MAX_PACKET_BYTES)
+}
+
 async function handlePacket(
   source: string,
   payload: Uint8Array,
   ownerPubkey: string,
   tcp: DeviceSyncTcp,
+  history: DeviceHistorySync,
 ): Promise<void> {
-  if (!isAuthorizedDeviceSyncSource(source, get(devices))) return
+  const authorized = () => getPubkey() === ownerPubkey && isAuthorizedDeviceSyncSource(source, get(devices))
+  if (!authorized()) return
   const packet = parseDeviceSyncPacket(payload, ownerPubkey)
 
   if (packet.type === 'request') {
-    await sendPackets(tcp, source, () => buildDeviceSyncReplyPackets(
-      snapshotSource(packet.rosterAt, ownerPubkey),
-      packet.page,
-    ))
+    const pair = currentHistoryPair(ownerPubkey, source)
+    const since = pair?.role === 'outbound' && !pair.complete && pair.since === 0 ? 0 : regularHistorySince(source)
+    if (packet.historyReconcile === 1) {
+      historyPeers.add(source)
+      history.negotiate(source, since)
+    }
+    if (pair?.role === 'outbound' && (!packet.page || packet.page.kind === 'metadata')) {
+      await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyPolicy', linkAt: pair.linkAt, linkId: pair.linkId, since: pair.since ?? pair.linkAt }))
+    } else if (pair?.complete && pair.role === 'inbound') {
+      await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
+    }
+    let replies: DeviceSyncPacket[]
+    if (packet.page?.kind === 'messages' && pair?.role === 'outbound' && !pair.complete && pair.since === 0 && pair.linkId === packet.linkId) {
+      const remaining = historyMessages(ownerPubkey, 0, pair.linkAt - 1).filter(message => !packet.page || packet.page.kind !== 'messages' || !packet.page.after || messageAfterCursor(message, packet.page.after))
+      const selected = remaining.slice(0, DEVICE_SYNC_PAGE_MESSAGES)
+      replies = chunkSnapshot(0, { appKeys: [], chats: [], groups: [], messages: selected }, DEVICE_SYNC_MAX_PACKET_BYTES)
+      const last = selected.at(-1)
+      replies.push(remaining.length > selected.length && last
+        ? { v: 1, type: 'pageEnd', rosterAt: 0, next: { kind: 'messages', after: { createdAt: last.createdAt, chatId: last.chatId, id: last.id } } }
+        : { v: 1, type: 'historyPageEnd', linkAt: pair.linkAt, linkId: pair.linkId })
+    } else {
+      const snapshot = snapshotSource(Math.max(packet.rosterAt, regularHistorySince(source)), ownerPubkey)
+      if (packet.historyReconcile === 1 && packet.page?.kind === 'messages') {
+        snapshot.requestRosterAt = regularHistorySince(source)
+        snapshot.localRosterAt = 0
+      }
+      replies = buildDeviceSyncReplyPackets(snapshot, packet.page)
+    }
+    for (const reply of replies) {
+      if (packet.historyReconcile === 1 && reply.type === 'pageEnd') {
+        reply.historyReconcile = 1
+        reply.historySince = since
+      }
+    }
+    await sendPackets(tcp, source, replies)
     return
   }
 
   if (packet.type === 'resyncRequired' || packet.type === 'pageEnd') {
-    const request: DeviceSyncRequest = {
-      v: 1,
-      type: 'request',
-      rosterAt: get(devices).lastEventTimestamp,
-      ...(packet.type === 'pageEnd' && { page: packet.next }),
+    if (packet.type === 'pageEnd' && packet.historyReconcile === 1 && packet.next.kind === 'messages' && !packet.next.after) {
+      const pair = currentHistoryPair(ownerPubkey, source)
+      if (pair?.role === 'inbound' && !pair.complete && pair.since === 0) await history.start(source, 0, pair.linkAt - 1, pair.linkId)
+      else await history.start(source, Math.max(regularHistorySince(source), packet.historySince ?? 0))
+      return
     }
-    await tcp.sendFirst(source, encodeDeviceSyncPacket(request))
+    if (packet.type === 'resyncRequired') history.reset(source)
+    await tcp.sendFirst(source, encodeDeviceSyncPacket(historyRequest(ownerPubkey, packet.type === 'pageEnd' ? packet.next : undefined, source)))
     return
   }
-
-  applyQueue = applyQueue.catch(() => undefined).then(() =>
-    applyDeviceSyncSnapshot(packet, ownerPubkey)
-  )
+  if (packet.type === 'historyPolicy' || packet.type === 'historyComplete' || packet.type === 'historyPageEnd') {
+    const pair = currentHistoryPair(ownerPubkey, source)
+    if (!pair || pair.linkAt !== packet.linkAt || pair.linkId !== packet.linkId) return
+    const local = get(devices).identityPubkey!
+    if (packet.type === 'historyPageEnd' && pair.role === 'inbound' && pair.fallback && !pair.fallbackFailed && !pair.complete) {
+      await saveDeviceHistoryPair(ownerPubkey, local, { ...pair, complete: true })
+      await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
+      void history.start(source, regularHistorySince(source))
+    } else if (packet.type === 'historyPolicy' && pair.role === 'inbound' && !pair.complete) {
+      await saveDeviceHistoryPair(ownerPubkey, local, { ...pair, since: packet.since, complete: packet.since !== 0 })
+    } else if (packet.type === 'historyComplete') {
+      if (pair.role === 'inbound' && !pair.complete) return
+      await saveDeviceHistoryPair(ownerPubkey, local, { ...pair, complete: true })
+      if (pair.role === 'outbound') await tcp.send(source, encodeDeviceSyncPacket(packet))
+    }
+    return
+  }
+  if (packet.type !== 'snapshot') {
+    await history.receive(source, packet)
+    return
+  }
+  const pair = currentHistoryPair(ownerPubkey, source)
+  const fallback = pair?.role === 'inbound' && !pair.complete && pair.fallback && pair.since === 0
+  const incoming = fallback ? { ...packet, messages: packet.messages.filter(message => message.createdAt < pair.linkAt) } : packet
+  applyQueue = applyQueue.catch(() => undefined).then(async () => {
+    try {
+      const imported = await applyDeviceSyncSnapshot(incoming, ownerPubkey, fallback ? 0 : undefined, authorized)
+      if (fallback) for (const message of incoming.messages) if (!await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
+      if (fallback) deviceHistoryProgress.update(progress => ({ phase: 'transferring', imported: (progress?.imported ?? 0) + imported }))
+    } catch (error) {
+      if (fallback) await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, fallbackFailed: true })
+      throw error
+    }
+  })
   await applyQueue
 }
 
@@ -680,6 +814,9 @@ async function stopActiveNode(): Promise<void> {
   const tcp = activeTcp
   activeNode = null
   activeTcp = null
+  activeHistory?.reset()
+  activeHistory = null
+  historyPeers.clear()
   activeKey = ''
   activeOwnerPubkey = ''
   activePeers = new Set()
@@ -751,22 +888,61 @@ async function updateRuntime(
   }
   const seeds = get(callConnectionSettings).servers
   const transports = seeds.length ? [new WebSocketTransport({ seedUrls: seeds }), transport] : [transport]
+  await loadDeviceHistoryPairs(ownerPubkey, state.identityPubkey!)
+  await closeRevokedDeviceHistoryPairs(ownerPubkey, state.identityPubkey!, get(devices).registeredDevices.map(device => device.identityPubkey))
   const node = new FipsNode({ identity, transports, routingMode: 'reply_learned' })
   const peers = new Set<string>()
   const callPeers = new Set<string>()
   let tcp: DeviceSyncTcp
+  const history = new DeviceHistorySync({
+    authorized: peer => run === generation && isAuthorizedDeviceSyncSource(peer, get(devices)),
+    floor: peer => {
+      const pair = currentHistoryPair(ownerPubkey, peer)
+      return pair?.role === 'outbound' && !pair.complete && pair.since === 0 ? 0 : regularHistorySince(peer)
+    },
+    allowsWindow: (peer, since, until, linkId) => {
+      if (since >= regularHistorySince(peer)) return true
+      const pair = currentHistoryPair(ownerPubkey, peer)
+      return !!pair && pair.role === 'outbound' && !pair.complete && pair.since === 0 && since === 0 && until === pair.linkAt - 1 && linkId === pair.linkId
+    },
+    progress: (peer, since, imported, total) => {
+      const pair = currentHistoryPair(ownerPubkey, peer)
+      if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.set({ phase: total === undefined ? 'discovering' : 'transferring', imported, ...(total !== undefined && { total }) })
+    },
+    complete: async (peer, since, until, withheld) => {
+      const pair = currentHistoryPair(ownerPubkey, peer)
+      if (since !== 0 || !pair || pair.role !== 'inbound' || pair.complete || until !== pair.linkAt - 1) return
+      if (withheld) { void history.start(peer, 0, pair.linkAt - 1, pair.linkId); return }
+      await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, complete: true })
+      await tcp.send(peer, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
+      void history.start(peer, regularHistorySince(peer))
+    },
+    fallback: async (peer, since, until) => {
+      const pair = currentHistoryPair(ownerPubkey, peer)
+      if (since === 0 && pair?.role === 'inbound' && !pair.complete && until === pair.linkAt - 1) {
+        await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, fallback: true, fallbackFailed: false })
+        deviceHistoryProgress.set({ phase: 'transferring', imported: 0 })
+      }
+      await tcp.send(peer, encodeDeviceSyncPacket(historyRequest(ownerPubkey, { kind: 'messages', after: null }, peer)))
+    },
+    inventory: async (since, until, initiator) => [...historyMessages(ownerPubkey, since, until), ...(initiator ? await deletedHistoryRecords() : [])],
+    messages: async (since, until, requested) => historyMessages(ownerPubkey, since, until, requested),
+    apply: async (messages, since, authorized) => {
+      const imported = await applyDeviceSyncSnapshot({ ...emptySnapshot(since), messages }, ownerPubkey, since, authorized)
+      for (const message of messages) if (!await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
+      return imported
+    },
+    send: (peer, packet) => tcp.send(peer, encodeDeviceSyncPacket(packet)),
+  })
   tcp = new DeviceSyncTcp({
     endpoint: node,
     localPeer: state.identityPubkey,
     port: DEVICE_SYNC_PORT,
     maxRecordBytes: DEVICE_SYNC_MAX_PACKET_BYTES,
-    onRecord: (source, payload) => handlePacket(source, payload, ownerPubkey, tcp),
+    onRecord: (source, payload) => handlePacket(source, payload, ownerPubkey, tcp, history),
     onConnected: (peer) => {
-      const request: DeviceSyncRequest = {
-        v: 1,
-        type: 'request',
-        rosterAt: get(devices).lastEventTimestamp,
-      }
+      history.reset(peer)
+      const request = historyRequest(ownerPubkey)
       void tcp.sendFirst(peer, encodeDeviceSyncPacket(request))
         .catch((error) => console.warn('[deviceSync] Request failed:', error))
     },
@@ -777,6 +953,10 @@ async function updateRuntime(
     if (peer.state === 'disconnected') {
       callPeers.delete(peer.remotePubkey)
       peers.delete(peer.remotePubkey)
+      history.reset(peer.remotePubkey)
+      const pending = currentHistoryPair(ownerPubkey, peer.remotePubkey)
+      if (pending?.role === 'inbound' && !pending.complete && pending.since === 0) deviceHistoryProgress.update(progress => ({ phase: 'waiting', imported: progress?.imported ?? 0, ...(progress?.total !== undefined && { total: progress.total }) }))
+      historyPeers.delete(peer.remotePubkey)
       tcp.setPeer(peer.remotePubkey, false)
       return
     }
@@ -816,6 +996,7 @@ async function updateRuntime(
   }
   activeNode = node
   activeTcp = tcp
+  activeHistory = history
   activeKey = key
   activeOwnerPubkey = ownerPubkey
   activePeers = peers
@@ -839,7 +1020,7 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
   for (const unsubscribe of storeUnsubscribers) unsubscribe()
   void loadChatPins(ownerPubkey).catch(error => console.warn('Could not load pin settings', error))
   void loadChatMutes(ownerPubkey).catch(error => console.warn('Could not load mute settings', error))
-  storeUnsubscribers = [chats, groups, chatMuteStates, chatPinStates, privateContactsVersion].map((store) =>
+  storeUnsubscribers = [chats, groups, groupMessages, chatMuteStates, chatPinStates, privateContactsVersion].map((store) =>
     store.subscribe(scheduleSnapshotPush)
   )
   storeUnsubscribers.push(startChatMuteSync(ownerPubkey))
@@ -859,6 +1040,7 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
   const contactsTimer = setInterval(() => reconcilePrivateContacts(get(devices)), 5000)
   storeUnsubscribers.push(() => clearInterval(contactsTimer))
   deviceUnsubscribe = devices.subscribe((state) => {
+    if (state.identityPubkey && state.lastEventTimestamp > 0) void closeRevokedDeviceHistoryPairs(ownerPubkey, state.identityPubkey, (state.isCurrentDeviceRegistered ? state.registeredDevices.map(device => device.identityPubkey) : [])).catch(error => console.warn('Could not close removed device history', error))
     reconcilePrivateContacts(state)
     void refreshCurrentDeviceDescription(ownerPubkey).catch(error => console.warn('Could not sync device name', error))
     void reconcileRuntime(ownerPubkey, key, state).catch((error) =>
@@ -868,6 +1050,7 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
 }
 
 export async function stopDeviceSync(): Promise<void> {
+  deviceHistoryProgress.set(null)
   generation += 1
   pendingReconcile = null
   deviceUnsubscribe?.()

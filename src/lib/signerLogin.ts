@@ -1,4 +1,5 @@
 import { getPublicKey } from 'nostr-tools'
+import { AppKeys } from 'nostr-double-ratchet'
 import { db } from './storage'
 import { identity, loginLinkedDevice, nostrClient } from './identity'
 import { get } from 'svelte/store'
@@ -17,8 +18,17 @@ export async function loginWithRemoteSigner(options: Omit<RemoteSignerOptions, '
   let deviceSecret: Uint8Array | undefined
   try {
     const owner = await signer.connect()
+    let info: { v: 1; linkId: string; approver: string; device: string; linkAt: number } | undefined
     const authorization = await authorizeSignerDevice({
       owner, relays, runtime, signal: options.signal, signEvent: event => signer.signEvent(event),
+      onAuthorized: (event, device) => {
+        const candidate = signer.linkInfo as typeof info
+        const roster = AppKeys.fromEvent(event).getAllDevices()
+        if (candidate !== undefined && (!candidate || candidate.v !== 1 || candidate.linkId !== signer.transportPubkey || candidate.device !== device ||
+          !roster.some(entry => entry.identityPubkey === candidate.approver && entry.identityPubkey !== device) ||
+          candidate.linkAt !== roster.find(entry => entry.identityPubkey === device)?.createdAt)) throw new Error('Invalid device-link information.')
+        info = candidate
+      },
       onCommitting: () => {
         signer.ensureActive()
         if (get(identity)) throw new Error('Already signed in.')
@@ -27,6 +37,7 @@ export async function loginWithRemoteSigner(options: Omit<RemoteSignerOptions, '
       },
     })
     deviceSecret = authorization.deviceSecret
+    const device = getPublicKey(deviceSecret)
     // The exact signed proof and device key commit together. The identity
     // marker is written only afterward; no owner or signer secret is retained.
     await db.transaction('rw', db.sessionManager, async () => {
@@ -36,6 +47,9 @@ export async function loginWithRemoteSigner(options: Omit<RemoteSignerOptions, '
         { key: `${DEVICE_PREFIX}/identity-private-key`, value: Array.from(deviceSecret!) },
         { key: `${DEVICE_PREFIX}/owner-pubkey`, value: owner },
       ])
+      if (info) await db.sessionManager.put({ key: `device-history-pairs:${owner}:${device}`, value: [{
+        peer: info.approver, linkId: info.linkId, linkAt: info.linkAt, since: null, role: 'inbound', complete: false,
+      }] })
       await db.sessionManager.delete(`${DEVICE_PREFIX}/invite`)
     })
     await loginLinkedDevice(owner)

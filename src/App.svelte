@@ -26,6 +26,7 @@
   import { get } from 'svelte/store'
   import { getDelegateManager, initMultiDevice, resetManagers } from './lib/privateChats'
   import { startDeviceSync, stopDeviceSync } from './lib/deviceSync'
+  import { deviceHistoryProgress } from './lib/deviceHistoryPolicy'
   import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
   import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
   import { initFollowing, clearFollowingCache } from './lib/following'
@@ -644,6 +645,18 @@
     <div class="h-full flex flex-col">
       <!-- Notification prompt -->
       <NotificationPrompt />
+      {#if $deviceHistoryProgress}
+        <div role="status" class="px-4 py-2 text-center text-sm text-gray-400" data-testid="device-history-progress">
+          {#if $deviceHistoryProgress.phase === 'waiting'}
+            Waiting for your other device…
+          {:else}
+            Syncing messages…
+            {#if $deviceHistoryProgress.total !== undefined}
+              <span class="ml-2">{$deviceHistoryProgress.imported} / {$deviceHistoryProgress.total}</span>
+            {/if}
+          {/if}
+        </div>
+      {/if}
 
       <!-- Main app layout -->
       <div class="flex flex-1 min-h-0">

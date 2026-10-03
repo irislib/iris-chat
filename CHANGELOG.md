@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.37 - 2026-10-03
+
+- Link devices through one approval flow, with working pasted links from current and older Iris apps.
+- Choose chats and groups only or include old messages from the approving device, with progress while messages sync.
+- Repair missing messages after reconnecting, preserve deletions, and keep the history choice private.
+- Fix linking and sync after reopening saved groups.
+
 ## 2.6.36 - 2026-10-02
 
 - Keep direct calls connected when devices start connecting to each other at the same time.

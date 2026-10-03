@@ -35,6 +35,7 @@ import {
   ensureDeviceRegistered,
   getNdrRuntime,
   waitForSendReadyRuntime,
+  waitForNdrRuntime,
 } from './privateChats'
 import { getEventHash, type VerifiedEvent } from 'nostr-tools'
 import {
@@ -155,10 +156,11 @@ function resolveOurDevicePubkey(): string | null {
 }
 
 export function syncNativeGroupTransport(groupId: string): void {
-  const runtime = getNdrRuntime()
   const currentGroups = Array.from(get(groups).values())
   const ownerPubkey = getPubkey()?.trim()
-  void runtime.syncGroups(currentGroups, ownerPubkey || undefined).catch((error) => {
+  // Restored groups can arrive before session initialization. Calling syncGroups
+  // then would recursively wait for that same group-manager initialization.
+  void waitForNdrRuntime().then(runtime => runtime.syncGroups(currentGroups, ownerPubkey || undefined)).catch((error) => {
     console.warn('[groups] Failed to sync runtime groups:', groupId, error)
   })
 }

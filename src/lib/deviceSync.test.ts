@@ -136,6 +136,10 @@ vi.mock('./storage', () => ({
   deleteSessionManagerValue: vi.fn(async () => {}),
   saveGroup: vi.fn(),
   saveMessage: vi.fn(),
+  isHistoryMessageSettled: vi.fn().mockResolvedValue(true),
+  admitHistoryMessage: vi.fn(async () => true),
+  deletedHistoryRecords: vi.fn(async () => []),
+  isHistoryChatDeleted: vi.fn(async () => false),
   saveSession: vi.fn(),
 }))
 
@@ -163,6 +167,7 @@ import { groups } from './groups'
 import { nostrClient } from './identity'
 import { devices } from './devices'
 import { chatMutes, clearChatMutes } from './chatMuteStore'
+import { deviceHistoryPair, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { pinnedChatIds, clearChatPins } from './chatPinStore'
 
 const owner = 'a'.repeat(64)
@@ -256,7 +261,7 @@ describe('device sync', () => {
   it('uses shared STUN-assisted FIPS defaults with public message servers configured', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 10 && fips.nodes.length === 0; tick++) await Promise.resolve()
+      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick++) await Promise.resolve()
       expect(fips.transports).toHaveLength(1)
       expect(fips.transports[0]).toMatchObject({
         relays: ['wss://relay.example'],
@@ -743,7 +748,7 @@ describe('device sync', () => {
   it('continues PageEnd and ResyncRequired control packets without applying a snapshot', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 10 && fips.nodes.length === 0; tick += 1) await Promise.resolve()
+      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick += 1) await Promise.resolve()
       const transport = tcp.instances.at(-1)!
       const source = `02${device}`
       transport.sendFirst.mockClear()
@@ -758,6 +763,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
+        historyReconcile: 1,
         page: { kind: 'messages', after: null },
       }))
 
@@ -766,6 +772,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
+        historyReconcile: 1,
       }))
 
       transport.send.mockRejectedValueOnce(new Error('queue full'))
@@ -773,6 +780,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
+        historyReconcile: 1,
       }))).rejects.toThrow('queue full')
       expect(transport.sendFirst).toHaveBeenLastCalledWith(
         source,
@@ -789,11 +797,40 @@ describe('device sync', () => {
     }
   })
 
+  it('sends pre-link history only to its approving pair with the exact private link operation', async () => {
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick += 1) await Promise.resolve()
+      const transport = tcp.instances.at(-1)!, source = `02${device}`, linkId = '8'.repeat(64)
+      await saveDeviceHistoryPair(owner, owner, { peer: device, linkId, linkAt: 100, since: 0, role: 'outbound', complete: false })
+      chats.set(new Map([[peerOwner, { id: peerOwner, recipientPubkey: peerOwner, mode: 'manager', messages: [
+        { id: 'old', timestamp: 50_000, content: 'Initial history', isMine: true },
+        { id: 'new', timestamp: 110_000, content: 'After linking', isMine: true },
+      ] }]]))
+      const request = (id?: string) => encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 0, historyReconcile: 1,
+        page: { kind: 'messages', after: null }, ...(id && { linkId: id }) })
+      const messages = (): string[] => transport.send.mock.calls.map((call: unknown[]) => parseDeviceSyncPacket(call[1] as Uint8Array, owner))
+        .flatMap((packet: ReturnType<typeof parseDeviceSyncPacket>) => packet.type === 'snapshot' ? packet.messages.map(message => message.id) : [])
+      transport.send.mockClear()
+      await transport.onRecord(source, request('9'.repeat(64)))
+      expect(messages()).toEqual(['new'])
+      transport.send.mockClear()
+      await transport.onRecord(source, request(linkId))
+      expect(messages()).toEqual(['old'])
+      expect(transport.send.mock.calls.map((call: unknown[]) => parseDeviceSyncPacket(call[1] as Uint8Array, owner)).at(-1)).toEqual({ v: 1, type: 'historyPageEnd', linkAt: 100, linkId })
+      await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: 100, linkId }))
+      expect(deviceHistoryPair(owner, owner, device)?.complete).toBe(true)
+      transport.send.mockClear()
+      await transport.onRecord(source, request(linkId))
+      expect(messages()).toEqual(['new'])
+    } finally { await stopDeviceSync() }
+  })
+
   it('pushes new chat metadata without replaying history', async () => {
     vi.useFakeTimers()
     try {
       startDeviceSync(owner, new Uint8Array(32))
-      for (let tick = 0; tick < 10 && fips.nodes.length === 0; tick += 1) {
+      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick += 1) {
         await Promise.resolve()
       }
       const node = fips.nodes.at(-1)

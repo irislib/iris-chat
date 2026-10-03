@@ -1,11 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity, loginLinkedDevice } from '../lib/identity'
+  import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity } from '../lib/identity'
   import { isLinkInvite, parseInviteFromHash } from '../lib/chat'
-  import { startDeviceLink } from '../lib/privateChats'
   import { getErrorMessage } from '../lib/utils'
-  import QRCode from './QRCode.svelte'
-  import CopyButton from './CopyButton.svelte'
   import SignerLogin from './SignerLogin.svelte'
 
   interface Props {
@@ -23,12 +20,7 @@
   const inviteFromUrl = parseInviteFromHash()
   const isLinkInviteInUrl = isLinkInvite(inviteFromUrl)
   const hasInviteInUrl = !!inviteFromUrl && !isLinkInviteInUrl
-  let mode = $state<'login' | 'link' | 'signer'>('login')
-
-  let linkInviteUrl = $state('')
-  let linkInviteStatus = $state<'idle' | 'waiting' | 'linked' | 'error'>('idle')
-  let linkInviteError = $state('')
-  let linkDeviceStop: (() => void) | null = null
+  let mode = $state<'login' | 'signer'>('login')
 
   onMount(() => {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0
@@ -64,99 +56,11 @@
     }
   }
 
-  async function startLinkInvite() {
-    linkInviteStatus = 'waiting'
-    linkInviteError = ''
-    try {
-      linkDeviceStop?.()
-      const session = await startDeviceLink(async (ownerPubkey) => {
-        try {
-          await loginLinkedDevice(ownerPubkey, displayName || null)
-          if (window.location.hash) {
-            history.replaceState(null, '', window.location.pathname)
-          }
-          linkInviteStatus = 'linked'
-          onlogin()
-        } catch (e) {
-          linkInviteStatus = 'error'
-          linkInviteError = getErrorMessage(e, 'Failed to link device')
-        } finally {
-          linkDeviceStop?.()
-          linkDeviceStop = null
-        }
-      })
-      linkInviteUrl = session.url
-      linkDeviceStop = session.stop
-    } catch (e) {
-      linkInviteStatus = 'error'
-      linkInviteError = getErrorMessage(e, 'Failed to create link code')
-    }
-  }
-
-  $effect(() => {
-    if (mode !== 'link') {
-      linkDeviceStop?.()
-      linkDeviceStop = null
-      linkInviteUrl = ''
-      linkInviteStatus = 'idle'
-      linkInviteError = ''
-      return
-    }
-    if (linkInviteStatus === 'idle') {
-      void startLinkInvite()
-    }
-    return () => {
-      linkDeviceStop?.()
-      linkDeviceStop = null
-    }
-  })
 </script>
 
 <div class="w-full max-w-md mx-auto p-6 bg-surface rounded-2xl shadow-xl">
   {#if mode === 'signer'}
     <SignerLogin {onlogin} onback={() => mode = 'login'} />
-  {:else if mode === 'link'}
-    <div class="space-y-4">
-      <h2 class="text-2xl font-bold text-white text-center">Link this device</h2>
-      <p class="text-sm text-gray-400 text-center">
-        Scan this code with your main device to connect it.
-      </p>
-
-      <div class="flex justify-center">
-        <div class="p-4 bg-white rounded-xl">
-          {#if linkInviteUrl}
-            <QRCode data={linkInviteUrl} size={240} />
-          {:else}
-            <div class="w-60 h-60 bg-surface-light animate-pulse rounded-lg"></div>
-          {/if}
-        </div>
-      </div>
-
-      {#if linkInviteUrl}
-        <div class="w-full max-w-full min-w-0 overflow-hidden">
-          <CopyButton text={linkInviteUrl} maxLength={32} className="w-full max-w-full min-w-0" />
-        </div>
-      {/if}
-
-      {#if linkInviteStatus === 'waiting'}
-        <p class="text-sm text-gray-400 text-center">Waiting for your signed-in device…</p>
-      {:else if linkInviteStatus === 'linked'}
-        <p class="text-sm text-green-400 text-center">Device linked</p>
-      {:else if linkInviteStatus === 'error'}
-        <div class="p-3 bg-red-900/30 border border-red-700 rounded-lg text-red-400 text-sm">
-          {linkInviteError}
-        </div>
-      {/if}
-
-      <button
-        class="btn-ghost w-full flex items-center justify-center gap-2"
-        onclick={() => mode = 'login'}
-        disabled={loading}
-      >
-        <span class="i-carbon-arrow-left"></span>
-        Back to login
-      </button>
-    </div>
   {:else}
     <div class="space-y-4">
       <div>
@@ -213,15 +117,6 @@
         <button
           class="btn-ghost w-full flex items-center justify-center gap-2"
           onclick={() => mode = 'signer'}
-          disabled={loading}
-        >
-          <span class="i-carbon-pen"></span>
-          Signer app/device
-        </button>
-
-        <button
-          class="btn-ghost w-full flex items-center justify-center gap-2"
-          onclick={() => mode = 'link'}
           disabled={loading}
         >
           <span class="i-carbon-qr-code"></span>
