@@ -11,16 +11,16 @@ const releases = {
     "integrity": "sha512-F1UToi75yYrZpt5KFocPUlQH4MeU/J9A/aJBndWUuDvzx1WdQtF99tNxD3KnH2x81R4oaT721hf5OcTdSv8hRg=="
   },
   "@fips/core": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.48/fips-core-0.0.48.tgz",
-    "integrity": "sha512-9Ko3aX3QLgBy+1zFFySjMpLPP70PG61fOWUkguSmfIn5xFM4m7sZa7FfrY/qJnWhFvhFYdwpVVxfWv06woY5GA=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.50/fips-core-0.0.49.tgz",
+    "integrity": "sha512-kTCB8jZ5scSYzfZnLT3ysIH8IDxkjcGCNJOiNiY1yhFAL7o1JlG4WgbplThRJMEMDwcK+urGfkhjlV3jMF0PlA=="
   },
   "@fips/tcp": {
     "url": "https://github.com/mmalmi/fips-tcp/releases/download/v0.2.0/fips-tcp-0.2.0.tgz",
     "integrity": "sha512-KCJmltpx4cH76Sp+GOKJvYzQpwUTUtmyBA5bgcfS36ty8AxSgBQZxLdBwM59IER+B/rZpjRYFtqE6MPePL0o+w=="
   },
   "@fips/transport-webrtc": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.49/fips-transport-webrtc-0.0.52.tgz",
-    "integrity": "sha512-VT22nF8LqxjXcl8cVq/8k7xcK8c0QNXoxB3pXZ7yMI+da7LkUACjc8pIkYPCZYuIjuXuIhNzNEFYbYalGRyzTw=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.51/fips-transport-webrtc-0.0.53.tgz",
+    "integrity": "sha512-Za/F3BAUnQFBd2fI+80unwuYNmNmFuRt50vGiWNPpYZbHQgoXSzjloAz89+zLjURr5cvdIjxRInjV0Y1/0ekYg=="
   },
   "@fips/transport-websocket": {
     "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.48/fips-transport-websocket-0.0.8.tgz",
