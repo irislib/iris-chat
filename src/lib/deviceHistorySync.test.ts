@@ -6,7 +6,7 @@ import { encodeDeviceSyncPacket, parseDeviceSyncPacket, type DeviceHistoryPacket
 const owner = 'a'.repeat(64)
 const contact = 'b'.repeat(64)
 const message = (id: string, createdAt = 100): DeviceSyncMessage => ({ chatId: contact, id, createdAt, author: owner, body: `Message ${id} ☕` })
-function pair(initialA: DeviceSyncMessage[], initialB: DeviceSyncMessage[], since = 0) {
+function pair(initialA: DeviceSyncMessage[], initialB: DeviceSyncMessage[], since = 0, allowedWindow?: (since: number, until: number, linkId?: string) => boolean) {
   const a = new Map(initialA.map(message => [historyRecordId(message), message]))
   const b = new Map(initialB.map(message => [historyRecordId(message), message]))
   const tombstones = new Map<string, DeviceSyncMessage>()
@@ -16,6 +16,7 @@ function pair(initialA: DeviceSyncMessage[], initialB: DeviceSyncMessage[], sinc
   let now = 200_000
   const options = (local: Map<string, DeviceSyncMessage>, to: 'a' | 'b') => ({
     authorized: () => authorized, now: () => now, floor: () => since,
+    allowsWindow: (_peer: string, since: number, until: number, linkId?: string) => to !== 'a' || !allowedWindow || allowedWindow(since, until, linkId),
     inventory: async (_since: number, _until: number, initiator: boolean) => [...local.values(), ...(initiator && to === 'b' ? tombstones.values() : [])],
     messages: async (since: number, until: number) => [...local.values()].filter(message => message.createdAt >= since && message.createdAt <= until),
     apply: async (messages: DeviceSyncMessage[]) => {
@@ -69,6 +70,22 @@ describe('encrypted device history reconciliation', () => {
     p.first.negotiate('b', 100); p.second.negotiate('a', 100)
     await p.first.start('b', 0); await p.drain()
     expect([...p.a.values()].map(message => message.id)).toEqual(['new'])
+  })
+
+  it.each([false, true])('retains the approved initial window queued behind normal sync (later refresh: %s)', async (refresh: boolean) => {
+    const linkId = 'c'.repeat(64)
+    const p = pair([], [message('old', 99), message('new', 110)], 0,
+      (since, until, link) => since >= 100 || (since === 0 && until === 99 && link === linkId))
+    await p.first.start('b', 100, 200)
+    await p.first.start('b', 0, 99, linkId)
+    if (refresh) await p.first.start('b', 100, 200)
+    await p.drain()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await p.drain()
+    const opens = p.sent.filter(packet => packet.type === 'historyOpen')
+    expect(opens).toHaveLength(2)
+    expect(opens[1]).toMatchObject({ since: 0, until: 99, linkId })
+    expect([...p.a.values()].map(message => message.id).sort()).toEqual(['new', 'old'])
   })
 
   it('does not request deleted IDs or revive them on later reconciliation', async () => {

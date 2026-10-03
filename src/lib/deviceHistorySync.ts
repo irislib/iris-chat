@@ -20,7 +20,7 @@ interface HistorySession {
   requested: Set<string>
   received: Set<string>
   complete: boolean
-  restartSince?: number
+  restart?: { since: number; until?: number; linkId?: string }
   imported: number
   total: number
   withheld: boolean
@@ -70,7 +70,12 @@ export class DeviceHistorySync {
         if (this.peers.size >= 32) return
         state = { floor: Infinity }; this.peers.set(peer, state)
       }
-      if (state.outgoing && this.live(peer, state, state.outgoing)) { state.outgoing.restartSince = since; return }
+      if (state.outgoing && this.live(peer, state, state.outgoing)) {
+        // A pending initial transfer keeps its exact approval binding, even when
+        // a later metadata update also asks for normal gap repair.
+        if (!state.outgoing.restart?.linkId || linkId) state.outgoing.restart = { since, until: end, linkId }
+        return
+      }
       const until = end ?? Math.max(since, Math.floor(this.now() / 1000))
       let session: HistorySession
       try { session = await this.session(bytesToHex(crypto.getRandomValues(new Uint8Array(16))), since, until, true) }
@@ -180,7 +185,10 @@ export class DeviceHistorySync {
       await this.send(peer, state, session, { v: 1, type: 'historyDone', session: session.id })
       state.outgoing = undefined
       await this.options.complete?.(peer, session.since, session.until, session.withheld)
-      if (session.restartSince !== undefined && session.since > 0) void this.start(peer, session.restartSince).catch(() => undefined)
+      if (session.restart && session.since > 0) {
+        const { since, until, linkId } = session.restart
+        void this.start(peer, since, until, linkId).catch(() => undefined)
+      }
     }
   }
 
