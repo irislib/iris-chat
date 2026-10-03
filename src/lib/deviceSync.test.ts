@@ -66,7 +66,8 @@ vi.mock('@fips/transport-webrtc', async importOriginal => ({
     connect = vi.fn(async () => undefined)
   },
 }))
-vi.mock('./deviceSyncTcp', () => ({
+vi.mock('./deviceSyncTcp', async importOriginal => ({
+  normalizeDeviceSyncPeer: (await importOriginal<typeof import('./deviceSyncTcp')>()).normalizeDeviceSyncPeer,
   DeviceSyncTcp: class {
     port: number
     send = vi.fn(async () => undefined)
@@ -292,6 +293,27 @@ describe('device sync', () => {
     } finally {
       finishStart?.()
       await stopDeviceSync()
+    }
+  })
+
+  it('prefers only current authorized siblings and removes their priority when revoked', async () => {
+    const original = get(devices)
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(fips.transports).toHaveLength(1))
+      expect(fips.transports[0].preferredAutoConnectPeers).toEqual([`02${'b'.repeat(64)}`, `03${'b'.repeat(64)}`])
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({
+        ...state,
+        lastEventTimestamp: state.lastEventTimestamp + 1,
+        registeredDevices: state.registeredDevices.filter(device => device.identityPubkey === state.identityPubkey),
+      }))
+      await vi.waitFor(() => expect(fips.transports).toHaveLength(2))
+      expect(fips.nodes[0].stop).toHaveBeenCalledOnce()
+      expect(fips.transports[1].preferredAutoConnectPeers).toEqual([])
+      expect((fips.transports[1].allowIncomingPeer as (peer: string) => boolean)(`02${'b'.repeat(64)}`)).toBe(false)
+    } finally {
+      await stopDeviceSync()
+      ;(devices as unknown as Writable<DeviceState>).set(original)
     }
   })
 

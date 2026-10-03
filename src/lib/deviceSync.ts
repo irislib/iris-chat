@@ -40,7 +40,7 @@ import {
 import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
 import { activateAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
-import { DeviceSyncTcp } from './deviceSyncTcp'
+import { DeviceSyncTcp, normalizeDeviceSyncPeer } from './deviceSyncTcp'
 import { DeviceHistorySync, type HistoryRecord } from './deviceHistorySync'
 import { closeRevokedDeviceHistoryPairs, deviceHistoryPair, deviceHistoryProgress, loadDeviceHistoryPairs, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { attachCalls, detachCalls, callOwnerForPeer, knownCallDevices } from './calls'
@@ -876,6 +876,9 @@ async function updateRuntime(
     stunServers: get(callConnectionSettings).stunServers,
     advertiseOnNostr: true,
     autoConnect: true,
+    preferredAutoConnectPeers: state.registeredDevices
+      .filter(device => device.identityPubkey !== state.identityPubkey)
+      .flatMap(device => [`02${device.identityPubkey}`, `03${device.identityPubkey}`]),
     discoveryApp: DEVICE_SYNC_SCOPE,
     allowIncomingPeer: peer => isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer),
     maxConnections: Math.max(16, state.registeredDevices.length + 1),
@@ -955,22 +958,23 @@ async function updateRuntime(
   })
   node.on('peer', (value) => {
     const peer = value as PeerEvent
+    const syncPeer = normalizeDeviceSyncPeer(peer.remotePubkey)
     if (peer.state === 'disconnected') {
       callPeers.delete(peer.remotePubkey)
-      peers.delete(peer.remotePubkey)
-      history.reset(peer.remotePubkey)
-      const pending = currentHistoryPair(ownerPubkey, peer.remotePubkey)
+      peers.delete(syncPeer)
+      history.reset(syncPeer)
+      const pending = currentHistoryPair(ownerPubkey, syncPeer)
       if (pending?.role === 'inbound' && !pending.complete && pending.since === 0) deviceHistoryProgress.update(progress => ({ phase: 'waiting', imported: progress?.imported ?? 0, ...(progress?.total !== undefined && { total: progress.total }) }))
-      historyPeers.delete(peer.remotePubkey)
-      tcp.setPeer(peer.remotePubkey, false)
+      historyPeers.delete(syncPeer)
+      tcp.setPeer(syncPeer, false)
       return
     }
     callPeers.add(peer.remotePubkey)
     if (
       !isAuthorizedDeviceSyncSource(peer.remotePubkey, get(devices))
     ) return
-    peers.add(peer.remotePubkey)
-    tcp.setPeer(peer.remotePubkey, true)
+    peers.add(syncPeer)
+    tcp.setPeer(syncPeer, true)
   })
   node.on('error', (error) => console.warn('[deviceSync] FIPS error:', error))
   attachCalls(node, () => Array.from(callPeers), async owner => {

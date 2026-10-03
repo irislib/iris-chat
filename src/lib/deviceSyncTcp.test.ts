@@ -9,6 +9,7 @@ class MemoryFipsEndpoint implements FipsDatagramEndpoint {
   remote?: MemoryFipsEndpoint
   dropNext = false
   dropAll = false
+  sourceIdentity?: string
 
   constructor(readonly id: string) {}
 
@@ -31,7 +32,7 @@ class MemoryFipsEndpoint implements FipsDatagramEndpoint {
     const handler = this.remote.handlers.get(args.dstPort)
     if (!handler) throw new Error('missing service')
     queueMicrotask(() => void handler({
-      src: this.id,
+      src: this.sourceIdentity ?? this.id,
       srcPort: args.srcPort ?? 0,
       dstPort: args.dstPort,
       payload: args.payload.slice(),
@@ -40,6 +41,48 @@ class MemoryFipsEndpoint implements FipsDatagramEndpoint {
 }
 
 describe('DeviceSyncTcp', () => {
+  it('uses one stream identity when peer events and authenticated datagrams have different key parity', async () => {
+    vi.useFakeTimers()
+    const aEndpoint = new MemoryFipsEndpoint(`02${'a'.repeat(64)}`)
+    const bEndpoint = new MemoryFipsEndpoint(`02${'b'.repeat(64)}`)
+    aEndpoint.remote = bEndpoint
+    bEndpoint.remote = aEndpoint
+    bEndpoint.sourceIdentity = `03${'b'.repeat(64)}`
+    const received: Array<[string, string]> = []
+    const options = (endpoint: MemoryFipsEndpoint) => ({
+      endpoint, localPeer: endpoint.id, port: 7369, maxRecordBytes: 1024,
+      onRecord: (peer: string, bytes: Uint8Array) => { received.push([peer, new TextDecoder().decode(bytes)]) },
+    })
+    const a = new DeviceSyncTcp(options(aEndpoint))
+    const b = new DeviceSyncTcp(options(bEndpoint))
+    try {
+      a.setPeer(bEndpoint.id, true)
+      b.setPeer(aEndpoint.id, true)
+      const sent = a.send(bEndpoint.id, new TextEncoder().encode('history')).catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(received).toEqual([[aEndpoint.id, 'history']])
+      await sent
+      const reply = b.send(`03${'a'.repeat(64)}`, new TextEncoder().encode('reply')).catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(received).toEqual([[aEndpoint.id, 'history'], [bEndpoint.id, 'reply']])
+      await reply
+      a.setPeer(bEndpoint.sourceIdentity, false)
+      b.setPeer(aEndpoint.id, false)
+      await vi.advanceTimersByTimeAsync(100)
+      const pending = a.send(bEndpoint.id, new TextEncoder().encode('after reconnect')).catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(received).toHaveLength(2)
+      a.setPeer(bEndpoint.sourceIdentity, true)
+      b.setPeer(`03${'a'.repeat(64)}`, true)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(received.at(-1)).toEqual([aEndpoint.id, 'after reconnect'])
+      await pending
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()])
+      vi.useRealTimers()
+    }
+  })
+
   it('reassembles split and coalesced records within the size bound', () => {
     const reader = new RecordReader(8)
     const framed = Uint8Array.from([0, 0, 0, 2, 1, 2, 0, 0, 0, 1, 3])

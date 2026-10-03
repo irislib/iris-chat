@@ -47,7 +47,12 @@ export class DeviceSyncTcp {
   private stopped = false
 
   constructor(private readonly options: DeviceSyncTcpOptions) {
-    this.tcp = new FipsTcpEndpoint(options.endpoint, options.port, {
+    const endpoint: FipsDatagramEndpoint = {
+      registerService: (port, handler) => options.endpoint.registerService(port, context =>
+        handler({ ...context, src: normalizeDeviceSyncPeer(context.src) })),
+      sendDatagram: args => options.endpoint.sendDatagram({ ...args, dst: normalizeDeviceSyncPeer(args.dst) }),
+    }
+    this.tcp = new FipsTcpEndpoint(endpoint, options.port, {
       mss: 1024,
       receiveBuffer: 0xffff,
       sendBuffer: 1024 * 1024,
@@ -61,6 +66,7 @@ export class DeviceSyncTcp {
   }
 
   setPeer(peer: string, connected: boolean): void {
+    peer = normalizeDeviceSyncPeer(peer)
     void this.enqueue(async () => {
       if (connected) this.peers.add(peer)
       else {
@@ -88,6 +94,7 @@ export class DeviceSyncTcp {
   }
 
   private queueRecord(peer: string, record: Uint8Array, first: boolean): Promise<void> {
+    peer = normalizeDeviceSyncPeer(peer)
     if (this.stopped) return Promise.reject(new Error('device sync TCP is stopped'))
     if (record.byteLength > this.options.maxRecordBytes) {
       return Promise.reject(new Error('device sync record exceeds the configured limit'))
@@ -289,6 +296,12 @@ export class DeviceSyncTcp {
     if (remaining === 0) this.pendingBytesByPeer.delete(peer)
     else this.pendingBytesByPeer.set(peer, remaining)
   }
+}
+
+/** FIPS identifies a device by its x-only key; Noise can expose either parity. */
+export function normalizeDeviceSyncPeer(peer: string): string {
+  const normalized = peer.toLowerCase()
+  return /^(02|03)[0-9a-f]{64}$/.test(normalized) ? `02${normalized.slice(2)}` : peer
 }
 
 export class RecordReader {
