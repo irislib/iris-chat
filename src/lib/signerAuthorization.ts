@@ -14,7 +14,7 @@ function canonicalEvent(event: Event): Event {
     tags: event.tags.map(tag => [...tag]), content: event.content, sig: event.sig }
 }
 
-export function selectSignerRoster(events: Event[], owner: string): VerifiedEvent | null {
+function signerRosterHeads(events: Event[], owner: string): VerifiedEvent[] {
   const candidates = new Map<string, VerifiedEvent>()
   let latest = 0
   for (const incoming of events) {
@@ -29,11 +29,17 @@ export function selectSignerRoster(events: Event[], owner: string): VerifiedEven
     if (event.created_at > latest) { candidates.clear(); latest = event.created_at }
     candidates.set(event.id, event as VerifiedEvent)
   }
-  if (candidates.size > 1) throw new Error('Conflicting device lists. Try again later.')
-  return candidates.values().next().value ?? null
+  return [...candidates.values()].sort((a, b) => a.id.localeCompare(b.id))
 }
 
-export async function fetchSignerRoster(owner: string, urls: string[], signal: AbortSignal, runtime: SignerRuntime): Promise<VerifiedEvent | null> {
+export function selectSignerRoster(events: Event[], owner: string): VerifiedEvent | null {
+  const heads = signerRosterHeads(events, owner)
+  if (heads.length > 1) throw new Error('Conflicting device lists. Try again later.')
+  return heads[0] ?? null
+}
+
+/** Exposes verified heads only to the owner-side legacy snapshot repair. */
+export async function fetchSignerRosterHeads(owner: string, urls: string[], signal: AbortSignal, runtime: SignerRuntime): Promise<VerifiedEvent[]> {
   check(signal)
   const result = await runtime.query([{ kinds: [37368], authors: [owner], limit: MAX_EVENTS }], {
     relays: signerRelayUrls(urls), sources: [], cache: 'network-only', localEcho: false,
@@ -44,7 +50,13 @@ export async function fetchSignerRoster(owner: string, urls: string[], signal: A
   check(signal)
   if (!result.complete) throw new Error('Could not check all message servers. Try again.')
   if (result.events.length >= MAX_EVENTS) throw new Error('Device list is too large.')
-  return selectSignerRoster(result.events, owner)
+  return signerRosterHeads(result.events, owner)
+}
+
+export async function fetchSignerRoster(owner: string, urls: string[], signal: AbortSignal, runtime: SignerRuntime): Promise<VerifiedEvent | null> {
+  const heads = await fetchSignerRosterHeads(owner, urls, signal, runtime)
+  if (heads.length > 1) throw new Error('Conflicting device lists. Try again later.')
+  return heads[0] ?? null
 }
 
 export function prepareSignerAuthorization(owner: string, device: string, previous: VerifiedEvent | null): UnsignedEvent {

@@ -1,6 +1,6 @@
-import { AppKeys } from 'nostr-double-ratchet'
+import { AppKeys, type DeviceEntry } from 'nostr-double-ratchet'
 import { finalizeEvent, generateSecretKey, getPublicKey, nip44, verifyEvent, type Event, type EventTemplate, type UnsignedEvent, type VerifiedEvent } from 'nostr-tools'
-import { fetchSignerRoster, validateSignerAuthorization } from './signerAuthorization'
+import { fetchSignerRoster, fetchSignerRosterHeads, validateSignerAuthorization } from './signerAuthorization'
 import { signerRelayUrls, type SignerRuntime } from './remoteSigner'
 import type { DeviceHistoryChoice } from './deviceHistoryPolicy'
 
@@ -33,8 +33,7 @@ export function validateDeviceAddition(draft: UnsignedEvent, owner: string, prev
   return { expected, device, linkAt }
 }
 
-/** A two-minute, single-device NIP-46 approval using the existing message worker. */
-export async function serveDeviceLink(options: {
+interface DeviceLinkOptions {
   link: string
   owner: string
   approver: string
@@ -42,9 +41,54 @@ export async function serveDeviceLink(options: {
   signal: AbortSignal
   sign(event: EventTemplate): Promise<Event>
   savePair(device: string, linkAt: number, linkId: string): Promise<void>
+  getKnownRoster?(): { devices: DeviceEntry[]; createdAt: number }
   timeoutMs?: number
-}): Promise<void> {
+}
+
+function comparableRoster(event: VerifiedEvent): string {
+  const identifiers = event.tags.filter(tag => tag[0] === 'd')
+  const subjects = event.tags.filter(tag => tag[0] === 'i')
+  const id = identifiers[0]?.[1]
+  if (identifiers.length !== 1 || identifiers[0].length !== 2 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id ?? '') || subjects.length !== 1 || subjects[0].length !== 3 || subjects[0][1] !== id || subjects[0][2] !== 'subject') throw new Error('Conflicting device lists. Try again later.')
+  return JSON.stringify([event.created_at, event.content, event.tags.map(tag => tag[0] === 'd' || tag[0] === 'i' ? [tag[0], 'same-profile', ...tag.slice(2)] : tag)])
+}
+
+/** Older native versions gave unchanged signed snapshots fresh profile UUIDs.
+ * Only their owner can supersede those equivalent heads before a link starts. */
+export async function prepareDeviceLinkRoster(options: Pick<DeviceLinkOptions, 'owner' | 'approver' | 'runtime' | 'signal' | 'sign' | 'getKnownRoster'> & { relays: string[] }): Promise<void> {
+  const { owner, approver, runtime, signal, relays } = options
+  const heads = await fetchSignerRosterHeads(owner, relays, signal, runtime)
+  if (heads.length < 2) return
+  const previous = heads[0]
+  const canonical = comparableRoster(previous)
+  if (heads.some(head => comparableRoster(head) !== canonical)) throw new Error('Conflicting device lists. Try again later.')
+  const members = (devices: DeviceEntry[]) => JSON.stringify(devices.map(device => [device.identityPubkey, device.createdAt]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
+  const expectedDevices = AppKeys.fromEvent(previous).getAllDevices()
+  const checkLocal = () => {
+    signal.throwIfAborted()
+    const known = options.getKnownRoster?.()
+    if (!known || known.createdAt > previous.created_at || !expectedDevices.some(device => device.identityPubkey === approver) || members(known.devices) !== members(expectedDevices)) throw new Error('Your device list changed. Create a new link.')
+  }
+  checkLocal()
+  const now = Math.floor(Date.now() / 1000)
+  const expected: UnsignedEvent = { pubkey: owner, kind: previous.kind, tags: previous.tags.map(tag => [...tag]), content: previous.content, created_at: Math.max(now, previous.created_at + 1) }
+  if (expected.created_at > now + 300) throw new Error('Device list is dated too far ahead. Try again later.')
+  const repaired = validateSignerAuthorization(expected, await options.sign(expected))
+  checkLocal()
+  const latest = await fetchSignerRosterHeads(owner, relays, signal, runtime)
+  if (JSON.stringify(latest.map(head => head.id)) !== JSON.stringify(heads.map(head => head.id))) throw new Error('Your device list changed. Create a new link.')
+  checkLocal()
+  const receipt = await runtime.publish(repaired, { relays: signerRelayUrls(relays), sources: [], requireAck: true, queue: false, localEcho: false })
+  if (!receipt.remoteAccepted) throw new Error('Could not save device authorization. Try again.')
+  const current = await fetchSignerRoster(owner, relays, signal, runtime)
+  if (current?.id !== repaired.id) throw new Error('Your device list changed. Create a new link.')
+}
+
+/** A two-minute, single-device NIP-46 approval using the existing message worker. */
+export async function serveDeviceLink(options: DeviceLinkOptions): Promise<void> {
   const link = parseDeviceConnectLink(options.link)
+  const stopped = new AbortController()
+  const signal = AbortSignal.any([options.signal, stopped.signal])
   const secret = generateSecretKey(), local = getPublicKey(secret)
   const conversation = nip44.v2.utils.getConversationKey(secret, link.client)
   let signed: Event | undefined
@@ -54,17 +98,17 @@ export async function serveDeviceLink(options: {
   let resolve!: () => void, reject!: (error: Error) => void
   const finished = new Promise<void>((yes, no) => { resolve = yes; reject = no })
   const fail = (error: Error) => { if (!done) { done = true; reject(error) } }
-  const active = () => { if (done || options.signal.aborted) throw new Error('Device linking cancelled.') }
-  const abort = () => fail(new Error('Device linking cancelled.'))
-  const timer = setTimeout(() => fail(new Error('This device link has expired. Create a new one.')), options.timeoutMs ?? 120_000)
+  const active = () => { if (done || signal.aborted) throw new Error('Device linking cancelled.') }
+  const abort = () => fail(signal.reason instanceof Error ? signal.reason : new Error('Device linking cancelled.'))
+  const timer = setTimeout(() => stopped.abort(new Error('This device link has expired. Create a new one.')), options.timeoutMs ?? 120_000)
   const send = async (id: string, result: string, error?: string) => {
-    if (done || options.signal.aborted) throw new Error('Device linking cancelled.')
+    if (done || signal.aborted) throw new Error('Device linking cancelled.')
     const event = finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [['p', link.client]],
       content: nip44.v2.encrypt(JSON.stringify({ id, result, ...(error && { error }) }), conversation) }, secret)
     const receipt = await options.runtime.publish(event, { relays: link.relays, sources: [], requireAck: true, queue: false, localEcho: false })
     if (!receipt.remoteAccepted) throw new Error('Could not reach the new device. Try again.')
   }
-  options.signal.addEventListener('abort', abort, { once: true })
+  signal.addEventListener('abort', abort, { once: true })
   const subscription = options.runtime.subscribe([{ kinds: [24133], authors: [link.client], '#p': [local], since: Math.floor(Date.now() / 1000) - 60 }], {
     onEvent: raw => {
       if (done || raw.content.length > 64 * 1024 || seen.has(raw.id) || raw.pubkey !== link.client || raw.kind !== 24133 || !raw.tags.some(tag => tag[0] === 'p' && tag[1] === local)) return
@@ -86,13 +130,13 @@ export async function serveDeviceLink(options: {
             if (signed) {
               validateSignerAuthorization(draft, signed)
             } else {
-              const previous = await fetchSignerRoster(options.owner, link.relays, options.signal, options.runtime)
+              const previous = await fetchSignerRoster(options.owner, link.relays, signal, options.runtime)
               active()
               const addition = validateDeviceAddition(draft, options.owner, previous)
               if (!previous || !AppKeys.fromEvent(previous).getAllDevices().some(device => device.identityPubkey === options.approver)) throw new Error('This device is no longer authorized to link devices.')
               const candidate = validateSignerAuthorization(addition.expected, await options.sign(addition.expected))
               active()
-              const latest = await fetchSignerRoster(options.owner, link.relays, options.signal, options.runtime)
+              const latest = await fetchSignerRoster(options.owner, link.relays, signal, options.runtime)
               active()
               if (latest?.id !== previous.id) throw new Error('Your device list changed. Create a new link.')
               await options.savePair(addition.device, addition.linkAt, link.client)
@@ -105,20 +149,21 @@ export async function serveDeviceLink(options: {
             done = true; resolve()
           } else await send(request.id, '', 'Unsupported method')
         } catch (error) {
-          if (done || options.signal.aborted) return
+          if (done || signal.aborted) return
           await send(request.id, '', error instanceof Error ? error.message : 'Could not link device.')
           fail(error instanceof Error ? error : new Error('Could not link device.'))
         }
       }).catch(error => fail(error instanceof Error ? error : new Error('Could not link device.')))
     },
-  }, { relays: link.relays, sources: [], cache: 'network-only', localEcho: false, signal: options.signal })
+  }, { relays: link.relays, sources: [], cache: 'network-only', localEcho: false, signal })
   try {
-    if (options.signal.aborted) abort()
+    await Promise.race([prepareDeviceLinkRoster({ ...options, signal, relays: link.relays }), finished])
+    if (signal.aborted) abort()
     else await send(crypto.randomUUID(), link.secret)
     await finished
   } finally {
     done = true
-    subscription.close(); clearTimeout(timer); options.signal.removeEventListener('abort', abort); secret.fill(0)
+    subscription.close(); clearTimeout(timer); signal.removeEventListener('abort', abort); stopped.abort(); secret.fill(0)
   }
 }
 
@@ -133,6 +178,10 @@ export async function approveDeviceConnectLink(link: string, choice: DeviceHisto
   const approver = getNdrRuntime().getState().currentDevicePubkey
   if (!approver) throw new Error('This device is not ready.')
   return serveDeviceLink({ link, owner: account.pubkey, approver, runtime: get(nostrClient).runtime, signal,
+    getKnownRoster: () => {
+      const state = getNdrRuntime().getState()
+      return { devices: state.registeredDevices, createdAt: state.lastAppKeysCreatedAt }
+    },
     sign: event => {
       if (get(identity)?.pubkey !== account.pubkey) throw new Error('Account changed.')
       return account.signer!.signEvent(event)

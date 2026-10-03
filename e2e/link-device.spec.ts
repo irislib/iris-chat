@@ -1,7 +1,8 @@
 import { test, expect, useTestRelay } from './fixtures'
 import type { BrowserContext, Page } from '@playwright/test'
 import { createDeviceLinkRequest, Invite } from 'nostr-double-ratchet'
-import { generateSecretKey, getPublicKey } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
+import { createNostrRuntime } from 'nostr-pubsub'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { mkdir } from 'node:fs/promises'
 
@@ -107,6 +108,16 @@ for (const choice of ['Chats and groups only', 'Include message history']) test(
     }, { account, contact })
     await ownerPage.reload()
     await expect(ownerPage.getByText('History group', { exact: true })).toBeVisible()
+    if (choice === 'Include message history') {
+      // Existing native accounts could retain equal snapshots with fresh d/i UUIDs.
+      const previous = testRelay.publishedEvents.filter(event => event.kind === 37368 && event.pubkey === account).sort((a, b) => b.created_at - a.created_at)[0]
+      expect(previous).toBeDefined()
+      const profile = crypto.randomUUID()
+      const duplicate = finalizeEvent({ ...previous, tags: previous.tags.map(tag => tag[0] === 'd' || tag[0] === 'i' ? [tag[0], profile, ...tag.slice(2)] : tag) }, secret)
+      const publisher = createNostrRuntime({ relays: [testRelayUrl] })
+      try { expect((await publisher.publish(duplicate, { requireAck: true })).remoteAccepted).toBe(true) }
+      finally { await publisher.close() }
+    }
     const approvalUrl = await openLinkThisDevice(linkedPage)
     expect(approvalUrl).toMatch(/^nostrconnect:\/\//)
     const linkId = new URL(approvalUrl).hostname

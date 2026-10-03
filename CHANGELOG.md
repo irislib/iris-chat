@@ -6,6 +6,7 @@
 - Choose chats and groups only or include old messages from the approving device, with progress while messages sync.
 - Repair missing messages after reconnecting, preserve deletions, and keep the history choice private.
 - Fix linking and sync after reopening saved groups.
+- Restore linking for accounts with duplicate device lists from older apps.
 
 ## 2.6.36 - 2026-10-02
 
