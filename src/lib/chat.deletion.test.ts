@@ -1,3 +1,7 @@
+vi.mock('./deviceSyncRecordApply', async importOriginal => ({
+  ...await importOriginal<typeof import('./deviceSyncRecordApply')>(),
+  persistMessageWithReactions: (_owner: string, message: import('./storage').StoredMessage) => saveMessage(message),
+}))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { saveMessage } from './storage'

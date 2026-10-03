@@ -1,12 +1,15 @@
+import { verifiedProfileEvent } from './deviceSyncRecords'
+import { saveSignedProfileHead, signedProfileHeads } from './deviceSyncRecordStore'
 import { readable, type Readable, get } from 'svelte/store'
 import type { EventSubscription } from './nostrClient'
-import { identity, nostrClient } from './identity'
+import { identity, nostrClient, getPubkey } from './identity'
 import { saveProfileToStorage, getProfileFromStorage } from './storage'
 import { observeContactProfile } from './contactMemory'
 
 export interface Profile {
   pubkey: string
   eventCreatedAt?: number
+  eventId?: string
   name?: string
   display_name?: string
   username?: string
@@ -75,6 +78,7 @@ function persistProfile(profile: Profile): void {
   saveProfileToStorage({
     pubkey: profile.pubkey,
     eventCreatedAt: profile.eventCreatedAt,
+    eventId: profile.eventId,
     name: profile.name,
     display_name: profile.display_name,
     username: profile.username,
@@ -118,7 +122,7 @@ export function addProfileToCache(profile: Profile, persist = true): void {
   if (!profile.pubkey) return
   const previous = profileCache.get(profile.pubkey)
   if (previous?.eventCreatedAt !== undefined &&
-      ((profile.eventCreatedAt !== undefined && profile.eventCreatedAt < previous.eventCreatedAt) ||
+      ((profile.eventCreatedAt !== undefined && (profile.eventCreatedAt < previous.eventCreatedAt || profile.eventCreatedAt === previous.eventCreatedAt && !!previous.eventId && (!profile.eventId || profile.eventId > previous.eventId))) ||
        (!persist && profile.eventCreatedAt === undefined))) return
   profileCache.set(profile.pubkey, profile)
   notifyListeners(profile.pubkey, profile)
@@ -128,6 +132,7 @@ export function addProfileToCache(profile: Profile, persist = true): void {
   saveProfileToStorage({
     pubkey: profile.pubkey,
     eventCreatedAt: profile.eventCreatedAt,
+    eventId: profile.eventId,
     name: profile.name,
     display_name: profile.display_name,
     username: profile.username,
@@ -180,6 +185,23 @@ function notifyListeners(pubkey: string, profile: Profile) {
   }
 }
 
+export async function observeSignedProfile(value: unknown): Promise<void> {
+  let event = verifiedProfileEvent(value)
+  if (!event) return
+  const owner = getPubkey()
+  if (owner) {
+    await saveSignedProfileHead(owner, event)
+    event = (await signedProfileHeads(owner, new Set([event.pubkey])))[0]
+    if (!event) return
+  }
+  const data = JSON.parse(event.content)
+  const profile: Profile = { pubkey: event.pubkey, eventCreatedAt: event.created_at, eventId: event.id }
+  for (const field of ['name', 'display_name', 'username', 'picture', 'nip05', 'about'] as const) {
+    if (typeof data[field] === 'string') profile[field] = data[field]
+  }
+  addProfileToCache(profile)
+}
+
 function keepProfileLoaded(pubkey: string): () => void {
   const existing = activeProfiles.get(pubkey)
   if (existing) {
@@ -190,20 +212,15 @@ function keepProfileLoaded(pubkey: string): () => void {
         if (cached) addProfileToCache(cached, false)
       }).catch(() => {})
     }
+    const owner = getPubkey()
+    if (owner) void signedProfileHeads(owner, new Set([pubkey])).then(heads => heads[0] && observeSignedProfile(heads[0])).catch(() => {})
     const sub = get(nostrClient).subscribe(
       { kinds: [0], authors: [pubkey], limit: 1 }, { closeOnEose: false },
     )
     activeProfiles.set(pubkey, { refs: 1, sub })
     sub.on('event', event => {
-      if (event.pubkey !== pubkey || event.kind !== 0 || event.content.length > 16384) return
-      try {
-        const data = JSON.parse(event.content)
-        const profile: Profile = { pubkey, eventCreatedAt: event.created_at }
-        for (const field of ['name', 'display_name', 'username', 'picture', 'nip05', 'about'] as const) {
-          if (typeof data?.[field] === 'string') profile[field] = data[field]
-        }
-        addProfileToCache(profile)
-      } catch { /* Ignore malformed profile metadata. */ }
+      if (event.pubkey !== pubkey) return
+      void observeSignedProfile(event.rawEvent()).catch(() => {})
     })
   }
   return () => {

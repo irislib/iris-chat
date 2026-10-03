@@ -1,7 +1,7 @@
 import { readable } from 'svelte/store'
 import { verifyEvent, type Event } from 'nostr-tools'
 import { createNostrSubscribe } from './profileAppKeysRuntime'
-import { addProfileToCache, getCachedPeopleProfiles, type Profile } from './profile'
+import { addProfileToCache, observeSignedProfile, getCachedPeopleProfiles, type Profile } from './profile'
 import { getPeopleProfilesFromStorage } from './storage'
 import { peopleSearchScore } from './peopleSearch'
 
@@ -52,9 +52,10 @@ export function createRuntimePeopleProfilesStore(options: { owners?: string[]; q
           raw.created_at > Date.now() / 1000 + 300 || (requested && !requested.has(raw.pubkey)) ||
           raw.created_at <= (latest.get(raw.pubkey) ?? -1)) return
       try {
-        if (!verifyEvent(raw)) return
+        if (!verifyEvent({ ...raw })) return
+        void observeSignedProfile(raw).catch(() => {})
         const data = JSON.parse(raw.content)
-        const profile: Profile = { pubkey: raw.pubkey, eventCreatedAt: raw.created_at }
+        const profile: Profile = { pubkey: raw.pubkey, eventCreatedAt: raw.created_at, eventId: raw.id }
         for (const field of ['name', 'display_name', 'username', 'nip05', 'picture'] as const) {
           if (typeof data?.[field] === 'string') profile[field] = data[field].slice(0, field === 'picture' ? 2048 : 256)
         }

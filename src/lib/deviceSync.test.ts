@@ -131,7 +131,10 @@ vi.mock('./privateChats', () => ({
 vi.mock('./relayStore', () => ({
   relayStore: { getState: () => ({ relays: new Set(['wss://relay.example']) }) },
 }))
+vi.mock('./deviceSyncRecordApply', () => ({ admitRecordMessage: async (_owner: string, value: unknown) => value }))
+vi.mock('./deviceSyncRecordStore', () => ({ deviceRecordVersion: writable(0), messageWithReactionHeads: async (_owner: string, value: unknown) => value, hasReactionHead: async () => false, groupSettingsHeads: async () => [] }))
 vi.mock('./storage', () => ({
+  db: { transaction: async (...args: any[]) => args.at(-1)(), messages: { get: async () => undefined } },
   getSessionManagerValue: vi.fn(async () => undefined),
   putSessionManagerValue: vi.fn(async () => {}),
   deleteSessionManagerValue: vi.fn(async () => {}),
@@ -167,6 +170,7 @@ import { chats } from './chat'
 import { groups } from './groups'
 import { nostrClient } from './identity'
 import { devices } from './devices'
+import { expirationStore } from './expirationStore'
 import { chatMutes, clearChatMutes } from './chatMuteStore'
 import { deviceHistoryPair, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { pinnedChatIds, clearChatPins } from './chatPinStore'
@@ -262,7 +266,7 @@ describe('device sync', () => {
   it('uses shared STUN-assisted FIPS defaults with public message servers configured', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick++) await Promise.resolve()
+      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
       expect(fips.transports).toHaveLength(1)
       expect(fips.transports[0]).toMatchObject({
         relays: ['wss://relay.example'],
@@ -653,6 +657,20 @@ describe('device sync', () => {
     expect(get(groups).has('unknown-removed')).toBe(false)
   })
 
+  it('bootstraps legacy group expiry only for a new group without a local choice', async () => {
+    groups.set(new Map()); expirationStore.clear()
+    const group = { id: 'ttl-friends', name: 'Friends', createdBy: owner, members: [owner, peerOwner], admins: [owner], revision: 1, createdAt: 10, updatedAt: 20, legacyMessageTtlSeconds: 60 }
+    const packet = { ...snapshot([]), groups: [group] }
+    await applyDeviceSyncSnapshot(packet, owner)
+    expect(expirationStore.getExpiration(group.id)).toBe(60)
+    await applyDeviceSyncSnapshot({ ...packet, groups: [{ ...group, revision: 2, legacyMessageTtlSeconds: null }] }, owner)
+    expect(expirationStore.getExpiration(group.id)).toBe(60)
+    groups.set(new Map()); expirationStore.setExpiration(group.id, 3600)
+    await applyDeviceSyncSnapshot(packet, owner)
+    expect(expirationStore.getExpiration(group.id)).toBe(3600)
+    expirationStore.clear()
+  })
+
   it('chunks snapshots into self-contained bounded packets', () => {
     const chat: ChatSession = {
       id: 'peer',
@@ -770,7 +788,7 @@ describe('device sync', () => {
   it('continues PageEnd and ResyncRequired control packets without applying a snapshot', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick += 1) await Promise.resolve()
+      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick += 1) await Promise.resolve()
       const transport = tcp.instances.at(-1)!
       const source = `02${device}`
       transport.sendFirst.mockClear()
@@ -785,7 +803,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        historyReconcile: 1,
+        historyReconcile: 1, recordReconcile: 1,
         page: { kind: 'messages', after: null },
       }))
 
@@ -794,7 +812,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        historyReconcile: 1,
+        historyReconcile: 1, recordReconcile: 1,
       }))
 
       transport.send.mockRejectedValueOnce(new Error('queue full'))
@@ -822,7 +840,7 @@ describe('device sync', () => {
   it('sends pre-link history only to its approving pair with the exact private link operation', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick += 1) await Promise.resolve()
+      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick += 1) await Promise.resolve()
       const transport = tcp.instances.at(-1)!, source = `02${device}`, linkId = '8'.repeat(64)
       await saveDeviceHistoryPair(owner, owner, { peer: device, linkId, linkAt: 100, since: 0, role: 'outbound', complete: false })
       chats.set(new Map([[peerOwner, { id: peerOwner, recipientPubkey: peerOwner, mode: 'manager', messages: [
@@ -852,7 +870,7 @@ describe('device sync', () => {
     vi.useFakeTimers()
     try {
       startDeviceSync(owner, new Uint8Array(32))
-      for (let tick = 0; tick < 30 && fips.nodes.length === 0; tick += 1) {
+      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick += 1) {
         await Promise.resolve()
       }
       const node = fips.nodes.at(-1)

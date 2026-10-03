@@ -1,0 +1,128 @@
+[
+  {
+    "name": "message",
+    "record": {
+      "type": "message",
+      "message": {
+        "chatId": "2222222222222222222222222222222222222222222222222222222222222222",
+        "id": "legacy-message",
+        "body": "Hello",
+        "author": "1111111111111111111111111111111111111111111111111111111111111111",
+        "createdAt": 1700000000
+      }
+    },
+    "input": [
+      "2222222222222222222222222222222222222222222222222222222222222222",
+      "legacy-message"
+    ],
+    "timestamp": 1700000000,
+    "id": "49d553442f9ff13f021aa813670e7b871c05be826d3ae0e990d27998923177a0"
+  },
+  {
+    "name": "reaction-remove",
+    "record": {
+      "type": "reaction",
+      "reaction": {
+        "chatId": "2222222222222222222222222222222222222222222222222222222222222222",
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "author": "1111111111111111111111111111111111111111111111111111111111111111",
+        "createdAt": 1700000000,
+        "createdAtMs": 1700000000123,
+        "messageId": "legacy-message",
+        "emoji": ""
+      }
+    },
+    "input": [
+      "reaction",
+      "2222222222222222222222222222222222222222222222222222222222222222",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "timestamp": 1700000000,
+    "id": "8b2a22adc3a4b2fd7c7cd234cb103aa036d4734660f4deb495349cd501686234"
+  },
+  {
+    "name": "group",
+    "record": {
+      "type": "group",
+      "group": {
+        "id": "group-fixture",
+        "name": "Café 🌱",
+        "description": "Shared group",
+        "createdBy": "1111111111111111111111111111111111111111111111111111111111111111",
+        "members": [
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "admins": [
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "revision": 2,
+        "createdAt": 1699999900,
+        "updatedAt": 1700000000
+      }
+    },
+    "input": [
+      "group",
+      "group-fixture",
+      2,
+      1700000000,
+      "Café 🌱",
+      "Shared group",
+      null,
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      [
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222222222222222222222222222"
+      ],
+      [
+        "1111111111111111111111111111111111111111111111111111111111111111"
+      ],
+      "pairwise_fanout_v1",
+      1699999900
+    ],
+    "timestamp": 0,
+    "id": "150cb2cdf0a34244346efabd7147010185fdfa4e4404aba0644a93e4ea737675"
+  },
+  {
+    "name": "group-settings-clear",
+    "record": {
+      "type": "groupSettings",
+      "settings": {
+        "groupId": "group-fixture",
+        "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "author": "1111111111111111111111111111111111111111111111111111111111111111",
+        "createdAt": 1700000000,
+        "messageTtlSeconds": null
+      }
+    },
+    "input": [
+      "groupSettings",
+      "group-fixture",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "timestamp": 0,
+    "id": "58d5aeee04d08914dd156056fdf9a4b2765495020bb70f6c4eac69bbaf2d7254"
+  },
+  {
+    "name": "profile",
+    "record": {
+      "type": "profile",
+      "event": {
+        "kind": 0,
+        "created_at": 1700000000,
+        "tags": [],
+        "content": "{\"name\":\"Fixture profile\"}",
+        "pubkey": "62d14dab4150bf497402fdc45a215e10dcb01c354959b10cfe31c7e9d87ff33d",
+        "id": "2909752d61ecc78012a640c8489fb3e76bc451280d4b1fb2dca483146f8fff2a",
+        "sig": "a82b93ddec9981fdf3ea2c06ada98477393cd76b2d11627184c705d7220691becda51252bcd7d2107efc789a1cfb07630a777b82efca44428c4a40eae5738737"
+      }
+    },
+    "input": [
+      "profile",
+      "62d14dab4150bf497402fdc45a215e10dcb01c354959b10cfe31c7e9d87ff33d",
+      "2909752d61ecc78012a640c8489fb3e76bc451280d4b1fb2dca483146f8fff2a"
+    ],
+    "timestamp": 0,
+    "id": "f373f4aa03f68b855a5390e0572091e20718110bff73baf1b8b0d81d6fdea99e"
+  }
+]

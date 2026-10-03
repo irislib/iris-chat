@@ -1,8 +1,10 @@
+import { reactionControl } from './deviceSyncRecords'
+import { captureReaction, controlClock, applyGroupSettingsRecord, persistMessageWithReactions, restoreGroupSettings } from './deviceSyncRecordApply'
 import { writable, get } from 'svelte/store'
 import {
   buildGroupRosterFactEvent,
   buildGroupRosterFactFilter,
-  CHAT_MESSAGE_KIND, CHAT_SETTINGS_KIND, REACTION_KIND, RECEIPT_KIND, TYPING_KIND, parseReaction,
+  CHAT_MESSAGE_KIND, CHAT_SETTINGS_KIND, REACTION_KIND, RECEIPT_KIND, TYPING_KIND,
   GROUP_ROSTER_FACT_KIND,
   GROUP_ROSTER_FACT_TYPE,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
@@ -616,7 +618,7 @@ async function fanOutToOwnDevices(
 async function sendNativeGroupEvent(
   groupId: string,
   partialEvent: { content: string, kind: number, tags: string[][] },
-  options?: { includeSelfPairwiseCopy?: boolean },
+  options?: { includeSelfPairwiseCopy?: boolean; rumor?: Rumor },
 ): Promise<NativeGroupSendResult | null> {
   return enqueueNativeGroupSend(groupId, async () => {
     const runtime = getNdrRuntime()
@@ -628,7 +630,7 @@ async function sendNativeGroupEvent(
     await runtime.upsertGroup(groupData)
     if (!currentGroupForSend(groupId, groupData)) return null
     try {
-      const runtimeRumor = buildScopedGroupRumor(['l', groupId], partialEvent)
+      const runtimeRumor = options?.rumor ?? buildScopedGroupRumor(['l', groupId], partialEvent)
       const result = await runtime.sendGroupEvent(groupId, {
         kind: runtimeRumor.kind,
         content: JSON.stringify(runtimeRumor),
@@ -636,7 +638,7 @@ async function sendNativeGroupEvent(
       })
 
       if (options?.includeSelfPairwiseCopy) {
-        await fanOutToOwnDevices(groupId, partialEvent)
+        await fanOutToOwnDevices(groupId, options?.rumor ? { ...partialEvent, content: JSON.stringify(runtimeRumor) } : partialEvent)
       }
       return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
     } catch (error) {
@@ -644,7 +646,7 @@ async function sendNativeGroupEvent(
       console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
       fanOutToMembers(
         groupId,
-        partialEvent,
+        options?.rumor ? { ...partialEvent, content: JSON.stringify(options.rumor) } : partialEvent,
         undefined,
         options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
       )
@@ -803,44 +805,17 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
 }
 
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {
-  const myPubkey = getPubkey()
-  if (!myPubkey || !currentGroupForSend(groupId)) return
-
-  groupMessages.update(gm => {
-    const msgs = gm.get(groupId) || []
-    const idx = msgs.findIndex(m => m.id === messageId)
-    if (idx === -1) return gm
-
-    const message = msgs[idx]
-    const reactions: Record<string, string[]> = {}
-    for (const [e, users] of Object.entries(message.reactions || {})) {
-      const filtered = users.filter(u => u !== myPubkey)
-      if (filtered.length > 0) reactions[e] = filtered
-    }
-    if (!reactions[emoji]) reactions[emoji] = []
-    reactions[emoji] = [...reactions[emoji], myPubkey]
-
-    const updated = [...msgs]
-    updated[idx] = { ...message, reactions }
-    gm.set(groupId, updated)
-    return gm
+  const owner = getPubkey()
+  if (!owner || !currentGroupForSend(groupId)) return
+  const target = get(groupMessages).get(groupId)?.find(message => message.id === messageId)
+  const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
+  const rumor = buildScopedGroupRumor(['l', groupId], {
+    content: nextEmoji,
+    kind: REACTION_KIND, tags: [['e', messageId]],
   })
-
-  const msgs = get(groupMessages).get(groupId) || []
-  const updatedMsg = msgs.find(m => m.id === messageId)
-  if (updatedMsg) saveGroupMessageToStorage(groupId, updatedMsg)
-
-  void sendNativeGroupEvent(
-    groupId,
-    {
-      content: JSON.stringify({ type: 'reaction', messageId, emoji }),
-      kind: REACTION_KIND,
-      tags: [['e', messageId]],
-    },
-    { includeSelfPairwiseCopy: true },
-  ).catch((error) => {
-    console.error('[groups] Failed to send group reaction:', error)
-  })
+  void captureReaction(owner, `group:${groupId}`, rumor, owner, messageId, nextEmoji)
+    .then(() => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
+    .catch(error => console.error('[groups] Failed to send group reaction:', error))
 }
 
 export function sendGroupTypingEvent(groupId: string): void {
@@ -856,17 +831,15 @@ export function sendGroupTypingEvent(groupId: string): void {
 }
 
 export function sendGroupSettingsEvent(groupId: string, messageTtlSeconds: number | null): void {
-  void sendNativeGroupEvent(
-    groupId,
-    {
-      content: JSON.stringify({ type: 'chat-settings', v: 1, messageTtlSeconds }),
-      kind: CHAT_SETTINGS_KIND,
-      tags: [],
-    },
-    { includeSelfPairwiseCopy: true },
-  ).catch((error) => {
-    console.error('[groups] Failed to send group settings event:', error)
+  const owner = getPubkey()
+  if (!owner || !currentGroupForSend(groupId)?.admins.includes(owner)) return
+  const rumor = buildScopedGroupRumor(['l', groupId], {
+    content: JSON.stringify({ type: 'chat-settings', v: 1, messageTtlSeconds }),
+    kind: CHAT_SETTINGS_KIND, tags: [],
   })
+  void applyGroupSettingsRecord(owner, { ...controlClock(rumor), groupId, author: owner, messageTtlSeconds })
+    .then(() => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
+    .catch(error => console.error('[groups] Failed to send group settings event:', error))
 }
 
 export function handleGroupEvent(
@@ -905,11 +878,14 @@ export function handleGroupEvent(
   }
 
   if (rumor.kind === CHAT_SETTINGS_KIND) {
+    if (rumor.id && getEventHash(rumor) !== rumor.id) return
     const group = get(groups).get(groupId)
     if (!group?.admins?.includes(senderPubkey)) return
     const settings = parseChatSettingsContent(rumor.content)
     if (settings) {
-      expirationStore.setExpiration(groupId, settings.messageTtlSeconds)
+      const owner = getPubkey()
+      if (owner) void applyGroupSettingsRecord(owner, { ...controlClock(rumor), groupId, author: senderPubkey, messageTtlSeconds: settings.messageTtlSeconds })
+        .catch(error => console.warn('[groups] Failed to save settings:', error))
     }
     return
   }
@@ -1005,34 +981,12 @@ function handleGroupMessage(
 }
 
 function handleGroupReaction(groupId: string, rumor: Rumor, fromPubkey: string): void {
-  const parsed = parseReaction(rumor)
-  const emoji = parsed?.emoji ?? rumor.content
-  const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
-  if (!emoji || !messageId) return
-
-  groupMessages.update(gm => {
-    const msgs = gm.get(groupId) || []
-    const idx = msgs.findIndex(m => m.id === messageId)
-    if (idx === -1) return gm
-
-    const message = msgs[idx]
-    const reactions: Record<string, string[]> = {}
-    for (const [e, users] of Object.entries(message.reactions || {})) {
-      const filtered = users.filter(u => u !== fromPubkey)
-      if (filtered.length > 0) reactions[e] = filtered
-    }
-    if (!reactions[emoji]) reactions[emoji] = []
-    reactions[emoji] = [...reactions[emoji], fromPubkey]
-
-    const updated = [...msgs]
-    updated[idx] = { ...message, reactions }
-    gm.set(groupId, updated)
-    return gm
-  })
-
-  const msgs = get(groupMessages).get(groupId) || []
-  const updatedMsg = msgs.find(m => m.id === messageId)
-  if (updatedMsg) saveGroupMessageToStorage(groupId, updatedMsg)
+  const parsed = reactionControl(rumor)
+  const owner = getPubkey()
+  if (!parsed || !owner) return
+  const { emoji, messageId } = parsed
+  void captureReaction(owner, `group:${groupId}`, rumor, fromPubkey, messageId, emoji)
+    .catch(error => console.warn('[groups] Failed to save reaction:', error))
 }
 
 function handleGroupReceipt(groupId: string, receipt: ReceiptPayload, fromPubkey: string): void {
@@ -1130,7 +1084,9 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
       senderPubkey: message.senderPubkey,
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
-    await saveMessageToDb(storedMessage)
+    const owner = getPubkey()
+    if (owner) await persistMessageWithReactions(owner, storedMessage)
+    else await saveMessageToDb(storedMessage)
   } catch (e) {
     console.error('[groups] Failed to save message:', e)
   }
@@ -1185,6 +1141,8 @@ export async function loadGroupsFromStorage(): Promise<void> {
         return gm
       })
 
+      const owner = getPubkey()
+      if (owner) await restoreGroupSettings(owner, group.id)
       syncNativeGroupTransport(group.id)
 
       // Flush any events that arrived before this group was loaded

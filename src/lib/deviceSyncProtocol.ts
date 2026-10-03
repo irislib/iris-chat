@@ -2,6 +2,7 @@ import { validPrivateDeviceLabel, type PrivateDeviceLabel } from './privateDevic
 import { validatePrivateContactDocument, type PrivateContactDocument } from 'nostr-social-graph/privateContactSyncV2'
 import { isChatPinState, type ChatPinState } from './chatPinSync'
 import { isChatMuteState, type ChatMuteState } from './chatMuteSync'
+import { parseDeviceSyncRecord, type DeviceSyncRecord, type DeviceSyncScope } from './deviceSyncRecords'
 export const DEVICE_SYNC_PORT = 7369
 export const DEVICE_SYNC_MAX_PACKET_BYTES = 64 * 1024
 export const DEVICE_SYNC_PAGE_MESSAGES = 32
@@ -31,6 +32,7 @@ export interface DeviceSyncGroup {
   updatedAt: number
   accepted?: boolean
   protocol?: 'sender_key_v1' | 'pairwise_fanout_v1'
+  legacyMessageTtlSeconds?: number | null
 }
 
 export interface DeviceSyncMessage {
@@ -40,6 +42,7 @@ export interface DeviceSyncMessage {
   author: string
   createdAt: number
   expiresAt?: number
+  legacyReactions?: Array<{ author: string; emoji: string }>
 }
 
 export interface DeviceSyncCursor {
@@ -58,6 +61,7 @@ export interface DeviceSyncRequest {
   rosterAt: number
   page?: DeviceSyncPage
   historyReconcile?: 1
+  recordReconcile?: 1
   historySince?: number
   linkId?: string
 }
@@ -73,14 +77,16 @@ export interface DeviceSyncPageEnd {
   rosterAt: number
   next: DeviceSyncPage
   historyReconcile?: 1
+  recordReconcile?: 1
   historySince?: number
 }
 
 export type DeviceHistoryPacket =
-  | { v: 1; type: 'historyOpen'; session: string; linkId?: string; since: number; until: number; frame: string }
+  | { v: 1; type: 'historyOpen'; session: string; linkId?: string; scope?: DeviceSyncScope; since: number; until: number; frame: string }
   | { v: 1; type: 'historyFrame'; session: string; frame: string }
   | { v: 1; type: 'historyNeed'; session: string; ids: string[] }
   | { v: 1; type: 'historyMessages'; session: string; messages: DeviceSyncMessage[]; requested: string[] }
+  | { v: 1; type: 'historyRecords'; session: string; records: DeviceSyncRecord[]; requested: string[] }
   | { v: 1; type: 'historyDone'; session: string }
 
 export interface DeviceSyncSnapshot {
@@ -141,7 +147,8 @@ function serializedPacket(packet: DeviceSyncPacket): Uint8Array {
           body: encodeBase64(encoder.encode(message.body)),
         })),
       }
-    : packet
+    : packet.type === 'historyRecords' ? { ...packet, records: packet.records.map(record => record.type === 'message'
+      ? { ...record, message: { ...record.message, body: encodeBase64(encoder.encode(record.message.body)) } } : record) } : packet
   return encoder.encode(JSON.stringify(wire))
 }
 
@@ -189,6 +196,7 @@ export function parseDeviceSyncPacket(
     case 'historyFrame':
     case 'historyNeed':
     case 'historyMessages':
+    case 'historyRecords':
     case 'historyDone':
       return parseHistoryPacket(value)
     case 'snapshot':
@@ -198,10 +206,12 @@ export function parseDeviceSyncPacket(
   }
 }
 
-function parseHistoryCapability(value: Record<string, unknown>): { historyReconcile?: 1; historySince?: number } {
+function parseHistoryCapability(value: Record<string, unknown>): { historyReconcile?: 1; recordReconcile?: 1; historySince?: number } {
   if (value.historyReconcile !== undefined && value.historyReconcile !== 1) fail('history capability is invalid')
+  if (value.recordReconcile !== undefined && value.recordReconcile !== 1) fail('record capability is invalid')
   if (value.historySince !== undefined && !isTime(value.historySince)) fail('history cutoff is invalid')
   return { ...(value.historyReconcile === 1 && { historyReconcile: 1 as const }),
+    ...(value.recordReconcile === 1 && { recordReconcile: 1 as const }),
     ...(value.historySince !== undefined && { historySince: value.historySince as number }) }
 }
 
@@ -219,12 +229,19 @@ function parseHistoryPacket(value: Record<string, unknown>): DeviceHistoryPacket
     if (!Array.isArray(value.messages) || value.messages.length > 32) fail('history messages are invalid')
     return { ...base, type: value.type, messages: value.messages.map(parseMessage), requested: ids(value.requested) }
   }
+  if (value.type === 'historyRecords') {
+    if (!Array.isArray(value.records) || value.records.length > 32) fail('history records are invalid')
+    try { return { ...base, type: value.type, records: value.records.map(record => parseDeviceSyncRecord(record, { message: parseMessage, group: validGroup })), requested: ids(value.requested) } }
+    catch { fail('history records are invalid') }
+  }
   if (value.type === 'historyDone') return { ...base, type: value.type }
   if (typeof value.frame !== 'string' || value.frame.length > 32768 || !/^([0-9a-f]{2})+$/.test(value.frame)) fail('history frame is invalid')
   if (value.type === 'historyFrame') return { ...base, type: value.type, frame: value.frame }
   if (value.linkId !== undefined && !isHistoryLinkId(value.linkId)) fail('history link identity is invalid')
   if (!isTime(value.since) || !isTime(value.until) || value.since > value.until) fail('history window is invalid')
-  return { ...base, ...(value.linkId !== undefined && { linkId: value.linkId as string }), type: 'historyOpen', since: value.since, until: value.until, frame: value.frame }
+  if (value.scope !== undefined && value.scope !== 'history' && value.scope !== 'state') fail('history scope is invalid')
+  if (value.scope === 'state' && (value.since !== 0 || value.until !== 0 || value.linkId !== undefined)) fail('state window is invalid')
+  return { ...base, ...(value.linkId !== undefined && { linkId: value.linkId as string }), ...(value.scope !== undefined && { scope: value.scope as DeviceSyncScope }), type: 'historyOpen', since: value.since, until: value.until, frame: value.frame }
 }
 
 function parsePage(value: unknown): DeviceSyncPage {
@@ -331,6 +348,7 @@ function validGroup(value: unknown): boolean {
     (value.description === undefined || typeof value.description === 'string') &&
     (value.picture === undefined || typeof value.picture === 'string') &&
     (value.accepted === undefined || typeof value.accepted === 'boolean') &&
+    (value.legacyMessageTtlSeconds === undefined || value.legacyMessageTtlSeconds === null || isTime(value.legacyMessageTtlSeconds) && value.legacyMessageTtlSeconds > 0) &&
     (value.protocol === undefined ||
       value.protocol === 'sender_key_v1' || value.protocol === 'pairwise_fanout_v1')
 }
@@ -345,6 +363,8 @@ function parseMessage(value: unknown): DeviceSyncMessage {
     !isTime(value.createdAt) ||
     (value.expiresAt !== undefined && !isTime(value.expiresAt))
   ) fail('snapshot messages are invalid')
+  if (value.legacyReactions !== undefined && (!Array.isArray(value.legacyReactions) || value.legacyReactions.length > 256 ||
+    !value.legacyReactions.every(reaction => isObject(reaction) && isPubkey(reaction.author) && typeof reaction.emoji === 'string' && reaction.emoji.length > 0 && reaction.emoji.length <= 64))) fail('legacy reactions are invalid')
 
   let body: string
   try {
@@ -359,6 +379,7 @@ function parseMessage(value: unknown): DeviceSyncMessage {
     author: value.author,
     createdAt: value.createdAt,
     ...(value.expiresAt !== undefined && { expiresAt: value.expiresAt as number }),
+    ...(value.legacyReactions !== undefined && { legacyReactions: value.legacyReactions as Array<{ author: string; emoji: string }> }),
   }
 }
 

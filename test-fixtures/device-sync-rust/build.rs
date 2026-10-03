@@ -9,6 +9,7 @@ fn main() {
     let tcp_path = core.join("src/core/device_sync_tcp.rs");
     let framing_path = core.join("src/core/device_sync_tcp/framing.rs");
     let body_path = core.join("src/core/device_sync/body.rs");
+    let records_path = core.join("src/core/device_sync/records.rs");
     let history_path = core.join("src/core/device_sync/history.rs");
     let model_path = core.join("src/core/model.rs");
     let mute_path = core.join("src/core/chat_mute_sync.rs");
@@ -21,6 +22,7 @@ fn main() {
         &framing_path,
         &body_path,
         &history_path,
+        &records_path,
         &model_path,
         &label_path,
         &private_contact_path,
@@ -66,6 +68,14 @@ fn main() {
     let framing_end = item_end(&framing, frame_at);
 
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let records = read(records_path);
+    let record_types = derived_items(&records, "enum RecordScope", "struct DeviceSyncGroupSettings").replace("pub(super) ", "");
+    let methods = ["pub(super) fn id", "pub(super) fn timestamp", "pub(super) fn scope"].map(|name| {
+        let start = records.find(name).expect("native typed record method");
+        records[start..item_end(&records, start)].replace("pub(super) ", "")
+    }).join("\n");
+    fs::write(out.join("native_records.rs"), format!("{record_types}\nimpl DeviceSyncRecord {{\n{methods}\n}}"))
+        .expect("write native typed record declarations");
     let history = read(history_path);
     let record_at = history.find("pub(super) fn record_id").expect("native history record identity");
     fs::write(out.join("native_history_record.rs"), history[record_at..item_end(&history, record_at)].replace("pub(super) ", ""))

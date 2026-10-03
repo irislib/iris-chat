@@ -1,4 +1,6 @@
 // @vitest-environment node
+import recordFixtures from './fixtures/deviceSyncRecords.json'
+import { type DeviceSyncRecord } from './deviceSyncRecords'
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -114,6 +116,14 @@ interop('iris-chat-rs device-sync interop', () => {
     )
     if (build.status !== 0) throw new Error(build.error?.message || build.stderr || build.stdout || 'Rust fixture build failed')
   }, 120_000)
+
+  it.each(recordFixtures)('matches the native typed $name identity and packet', (fixture: typeof recordFixtures[number]) => {
+    const packet = { v: 1 as const, type: 'historyRecords' as const, session: 'f'.repeat(32), records: [fixture.record as DeviceSyncRecord], requested: [fixture.id] }
+    const encoded = encodeDeviceSyncPacket(packet)
+    const wire = JSON.parse(new TextDecoder().decode(encoded))
+    expect(new TextDecoder().decode(runNative('record-id', new TextEncoder().encode(JSON.stringify(wire.records[0]))))).toBe(fixture.id)
+    expect(parseDeviceSyncPacket(runNative('roundtrip', encoded), owner)).toEqual(packet)
+  })
 
   it('extracts the service, record, page, and framing bounds from native source', () => {
     expect(JSON.parse(new TextDecoder().decode(runNative('contract')))).toEqual({

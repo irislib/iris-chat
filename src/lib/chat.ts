@@ -1,3 +1,5 @@
+import { reactionControl } from './deviceSyncRecords'
+import { captureReaction, persistMessageWithReactions } from './deviceSyncRecordApply'
 import { registerPrivateControlEvents } from './privateControlEvents'
 import { DEVICE_LABEL_CONTROL_KIND, receivePrivateDeviceLabel } from './privateDeviceLabels'
 import { CHAT_PIN_KIND } from './chatPinSync'
@@ -24,7 +26,6 @@ import {
   buildTextRumor,
   buildTypingRumor,
   ensureRecipientTag,
-  parseReaction,
   isTyping,
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
@@ -1342,11 +1343,11 @@ function handleIncomingRumor(
 
   if (rumor.kind === REACTION_KIND) {
     saveProcessedRumor(rumor.content)
-    const parsed = parseReaction(rumor)
-    const emoji = parsed?.emoji ?? rumor.content // fallback for old plain-emoji format
-    const messageId = parsed?.messageId ?? rumor.tags?.find((t: string[]) => t[0] === 'e')?.[1]
-    if (!emoji || !messageId) return
-    handleIncomingReaction(currentSession, { messageId, emoji }, rumor.pubkey)
+    const parsed = reactionControl(rumor)
+    if (!parsed || !myPubkey) return
+    const { emoji, messageId } = parsed
+    void captureReaction(myPubkey, sessionId, rumor, receiptAuthorPubkey || (isMine ? myPubkey : currentSession.recipientPubkey), messageId, emoji)
+      .catch(error => console.warn('[chat] Failed to save reaction:', error))
     return
   }
 
@@ -1439,42 +1440,6 @@ function handleIncomingRumor(
 
   // Update notification subscription (debounced) since keys may have rotated
   updateDMSubscription()
-}
-
-// Handle incoming reaction
-function handleIncomingReaction(chatSession: ChatSession, reaction: { messageId: string, emoji: string }, fromPubkey: string) {
-  let updatedMessage: ChatMessage | null = null
-  const updatedSession = updateChatSession(chatSession.id, (latestSession) => {
-    const messageIndex = latestSession.messages.findIndex((m) => m.id === reaction.messageId)
-    if (messageIndex === -1) return null
-
-    const message = latestSession.messages[messageIndex]
-
-    // Create updated reactions - first remove user from any existing reactions
-    const reactions: Record<string, string[]> = {}
-    for (const [emoji, users] of Object.entries(message.reactions || {})) {
-      const filtered = users.filter((u) => u !== fromPubkey)
-      if (filtered.length > 0) {
-        reactions[emoji] = filtered
-      }
-    }
-
-    // Add user to new reaction
-    if (!reactions[reaction.emoji]) {
-      reactions[reaction.emoji] = []
-    }
-    reactions[reaction.emoji] = [...reactions[reaction.emoji], fromPubkey]
-
-    updatedMessage = { ...message, reactions }
-    const updatedMessages = [...latestSession.messages]
-    updatedMessages[messageIndex] = updatedMessage
-    return { ...latestSession, messages: updatedMessages }
-  })
-  if (!updatedSession || !updatedMessage) return
-
-  // Save updated message to IndexedDB
-  saveMessageToStorage(chatSession.id, updatedMessage)
-  saveSessionToStorage(updatedSession)
 }
 
 // Handle incoming receipt:
@@ -1688,67 +1653,13 @@ export async function sendMessage(chatSession: ChatSession, text: string, replyT
 
 // Send a reaction to a message
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
-  const rumor = buildReactionRumor(
-    messageId,
-    emoji,
-    buildManagerRumorOptions(chatSession.recipientPubkey)
-  )
+  const owner = getPubkey()
+  if (!owner) return
+  const target = get(chats).get(chatSession.id)?.messages.find(message => message.id === messageId)
+  const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
+  const rumor = buildReactionRumor(messageId, nextEmoji, buildManagerRumorOptions(chatSession.recipientPubkey))
+  await captureReaction(owner, chatSession.id, rumor, owner, messageId, nextEmoji)
   sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send reaction')
-
-  // Get current state from store (not the passed reference which may be stale)
-  const currentChats = get(chats)
-  const currentSession = currentChats.get(chatSession.id)
-  if (!currentSession) return
-
-  // Add reaction optimistically
-  const messageIndex = currentSession.messages.findIndex(m => m.id === messageId)
-  let updatedMessage: ChatMessage | null = null
-
-  if (messageIndex !== -1) {
-    const message = currentSession.messages[messageIndex]
-    const myPubkey = getPubkey()
-    if (!myPubkey) return
-
-    // Create updated reactions - first remove user from any existing reactions
-    const reactions: Record<string, string[]> = {}
-    for (const [existingEmoji, users] of Object.entries(message.reactions || {})) {
-      const filtered = users.filter(u => u !== myPubkey)
-      if (filtered.length > 0) {
-        reactions[existingEmoji] = filtered
-      }
-    }
-
-    // Add user to new reaction
-    if (!reactions[emoji]) {
-      reactions[emoji] = []
-    }
-    reactions[emoji] = [...reactions[emoji], myPubkey]
-
-    // Create new message with reactions
-    updatedMessage = { ...message, reactions }
-
-    // Create new messages array for reactivity
-    const updatedMessages = [...currentSession.messages]
-    updatedMessages[messageIndex] = updatedMessage
-
-    const updatedSession = updateChatSession(chatSession.id, (latestSession) => {
-      const latestMessageIndex = latestSession.messages.findIndex((m) => m.id === messageId)
-      if (latestMessageIndex === -1 || !updatedMessage) {
-        return null
-      }
-
-      const latestMessages = [...latestSession.messages]
-      latestMessages[latestMessageIndex] = updatedMessage
-      return { ...latestSession, messages: latestMessages }
-    })
-    if (!updatedSession) return
-
-    // Save updated message to IndexedDB
-    await saveMessageToStorage(chatSession.id, updatedMessage)
-    await saveSessionToStorage(updatedSession)
-  }
-
-  // No further action for manager mode (event already published)
 }
 
 // Delete a single message locally
@@ -1861,7 +1772,9 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       ...(message.senderPubkey && { senderPubkey: message.senderPubkey }),
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
-    await saveMessageToDb(storedMessage)
+    const owner = getPubkey()
+    if (owner) await persistMessageWithReactions(owner, storedMessage)
+    else await saveMessageToDb(storedMessage)
   } catch (e) {
     console.error('Failed to save message to storage:', e)
   }

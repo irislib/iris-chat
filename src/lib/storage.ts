@@ -53,6 +53,7 @@ export interface StoredGroup {
 export interface StoredProfile {
   pubkey: string
   eventCreatedAt?: number
+  eventId?: string
   name?: string
   display_name?: string
   username?: string

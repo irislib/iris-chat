@@ -4,6 +4,8 @@ use std::{
     io::{self, Read, Write},
 };
 
+use nostr::Event;
+use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -30,6 +32,7 @@ mod private_device_labels {
 }
 
 include!(concat!(env!("OUT_DIR"), "/native_contract.rs"));
+include!(concat!(env!("OUT_DIR"), "/native_records.rs"));
 include!(concat!(env!("OUT_DIR"), "/native_framing.rs"));
 include!(concat!(env!("OUT_DIR"), "/native_history_record.rs"));
 
@@ -45,6 +48,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut input = Vec::new();
     io::stdin().read_to_end(&mut input)?;
     match operation.as_str() {
+        "record-id" => {
+            let record: DeviceSyncRecord = serde_json::from_slice(&input)?;
+            write_packet(record.id().iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_bytes())
+        }
         "history-id" => {
             let (chat, id): (String, String) = serde_json::from_slice(&input)?;
             write_packet(record_id(&chat, &id).iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_bytes())

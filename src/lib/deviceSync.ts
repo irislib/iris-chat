@@ -1,3 +1,7 @@
+import { admitRecordMessage } from './deviceSyncRecordApply'
+import { createDeviceSyncRecordAdapter, withLegacyReactions } from './deviceSyncRecordAdapter'
+import { deviceRecordVersion, groupSettingsHeads } from './deviceSyncRecordStore'
+import { expirationStore } from './expirationStore'
 import { getPrivateDeviceLabels, mergePrivateDeviceLabels, sendPrivateDeviceLabels, type PrivateDeviceLabel } from './privateDeviceLabels'
 import type { PrivateContactDocument } from 'nostr-social-graph/privateContactSyncV2'
 import { getPrivateContactDocuments, mergePrivateContacts, privateContactsVersion } from './privateContactSync'
@@ -48,7 +52,6 @@ import { attachDirectFiles, detachDirectFiles } from './directFiles'
 import { directFileMessageFields } from './directFileProtocol'
 import {
   saveGroup,
-  admitHistoryMessage,
   isHistoryMessageSettled,
   deletedHistoryRecords,
   isHistoryChatDeleted,
@@ -284,6 +287,7 @@ export function buildDeviceSyncSnapshots(
       ),
       ...(group.accepted !== undefined && { accepted: group.accepted }),
       protocol: group.secret ? 'sender_key_v1' as const : 'pairwise_fanout_v1' as const,
+      ...(expirationStore.getExpiration(group.id) !== undefined && { legacyMessageTtlSeconds: expirationStore.getExpiration(group.id) }),
     }
   })
   const wireMessages = includeMessages ? collectDeviceSyncMessages(source, rosterAt) : []
@@ -466,6 +470,7 @@ export async function applyDeviceSyncSnapshot(
   ownerPubkey = getPubkey() || '',
   historySince?: number,
   authorized: () => boolean = () => true,
+  allowLegacyReactions = false,
 ): Promise<number> {
   let imported = 0
   if (!authorized()) return imported
@@ -533,6 +538,10 @@ export async function applyDeviceSyncSnapshot(
     if (!local.members.includes(ownerPubkey)) cancelGroupPublications(group.id)
     const stored: StoredGroup = { ...local }
     await saveGroup(stored)
+    if (!existing && group.legacyMessageTtlSeconds !== undefined && expirationStore.getExpiration(group.id) === undefined &&
+      !(await groupSettingsHeads(ownerPubkey)).some(head => head.groupId === group.id) && authorized()) {
+      expirationStore.setExpiration(group.id, group.legacyMessageTtlSeconds)
+    }
     rememberSyncedGroupRosterVersion(group.id, group.revision, group.updatedAt)
   }
   if (additions.groups[0]) syncNativeGroupTransport(additions.groups[0].id)
@@ -544,7 +553,9 @@ export async function applyDeviceSyncSnapshot(
       const group = get(groups).get(message.chatId.slice(6))
       if (!group?.members.includes(ownerPubkey) || !group.members.includes(message.author)) continue
     } else if (message.author !== ownerPubkey && message.author !== message.chatId) continue
-    if (!await admitHistoryMessage(storedMessage(message, isMine), authorized)) continue
+    const allowedAuthors = new Set(message.chatId.startsWith('group:') ? get(groups).get(message.chatId.slice(6))?.members : [ownerPubkey, message.chatId])
+    const stored = await admitRecordMessage(ownerPubkey, storedMessage(message, isMine), message.legacyReactions, allowLegacyReactions, allowedAuthors, authorized)
+    if (!stored) continue
     if (!authorized()) return imported
     imported += 1
     const local: ChatMessage = {
@@ -554,6 +565,7 @@ export async function applyDeviceSyncSnapshot(
       timestamp: message.createdAt * 1000,
       isMine,
       senderPubkey: message.author,
+      reactions: stored.reactions,
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
     if (message.chatId.startsWith('group:')) {
@@ -680,12 +692,13 @@ function currentHistoryPair(owner: string, peer: string) {
 function historyRequest(owner: string, page?: DeviceSyncPage, peer?: string): DeviceSyncRequest {
   const state = get(devices)
   const pair = peer ? currentHistoryPair(owner, peer) : undefined
-  return { v: 1, type: 'request', rosterAt: state.lastEventTimestamp, historyReconcile: 1,
+  return { v: 1, type: 'request', rosterAt: state.lastEventTimestamp, historyReconcile: 1, recordReconcile: 1,
     ...(page && { page }), ...(pair?.role === 'inbound' && !pair.complete && pair.fallback && { linkId: pair.linkId }) }
 }
 
 function historyMessages(owner: string, since: number, until: number, requested?: HistoryRecord[]): DeviceSyncMessage[] {
   const source = snapshotSource(since, owner)
+  source.groups = source.groups.filter(group => group.members.includes(owner))
   if (requested) {
     const selected = new Map<string, Set<string>>()
     for (const record of requested) {
@@ -716,7 +729,7 @@ async function handlePacket(
     const since = pair?.role === 'outbound' && !pair.complete && pair.since === 0 ? 0 : regularHistorySince(source)
     if (packet.historyReconcile === 1) {
       historyPeers.add(source)
-      history.negotiate(source, since)
+      history.negotiate(source, since, packet.recordReconcile === 1)
     }
     if (pair?.role === 'outbound' && (!packet.page || packet.page.kind === 'metadata')) {
       await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyPolicy', linkAt: pair.linkAt, linkId: pair.linkId, since: pair.since ?? pair.linkAt }))
@@ -726,7 +739,7 @@ async function handlePacket(
     let replies: DeviceSyncPacket[]
     if (packet.page?.kind === 'messages' && pair?.role === 'outbound' && !pair.complete && pair.since === 0 && pair.linkId === packet.linkId) {
       const remaining = historyMessages(ownerPubkey, 0, pair.linkAt - 1).filter(message => !packet.page || packet.page.kind !== 'messages' || !packet.page.after || messageAfterCursor(message, packet.page.after))
-      const selected = remaining.slice(0, DEVICE_SYNC_PAGE_MESSAGES)
+      const selected = await Promise.all(remaining.slice(0, DEVICE_SYNC_PAGE_MESSAGES).map(withLegacyReactions))
       replies = chunkSnapshot(0, { appKeys: [], chats: [], groups: [], messages: selected }, DEVICE_SYNC_MAX_PACKET_BYTES)
       const last = selected.at(-1)
       replies.push(remaining.length > selected.length && last
@@ -743,6 +756,7 @@ async function handlePacket(
     for (const reply of replies) {
       if (packet.historyReconcile === 1 && reply.type === 'pageEnd') {
         reply.historyReconcile = 1
+        if (packet.recordReconcile === 1) reply.recordReconcile = 1
         reply.historySince = since
       }
     }
@@ -752,6 +766,8 @@ async function handlePacket(
 
   if (packet.type === 'resyncRequired' || packet.type === 'pageEnd') {
     if (packet.type === 'pageEnd' && packet.historyReconcile === 1 && packet.next.kind === 'messages' && !packet.next.after) {
+      history.negotiate(source, packet.historySince ?? regularHistorySince(source), packet.recordReconcile === 1)
+      if (packet.recordReconcile === 1) await history.startState(source)
       const pair = currentHistoryPair(ownerPubkey, source)
       if (pair?.role === 'inbound' && !pair.complete && pair.since === 0) await history.start(source, 0, pair.linkAt - 1, pair.linkId)
       else await history.start(source, Math.max(regularHistorySince(source), packet.historySince ?? 0))
@@ -787,7 +803,7 @@ async function handlePacket(
   const incoming = fallback ? { ...packet, messages: packet.messages.filter(message => message.createdAt < pair.linkAt) } : packet
   applyQueue = applyQueue.catch(() => undefined).then(async () => {
     try {
-      const imported = await applyDeviceSyncSnapshot(incoming, ownerPubkey, fallback ? 0 : undefined, authorized)
+      const imported = await applyDeviceSyncSnapshot(incoming, ownerPubkey, fallback ? 0 : undefined, authorized, fallback)
       if (fallback) for (const message of incoming.messages) if (!await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
       if (fallback) deviceHistoryProgress.update(progress => ({ phase: 'transferring', imported: (progress?.imported ?? 0) + imported }))
     } catch (error) {
@@ -902,7 +918,23 @@ async function updateRuntime(
   const peers = new Set<string>()
   const callPeers = new Set<string>()
   let tcp: DeviceSyncTcp
+  const allowsLegacy = (peer: string, since: number, until: number, linkId?: string) => {
+    const pair = currentHistoryPair(ownerPubkey, peer)
+    return !!pair && !pair.complete && pair.since === 0 && since === 0 && until === pair.linkAt - 1 && linkId === pair.linkId
+  }
   const history = new DeviceHistorySync({
+    ...createDeviceSyncRecordAdapter({
+      owner: ownerPubkey,
+      snapshots: () => buildDeviceSyncSnapshots(snapshotSource(0, ownerPubkey), DEVICE_SYNC_MAX_PACKET_BYTES, false),
+      messages: (since, until) => historyMessages(ownerPubkey, since, until),
+      cachedProfiles: async contacts => (await get(nostrClient).runtime.query([{ kinds: [0], authors: contacts, limit: contacts.length }], { cache: 'cache-only' })).events,
+      allowsLegacy,
+      applySnapshot: async (packet, since, authorized, legacy) => {
+        const count = await applyDeviceSyncSnapshot(packet, ownerPubkey, since, authorized, legacy)
+        for (const message of packet.messages) if (authorized() && !await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
+        return count
+      },
+    }),
     authorized: peer => run === generation && isAuthorizedDeviceSyncSource(peer, get(devices)),
     floor: peer => {
       const pair = currentHistoryPair(ownerPubkey, peer)
@@ -915,7 +947,7 @@ async function updateRuntime(
     },
     progress: (peer, since, imported, total) => {
       const pair = currentHistoryPair(ownerPubkey, peer)
-      if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.set({ phase: total === undefined ? 'discovering' : 'transferring', imported, ...(total !== undefined && { total }) })
+      if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.set({ phase: total === undefined && imported === 0 ? 'discovering' : 'transferring', imported, ...(total !== undefined && { total }) })
     },
     complete: async (peer, since, until, withheld) => {
       const pair = currentHistoryPair(ownerPubkey, peer)
@@ -924,6 +956,10 @@ async function updateRuntime(
       await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, complete: true })
       await tcp.send(peer, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
       void history.start(peer, regularHistorySince(peer))
+    },
+    unavailable: (peer, since) => {
+      const pair = currentHistoryPair(ownerPubkey, peer)
+      if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.update(progress => ({ phase: 'waiting', imported: progress?.imported ?? 0 }))
     },
     fallback: async (peer, since, until) => {
       const pair = currentHistoryPair(ownerPubkey, peer)
@@ -934,9 +970,12 @@ async function updateRuntime(
       await tcp.send(peer, encodeDeviceSyncPacket(historyRequest(ownerPubkey, { kind: 'messages', after: null }, peer)))
     },
     inventory: async (since, until, initiator) => [...historyMessages(ownerPubkey, since, until), ...(initiator ? await deletedHistoryRecords() : [])],
-    messages: async (since, until, requested) => historyMessages(ownerPubkey, since, until, requested),
-    apply: async (messages, since, authorized) => {
-      const imported = await applyDeviceSyncSnapshot({ ...emptySnapshot(since), messages }, ownerPubkey, since, authorized)
+    messages: async (since, until, requested, peer, linkId) => {
+      const messages = historyMessages(ownerPubkey, since, until, requested)
+      return peer && allowsLegacy(peer, since, until, linkId) ? Promise.all(messages.map(withLegacyReactions)) : messages
+    },
+    apply: async (messages, since, authorized, peer, until, linkId) => {
+      const imported = await applyDeviceSyncSnapshot({ ...emptySnapshot(since), messages }, ownerPubkey, since, authorized, !!peer && until !== undefined && allowsLegacy(peer, since, until, linkId))
       for (const message of messages) if (!await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
       return imported
     },
@@ -1029,7 +1068,7 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
   for (const unsubscribe of storeUnsubscribers) unsubscribe()
   void loadChatPins(ownerPubkey).catch(error => console.warn('Could not load pin settings', error))
   void loadChatMutes(ownerPubkey).catch(error => console.warn('Could not load mute settings', error))
-  storeUnsubscribers = [chats, groups, groupMessages, chatMuteStates, chatPinStates, privateContactsVersion].map((store) =>
+  storeUnsubscribers = [chats, groups, groupMessages, chatMuteStates, chatPinStates, privateContactsVersion, deviceRecordVersion].map((store) =>
     store.subscribe(scheduleSnapshotPush)
   )
   storeUnsubscribers.push(startChatMuteSync(ownerPubkey))
