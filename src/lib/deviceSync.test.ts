@@ -652,6 +652,22 @@ describe('device sync', () => {
     expect(groupRoster.get(groupId)).toEqual({ revision: 2, updatedAt: 101 })
   })
 
+  it.each(['sender_key_v1', 'pairwise_fanout_v1'] as const)('preserves %s when a secret-free group is synced back to its source', async (protocol: 'sender_key_v1' | 'pairwise_fanout_v1') => {
+    const group = { id: `protocol-roundtrip-${protocol}`, name: 'Linked group', createdBy: owner,
+      members: [owner, peerOwner], admins: [owner], revision: 1, createdAt: 80, updatedAt: 100, protocol }
+    await applyDeviceSyncSnapshot({ ...snapshot([]), groups: [group] }, owner)
+    const { saveGroup } = await import('./storage')
+    expect(saveGroup).toHaveBeenCalledWith(expect.objectContaining({ id: group.id, protocol }))
+    const restored = JSON.parse(JSON.stringify(get(groups).get(group.id)))
+    const echoed = buildDeviceSyncSnapshots({ requestRosterAt: 100, localRosterAt: 100, ownerPubkey: owner,
+      appKeys: [], chats: [], groups: [restored], groupMessages: new Map() })[0].groups[0]
+    expect(echoed.protocol).toBe(protocol)
+    expect(echoed).not.toHaveProperty('secret')
+    await applyDeviceSyncSnapshot({ ...snapshot([]), groups: [{ ...group, revision: 0,
+      protocol: protocol === 'sender_key_v1' ? 'pairwise_fanout_v1' : 'sender_key_v1' }] }, owner)
+    expect(get(groups).get(group.id)?.protocol).toBe(protocol)
+  })
+
   it('retains known removed chats from sibling snapshots and ignores stale reactivation or unknown removed groups', async () => {
     const groupId = 'removed-sibling-group'
     groups.set(new Map([[groupId, { id: groupId, name: 'History', members: [owner, device], admins: [device], createdAt: 80000, accepted: true }]]))

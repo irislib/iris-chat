@@ -283,7 +283,7 @@ export function buildDeviceSyncSnapshots(
         createdAt,
       ),
       ...(group.accepted !== undefined && { accepted: group.accepted }),
-      protocol: group.secret ? 'sender_key_v1' as const : 'pairwise_fanout_v1' as const,
+      protocol: group.protocol ?? (group.secret ? 'sender_key_v1' as const : 'pairwise_fanout_v1' as const),
       ...(expirationStore.getExpiration(group.id) !== undefined && { legacyMessageTtlSeconds: expirationStore.getExpiration(group.id) }),
     }
   })
@@ -491,6 +491,7 @@ export async function applyDeviceSyncSnapshot(
       members: [...group.members],
       admins: [...group.admins],
       createdAt: group.createdAt * 1000,
+      protocol: group.protocol ?? existing?.protocol,
       rosterVersion: { revision: group.revision, updatedAt: group.updatedAt, eventCreatedAt: group.updatedAt, eventId: '' },
       ...(existing?.secret && { secret: existing.secret }),
       ...((group.accepted ?? existing?.accepted) !== undefined && {

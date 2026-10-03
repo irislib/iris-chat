@@ -286,6 +286,7 @@ vi.mock('nostr-double-ratchet', async () => {
         createdBy: tagValue('created_by') || event.pubkey,
         updatedAt: Number(tagValue('updated_at') || event.created_at),
         eventCreatedAt: event.created_at,
+        protocol: tagValue('protocol'),
         group: {
           id: groupId,
           name: tagValue('name') || '',
@@ -574,6 +575,26 @@ describe('groups', () => {
   })
 
   describe('group_roster fact ingest', () => {
+    it.each(['sender_key_v1', 'pairwise_fanout_v1'] as const)('retains signed %s group metadata through storage and a local rename', async (protocol: 'sender_key_v1' | 'pairwise_fanout_v1') => {
+      const { handleGroupRosterFactEvent, groups, clearGroupData, loadGroupsFromStorage, updateGroupInfo, acceptGroupInvitation } = await import('./groups')
+      const storage = await import('./storage')
+      const groupId = `protocol-roster-group-${protocol}`
+      expect(handleGroupRosterFactEvent(makeRosterFactEvent({ groupId, name: 'Native group',
+        members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN, MY_PUBKEY], protocol }))).toBe(true)
+      expect(get(groups).get(groupId)).toMatchObject({ protocol })
+      acceptGroupInvitation(groupId)
+      const saved = vi.mocked(storage.saveGroup).mock.calls.at(-1)![0]
+      expect(saved).toMatchObject({ protocol })
+      expect(saved.secret).toBeUndefined()
+      clearGroupData()
+      vi.mocked(storage.getAllGroups).mockResolvedValueOnce([saved])
+      await loadGroupsFromStorage()
+      expect(get(groups).get(groupId)).toMatchObject({ protocol })
+      updateGroupInfo(groupId, { name: 'Renamed group' })
+      await vi.waitFor(() => expect(publishedGroupRosterFacts.at(-1)?.tags).toContainEqual(['name', 'Renamed group']))
+      expect(publishedGroupRosterFacts.at(-1)?.tags).toContainEqual(['protocol', protocol])
+    })
+
     it('creates a pending local group from a valid roster fact', async () => {
       const { handleGroupRosterFactEvent, groups } = await import('./groups')
       const groupId = 'fact-created-group'
@@ -1268,6 +1289,7 @@ function makeRosterFactEvent({
   members,
   admins,
   revision = 1,
+  protocol,
   signerSecret = ROSTER_ADMIN_SECRET,
 }: {
   groupId: string
@@ -1275,6 +1297,7 @@ function makeRosterFactEvent({
   members: string[]
   admins: string[]
   revision?: number
+  protocol?: 'sender_key_v1' | 'pairwise_fanout_v1'
   signerSecret?: Uint8Array
 }): VerifiedEvent {
   const createdAt = 1700000000
@@ -1295,6 +1318,7 @@ function makeRosterFactEvent({
       ['created_at', String(createdAt)],
       ['updated_at', String(updatedAt)],
       ['created_by', admins[0] || signerPubkey],
+      ...(protocol ? [['protocol', protocol]] : []),
       ...members.map((member) => ['member', member]),
       ...admins.map((admin) => ['admin', admin]),
     ],

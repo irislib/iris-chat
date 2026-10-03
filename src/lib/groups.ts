@@ -71,7 +71,7 @@ import { typingSettings } from './typingSettings'
 import { parseChatSettingsContent } from './chatSettings'
 
 export { GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE }
-export type Group = GroupData & Pick<StoredGroup, 'rosterVersion'>
+export type Group = GroupData & Pick<StoredGroup, 'rosterVersion' | 'protocol'>
 
 type OuterEvent = { id?: string; outerEventId?: string } | unknown
 type NativeGroupSendResult = { outer: VerifiedEvent; inner: Rumor }
@@ -251,7 +251,7 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
     createdBy: group.admins[0] || signerPubkey,
     updatedAt: eventCreatedAt,
     eventCreatedAt,
-    protocol: group.secret ? 'sender_key_v1' : 'pairwise_fanout_v1',
+    protocol: group.protocol ?? (group.secret ? 'sender_key_v1' : 'pairwise_fanout_v1'),
   })
 
   const event = new AppEvent(client, unsigned)
@@ -298,7 +298,7 @@ function applyGroupRosterFact(fact: GroupRosterFact): boolean {
   if (existing) {
     const result = validateMetadataUpdate(existing, metadata, fact.signerPubkey, myPubkey)
     if (result === 'reject') return false
-    const updated = applyMetadataUpdate(existing, metadata)
+    const updated: Group = { ...applyMetadataUpdate(existing, metadata), protocol: fact.protocol ?? existing.protocol }
     rememberGroupRosterFact(fact.groupId, fact)
     groups.update(g => { g.set(fact.groupId, updated); return g })
     saveGroupState(updated)
@@ -312,6 +312,7 @@ function applyGroupRosterFact(fact: GroupRosterFact): boolean {
 
     const group: Group = {
       ...metadata,
+      protocol: fact.protocol,
       createdAt: fact.group.createdAt,
       accepted: fact.signerPubkey === myPubkey,
     }
@@ -666,6 +667,7 @@ function saveGroupState(group: Group): void {
     ...(group.description && { description: group.description }),
     ...(group.picture && { picture: group.picture }),
     ...(group.secret && { secret: group.secret }),
+    ...(group.protocol && { protocol: group.protocol }),
     accepted: group.accepted,
     rosterVersion: groupRosterFactCursors.get(group.id) ?? group.rosterVersion,
   }
@@ -676,7 +678,7 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
   const myPubkey = getPubkey()
   if (!myPubkey) throw new Error('Not logged in')
 
-  let group = createGroupData(name, myPubkey, memberPubkeys)
+  let group: Group = createGroupData(name, myPubkey, memberPubkeys)
   try {
     await waitForSendReadyRuntime()
     group = (
@@ -687,6 +689,7 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
   } catch (error) {
     console.warn('[groups] Falling back to local-only group creation:', error)
   }
+  group.protocol = 'sender_key_v1'
 
   groups.update(g => {
     g.set(group.id, group)
@@ -1122,6 +1125,7 @@ export async function loadGroupsFromStorage(): Promise<void> {
         admins: stored.admins || [],
         createdAt: stored.createdAt,
         secret: stored.secret,
+        protocol: stored.protocol,
         accepted: stored.accepted,
         rosterVersion: stored.rosterVersion,
       }

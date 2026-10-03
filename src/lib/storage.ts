@@ -46,6 +46,7 @@ export interface StoredGroup {
   admins: string[]   // pubkeys of admins
   createdAt: number
   secret?: string     // 32-byte hex group secret for shared channel
+  protocol?: 'sender_key_v1' | 'pairwise_fanout_v1'
   accepted?: boolean  // whether user has accepted the group invitation
   rosterVersion?: { revision: number; updatedAt: number; eventCreatedAt: number; eventId: string }
 }
