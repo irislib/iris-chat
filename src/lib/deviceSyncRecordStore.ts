@@ -36,6 +36,21 @@ export async function groupSettingsHead(owner: string, groupId: string): Promise
   return (await db.sessionManager.get(prefix(owner, `groupSettings:${groupId}`)))?.value as DeviceSyncGroupSettings | undefined
 }
 
+const authoredControls = new Map<string, Promise<unknown>>()
+/** Serialize local intent and advance its signed clock beyond the durable head. */
+export function withDeviceControlClock<T>(owner: string,
+  target: string | Pick<DeviceSyncReaction, 'chatId' | 'messageId' | 'author'>,
+  author: (nowMs: number) => Promise<T>): Promise<T> {
+  const key = typeof target === 'string' ? prefix(owner, `groupSettings:${target}`) : reactionKey(owner, target as DeviceSyncReaction)
+  const operation = (authoredControls.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    const head = typeof target === 'string' ? await groupSettingsHead(owner, target) : await reactionHead(owner, target)
+    return author(Math.max(Date.now(), head ? (head.createdAtMs ?? head.createdAt * 1000) + 1 : 0))
+  })
+  authoredControls.set(key, operation)
+  void operation.finally(() => { if (authoredControls.get(key) === operation) authoredControls.delete(key) }).catch(() => undefined)
+  return operation
+}
+
 export function projectReactionHeads(message: StoredMessage, records: DeviceSyncReaction[]): StoredMessage {
   const reactions = Object.fromEntries(Object.entries(message.reactions ?? {}).map(([emoji, authors]) => [emoji, [...authors]]))
   for (const record of records) {

@@ -1,3 +1,4 @@
+import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, controlClock, applyGroupSettingsRecord, persistMessageWithReactions, restoreGroupSettings } from './deviceSyncRecordApply'
 import { writable, get } from 'svelte/store'
@@ -488,13 +489,13 @@ function buildScopedGroupRumor(
   scopeTag: string[],
   partialEvent: { content: string; kind: number; tags: string[][] },
   matchScopeValue = false,
+  now = Date.now(),
 ): Rumor {
   const myPubkey = getPubkey()
   if (!myPubkey) {
     throw new Error('Not logged in')
   }
 
-  const now = Date.now()
   const tags = [...partialEvent.tags]
   if (!tags.some((tag) =>
     tag[0] === scopeTag[0] && (!matchScopeValue || tag[1] === scopeTag[1])
@@ -807,14 +808,15 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {
   const owner = getPubkey()
   if (!owner || !currentGroupForSend(groupId)) return
-  const target = get(groupMessages).get(groupId)?.find(message => message.id === messageId)
-  const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
-  const rumor = buildScopedGroupRumor(['l', groupId], {
-    content: nextEmoji,
-    kind: REACTION_KIND, tags: [['e', messageId]],
-  })
-  void captureReaction(owner, `group:${groupId}`, rumor, owner, messageId, nextEmoji)
-    .then(() => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
+  void withDeviceControlClock(owner, { chatId: `group:${groupId}`, messageId, author: owner }, async nowMs => {
+    const target = get(groupMessages).get(groupId)?.find(message => message.id === messageId)
+    const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
+    const rumor = buildScopedGroupRumor(['l', groupId], {
+      content: nextEmoji, kind: REACTION_KIND, tags: [['e', messageId]],
+    }, false, nowMs)
+    await captureReaction(owner, `group:${groupId}`, rumor, owner, messageId, nextEmoji)
+    return rumor
+  }).then(rumor => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
     .catch(error => console.error('[groups] Failed to send group reaction:', error))
 }
 
@@ -833,12 +835,14 @@ export function sendGroupTypingEvent(groupId: string): void {
 export function sendGroupSettingsEvent(groupId: string, messageTtlSeconds: number | null): void {
   const owner = getPubkey()
   if (!owner || !currentGroupForSend(groupId)?.admins.includes(owner)) return
-  const rumor = buildScopedGroupRumor(['l', groupId], {
-    content: JSON.stringify({ type: 'chat-settings', v: 1, messageTtlSeconds }),
-    kind: CHAT_SETTINGS_KIND, tags: [],
-  })
-  void applyGroupSettingsRecord(owner, { ...controlClock(rumor), groupId, author: owner, messageTtlSeconds })
-    .then(() => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
+  void withDeviceControlClock(owner, groupId, async nowMs => {
+    const rumor = buildScopedGroupRumor(['l', groupId], {
+      content: JSON.stringify({ type: 'chat-settings', v: 1, messageTtlSeconds }),
+      kind: CHAT_SETTINGS_KIND, tags: [],
+    }, false, nowMs)
+    await applyGroupSettingsRecord(owner, { ...controlClock(rumor), groupId, author: owner, messageTtlSeconds })
+    return rumor
+  }).then(rumor => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
     .catch(error => console.error('[groups] Failed to send group settings event:', error))
 }
 

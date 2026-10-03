@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
 import { finalizeEvent, getPublicKey, getEventHash } from 'nostr-tools'
 import { db, deleteMessage, type StoredMessage } from './storage'
-import { saveReactionHead, reactionHeads as iterReactions, saveGroupSettingsHead, groupSettingsHeads as iterSettings, saveSignedProfileHead, signedProfileHeads } from './deviceSyncRecordStore'
+import { withDeviceControlClock, saveReactionHead, reactionHeads as iterReactions, saveGroupSettingsHead, groupSettingsHeads as iterSettings, saveSignedProfileHead, signedProfileHeads } from './deviceSyncRecordStore'
 import { applyReactionRecord, applyGroupSettingsRecord, applyProfileRecord, persistMessageWithReactions, admitRecordMessage, restoreGroupSettings, captureReaction } from './deviceSyncRecordApply'
 import { createDeviceSyncRecordAdapter, withLegacyReactions } from './deviceSyncRecordAdapter'
 import { deviceSyncRecordId, type DeviceSyncGroupSettings, type DeviceSyncReaction } from './deviceSyncRecords'
@@ -71,6 +71,21 @@ describe('durable private controls', () => {
     const rumor = { ...draft, id: getEventHash(draft) }
     await captureReaction(owner, peer, rumor, peer, message.id, '')
     expect(await reactionHeads(owner)).toEqual([{ chatId: peer, messageId: message.id, author: peer, id: rumor.id, createdAt: 100, createdAtMs: 100123, emoji: '' }])
+  })
+  it('preserves rapid local reaction and settings intent when the wall clock does not advance', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100_000)
+    try {
+      const key = { chatId: peer, messageId: message.id, author: peer }
+      await Promise.all(['❤️', '', '👍'].map((emoji, index) => withDeviceControlClock(owner, key, async nowMs => {
+        await applyReactionRecord(owner, { ...reaction(String(index + 1), Math.floor(nowMs / 1000), emoji), createdAtMs: nowMs })
+      })))
+      expect((await reactionHeads(owner))[0]).toMatchObject({ emoji: '👍', createdAtMs: 100_002 })
+      await Promise.all([60, null, 3600].map((ttl, index) => withDeviceControlClock(owner, 'friends', async nowMs => {
+        await applyGroupSettingsRecord(owner, { ...settings(String(index + 1), Math.floor(nowMs / 1000), ttl), createdAtMs: nowMs })
+      })))
+      expect((await groupSettingsHeads(owner))[0]).toMatchObject({ messageTtlSeconds: 3600, createdAtMs: 100_002 })
+      expect(expirationStore.getExpiration('friends')).toBe(3600)
+    } finally { now.mockRestore() }
   })
   it('recovers committed settings after a shutdown before preference projection', async () => {
     await saveGroupSettingsHead(owner, settings('b', 103, null))

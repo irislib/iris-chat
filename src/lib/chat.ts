@@ -1,3 +1,4 @@
+import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, persistMessageWithReactions } from './deviceSyncRecordApply'
 import { registerPrivateControlEvents } from './privateControlEvents'
@@ -1655,11 +1656,13 @@ export async function sendMessage(chatSession: ChatSession, text: string, replyT
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
   const owner = getPubkey()
   if (!owner) return
-  const target = get(chats).get(chatSession.id)?.messages.find(message => message.id === messageId)
-  const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
-  const rumor = buildReactionRumor(messageId, nextEmoji, buildManagerRumorOptions(chatSession.recipientPubkey))
-  await captureReaction(owner, chatSession.id, rumor, owner, messageId, nextEmoji)
-  sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send reaction')
+  await withDeviceControlClock(owner, { chatId: chatSession.id, messageId, author: owner }, async nowMs => {
+    const target = get(chats).get(chatSession.id)?.messages.find(message => message.id === messageId)
+    const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
+    const rumor = buildReactionRumor(messageId, nextEmoji, { ...buildManagerRumorOptions(chatSession.recipientPubkey), nowMs })
+    await captureReaction(owner, chatSession.id, rumor, owner, messageId, nextEmoji)
+    sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send reaction')
+  })
 }
 
 // Delete a single message locally
