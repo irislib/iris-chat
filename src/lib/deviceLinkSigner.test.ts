@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppKeys } from 'nostr-double-ratchet'
 import { createNostrRuntime } from 'nostr-pubsub'
-import { finalizeEvent, generateSecretKey, getPublicKey, type Event, type VerifiedEvent } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey, type Event, type EventTemplate, type VerifiedEvent } from 'nostr-tools'
 import { TestRelay } from '../../e2e/test-relay'
 import { RemoteSigner, type SignerRuntime } from './remoteSigner'
 import { authorizeSignerDevice, prepareSignerAuthorization, selectSignerRoster } from './signerAuthorization'
@@ -124,6 +124,20 @@ describe('private device-link approval', () => {
     expect(close).toHaveBeenCalledOnce()
     finishSigning()
     await new Promise(resolve => setTimeout(resolve, 0))
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it.each(['encrypted_device_labels', 'f'])('never republishes retired private labels from matching %s heads', async (form: string) => {
+    const { secret, owner, approver, event } = roster()
+    const legacy = form === 'f' ? ['f', 'encrypted_device_labels', 'old-ciphertext'] : ['encrypted_device_labels', 'old-ciphertext']
+    const heads = [event, finalizeEvent(AppKeys.fromEvent(event).getEvent({ ownerPubkey: owner, createdAt: event.created_at }), secret)]
+      .map(head => finalizeEvent({ ...head, tags: [...head.tags, legacy] }, secret))
+    const publish = vi.fn(), sign = vi.fn(async (draft: EventTemplate) => finalizeEvent(draft, secret))
+    const runtime = { publish, query: async () => ({ complete: true, events: heads }) } as unknown as SignerRuntime
+    await expect(prepareDeviceLinkRoster({ owner, approver, runtime, signal: new AbortController().signal, relays: ['wss://example.org'], sign,
+      getKnownRoster: () => ({ devices: AppKeys.fromEvent(event).getAllDevices(), createdAt: event.created_at }),
+    })).rejects.toThrow()
+    expect(sign).not.toHaveBeenCalled()
     expect(publish).not.toHaveBeenCalled()
   })
 })

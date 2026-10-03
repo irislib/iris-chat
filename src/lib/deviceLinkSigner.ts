@@ -46,6 +46,7 @@ interface DeviceLinkOptions {
 }
 
 function comparableRoster(event: VerifiedEvent): string {
+  if (event.tags.some(tag => tag[0] === 'encrypted_device_labels' || (tag[0] === 'f' && tag[1] === 'encrypted_device_labels'))) throw new Error('This saved device list needs updating before linking.')
   const identifiers = event.tags.filter(tag => tag[0] === 'd')
   const subjects = event.tags.filter(tag => tag[0] === 'i')
   const id = identifiers[0]?.[1]
