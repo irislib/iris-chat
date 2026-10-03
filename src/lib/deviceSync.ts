@@ -796,6 +796,11 @@ async function handlePacket(
     }
   })
   await applyQueue
+  history.observe(source, [
+    ...incoming.chats.map(chat => chat.updatedAt),
+    ...incoming.groups.map(group => group.updatedAt),
+    ...incoming.messages.map(message => message.createdAt),
+  ])
 }
 
 function runtimeKey(ownerPubkey: string, state: DeviceState): string {

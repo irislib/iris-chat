@@ -72,6 +72,33 @@ describe('encrypted device history reconciliation', () => {
     expect([...p.a.values()].map(message => message.id)).toEqual(['new'])
   })
 
+  it.each([false, true])('repairs an advertised new message ahead of the local clock (queued: %s)', async (queued: boolean) => {
+    const p = pair([], [message('new', 201)], 100)
+    if (queued) await p.first.start('b', 100)
+    p.first.observe('b', [201])
+    await p.first.start('b', 100)
+    await p.drain()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await p.drain()
+    expect([...p.a.values()].map(message => message.id)).toEqual(['new'])
+    expect(p.sent.filter(packet => packet.type === 'historyOpen').at(-1)).toMatchObject({ since: 100, until: 201 })
+  })
+
+  it('bounds advertised timestamps and preserves the exact approved initial window', async () => {
+    const linkId = 'c'.repeat(64)
+    const p = pair([], [message('old', 99), message('new', 201)], 0,
+      (since, until, link) => since >= 100 || (since === 0 && until === 99 && link === linkId))
+    p.first.observe('b', [201, 501, Infinity, NaN, -1, 201.5, Number.MAX_SAFE_INTEGER])
+    await p.first.start('b', 0, 99, linkId)
+    await p.drain()
+    expect(p.sent.find(packet => packet.type === 'historyOpen')).toMatchObject({ since: 0, until: 99, linkId })
+    expect([...p.a.values()].map(message => message.id)).toEqual(['old'])
+    await p.first.start('b', 100)
+    await p.drain()
+    expect(p.sent.filter(packet => packet.type === 'historyOpen').at(-1)).toMatchObject({ since: 100, until: 201 })
+    expect([...p.a.values()].map(message => message.id).sort()).toEqual(['new', 'old'])
+  })
+
   it.each([false, true])('retains the approved initial window queued behind normal sync (later refresh: %s)', async (refresh: boolean) => {
     const linkId = 'c'.repeat(64)
     const p = pair([], [message('old', 99), message('new', 110)], 0,

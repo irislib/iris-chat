@@ -28,6 +28,7 @@ interface HistorySession {
 
 interface HistoryPeer {
   floor: number
+  latest?: number
   incoming?: HistorySession
   outgoing?: HistorySession
 }
@@ -62,6 +63,19 @@ export class DeviceHistorySync {
     else if (this.peers.size < 32) this.peers.set(peer, { floor })
   }
 
+  observe(peer: string, timestamps: Iterable<number>): void {
+    if (!this.options.authorized(peer)) return
+    if (!this.peers.has(peer)) this.negotiate(peer, Infinity)
+    const state = this.peers.get(peer)
+    if (!state) return
+    const latestAllowed = Math.floor(this.now() / 1000) + 300
+    for (const timestamp of timestamps) {
+      if (Number.isSafeInteger(timestamp) && timestamp >= 0 && timestamp <= latestAllowed) {
+        state.latest = Math.max(state.latest ?? 0, timestamp)
+      }
+    }
+  }
+
   start(peer: string, since: number, end?: number, linkId?: string): Promise<void> {
     return this.queue(peer, async () => {
       if (!this.options.authorized(peer)) return
@@ -76,7 +90,9 @@ export class DeviceHistorySync {
         if (!state.outgoing.restart?.linkId || linkId) state.outgoing.restart = { since, until: end, linkId }
         return
       }
-      const until = end ?? Math.max(since, Math.floor(this.now() / 1000))
+      // A sibling's clock can lead ours. Its validated metadata may advertise a
+      // just-sent message beyond local now, even when this is its only update.
+      const until = end ?? Math.max(since, Math.floor(this.now() / 1000), state.latest ?? 0)
       let session: HistorySession
       try { session = await this.session(bytesToHex(crypto.getRandomValues(new Uint8Array(16))), since, until, true) }
       catch (error) {
