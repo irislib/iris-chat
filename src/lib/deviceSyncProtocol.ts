@@ -294,7 +294,7 @@ function validAppKeys(value: unknown): boolean {
 }
 
 function validChat(value: unknown): boolean {
-  return isObject(value) && isPubkey(value.id) && isTime(value.updatedAt)
+  return isObject(value) && validChatId(value.id) && isTime(value.updatedAt)
 }
 
 function validGroup(value: unknown): boolean {

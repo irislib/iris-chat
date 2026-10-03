@@ -177,6 +177,9 @@ interop('iris-chat-rs device-sync interop', () => {
     }
     expect(JSON.parse(new TextDecoder().decode(nativeBytes))).toEqual(expected)
     expect(parseDeviceSyncPacket(nativeBytes, owner)).toEqual(expected)
+    const groupReadState = { ...nativeSnapshot.chats[0], id: 'group:friends' }
+    const withGroup = { ...nativeSnapshot, chats: [...nativeSnapshot.chats, groupReadState] }
+    expect(parseDeviceSyncPacket(runNative('roundtrip', encodeDeviceSyncPacket(withGroup)), owner).type).toBe('snapshot')
   })
 
   it('preserves timed, forever, and unmuted states across native and web chat sync', () => {

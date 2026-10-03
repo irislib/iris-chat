@@ -586,6 +586,17 @@ describe('device sync', () => {
     )
   })
 
+  it('imports direct contacts without turning native group chat rows into direct sessions', async () => {
+    await applyDeviceSyncSnapshot({
+      ...snapshot([]),
+      chats: [{ id: peerOwner, updatedAt: 101 }, { id: 'group:friends', updatedAt: 101 }],
+    }, owner)
+    expect([...get(chats).keys()]).toEqual([peerOwner])
+    const { saveSession } = await import('./storage')
+    expect(saveSession).toHaveBeenCalledTimes(1)
+    expect(saveSession).toHaveBeenCalledWith(expect.objectContaining({ id: peerOwner }))
+  })
+
   it('applies only a newer group roster version and preserves its local secret', async () => {
     const groupId = 'group-id'
     const groupStore = groups as unknown as Writable<Map<string, Group>>
@@ -819,13 +830,16 @@ describe('device sync', () => {
     }
   })
 
-  it('accepts the initial typed history open only from the exact approving pair window', async () => {
+  it.each([false, true])('accepts only the exact approving pair history window after a reciprocal metadata reply: %s', async (reciprocalReply: boolean) => {
+    chats.set(new Map())
+    groups.set(new Map())
     startDeviceSync(owner, new Uint8Array(32))
     try {
       for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
       const transport = tcp.instances.at(-1)!, source = `02${device}`, linkId = '8'.repeat(64)
       await saveDeviceHistoryPair(owner, owner, { peer: device, linkId, linkAt: 100, since: 0, role: 'outbound', complete: false })
       await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 0, recordReconcile: 1 }))
+      if (reciprocalReply) await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'pageEnd', rosterAt: 100, next: null, recordReconcile: 1 }))
       transport.send.mockClear()
       const frame = bytesToHex(await new Reconciliation([], { since: 0n, until: 99n }).initiate())
       const open = { v: 1 as const, type: 'historyOpen' as const, scope: 'history' as const, session: '1'.repeat(32), since: 0, until: 99, frame }

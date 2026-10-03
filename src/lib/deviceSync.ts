@@ -460,6 +460,8 @@ export async function applyDeviceSyncSnapshot(
 
   for (const chat of additions.chats) {
     if (!authorized()) return imported
+    // Native includes group read-state rows here; groups have their own store.
+    if (chat.id.startsWith('group:')) continue
     if (await isHistoryChatDeleted(chat.id)) continue
     const session: ChatSession = {
       id: chat.id,
@@ -653,6 +655,11 @@ function currentHistoryPair(owner: string, peer: string) {
   return pair && pair.linkAt === state.registeredDevices.find(device => device.identityPubkey === target)?.createdAt ? pair : undefined
 }
 
+function servingHistorySince(owner: string, peer: string): number {
+  const pair = currentHistoryPair(owner, peer)
+  return pair?.role === 'outbound' && !pair.complete && pair.since === 0 ? 0 : regularHistorySince(peer)
+}
+
 function historyRequest(_owner: string, page?: DeviceSyncPage): DeviceSyncRequest {
   return { v: 1, type: 'request', rosterAt: get(devices).lastEventTimestamp, recordReconcile: 1, ...(page && { page }) }
 }
@@ -677,7 +684,7 @@ async function handlePacket(
 
   if (packet.type === 'request') {
     const pair = currentHistoryPair(ownerPubkey, source)
-    const since = pair?.role === 'outbound' && !pair.complete && pair.since === 0 ? 0 : regularHistorySince(source)
+    const since = servingHistorySince(ownerPubkey, source)
     if (packet.recordReconcile === 1) {
       historyPeers.add(source)
       history.negotiate(source, since)
@@ -699,7 +706,8 @@ async function handlePacket(
   if (packet.type === 'resyncRequired' || packet.type === 'pageEnd') {
     if (packet.type === 'pageEnd' && packet.next === null) {
       if (packet.recordReconcile !== 1) return
-      history.negotiate(source, packet.historySince ?? regularHistorySince(source))
+      // The peer's receive cutoff must not replace our private serving grant.
+      history.negotiate(source, servingHistorySince(ownerPubkey, source))
       await history.startState(source)
       const pair = currentHistoryPair(ownerPubkey, source)
       if (pair?.role === 'inbound' && !pair.complete && pair.since === 0) await history.start(source, 0, pair.linkAt - 1, pair.linkId)
@@ -846,10 +854,7 @@ async function updateRuntime(
       },
     }),
     authorized: peer => run === generation && isAuthorizedDeviceSyncSource(peer, get(devices)),
-    floor: peer => {
-      const pair = currentHistoryPair(ownerPubkey, peer)
-      return pair?.role === 'outbound' && !pair.complete && pair.since === 0 ? 0 : regularHistorySince(peer)
-    },
+    floor: peer => servingHistorySince(ownerPubkey, peer),
     allowsWindow: (peer, since, until, linkId) => {
       if (since >= regularHistorySince(peer)) return true
       const pair = currentHistoryPair(ownerPubkey, peer)

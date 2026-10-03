@@ -65,6 +65,17 @@ describe('native device-sync protocol', () => {
     expect(wire.messages[0].body).toBe('SGVsbG8sIGxpbmtlZCBkZXZpY2Ug8J+Riw==')
   })
 
+  it('accepts native group read-state rows alongside direct chat metadata', () => {
+    const packet: DeviceSyncSnapshot = {
+      ...packets.at(-1) as DeviceSyncSnapshot,
+      chats: [{ id: peer, updatedAt: 43 }, { id: 'group:friends', updatedAt: 44 }],
+    }
+    expect(parseDeviceSyncPacket(encodeDeviceSyncPacket(packet), owner)).toEqual(packet)
+    expect(() => parseDeviceSyncPacket(encodeDeviceSyncPacket({
+      ...packet, chats: [{ id: 'group:', updatedAt: 44 }],
+    }), owner)).toThrow(DeviceSyncProtocolError)
+  })
+
   it('preserves a leading Unicode byte-order mark in a message body', () => {
     const packet = packets.at(-1) as DeviceSyncSnapshot
     const snapshot = {
