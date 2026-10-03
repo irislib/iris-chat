@@ -1,6 +1,6 @@
 import { admitRecordMessage } from './deviceSyncRecordApply'
-import { createDeviceSyncRecordAdapter, withLegacyReactions } from './deviceSyncRecordAdapter'
-import { deviceRecordVersion, groupSettingsHeads } from './deviceSyncRecordStore'
+import { createDeviceSyncRecordAdapter } from './deviceSyncRecordAdapter'
+import { deviceRecordVersion, groupSettingsHead } from './deviceSyncRecordStore'
 import { expirationStore } from './expirationStore'
 import { getPrivateDeviceLabels, mergePrivateDeviceLabels, sendPrivateDeviceLabels, type PrivateDeviceLabel } from './privateDeviceLabels'
 import type { PrivateContactDocument } from 'nostr-social-graph/privateContactSyncV2'
@@ -45,7 +45,7 @@ import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
 import { activateAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
 import { DeviceSyncTcp, normalizeDeviceSyncPeer } from './deviceSyncTcp'
-import { DeviceHistorySync, type HistoryRecord } from './deviceHistorySync'
+import { DeviceHistorySync } from './deviceHistorySync'
 import { closeRevokedDeviceHistoryPairs, deviceHistoryPair, deviceHistoryProgress, loadDeviceHistoryPairs, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { attachCalls, detachCalls, callOwnerForPeer, knownCallDevices } from './calls'
 import { attachDirectFiles, detachDirectFiles } from './directFiles'
@@ -53,7 +53,6 @@ import { directFileMessageFields } from './directFileProtocol'
 import {
   saveGroup,
   isHistoryMessageSettled,
-  deletedHistoryRecords,
   isHistoryChatDeleted,
   saveSession,
   type StoredGroup,
@@ -61,7 +60,7 @@ import {
 } from './storage'
 import {
   DEVICE_SYNC_MAX_PACKET_BYTES,
-  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_RECORD_BATCH,
   DEVICE_SYNC_PAGE_PACKETS,
   DEVICE_SYNC_PORT,
   DeviceSyncProtocolError,
@@ -69,7 +68,6 @@ import {
   encodeDeviceSyncPacket,
   parseDeviceSyncPacket,
   type DeviceSyncAppKeys,
-  type DeviceSyncCursor,
   type DeviceSyncGroup,
   type DeviceSyncMessage,
   type DeviceSyncPacket,
@@ -80,14 +78,13 @@ import {
 
 export {
   DEVICE_SYNC_MAX_PACKET_BYTES,
-  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_RECORD_BATCH,
   DEVICE_SYNC_PAGE_PACKETS,
   DEVICE_SYNC_PORT,
   parseDeviceSyncPacket,
 } from './deviceSyncProtocol'
 export type {
   DeviceSyncAppKeys,
-  DeviceSyncCursor,
   DeviceSyncGroup,
   DeviceSyncMessage,
   DeviceSyncPacket,
@@ -346,10 +343,6 @@ function compareDeviceSyncMessages(
     compareString(left.chatId, right.chatId) || compareString(left.id, right.id)
 }
 
-function messageAfterCursor(message: DeviceSyncMessage, cursor: DeviceSyncCursor): boolean {
-  return compareDeviceSyncMessages(message, cursor) > 0
-}
-
 function compareString(left: string, right: string): number {
   return left < right ? -1 : Number(left > right)
 }
@@ -364,40 +357,11 @@ export function buildDeviceSyncReplyPackets(
   maxBytes = DEVICE_SYNC_MAX_PACKET_BYTES,
 ): DeviceSyncPacket[] {
   const rosterAt = Math.max(source.requestRosterAt, source.localRosterAt)
-  if (!page || page.kind === 'metadata') {
-    const metadata = buildDeviceSyncSnapshots(source, maxBytes, false)
-    const offset = page?.offset ?? 0
-    const end = Math.min(offset + DEVICE_SYNC_PAGE_PACKETS, metadata.length)
-    const next: DeviceSyncPage = end < metadata.length
-      ? { kind: 'metadata', offset: end }
-      : { kind: 'messages', after: null }
-    return [
-      ...metadata.slice(offset, end),
-      { v: 1, type: 'pageEnd', rosterAt, next },
-    ]
-  }
-
-  const remaining = collectDeviceSyncMessages(source, rosterAt)
-    .filter((message) => !page.after || messageAfterCursor(message, page.after))
-  const messages = remaining.slice(0, DEVICE_SYNC_PAGE_MESSAGES)
-  const packets: DeviceSyncPacket[] = chunkSnapshot(
-    rosterAt,
-    { appKeys: [], chats: [], groups: [], messages },
-    maxBytes,
-  )
-  if (remaining.length > messages.length) {
-    const last = messages.at(-1)!
-    packets.push({
-      v: 1,
-      type: 'pageEnd',
-      rosterAt,
-      next: {
-        kind: 'messages',
-        after: { createdAt: last.createdAt, chatId: last.chatId, id: last.id },
-      },
-    })
-  }
-  return packets
+  const metadata = buildDeviceSyncSnapshots(source, maxBytes, false)
+  const offset = page?.offset ?? 0
+  const end = Math.min(offset + DEVICE_SYNC_PAGE_PACKETS, metadata.length)
+  return [...metadata.slice(offset, end), { v: 1, type: 'pageEnd', rosterAt,
+    next: end < metadata.length ? { kind: 'metadata', offset: end } : null }]
 }
 
 export function selectDeviceSyncAdditions(
@@ -539,7 +503,7 @@ export async function applyDeviceSyncSnapshot(
     const stored: StoredGroup = { ...local }
     await saveGroup(stored)
     if (!existing && group.legacyMessageTtlSeconds !== undefined && expirationStore.getExpiration(group.id) === undefined &&
-      !(await groupSettingsHeads(ownerPubkey)).some(head => head.groupId === group.id) && authorized()) {
+      !await groupSettingsHead(ownerPubkey, group.id) && authorized()) {
       expirationStore.setExpiration(group.id, group.legacyMessageTtlSeconds)
     }
     rememberSyncedGroupRosterVersion(group.id, group.revision, group.updatedAt)
@@ -689,28 +653,15 @@ function currentHistoryPair(owner: string, peer: string) {
   return pair && pair.linkAt === state.registeredDevices.find(device => device.identityPubkey === target)?.createdAt ? pair : undefined
 }
 
-function historyRequest(owner: string, page?: DeviceSyncPage, peer?: string): DeviceSyncRequest {
-  const state = get(devices)
-  const pair = peer ? currentHistoryPair(owner, peer) : undefined
-  return { v: 1, type: 'request', rosterAt: state.lastEventTimestamp, historyReconcile: 1, recordReconcile: 1,
-    ...(page && { page }), ...(pair?.role === 'inbound' && !pair.complete && pair.fallback && { linkId: pair.linkId }) }
+function historyRequest(_owner: string, page?: DeviceSyncPage): DeviceSyncRequest {
+  return { v: 1, type: 'request', rosterAt: get(devices).lastEventTimestamp, recordReconcile: 1, ...(page && { page }) }
 }
 
-function historyMessages(owner: string, since: number, until: number, requested?: HistoryRecord[]): DeviceSyncMessage[] {
+function inventoryMessages(owner: string, since: number, until: number): DeviceSyncMessage[] {
   const source = snapshotSource(since, owner)
   source.groups = source.groups.filter(group => group.members.includes(owner))
-  if (requested) {
-    const selected = new Map<string, Set<string>>()
-    for (const record of requested) {
-      const ids = selected.get(record.chatId) ?? new Set<string>()
-      ids.add(record.id); selected.set(record.chatId, ids)
-    }
-    source.chats = source.chats.filter(chat => selected.has(chat.id)).map(chat => ({ ...chat, messages: chat.messages.filter(message => selected.get(chat.id)!.has(message.id)) }))
-    source.groups = source.groups.filter(group => selected.has(`group:${group.id}`))
-    source.groupMessages = new Map(source.groups.map(group => [group.id, (source.groupMessages.get(group.id) ?? []).filter(message => selected.get(`group:${group.id}`)!.has(message.id))]))
-  }
   return collectDeviceSyncMessages(source, since).filter(message => message.createdAt <= until &&
-    deviceSyncPacketByteLength({ v: 1, type: 'historyMessages', session: '0'.repeat(32), requested: [], messages: [message] }) <= DEVICE_SYNC_MAX_PACKET_BYTES)
+    deviceSyncPacketByteLength({ v: 1, type: 'historyRecords', session: '0'.repeat(32), requested: [], records: [{ type: 'message', message }] }) <= DEVICE_SYNC_MAX_PACKET_BYTES)
 }
 
 async function handlePacket(
@@ -727,65 +678,43 @@ async function handlePacket(
   if (packet.type === 'request') {
     const pair = currentHistoryPair(ownerPubkey, source)
     const since = pair?.role === 'outbound' && !pair.complete && pair.since === 0 ? 0 : regularHistorySince(source)
-    if (packet.historyReconcile === 1) {
+    if (packet.recordReconcile === 1) {
       historyPeers.add(source)
-      history.negotiate(source, since, packet.recordReconcile === 1)
+      history.negotiate(source, since)
     }
-    if (pair?.role === 'outbound' && (!packet.page || packet.page.kind === 'metadata')) {
+    if (pair?.role === 'outbound') {
       await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyPolicy', linkAt: pair.linkAt, linkId: pair.linkId, since: pair.since ?? pair.linkAt }))
     } else if (pair?.complete && pair.role === 'inbound') {
       await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
     }
-    let replies: DeviceSyncPacket[]
-    if (packet.page?.kind === 'messages' && pair?.role === 'outbound' && !pair.complete && pair.since === 0 && pair.linkId === packet.linkId) {
-      const remaining = historyMessages(ownerPubkey, 0, pair.linkAt - 1).filter(message => !packet.page || packet.page.kind !== 'messages' || !packet.page.after || messageAfterCursor(message, packet.page.after))
-      const selected = await Promise.all(remaining.slice(0, DEVICE_SYNC_PAGE_MESSAGES).map(withLegacyReactions))
-      replies = chunkSnapshot(0, { appKeys: [], chats: [], groups: [], messages: selected }, DEVICE_SYNC_MAX_PACKET_BYTES)
-      const last = selected.at(-1)
-      replies.push(remaining.length > selected.length && last
-        ? { v: 1, type: 'pageEnd', rosterAt: 0, next: { kind: 'messages', after: { createdAt: last.createdAt, chatId: last.chatId, id: last.id } } }
-        : { v: 1, type: 'historyPageEnd', linkAt: pair.linkAt, linkId: pair.linkId })
-    } else {
-      const snapshot = snapshotSource(Math.max(packet.rosterAt, regularHistorySince(source)), ownerPubkey)
-      if (packet.historyReconcile === 1 && packet.page?.kind === 'messages') {
-        snapshot.requestRosterAt = regularHistorySince(source)
-        snapshot.localRosterAt = 0
-      }
-      replies = buildDeviceSyncReplyPackets(snapshot, packet.page)
-    }
-    for (const reply of replies) {
-      if (packet.historyReconcile === 1 && reply.type === 'pageEnd') {
-        reply.historyReconcile = 1
-        if (packet.recordReconcile === 1) reply.recordReconcile = 1
-        reply.historySince = since
-      }
+    const replies = buildDeviceSyncReplyPackets(snapshotSource(Math.max(packet.rosterAt, regularHistorySince(source)), ownerPubkey), packet.page)
+    for (const reply of replies) if (packet.recordReconcile === 1 && reply.type === 'pageEnd') {
+      reply.recordReconcile = 1
+      reply.historySince = since
     }
     await sendPackets(tcp, source, replies)
     return
   }
 
   if (packet.type === 'resyncRequired' || packet.type === 'pageEnd') {
-    if (packet.type === 'pageEnd' && packet.historyReconcile === 1 && packet.next.kind === 'messages' && !packet.next.after) {
-      history.negotiate(source, packet.historySince ?? regularHistorySince(source), packet.recordReconcile === 1)
-      if (packet.recordReconcile === 1) await history.startState(source)
+    if (packet.type === 'pageEnd' && packet.next === null) {
+      if (packet.recordReconcile !== 1) return
+      history.negotiate(source, packet.historySince ?? regularHistorySince(source))
+      await history.startState(source)
       const pair = currentHistoryPair(ownerPubkey, source)
       if (pair?.role === 'inbound' && !pair.complete && pair.since === 0) await history.start(source, 0, pair.linkAt - 1, pair.linkId)
       else await history.start(source, Math.max(regularHistorySince(source), packet.historySince ?? 0))
       return
     }
     if (packet.type === 'resyncRequired') history.reset(source)
-    await tcp.sendFirst(source, encodeDeviceSyncPacket(historyRequest(ownerPubkey, packet.type === 'pageEnd' ? packet.next : undefined, source)))
+    await tcp.sendFirst(source, encodeDeviceSyncPacket(historyRequest(ownerPubkey, packet.type === 'pageEnd' ? packet.next ?? undefined : undefined)))
     return
   }
-  if (packet.type === 'historyPolicy' || packet.type === 'historyComplete' || packet.type === 'historyPageEnd') {
+  if (packet.type === 'historyPolicy' || packet.type === 'historyComplete') {
     const pair = currentHistoryPair(ownerPubkey, source)
     if (!pair || pair.linkAt !== packet.linkAt || pair.linkId !== packet.linkId) return
     const local = get(devices).identityPubkey!
-    if (packet.type === 'historyPageEnd' && pair.role === 'inbound' && pair.fallback && !pair.fallbackFailed && !pair.complete) {
-      await saveDeviceHistoryPair(ownerPubkey, local, { ...pair, complete: true })
-      await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
-      void history.start(source, regularHistorySince(source))
-    } else if (packet.type === 'historyPolicy' && pair.role === 'inbound' && !pair.complete) {
+    if (packet.type === 'historyPolicy' && pair.role === 'inbound' && !pair.complete) {
       await saveDeviceHistoryPair(ownerPubkey, local, { ...pair, since: packet.since, complete: packet.since !== 0 })
     } else if (packet.type === 'historyComplete') {
       if (pair.role === 'inbound' && !pair.complete) return
@@ -794,29 +723,10 @@ async function handlePacket(
     }
     return
   }
-  if (packet.type !== 'snapshot') {
-    await history.receive(source, packet)
-    return
-  }
-  const pair = currentHistoryPair(ownerPubkey, source)
-  const fallback = pair?.role === 'inbound' && !pair.complete && pair.fallback && pair.since === 0
-  const incoming = fallback ? { ...packet, messages: packet.messages.filter(message => message.createdAt < pair.linkAt) } : packet
-  applyQueue = applyQueue.catch(() => undefined).then(async () => {
-    try {
-      const imported = await applyDeviceSyncSnapshot(incoming, ownerPubkey, fallback ? 0 : undefined, authorized, fallback)
-      if (fallback) for (const message of incoming.messages) if (!await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
-      if (fallback) deviceHistoryProgress.update(progress => ({ phase: 'transferring', imported: (progress?.imported ?? 0) + imported }))
-    } catch (error) {
-      if (fallback) await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, fallbackFailed: true })
-      throw error
-    }
-  })
+  if (packet.type !== 'snapshot') { await history.receive(source, packet); return }
+  applyQueue = applyQueue.catch(() => undefined).then(() => applyDeviceSyncSnapshot(packet, ownerPubkey, regularHistorySince(source), authorized))
   await applyQueue
-  history.observe(source, [
-    ...incoming.chats.map(chat => chat.updatedAt),
-    ...incoming.groups.map(group => group.updatedAt),
-    ...incoming.messages.map(message => message.createdAt),
-  ])
+  history.observe(source, [ ...packet.chats.map(chat => chat.updatedAt), ...packet.groups.map(group => group.updatedAt), ...packet.messages.map(message => message.createdAt) ])
 }
 
 function runtimeKey(ownerPubkey: string, state: DeviceState): string {
@@ -926,7 +836,7 @@ async function updateRuntime(
     ...createDeviceSyncRecordAdapter({
       owner: ownerPubkey,
       snapshots: () => buildDeviceSyncSnapshots(snapshotSource(0, ownerPubkey), DEVICE_SYNC_MAX_PACKET_BYTES, false),
-      messages: (since, until) => historyMessages(ownerPubkey, since, until),
+      messages: (since, until) => inventoryMessages(ownerPubkey, since, until),
       cachedProfiles: async contacts => (await get(nostrClient).runtime.query([{ kinds: [0], authors: contacts, limit: contacts.length }], { cache: 'cache-only' })).events,
       allowsLegacy,
       applySnapshot: async (packet, since, authorized, legacy) => {
@@ -960,24 +870,6 @@ async function updateRuntime(
     unavailable: (peer, since) => {
       const pair = currentHistoryPair(ownerPubkey, peer)
       if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.update(progress => ({ phase: 'waiting', imported: progress?.imported ?? 0 }))
-    },
-    fallback: async (peer, since, until) => {
-      const pair = currentHistoryPair(ownerPubkey, peer)
-      if (since === 0 && pair?.role === 'inbound' && !pair.complete && until === pair.linkAt - 1) {
-        await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, fallback: true, fallbackFailed: false })
-        deviceHistoryProgress.set({ phase: 'transferring', imported: 0 })
-      }
-      await tcp.send(peer, encodeDeviceSyncPacket(historyRequest(ownerPubkey, { kind: 'messages', after: null }, peer)))
-    },
-    inventory: async (since, until, initiator) => [...historyMessages(ownerPubkey, since, until), ...(initiator ? await deletedHistoryRecords() : [])],
-    messages: async (since, until, requested, peer, linkId) => {
-      const messages = historyMessages(ownerPubkey, since, until, requested)
-      return peer && allowsLegacy(peer, since, until, linkId) ? Promise.all(messages.map(withLegacyReactions)) : messages
-    },
-    apply: async (messages, since, authorized, peer, until, linkId) => {
-      const imported = await applyDeviceSyncSnapshot({ ...emptySnapshot(since), messages }, ownerPubkey, since, authorized, !!peer && until !== undefined && allowsLegacy(peer, since, until, linkId))
-      for (const message of messages) if (!await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
-      return imported
     },
     send: (peer, packet) => tcp.send(peer, encodeDeviceSyncPacket(packet)),
   })

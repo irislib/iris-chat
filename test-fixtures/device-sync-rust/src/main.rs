@@ -34,13 +34,12 @@ mod private_device_labels {
 include!(concat!(env!("OUT_DIR"), "/native_contract.rs"));
 include!(concat!(env!("OUT_DIR"), "/native_records.rs"));
 include!(concat!(env!("OUT_DIR"), "/native_framing.rs"));
-include!(concat!(env!("OUT_DIR"), "/native_history_record.rs"));
 
 fn main() -> Result<(), Box<dyn Error>> {
     let operation = env::args().nth(1).unwrap_or_else(|| "contract".to_string());
     if operation == "contract" {
         println!(
-            "{{\"port\":{DEVICE_SYNC_PORT},\"maxPacketBytes\":{DEVICE_SYNC_MAX_PACKET_BYTES},\"pageMessages\":{DEVICE_SYNC_PAGE_MESSAGES},\"pagePackets\":{DEVICE_SYNC_PAGE_PACKETS},\"frameHeaderBytes\":{FRAME_HEADER_BYTES}}}"
+            "{{\"port\":{DEVICE_SYNC_PORT},\"maxPacketBytes\":{DEVICE_SYNC_MAX_PACKET_BYTES},\"pageMessages\":{DEVICE_SYNC_RECORD_BATCH},\"pagePackets\":{DEVICE_SYNC_PAGE_PACKETS},\"frameHeaderBytes\":{FRAME_HEADER_BYTES}}}"
         );
         return Ok(());
     }
@@ -51,10 +50,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         "record-id" => {
             let record: DeviceSyncRecord = serde_json::from_slice(&input)?;
             write_packet(record.id().iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_bytes())
-        }
-        "history-id" => {
-            let (chat, id): (String, String) = serde_json::from_slice(&input)?;
-            write_packet(record_id(&chat, &id).iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_bytes())
         }
         "roundtrip" => write_packet(roundtrip(&input)?),
         "frame" => write_packet(frame(&roundtrip(&input)?)),

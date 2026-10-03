@@ -1,5 +1,7 @@
 import { get, writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
+import { Reconciliation } from 'nostr-pubsub-reconcile'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { AppKeys } from 'nostr-double-ratchet'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatSession } from './chat'
@@ -132,7 +134,7 @@ vi.mock('./relayStore', () => ({
   relayStore: { getState: () => ({ relays: new Set(['wss://relay.example']) }) },
 }))
 vi.mock('./deviceSyncRecordApply', () => ({ admitRecordMessage: async (_owner: string, value: unknown) => value }))
-vi.mock('./deviceSyncRecordStore', () => ({ deviceRecordVersion: writable(0), messageWithReactionHeads: async (_owner: string, value: unknown) => value, hasReactionHead: async () => false, groupSettingsHeads: async () => [] }))
+vi.mock('./deviceSyncRecordStore', () => ({ deviceRecordVersion: writable(0), messageWithReactionHeads: async (_owner: string, value: unknown) => value, hasReactionHead: async () => false, groupSettingsHead: async () => undefined, reactionHeads: async function* () {}, reactionHeadPages: async function* () {}, groupSettingsHeads: async function* () {} }))
 vi.mock('./storage', () => ({
   db: { transaction: async (...args: any[]) => args.at(-1)(), messages: { get: async () => undefined } },
   getSessionManagerValue: vi.fn(async () => undefined),
@@ -142,7 +144,7 @@ vi.mock('./storage', () => ({
   saveMessage: vi.fn(),
   isHistoryMessageSettled: vi.fn().mockResolvedValue(true),
   admitHistoryMessage: vi.fn(async () => true),
-  deletedHistoryRecords: vi.fn(async () => []),
+  deletedHistoryRecords: vi.fn(async function* () {}),
   isHistoryChatDeleted: vi.fn(async () => false),
   saveSession: vi.fn(),
 }))
@@ -152,7 +154,7 @@ import {
   mergeDeviceDescriptions,
   buildDeviceSyncReplyPackets,
   DEVICE_SYNC_MAX_PACKET_BYTES,
-  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_RECORD_BATCH,
   DEVICE_SYNC_PAGE_PACKETS,
   DEVICE_SYNC_PORT,
   applyDeviceSyncSnapshot,
@@ -725,7 +727,7 @@ describe('device sync', () => {
     }, 512)).toThrow(/snapshot messages entry exceeds the packet limit/)
   })
 
-  it('paginates metadata to 32 packets and messages to 32 cursor-sorted records', () => {
+  it('paginates only metadata in bounded packets', () => {
     const chats = Array.from({ length: 96 }, (_, index) => {
       const id = index.toString(16).padStart(64, '0')
       return {
@@ -763,26 +765,6 @@ describe('device sync', () => {
       next: { kind: 'metadata', offset: DEVICE_SYNC_PAGE_PACKETS },
     })
 
-    const firstMessages = buildDeviceSyncReplyPackets(
-      source,
-      { kind: 'messages', after: null },
-      DEVICE_SYNC_MAX_PACKET_BYTES,
-    )
-    const firstPage = firstMessages
-      .filter((packet): packet is DeviceSyncSnapshot => packet.type === 'snapshot')
-      .flatMap((packet) => packet.messages)
-    expect(firstPage).toHaveLength(DEVICE_SYNC_PAGE_MESSAGES)
-    expect(firstPage[0].id).toBe('message-000')
-    expect(firstPage.at(-1)?.id).toBe('message-031')
-    expect(firstMessages.at(-1)).toEqual({
-      v: 1,
-      type: 'pageEnd',
-      rosterAt: 100,
-      next: {
-        kind: 'messages',
-        after: { createdAt: 131, chatId: '0'.repeat(64), id: 'message-031' },
-      },
-    })
   })
 
   it('continues PageEnd and ResyncRequired control packets without applying a snapshot', async () => {
@@ -797,14 +779,14 @@ describe('device sync', () => {
         v: 1,
         type: 'pageEnd',
         rosterAt: 100,
-        next: { kind: 'messages', after: null },
+        next: { kind: 'metadata', offset: 32 },
       }))
       expect(transport.sendFirst).toHaveBeenLastCalledWith(source, encodeDeviceSyncPacket({
         v: 1,
         type: 'request',
         rosterAt: 100,
-        historyReconcile: 1, recordReconcile: 1,
-        page: { kind: 'messages', after: null },
+        recordReconcile: 1,
+        page: { kind: 'metadata', offset: 32 },
       }))
 
       await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'resyncRequired' }))
@@ -812,7 +794,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        historyReconcile: 1, recordReconcile: 1,
+        recordReconcile: 1,
       }))
 
       transport.send.mockRejectedValueOnce(new Error('queue full'))
@@ -820,7 +802,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        historyReconcile: 1,
+        recordReconcile: 1,
       }))).rejects.toThrow('queue full')
       expect(transport.sendFirst).toHaveBeenLastCalledWith(
         source,
@@ -837,32 +819,35 @@ describe('device sync', () => {
     }
   })
 
-  it('sends pre-link history only to its approving pair with the exact private link operation', async () => {
+  it('accepts the initial typed history open only from the exact approving pair window', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick += 1) await Promise.resolve()
+      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
       const transport = tcp.instances.at(-1)!, source = `02${device}`, linkId = '8'.repeat(64)
       await saveDeviceHistoryPair(owner, owner, { peer: device, linkId, linkAt: 100, since: 0, role: 'outbound', complete: false })
-      chats.set(new Map([[peerOwner, { id: peerOwner, recipientPubkey: peerOwner, mode: 'manager', messages: [
-        { id: 'old', timestamp: 50_000, content: 'Initial history', isMine: true },
-        { id: 'new', timestamp: 110_000, content: 'After linking', isMine: true },
-      ] }]]))
-      const request = (id?: string) => encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 0, historyReconcile: 1,
-        page: { kind: 'messages', after: null }, ...(id && { linkId: id }) })
-      const messages = (): string[] => transport.send.mock.calls.map((call: unknown[]) => parseDeviceSyncPacket(call[1] as Uint8Array, owner))
-        .flatMap((packet: ReturnType<typeof parseDeviceSyncPacket>) => packet.type === 'snapshot' ? packet.messages.map(message => message.id) : [])
+      await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 0, recordReconcile: 1 }))
       transport.send.mockClear()
-      await transport.onRecord(source, request('9'.repeat(64)))
-      expect(messages()).toEqual(['new'])
-      transport.send.mockClear()
-      await transport.onRecord(source, request(linkId))
-      expect(messages()).toEqual(['old'])
-      expect(transport.send.mock.calls.map((call: unknown[]) => parseDeviceSyncPacket(call[1] as Uint8Array, owner)).at(-1)).toEqual({ v: 1, type: 'historyPageEnd', linkAt: 100, linkId })
-      await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: 100, linkId }))
-      expect(deviceHistoryPair(owner, owner, device)?.complete).toBe(true)
-      transport.send.mockClear()
-      await transport.onRecord(source, request(linkId))
-      expect(messages()).toEqual(['new'])
+      const frame = bytesToHex(await new Reconciliation([], { since: 0n, until: 99n }).initiate())
+      const open = { v: 1 as const, type: 'historyOpen' as const, scope: 'history' as const, session: '1'.repeat(32), since: 0, until: 99, frame }
+      await transport.onRecord(source, encodeDeviceSyncPacket({ ...open, linkId: '9'.repeat(64) }))
+      expect(transport.send).not.toHaveBeenCalled()
+      await transport.onRecord(source, encodeDeviceSyncPacket({ ...open, linkId }))
+      expect(transport.send.mock.calls.map((call: unknown[]) => parseDeviceSyncPacket(call[1] as Uint8Array, owner))).toEqual([expect.objectContaining({ type: 'historyFrame' })])
+    } finally { await stopDeviceSync() }
+  })
+
+  it('never lowers the ordinary live-message floor to a newer sibling supplied cutoff', async () => {
+    chats.set(new Map())
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
+      const transport = tcp.instances.at(-1)!, source = `02${device}`
+      await saveDeviceHistoryPair(owner, owner, { peer: device, linkId: '7'.repeat(64), linkAt: 100, since: 0, role: 'outbound', complete: false })
+      await transport.onRecord(source, encodeDeviceSyncPacket({ ...snapshot([]), rosterAt: 0, messages: [
+        { chatId: peerOwner, id: 'old-unauthorized', body: 'Old', author: owner, createdAt: 95 },
+        { chatId: peerOwner, id: 'live-authorized', body: 'Live', author: owner, createdAt: 110 },
+      ] }))
+      expect(get(chats).get(peerOwner)?.messages.map(message => message.id)).toEqual(['live-authorized'])
     } finally { await stopDeviceSync() }
   })
 

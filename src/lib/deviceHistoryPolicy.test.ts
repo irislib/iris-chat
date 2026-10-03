@@ -47,7 +47,8 @@ describe('durable history admission', () => {
     await deleteMessage(stored.id)
     expect(await isHistoryMessageSettled({ id: stored.id, chatId: device, createdAt: 100 })).toBe(true)
     expect(await admitHistoryMessage(stored)).toBe(false)
-    expect(await deletedHistoryRecords()).toEqual([{ chatId: device, id: stored.id, createdAt: 100 }])
+    const tombstones = []; for await (const record of deletedHistoryRecords()) tombstones.push(record)
+    expect(tombstones).toEqual([{ chatId: device, id: stored.id, createdAt: 100 }])
     expect(await db.messages.get(stored.id)).toBeUndefined()
   })
   it('suppresses removed chat history while allowing new live-era messages', async () => {

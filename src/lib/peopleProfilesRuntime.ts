@@ -48,7 +48,7 @@ export function createRuntimePeopleProfilesStore(options: { owners?: string[]; q
       publish()
     }).catch(() => {})
     const receive = (raw: Event) => {
-      if (!active || raw.kind !== 0 || raw.content.length > 16384 || !Number.isSafeInteger(raw.created_at) ||
+      if (!active || raw.kind !== 0 || new TextEncoder().encode(raw.content).length > 32768 || !Number.isSafeInteger(raw.created_at) ||
           raw.created_at > Date.now() / 1000 + 300 || (requested && !requested.has(raw.pubkey)) ||
           raw.created_at <= (latest.get(raw.pubkey) ?? -1)) return
       try {

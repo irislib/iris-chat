@@ -195,9 +195,15 @@ async function rememberHistoryDeletion(message: StoredMessage): Promise<void> {
     value: { chatId: message.sessionId, id: message.id, createdAt: Math.floor(message.timestamp / 1000) } })
 }
 
-export async function deletedHistoryRecords(): Promise<Array<{ chatId: string; id: string; createdAt: number }>> {
-  const records = await db.sessionManager.where('key').startsWith('history-deleted-message:').toArray()
-  return records.flatMap(record => record.value ? [record.value as { chatId: string; id: string; createdAt: number }] : [])
+export async function* deletedHistoryRecords(): AsyncGenerator<{ chatId: string; id: string; createdAt: number }> {
+  const base = 'history-deleted-message:'
+  let after: string | undefined
+  while (true) {
+    const rows = await db.sessionManager.where('key').between(after ?? base, `${base}\uffff`, after === undefined, true).limit(256).toArray()
+    for (const row of rows) if (row.value) yield row.value as { chatId: string; id: string; createdAt: number }
+    if (rows.length < 256) return
+    after = rows.at(-1)!.key
+  }
 }
 
 export async function isHistoryChatDeleted(chatId: string): Promise<boolean> {

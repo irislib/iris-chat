@@ -10,8 +10,6 @@ export interface DeviceHistoryPair {
   role: 'inbound' | 'outbound'
   complete: boolean
   authorized?: boolean
-  fallback?: boolean
-  fallbackFailed?: boolean
 }
 export const deviceHistoryProgress = writable<{ phase: 'discovering' | 'transferring' | 'waiting'; imported: number; total?: number } | null>(null)
 const writes = new Map<string, Promise<void>>()

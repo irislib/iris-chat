@@ -15,7 +15,7 @@ import { registerPrivateControlEvents } from './privateControlEvents'
 import { validPrivateDeviceLabel } from './privateDeviceLabelProtocol'
 import {
   DEVICE_SYNC_MAX_PACKET_BYTES,
-  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_RECORD_BATCH,
   DEVICE_SYNC_PAGE_PACKETS,
   DEVICE_SYNC_PORT,
   DeviceSyncProtocolError,
@@ -129,29 +129,26 @@ interop('iris-chat-rs device-sync interop', () => {
     expect(JSON.parse(new TextDecoder().decode(runNative('contract')))).toEqual({
       port: DEVICE_SYNC_PORT,
       maxPacketBytes: DEVICE_SYNC_MAX_PACKET_BYTES,
-      pageMessages: DEVICE_SYNC_PAGE_MESSAGES,
+      pageMessages: DEVICE_SYNC_RECORD_BATCH,
       pagePackets: DEVICE_SYNC_PAGE_PACKETS,
       frameHeaderBytes: 4,
     })
   })
 
   it('interchanges private pair policies, identities and Negentropy packet frames with native production declarations', async () => {
-    const identity = { chatId: `group:friends☕`, id: 'message-"line\\\n' }
-    const nativeId = new TextDecoder().decode(runNative('history-id', new TextEncoder().encode(JSON.stringify([identity.chatId, identity.id]))))
-    expect(nativeId).toBe(historyRecordId(identity))
     const frame = bytesToHex(await new Reconciliation([], { since: 0n, until: 100n }).initiate())
+    const nativeId = recordFixtures[0].id
     const session = '1'.repeat(32), linkId = '2'.repeat(64)
     const packets = [
-      { v: 1 as const, type: 'request' as const, rosterAt: 100, historyReconcile: 1 as const, historySince: 0, linkId },
-      { v: 1 as const, type: 'pageEnd' as const, rosterAt: 100, historyReconcile: 1 as const, historySince: 0, next: { kind: 'messages' as const, after: null } },
-      { v: 1 as const, type: 'historyOpen' as const, session, linkId, since: 0, until: 100, frame },
+      { v: 1 as const, type: 'request' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0 },
+      { v: 1 as const, type: 'pageEnd' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, next: null },
+      { v: 1 as const, type: 'historyOpen' as const, scope: 'history' as const, prefix: 'abc', session, linkId, since: 0, until: 100, frame },
       { v: 1 as const, type: 'historyFrame' as const, session, frame },
       { v: 1 as const, type: 'historyNeed' as const, session, ids: [nativeId] },
-      { v: 1 as const, type: 'historyMessages' as const, session, messages: [{ chatId: peer, id: 'history', author: owner, createdAt: 50, body: 'A private message ☕' }], requested: [nativeId] },
+      { v: 1 as const, type: 'historyOverflow' as const, session },
       { v: 1 as const, type: 'historyDone' as const, session },
       { v: 1 as const, type: 'historyPolicy' as const, linkAt: 100, since: 0, linkId },
       { v: 1 as const, type: 'historyComplete' as const, linkAt: 100, linkId },
-      { v: 1 as const, type: 'historyPageEnd' as const, linkAt: 100, linkId },
     ]
     for (const packet of packets) {
       const native = runNative('roundtrip', encodeDeviceSyncPacket(packet))
@@ -268,13 +265,13 @@ interop('iris-chat-rs device-sync interop', () => {
 
     const rustPackets = [
       { v: 1, type: 'request', rosterAt: 42, page: { kind: 'metadata', offset: 32 } },
-      { v: 1, type: 'request', rosterAt: 42, page: { kind: 'messages', after: null } },
+      { v: 1, type: 'request', rosterAt: 42, page: { kind: 'metadata', offset: 32 } },
       { v: 1, type: 'resyncRequired' },
       {
         v: 1,
         type: 'pageEnd',
         rosterAt: 42,
-        next: { kind: 'messages', after: { createdAt: 43, chatId: peer, id: 'message-1' } },
+        next: null,
       },
     ]
     for (const packet of rustPackets) {

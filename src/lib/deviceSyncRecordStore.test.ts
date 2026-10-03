@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
 import { finalizeEvent, getPublicKey, getEventHash } from 'nostr-tools'
 import { db, deleteMessage, type StoredMessage } from './storage'
-import { saveReactionHead, reactionHeads, saveGroupSettingsHead, groupSettingsHeads, saveSignedProfileHead, signedProfileHeads } from './deviceSyncRecordStore'
+import { saveReactionHead, reactionHeads as iterReactions, saveGroupSettingsHead, groupSettingsHeads as iterSettings, saveSignedProfileHead, signedProfileHeads } from './deviceSyncRecordStore'
 import { applyReactionRecord, applyGroupSettingsRecord, applyProfileRecord, persistMessageWithReactions, admitRecordMessage, restoreGroupSettings, captureReaction } from './deviceSyncRecordApply'
-import { createDeviceSyncRecordAdapter } from './deviceSyncRecordAdapter'
+import { createDeviceSyncRecordAdapter, withLegacyReactions } from './deviceSyncRecordAdapter'
 import { deviceSyncRecordId, type DeviceSyncGroupSettings, type DeviceSyncReaction } from './deviceSyncRecords'
-import type { DeviceSyncSnapshot } from './deviceSyncProtocol'
+import { deviceSyncPacketByteLength, DEVICE_SYNC_MAX_PACKET_BYTES, type DeviceSyncSnapshot } from './deviceSyncProtocol'
 
 vi.mock('./chat', () => ({ chats: writable(new Map()), currentChat: writable(null) }))
 vi.mock('./groups', () => ({ groups: writable(new Map()), groupMessages: writable(new Map()) }))
@@ -17,6 +17,8 @@ import { chats, currentChat } from './chat'
 import { groups, groupMessages } from './groups'
 import { addProfileToCache } from './profile'
 import { expirationStore } from './expirationStore'
+async function reactionHeads(owner: string) { const records = []; for await (const head of iterReactions(owner)) records.push(head); return records }
+async function groupSettingsHeads(owner: string) { const records = []; for await (const head of iterSettings(owner)) records.push(head); return records }
 const owner = 'a'.repeat(64), peer = 'b'.repeat(64), outsider = 'c'.repeat(64)
 const message: StoredMessage = { id: 'target', sessionId: peer, content: 'hello', timestamp: 100_000, isMine: true }
 const reaction = (id: string, createdAt: number, emoji: string): DeviceSyncReaction => ({ chatId: peer, messageId: message.id, author: peer, id: id.repeat(64), createdAt, emoji })
@@ -36,7 +38,7 @@ describe('durable private controls', () => {
     expect(await applyReactionRecord(owner, reaction('a', 101, '❤️'))).toBe(false)
     db.close(); await db.open()
     await persistMessageWithReactions(owner, { ...message, reactions: { '❤️': [peer] } })
-    expect((await db.messages.get(message.id))?.reactions).toEqual({})
+    expect((await db.messages.get(message.id))?.reactions ?? {}).toEqual({})
     expect(await reactionHeads(owner)).toEqual([reaction('b', 102, '')])
     expect(await applyReactionRecord(owner, reaction('c', 103, '👍'))).toBe(true)
     expect((await db.messages.get(message.id))?.reactions).toEqual({ '👍': [peer] })
@@ -53,7 +55,7 @@ describe('durable private controls', () => {
   it('only bootstraps legacy reactions into a new initial-history target, with durable heads winning', async () => {
     const legacy = [{ author: peer, emoji: '❤️' }], allowed = new Set([owner, peer])
     await admitRecordMessage(owner, message, legacy, false, allowed, () => true)
-    expect((await db.messages.get(message.id))?.reactions).toEqual({})
+    expect((await db.messages.get(message.id))?.reactions ?? {}).toEqual({})
     await db.messages.clear()
     await admitRecordMessage(owner, message, legacy, true, allowed, () => true)
     expect((await db.messages.get(message.id))?.reactions).toEqual({ '❤️': [peer] })
@@ -62,7 +64,7 @@ describe('durable private controls', () => {
     await db.messages.clear()
     await saveReactionHead(owner, reaction('f', 102, ''))
     await admitRecordMessage(owner, message, legacy, true, allowed, () => true)
-    expect((await db.messages.get(message.id))?.reactions).toEqual({})
+    expect((await db.messages.get(message.id))?.reactions ?? {}).toEqual({})
   })
   it('captures the original authenticated control clock, including empty removal', async () => {
     const draft = { pubkey: peer, kind: 7, created_at: 100, tags: [['e', message.id], ['ms', '100123']], content: '' }
@@ -109,6 +111,43 @@ describe('durable private controls', () => {
     await saveSignedProfileHead(owner, events[1]); await saveSignedProfileHead(owner, events[0]); await saveSignedProfileHead(owner, events[1])
     expect((await signedProfileHeads(owner, new Set([events[0].pubkey])))[0].id).toBe(events[0].id)
   })
+  it('rechecks membership, expiry and current heads before serving stored locators', async () => {
+    const group = { id: 'friends', name: 'Friends', createdBy: owner, members: [owner, peer], admins: [owner], revision: 1, createdAt: 1, updatedAt: 2 }
+    const wire = { chatId: 'group:friends', id: message.id, body: 'Hello', author: owner, createdAt: 100 }
+    await db.messages.put({ ...message, sessionId: wire.chatId })
+    await saveReactionHead(owner, { ...reaction('a', 101, '❤️'), chatId: wire.chatId })
+    await saveGroupSettingsHead(owner, settings('b', 102, 60))
+    const packet: DeviceSyncSnapshot = { v: 1, type: 'snapshot', rosterAt: 0, appKeys: [], chats: [], groups: [group], messages: [] }
+    const adapter = createDeviceSyncRecordAdapter({ owner, snapshots: () => [packet], messages: () => [wire], allowsLegacy: () => false, applySnapshot: async () => 0 })
+    const refs = await adapter.recordInventory('history', 0, 200, false)
+    expect((await adapter.records('history', 0, 200, refs, 'peer')).length).toBe(2)
+    group.members = [peer]
+    expect(await adapter.records('history', 0, 200, refs, 'peer')).toEqual([])
+    group.members = [owner, peer]
+    await db.messages.update(message.id, { expiresAt: 1 })
+    expect(await adapter.records('history', 0, 200, refs, 'peer')).toEqual([])
+    const stateRefs = await adapter.recordInventory('state', 0, 0, false)
+    await saveGroupSettingsHead(owner, settings('c', 103, null))
+    expect((await adapter.records('state', 0, 0, stateRefs, 'peer')).map(record => record.type)).toEqual(['group'])
+  })
+  it('bounds optional legacy projection without withholding the message itself', async () => {
+    const authors = Array.from({ length: 256 }, (_, index) => index.toString(16).padStart(64, '0'))
+    await db.messages.put({ ...message, content: 'x'.repeat(44_000), reactions: { '❤️': authors } })
+    const enriched = await withLegacyReactions({ chatId: peer, id: message.id, body: 'x'.repeat(44_000), author: owner, createdAt: 100 })
+    expect(enriched.body.length).toBe(44_000)
+    expect(enriched.legacyReactions!.length).toBeGreaterThan(0)
+    expect(enriched.legacyReactions!.length).toBeLessThan(256)
+    expect(deviceSyncPacketByteLength({ v: 1, type: 'historyRecords', session: '0'.repeat(32), records: [{ type: 'message', message: enriched }], requested: [] })).toBeLessThanOrEqual(DEVICE_SYNC_MAX_PACKET_BYTES)
+  })
+  it('enumerates durable heads in batches without a lifetime account cap', async () => {
+    await db.sessionManager.bulkPut(Array.from({ length: 601 }, (_, index) => {
+      const value = { ...reaction('a', 101, '❤️'), messageId: `target-${index}` }
+      return { key: `device-record-v1:${owner}:reaction:${JSON.stringify([peer, value.messageId, peer])}`, value }
+    }))
+    expect((await reactionHeads(owner)).length).toBe(601)
+    expect(await saveReactionHead(owner, reaction('b', 102, ''))).toBe(true)
+    expect((await reactionHeads(owner)).length).toBe(602)
+  })
   it('exports current state for actual contacts only and excludes old history with opt-out', async () => {
     const secret = new Uint8Array(32).fill(3), pubkey = getPublicKey(secret)
     const event = finalizeEvent({ kind: 0, created_at: 50, tags: [], content: '{"name":"Contact"}' }, secret)
@@ -121,7 +160,7 @@ describe('durable private controls', () => {
     expect(await adapter.recordInventory('state', 0, 0, false)).toEqual([])
     packet.chats.push({ id: pubkey, updatedAt: 0 })
     const inventory = await adapter.recordInventory('state', 0, 0, false)
-    expect(inventory).toEqual([{ id: deviceSyncRecordId({ type: 'profile', event }), createdAt: 0 }])
+    expect(inventory).toEqual([expect.objectContaining({ id: deviceSyncRecordId({ type: 'profile', event }), createdAt: 0 })])
     await db.sessionManager.put({ key: `history-deleted-chat:${pubkey}`, value: 101 })
     expect(await adapter.recordInventory('state', 0, 0, false)).toEqual([])
   })

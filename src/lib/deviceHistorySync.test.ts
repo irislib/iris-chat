@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { DeviceHistorySync, historyRecordId } from './deviceHistorySync'
+import { DeviceHistorySync, historyRecordId, type DeviceRecordReference } from './deviceHistorySync'
+import type { DeviceSyncRecord, DeviceSyncScope } from './deviceSyncRecords'
 import { encodeDeviceSyncPacket, parseDeviceSyncPacket, type DeviceHistoryPacket, type DeviceSyncMessage } from './deviceSyncProtocol'
 
 const owner = 'a'.repeat(64)
@@ -17,10 +18,11 @@ function pair(initialA: DeviceSyncMessage[], initialB: DeviceSyncMessage[], sinc
   const options = (local: Map<string, DeviceSyncMessage>, to: 'a' | 'b') => ({
     authorized: () => authorized, now: () => now, floor: () => since,
     allowsWindow: (_peer: string, since: number, until: number, linkId?: string) => to !== 'a' || !allowedWindow || allowedWindow(since, until, linkId),
-    inventory: async (_since: number, _until: number, initiator: boolean) => [...local.values(), ...(initiator && to === 'b' ? tombstones.values() : [])],
-    messages: async (since: number, until: number) => [...local.values()].filter(message => message.createdAt >= since && message.createdAt <= until),
-    apply: async (messages: DeviceSyncMessage[]) => {
-      for (const message of messages) if (!tombstones.has(historyRecordId(message))) local.set(historyRecordId(message), message)
+    recordInventory: async (_scope: DeviceSyncScope, _since: number, _until: number, initiator: boolean, prefix: string) => [...local.values(), ...(initiator && to === 'b' ? tombstones.values() : [])].map(message => ({ id: historyRecordId(message), createdAt: message.createdAt })).filter(record => record.id.startsWith(prefix)),
+    records: async (_scope: DeviceSyncScope, since: number, until: number, refs: DeviceRecordReference[]) => [...local.values()].filter(message => message.createdAt >= since && message.createdAt <= until && refs.some(ref => ref.id === historyRecordId(message))).map(message => ({ type: 'message' as const, message })),
+    applyRecords: async (_peer: string, records: DeviceSyncRecord[]) => {
+      for (const record of records) if (record.type === 'message' && !tombstones.has(historyRecordId(record.message))) local.set(historyRecordId(record.message), record.message)
+      return records.length
     },
     send: async (_: string, packet: DeviceHistoryPacket) => {
       const decoded = parseDeviceSyncPacket(encodeDeviceSyncPacket(packet), owner) as DeviceHistoryPacket
@@ -52,14 +54,14 @@ describe('encrypted device history reconciliation', () => {
     await p.second.start('a', 0)
     await p.drain()
     expect([...p.a.keys()].sort()).toEqual([...p.b.keys()].sort())
-    expect(p.sent.filter(packet => packet.type === 'historyMessages').flatMap(packet => packet.messages).map(message => message.id).sort()).toEqual(['only-a', 'only-b'])
+    expect(p.sent.filter(packet => packet.type === 'historyRecords').flatMap(packet => packet.records.flatMap(record => record.type === 'message' ? [record.message] : [])).map(message => message.id).sort()).toEqual(['only-a', 'only-b'])
     p.first.reset('b'); p.second.reset('a')
     p.b.set(historyRecordId(message('offline', 150)), message('offline', 150))
     p.first.negotiate('b', 0); p.second.negotiate('a', 0)
     p.sent.length = 0
     await p.first.start('b', 0); await p.drain()
     expect(p.a.size).toBe(123)
-    expect(p.sent.filter(packet => packet.type === 'historyMessages').flatMap(packet => packet.messages).map(message => message.id)).toEqual(['offline'])
+    expect(p.sent.filter(packet => packet.type === 'historyRecords').flatMap(packet => packet.records.flatMap(record => record.type === 'message' ? [record.message] : [])).map(message => message.id)).toEqual(['offline'])
   })
 
   it('keeps list-only pre-link history excluded while repairing newer messages', async () => {
@@ -153,7 +155,7 @@ describe('encrypted device history reconciliation', () => {
       p[action]()
       await p.drain()
       expect(p.a.size).toBe(0)
-      expect(p.sent.some(packet => packet.type === 'historyMessages')).toBe(false)
+      expect(p.sent.some(packet => packet.type === 'historyRecords')).toBe(false)
     }
   })
 
@@ -161,7 +163,7 @@ describe('encrypted device history reconciliation', () => {
     const p = pair([], [message('expected')])
     await p.first.start('b', 0)
     const open = p.queue[0].packet
-    await expect(p.first.receive('b', { v: 1, type: 'historyMessages', session: open.session, messages: [message('injected')], requested: [] })).rejects.toThrow('unsolicited')
+    await expect(p.first.receive('b', { v: 1, type: 'historyRecords', session: open.session, records: [{ type: 'message', message: message('injected') }], requested: [] })).rejects.toThrow('unsolicited')
     await p.drain()
     expect(p.a.size).toBe(0)
   })

@@ -2,7 +2,7 @@ import { get } from 'svelte/store'
 import { getEventHash, type Event } from 'nostr-tools'
 import type { Rumor } from 'nostr-double-ratchet'
 import { db, admitHistoryMessage, type StoredMessage } from './storage'
-import { saveReactionHead, saveGroupSettingsHead, saveSignedProfileHead, messageWithReactionHeads, projectReactionHeads, groupSettingsHeads, hasReactionHead } from './deviceSyncRecordStore'
+import { saveReactionHead, saveGroupSettingsHead, saveSignedProfileHead, messageWithReactionHeads, projectReactionHeads, groupSettingsHead, hasReactionHead } from './deviceSyncRecordStore'
 import type { DeviceSyncReaction, DeviceSyncGroupSettings } from './deviceSyncRecords'
 
 export function controlClock(rumor: Pick<Rumor, 'id' | 'pubkey' | 'created_at' | 'kind' | 'tags' | 'content'>) {
@@ -67,7 +67,7 @@ export async function applyGroupSettingsRecord(owner: string, settings: DeviceSy
   const group = get(groups).get(settings.groupId)
   if (!authorized() || !group || !group.members.includes(owner) || !group.admins.includes(settings.author) || settings.createdAt > Date.now() / 1000 + 300) return false
   const changed = await saveGroupSettingsHead(owner, settings, authorized)
-  if (changed && authorized() && (await groupSettingsHeads(owner)).find(head => head.groupId === settings.groupId)?.id === settings.id) {
+  if (changed && authorized() && (await groupSettingsHead(owner, settings.groupId))?.id === settings.id) {
     const { expirationStore } = await import('./expirationStore')
     expirationStore.setExpiration(settings.groupId, settings.messageTtlSeconds)
   }
@@ -103,7 +103,7 @@ export async function restoreGroupSettings(owner: string, groupId: string): Prom
   const { groups } = await import('./groups')
   const group = get(groups).get(groupId)
   if (!group?.members.includes(owner)) return
-  const head = (await groupSettingsHeads(owner)).find(record => record.groupId === groupId)
+  const head = await groupSettingsHead(owner, groupId)
   if (!head || !group.admins.includes(head.author)) return
   const { expirationStore } = await import('./expirationStore')
   expirationStore.setExpiration(groupId, head.messageTtlSeconds)

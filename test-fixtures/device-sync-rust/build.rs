@@ -10,7 +10,6 @@ fn main() {
     let framing_path = core.join("src/core/device_sync_tcp/framing.rs");
     let body_path = core.join("src/core/device_sync/body.rs");
     let records_path = core.join("src/core/device_sync/records.rs");
-    let history_path = core.join("src/core/device_sync/history.rs");
     let model_path = core.join("src/core/model.rs");
     let mute_path = core.join("src/core/chat_mute_sync.rs");
     let pin_path = core.join("src/core/chat_pin_sync.rs");
@@ -21,7 +20,6 @@ fn main() {
         &tcp_path,
         &framing_path,
         &body_path,
-        &history_path,
         &records_path,
         &model_path,
         &label_path,
@@ -76,10 +74,6 @@ fn main() {
     }).join("\n");
     fs::write(out.join("native_records.rs"), format!("{record_types}\nimpl DeviceSyncRecord {{\n{methods}\n}}"))
         .expect("write native typed record declarations");
-    let history = read(history_path);
-    let record_at = history.find("pub(super) fn record_id").expect("native history record identity");
-    fs::write(out.join("native_history_record.rs"), history[record_at..item_end(&history, record_at)].replace("pub(super) ", ""))
-        .expect("write native history record identity");
     fs::write(out.join("native_contract.rs"), contract).expect("write contract");
     // Preserve the production wire declarations and aliases verbatim, without
     // importing the unrelated event encryption and storage implementation.
@@ -109,7 +103,7 @@ fn main() {
         [
             constant(&protocol, "DEVICE_SYNC_PORT"),
             constant(&protocol, "DEVICE_SYNC_MAX_PACKET_BYTES"),
-            constant(&protocol, "DEVICE_SYNC_PAGE_MESSAGES"),
+            constant(&protocol, "DEVICE_SYNC_RECORD_BATCH"),
             constant(&protocol, "DEVICE_SYNC_PAGE_PACKETS"),
             constant(&tcp, "FRAME_HEADER_BYTES"),
         ]

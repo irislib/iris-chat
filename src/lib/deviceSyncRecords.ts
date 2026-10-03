@@ -67,7 +67,7 @@ const clock = (value: Record<string, any>) => time(value.createdAt) && (value.cr
 
 export function verifiedProfileEvent(value: unknown, now = Date.now()): Event | undefined {
   if (!object(value) || value.kind !== 0 || !key(value.pubkey) || !key(value.id) || !time(value.created_at) ||
-    value.created_at > now / 1000 + 300 || typeof value.content !== 'string' || value.content.length > 16384 ||
+    value.created_at > now / 1000 + 300 || typeof value.content !== 'string' || new TextEncoder().encode(value.content).length > 32768 ||
     typeof value.sig !== 'string' || !/^[a-f0-9]{128}$/.test(value.sig) || !Array.isArray(value.tags) ||
     value.tags.length > 256 || !value.tags.every((tag: unknown) => Array.isArray(tag) && tag.every(item => typeof item === 'string'))) return
   const event: Event = { id: value.id, pubkey: value.pubkey, kind: 0, created_at: value.created_at,
@@ -84,7 +84,7 @@ export function parseDeviceSyncRecord(value: unknown, parsers: {
   if (value.type === 'message') return { type: 'message', message: parsers.message(value.message) }
   if (value.type === 'reaction') {
     const r = value.reaction
-    if (object(r) && chat(r.chatId) && key(r.id) && key(r.author) && clock(r) && id(r.messageId) && typeof r.emoji === 'string' && r.emoji.length <= 64) {
+    if (object(r) && chat(r.chatId) && key(r.id) && key(r.author) && clock(r) && id(r.messageId) && typeof r.emoji === 'string' && new TextEncoder().encode(r.emoji).length <= 256) {
       return { type: 'reaction', reaction: { chatId: r.chatId, id: r.id, author: r.author, createdAt: r.createdAt,
         ...(r.createdAtMs !== undefined && { createdAtMs: r.createdAtMs }), messageId: r.messageId, emoji: r.emoji } }
     }
@@ -118,5 +118,5 @@ export function reactionControl(rumor: { content: string; tags: string[][] }): {
       }
     } catch { /* Plain reaction text can begin with a brace. */ }
   }
-  return emoji.length <= 64 ? { messageId, emoji } : undefined
+  return new TextEncoder().encode(emoji).length <= 256 ? { messageId, emoji } : undefined
 }

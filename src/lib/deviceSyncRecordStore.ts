@@ -3,28 +3,37 @@ import type { Event } from 'nostr-tools'
 import { db, type StoredMessage } from './storage'
 import { compareControlHead, verifiedProfileEvent, type DeviceSyncReaction, type DeviceSyncGroupSettings } from './deviceSyncRecords'
 
-const MAX_HEADS = 100_000
 export const deviceRecordVersion = writable(0)
 const prefix = (owner: string, type = '') => `device-record-v1:${owner}:${type}`
 const reactionKey = (owner: string, r: DeviceSyncReaction) => prefix(owner, `reaction:${JSON.stringify([r.chatId, r.messageId, r.author])}`)
 const changed = () => deviceRecordVersion.update(value => value + 1)
 
-async function boundedPut(key: string, value: unknown, owner: string): Promise<void> {
+async function boundedPut(key: string, value: unknown): Promise<void> {
   if (new TextEncoder().encode(JSON.stringify(value)).length > 64 * 1024) throw new Error('Device record exceeds storage limit')
-  if (!await db.sessionManager.get(key) && await db.sessionManager.where('key').startsWith(prefix(owner)).count() >= MAX_HEADS) throw new Error('Device record head limit exceeded')
   await db.sessionManager.put({ key, value })
 }
 
-export async function reactionHeads(owner: string): Promise<DeviceSyncReaction[]> {
-  return heads<DeviceSyncReaction>(owner, 'reaction:')
+export function reactionHeads(owner: string): AsyncGenerator<DeviceSyncReaction> { return heads(owner, 'reaction:') }
+export function reactionHeadPages(owner: string): AsyncGenerator<DeviceSyncReaction[]> { return headPages(owner, 'reaction:') }
+export function groupSettingsHeads(owner: string): AsyncGenerator<DeviceSyncGroupSettings> { return heads(owner, 'groupSettings:') }
+async function* heads<T>(owner: string, type: string): AsyncGenerator<T> {
+  for await (const page of headPages<T>(owner, type)) yield* page
 }
-export async function groupSettingsHeads(owner: string): Promise<DeviceSyncGroupSettings[]> {
-  return heads<DeviceSyncGroupSettings>(owner, 'groupSettings:')
+async function* headPages<T>(owner: string, type: string): AsyncGenerator<T[]> {
+  const base = prefix(owner, type)
+  let after: string | undefined
+  while (true) {
+    const rows = await db.sessionManager.where('key').between(after ?? base, `${base}\uffff`, after === undefined, true).limit(256).toArray()
+    yield rows.map(row => row.value as T)
+    if (rows.length < 256) return
+    after = rows.at(-1)!.key
+  }
 }
-async function heads<T>(owner: string, type: string): Promise<T[]> {
-  const rows = await db.sessionManager.where('key').startsWith(prefix(owner, type)).limit(MAX_HEADS + 1).toArray()
-  if (rows.length > MAX_HEADS) throw new Error('Device record head limit exceeded')
-  return rows.map(row => row.value as T)
+export async function reactionHead(owner: string, key: Pick<DeviceSyncReaction, 'chatId' | 'messageId' | 'author'>): Promise<DeviceSyncReaction | undefined> {
+  return (await db.sessionManager.get(reactionKey(owner, key as DeviceSyncReaction)))?.value as DeviceSyncReaction | undefined
+}
+export async function groupSettingsHead(owner: string, groupId: string): Promise<DeviceSyncGroupSettings | undefined> {
+  return (await db.sessionManager.get(prefix(owner, `groupSettings:${groupId}`)))?.value as DeviceSyncGroupSettings | undefined
 }
 
 export function projectReactionHeads(message: StoredMessage, records: DeviceSyncReaction[]): StoredMessage {
@@ -51,7 +60,7 @@ export async function saveReactionHead(owner: string, reaction: DeviceSyncReacti
     if (target && (target.sessionId !== reaction.chatId || target.expiresAt !== undefined && target.expiresAt <= Date.now() / 1000)) return false
     if (await db.sessionManager.get(`history-deleted-message:${reaction.messageId}`) || await db.sessionManager.get(`history-deleted-chat:${reaction.chatId}`)) return false
     if (!authorized()) return false
-    await boundedPut(key, reaction, owner)
+    await boundedPut(key, reaction)
     if (target) await db.messages.put(projectReactionHeads(target, [reaction]))
     return true
   })
@@ -61,7 +70,9 @@ export async function saveReactionHead(owner: string, reaction: DeviceSyncReacti
 
 export async function messageWithReactionHeads(owner: string, message: StoredMessage): Promise<StoredMessage> {
   const partialKey = JSON.stringify([message.sessionId, message.id]).slice(0, -1) + ','
-  return projectReactionHeads(message, await heads<DeviceSyncReaction>(owner, `reaction:${partialKey}`))
+  let projected = message
+  for await (const head of heads<DeviceSyncReaction>(owner, `reaction:${partialKey}`)) projected = projectReactionHeads(projected, [head])
+  return projected
 }
 
 export async function hasReactionHead(owner: string, chatId: string, messageId: string, author: string): Promise<boolean> {
@@ -75,7 +86,7 @@ export async function saveGroupSettingsHead(owner: string, settings: DeviceSyncG
     const previous = (await db.sessionManager.get(key))?.value as DeviceSyncGroupSettings | undefined
     if (previous && compareControlHead(previous, settings) >= 0) return false
     if (await db.sessionManager.get(`history-deleted-chat:group:${settings.groupId}`) || !authorized()) return false
-    await boundedPut(key, settings, owner)
+    await boundedPut(key, settings)
     return true
   })
   if (result) changed()
@@ -83,9 +94,13 @@ export async function saveGroupSettingsHead(owner: string, settings: DeviceSyncG
 }
 
 export async function signedProfileHeads(owner: string, contacts: Set<string>): Promise<Event[]> {
-  if (contacts.size > MAX_HEADS) throw new Error('Contact record limit exceeded')
-  const rows = await db.sessionManager.bulkGet([...contacts].map(pubkey => prefix(owner, `profile:${pubkey}`)))
-  return rows.flatMap(row => { const event = verifiedProfileEvent(row?.value); return event ? [event] : [] })
+  const events: Event[] = []
+  const keys = [...contacts]
+  for (let index = 0; index < keys.length; index += 64) {
+    const rows = await db.sessionManager.bulkGet(keys.slice(index, index + 64).map(pubkey => prefix(owner, `profile:${pubkey}`)))
+    for (const row of rows) { const event = verifiedProfileEvent(row?.value); if (event) events.push(event) }
+  }
+  return events
 }
 
 export async function saveSignedProfileHead(owner: string, value: unknown, contacts?: Set<string>, authorized = () => true): Promise<boolean> {
@@ -96,7 +111,7 @@ export async function saveSignedProfileHead(owner: string, value: unknown, conta
     const key = prefix(owner, `profile:${event.pubkey}`)
     const previous = verifiedProfileEvent((await db.sessionManager.get(key))?.value)
     if (previous && (previous.created_at > event.created_at || previous.created_at === event.created_at && previous.id <= event.id)) return false
-    await boundedPut(key, event, owner)
+    await boundedPut(key, event)
     return true
   })
   if (result) changed()

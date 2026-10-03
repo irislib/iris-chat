@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEVICE_SYNC_MAX_PACKET_BYTES,
-  DEVICE_SYNC_PAGE_MESSAGES,
+  DEVICE_SYNC_RECORD_BATCH,
   DEVICE_SYNC_PAGE_PACKETS,
   DEVICE_SYNC_PORT,
   DeviceSyncProtocolError,
@@ -23,21 +23,12 @@ const packets: DeviceSyncPacket[] = [
     rosterAt: 42,
     page: { kind: 'metadata', offset: 32 },
   },
-  {
-    v: 1,
-    type: 'request',
-    rosterAt: 42,
-    page: {
-      kind: 'messages',
-      after: { createdAt: 44, chatId: peer, id: 'message-1' },
-    },
-  },
   { v: 1, type: 'resyncRequired' },
   {
     v: 1,
     type: 'pageEnd',
     rosterAt: 42,
-    next: { kind: 'messages', after: null },
+    next: null,
   },
   {
     v: 1,
@@ -60,7 +51,7 @@ describe('native device-sync protocol', () => {
   it('locks the native service and page bounds', () => {
     expect(DEVICE_SYNC_PORT).toBe(7369)
     expect(DEVICE_SYNC_MAX_PACKET_BYTES).toBe(64 * 1024)
-    expect(DEVICE_SYNC_PAGE_MESSAGES).toBe(32)
+    expect(DEVICE_SYNC_RECORD_BATCH).toBe(32)
     expect(DEVICE_SYNC_PAGE_PACKETS).toBe(32)
   })
 
@@ -91,6 +82,15 @@ describe('native device-sync protocol', () => {
     )).toThrow(DeviceSyncProtocolError)
   })
 
+  it('rejects obsolete message pagination and the removed message-only protocol', () => {
+    for (const packet of [
+      { v: 1, type: 'request', rosterAt: 1, page: { kind: 'messages', after: null } },
+      { v: 1, type: 'historyMessages', session: 'a'.repeat(32), messages: [], requested: [] },
+      { v: 1, type: 'historyPageEnd', linkAt: 1, linkId: 'a'.repeat(64) },
+      { v: 1, type: 'historyOpen', session: 'a'.repeat(32), since: 0, until: 1, frame: '00' },
+      { v: 1, type: 'historyOpen', scope: 'history', prefix: 'A', session: 'a'.repeat(32), since: 0, until: 1, frame: '00' },
+    ]) expect(() => parseDeviceSyncPacket(new TextEncoder().encode(JSON.stringify(packet)), owner)).toThrow(DeviceSyncProtocolError)
+  })
   it('treats a native null request page as the initial page', () => {
     const payload = new TextEncoder().encode('{"v":1,"type":"request","rosterAt":42,"page":null}')
     expect(parseDeviceSyncPacket(payload, owner)).toEqual({
