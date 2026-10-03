@@ -1051,16 +1051,28 @@ function handleGroupReceipt(groupId: string, receipt: ReceiptPayload, fromPubkey
 }
 
 function sendGroupReceipt(groupId: string, type: MessageStatus, messageIds: string[]): void {
-  if (messageIds.length === 0) return
-  void sendNativeGroupEvent(
-    groupId,
-    {
-      content: type,
-      kind: RECEIPT_KIND,
-      tags: messageIds.map((messageId) => ['e', messageId]),
-    },
-    { includeSelfPairwiseCopy: true },
-  ).catch((error) => {
+  const owner = getPubkey(), group = currentGroupForSend(groupId)
+  if (!owner || !group || messageIds.length === 0) return
+  void enqueueNativeGroupSend(groupId, async () => {
+    const runtime = await waitForSendReadyRuntime()
+    if (getPubkey() !== owner || !currentGroupForSend(groupId, group)) return
+    const requested = new Set(messageIds), byAuthor = new Map<string, string[]>()
+    for (const message of get(groupMessages).get(groupId) ?? []) {
+      const author = message.senderPubkey?.toLowerCase()
+      if (message.isMine || !author || author === owner || !/^[0-9a-f]{64}$/.test(author) || !requested.delete(message.id)) continue
+      const ids = byAuthor.get(author) ?? []
+      ids.push(message.id)
+      byAuthor.set(author, ids)
+    }
+    if (!byAuthor.size) return
+    // Sync our own devices once, separately from author delivery.
+    byAuthor.set(owner, [...byAuthor.values()].flat())
+    await Promise.all([...byAuthor].map(([author, ids]) => runtime.sendEvent(author,
+      buildScopedGroupRumor(['p', author], {
+        content: type, kind: RECEIPT_KIND, tags: [['l', groupId], ...ids.map(id => ['e', id])],
+      }, true), owner, { includeLocalSiblings: false },
+    )))
+  }).catch((error) => {
     console.error('[groups] Failed to send group receipt:', error)
   })
 }

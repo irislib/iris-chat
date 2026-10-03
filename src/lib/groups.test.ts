@@ -73,7 +73,7 @@ vi.mock('./identity', () => {
 })
 
 // Track sendEvent calls per recipient
-const sendEventCalls: Array<{ recipient: string, event: unknown }> = []
+const sendEventCalls: Array<{ recipient: string, event: unknown, owner?: string, options?: { includeLocalSiblings?: boolean } }> = []
 const sessionManagerValues = new Map<string, unknown>()
 const runtimeGroups = new Map<string, {
   id: string
@@ -131,16 +131,16 @@ vi.mock('./privateChats', () => ({
     },
   }),
   waitForSendReadyRuntime: vi.fn(async () => ({
-    sendEvent: (recipient: string, event: unknown) => {
-      sendEventCalls.push({ recipient, event })
+    sendEvent: (recipient: string, event: unknown, owner?: string, options?: { includeLocalSiblings?: boolean }) => {
+      sendEventCalls.push({ recipient, event, owner, options })
       return Promise.resolve(undefined)
     },
   })),
   waitForNdrRuntime: async () => (await import('./privateChats')).getNdrRuntime(),
   getNdrRuntime: () => ({
     getState: () => ({ sessionManagerReady: true }),
-    sendEvent: (recipient: string, event: unknown) => {
-      sendEventCalls.push({ recipient, event })
+    sendEvent: (recipient: string, event: unknown, owner?: string, options?: { includeLocalSiblings?: boolean }) => {
+      sendEventCalls.push({ recipient, event, owner, options })
       return Promise.resolve(undefined)
     },
     syncGroups: async (groups: Array<{
@@ -1000,6 +1000,79 @@ describe('groups', () => {
       expect(get(groupMessages).get(group.id)![0].recipientStatuses).toEqual({
         [MEMBER_B]: 'seen',
       })
+    })
+
+    it('sends batched seen receipts only to each stored author, with a separate own-device copy', async () => {
+      const { groups, groupMessages, markGroupMessagesSeen } = await import('./groups')
+      const { receiptSettings } = await import('./receiptSettings')
+      const groupId = 'author-receipts'
+      groups.set(new Map([[groupId, { id: groupId, name: 'Friends', members: [MY_PUBKEY, MEMBER_B, MEMBER_C, NON_MEMBER], admins: [MY_PUBKEY], createdAt: 1 }]]))
+      const message = (id: string, senderPubkey?: string, isMine = false) => ({ id, senderPubkey, isMine, timestamp: 1, content: id })
+      groupMessages.set(new Map([[groupId, [message('b1', MEMBER_B), message('b2', MEMBER_B), message('c1', MEMBER_C),
+        message('outgoing', MEMBER_B, true), message('self', MY_PUBKEY), message('unknown'), message('invalid', 'not-a-key')]]]))
+      receiptSettings.set({ sendReadReceipts: true, sendDeliveryReceipts: false })
+      try {
+        markGroupMessagesSeen(groupId, ['b1', 'b1', 'b2', 'c1', 'missing', 'outgoing', 'self', 'unknown', 'invalid'])
+        await waitForRecipients(MEMBER_B, MEMBER_C, MY_PUBKEY)
+        expect(sendEventCalls).toHaveLength(3)
+        expect(sendEventCalls.map(call => call.recipient).sort()).toEqual([MY_PUBKEY, MEMBER_B, MEMBER_C].sort())
+        for (const call of sendEventCalls) {
+          const event = call.event as Rumor
+          expect(event.kind).toBe(15)
+          expect(event.content).toBe('seen')
+          expect(event.tags.filter(tag => tag[0] === 'e').map(tag => tag[1])).toEqual(
+            call.recipient === MEMBER_B ? ['b1', 'b2'] : call.recipient === MEMBER_C ? ['c1'] : ['b1', 'b2', 'c1'],
+          )
+          expect(event.tags).toContainEqual(['l', groupId])
+          expect(event.tags.filter(tag => tag[0] === 'p')).toEqual([['p', call.recipient]])
+          expect(call.owner).toBe(MY_PUBKEY)
+          expect(call.options).toEqual({ includeLocalSiblings: false })
+        }
+        expect(new Set(sendEventCalls.map(call => (call.event as Rumor).id)).size).toBe(3)
+      } finally { receiptSettings.set({ sendReadReceipts: false, sendDeliveryReceipts: false }) }
+    })
+
+    it('sends delivery receipts to the authenticated sender without notifying uninvolved group members', async () => {
+      const { groups, handleGroupEvent } = await import('./groups')
+      const { receiptSettings } = await import('./receiptSettings')
+      const groupId = 'delivery-author'
+      groups.set(new Map([[groupId, { id: groupId, name: 'Friends', members: [MY_PUBKEY, MEMBER_B, MEMBER_C], admins: [MY_PUBKEY], createdAt: 1 }]]))
+      receiptSettings.set({ sendReadReceipts: false, sendDeliveryReceipts: true })
+      try {
+        const rumor = makeMessageRumor(groupId, 'Delivered message', MEMBER_C)
+        handleGroupEvent(rumor, MEMBER_B)
+        await waitForRecipients(MEMBER_B, MY_PUBKEY)
+        expect(sendEventCalls.map(call => call.recipient).sort()).toEqual([MY_PUBKEY, MEMBER_B].sort())
+        for (const call of sendEventCalls) {
+          const event = call.event as Rumor
+          expect(event.content).toBe('delivered')
+          expect(event.tags.filter(tag => tag[0] === 'e')).toEqual([['e', rumor.id]])
+          expect(event.tags).toContainEqual(['l', groupId])
+          expect(call.options).toEqual({ includeLocalSiblings: false })
+        }
+      } finally { receiptSettings.set({ sendReadReceipts: false, sendDeliveryReceipts: false }) }
+    })
+
+    it('cancels author receipts if the group is removed while runtime readiness is pending', async () => {
+      const { groups, groupMessages, markGroupMessagesSeen } = await import('./groups')
+      const { receiptSettings } = await import('./receiptSettings')
+      const { waitForSendReadyRuntime, getNdrRuntime } = await import('./privateChats')
+      const groupId = 'receipt-after-removal'
+      groups.set(new Map([[groupId, { id: groupId, name: 'Friends', members: [MY_PUBKEY, MEMBER_B], admins: [MY_PUBKEY], createdAt: 1 }]]))
+      groupMessages.set(new Map([[groupId, [{ id: 'b1', senderPubkey: MEMBER_B, isMine: false, timestamp: 1, content: 'Hello' }]]]))
+      let ready!: () => void
+      vi.mocked(waitForSendReadyRuntime).mockImplementationOnce(() => new Promise(resolve => {
+        ready = () => resolve(getNdrRuntime())
+      }))
+      receiptSettings.set({ sendReadReceipts: true, sendDeliveryReceipts: false })
+      try {
+        markGroupMessagesSeen(groupId, ['b1'])
+        await vi.waitFor(() => expect(ready).toBeTypeOf('function'))
+        groups.set(new Map())
+        ready()
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(sendEventCalls).toEqual([])
+      } finally { receiptSettings.set({ sendReadReceipts: false, sendDeliveryReceipts: false }) }
     })
 
     it('sets typing indicator for group typing rumor', async () => {
