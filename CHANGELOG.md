@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.39 - 2026-10-04
+
+- Restore peer connections after another browser reloads.
+- Keep downloaded shared files available to peers after restarting the app.
+
 ## 2.6.37 - 2026-10-03
 
 - Link devices through one approval flow, with working pasted links from current and older Iris apps.
