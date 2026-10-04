@@ -1,4 +1,4 @@
-import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
+import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
 import type { MessageRevision } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
@@ -1708,8 +1708,8 @@ async function mutateMessage(chatSession: ChatSession, messageId: string, operat
   const owner = getPubkey(), message = get(chats).get(chatSession.id)?.messages.find(row => row.id === messageId)
   if (!owner || !message?.isMine || message.call || message.deletedAt !== undefined || operation === 'edit' && !editableMessage(message)) throw new Error('This message cannot be changed.')
   const rumor = buildMessageMutation(owner, messageId, operation, content, ['p', chatSession.recipientPubkey], Math.max(Date.now(), (message.editedAt ?? 0) + 1), message.expiresAt)
-  if (!await captureMessageMutation(owner, chatSession.id, rumor, owner)) throw new Error('Could not update this message. Try again.')
-  sendRuntimeEvent(chatSession.recipientPubkey, rumor, operation === 'edit' ? 'edit message' : 'delete message')
+  await sendMessageMutation(owner, chatSession.id, rumor,
+    async () => (await waitForSendReadyRuntime()).sendEvent(chatSession.recipientPubkey, rumor), () => getPubkey() === owner)
 }
 
 // Delete a single message locally

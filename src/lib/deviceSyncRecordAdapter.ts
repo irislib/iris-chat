@@ -13,6 +13,7 @@ export function createDeviceSyncRecordAdapter(options: {
   messages(since: number, until: number): DeviceSyncMessage[]
   cachedProfiles?(contacts: string[]): Promise<Event[]>
   allowsLegacy(peer: string, since: number, until: number, linkId?: string): boolean
+  mutationTargetSince?(peer: string): number
   applySnapshot(packet: DeviceSyncSnapshot, since: number | undefined, authorized: () => boolean, legacy?: boolean): Promise<number>
 }) {
   async function state() {
@@ -41,12 +42,24 @@ export function createDeviceSyncRecordAdapter(options: {
     if (record.type === 'groupSettings') { const settings = record.settings; return current.groups.some(group => group.id === settings.groupId && group.members.includes(options.owner) && group.admins.includes(settings.author)) }
     return current.groups.some(group => group.id === record.group.id)
   }
-  async function* available(scope: DeviceSyncScope, since: number, until: number): AsyncGenerator<DeviceSyncRecord> {
+  async function mutationTargetInWindow(record: DeviceSyncRecord, since: number, until: number, peer?: string): Promise<boolean> {
+    if (record.type !== 'messageMutation') return true
+    const mutation = record.mutation, target = await db.messages.get(mutation.messageId)
+    if (!target || target.sessionId !== mutation.chatId || target.call) return false
+    const createdAt = Math.floor(target.timestamp / 1000)
+    const author = target.isMine ? options.owner : target.senderPubkey ?? (target.sessionId.startsWith('group:') ? undefined : target.sessionId)
+    const targetSince = peer ? options.mutationTargetSince?.(peer) ?? since : since
+    return author === mutation.author && createdAt >= targetSince && createdAt <= until && createdAt <= mutation.createdAt
+  }
+  async function* available(scope: DeviceSyncScope, since: number, until: number, peer?: string): AsyncGenerator<DeviceSyncRecord> {
     const current = await state()
     if (scope === 'history') {
       for (const message of options.messages(since, until)) { const record = { type: 'message' as const, message }; if (await eligible(record, current, true)) yield record }
       for await (const mutation of messageMutationRecords(options.owner)) {
-        if (mutation.createdAt >= since && mutation.createdAt <= until && await eligible({ type: 'messageMutation', mutation }, current)) yield { type: 'messageMutation', mutation }
+        const record = { type: 'messageMutation' as const, mutation }
+        // A new edit contains the full replacement text. Its own timestamp
+        // cannot grant a chats-only sibling access to an older original.
+        if (mutation.createdAt >= since && mutation.createdAt <= until && await mutationTargetInWindow(record, since, until, peer) && await eligible(record, current)) yield record
       }
       for await (const page of reactionHeadPages(options.owner)) {
         const [targets, deleted] = await Promise.all([
@@ -99,9 +112,9 @@ export function createDeviceSyncRecordAdapter(options: {
     return group && { type: 'group', group }
   }
   return {
-    recordInventory: async (scope: DeviceSyncScope, since: number, until: number, initiator: boolean, prefix = '') => {
+    recordInventory: async (scope: DeviceSyncScope, since: number, until: number, initiator: boolean, prefix = '', peer?: string) => {
       const inventory: DeviceRecordReference[] = []
-      for await (const record of available(scope, since, until)) {
+      for await (const record of available(scope, since, until, peer)) {
         const ref = reference(record)
         if (ref.id.startsWith(prefix) && bounded(record)) inventory.push(ref)
         if (inventory.length > 100_000) throw new Error('reconciliation window exceeds record limit')
@@ -117,7 +130,7 @@ export function createDeviceSyncRecordAdapter(options: {
       const selected: DeviceSyncRecord[] = [], current = await state()
       for (const ref of refs) {
         let record = await lookup(ref)
-        if (!record || deviceSyncRecordId(record) !== ref.id || !bounded(record) || !await eligible(record, current)) continue
+        if (!record || deviceSyncRecordId(record) !== ref.id || !bounded(record) || !await eligible(record, current) || !await mutationTargetInWindow(record, since, until, peer)) continue
         if (deviceSyncRecordTime(record) < since || deviceSyncRecordTime(record) > until) continue
         if (record.type === 'message' && scope === 'history' && options.allowsLegacy(peer, since, until, linkId)) record = { ...record, message: await withLegacyReactions(record.message) }
         if (bounded(record)) selected.push(record)
@@ -126,18 +139,26 @@ export function createDeviceSyncRecordAdapter(options: {
     },
     applyRecords: async (peer: string, incoming: DeviceSyncRecord[], scope: DeviceSyncScope, since: number, until: number, linkId: string | undefined, authorized: () => boolean) => {
       let imported = 0
+      const deferred: string[] = []
       const groups = incoming.flatMap(record => record.type === 'group' ? [record.group] : [])
       if (scope === 'state' && groups.length) await options.applySnapshot({ v: 1, type: 'snapshot', rosterAt: 0, appKeys: [], chats: [], groups, messages: [] }, undefined, authorized)
       const contacts = scope === 'state' ? (await state()).contacts : new Set<string>()
-      for (const record of incoming) {
-        if (!authorized()) return imported
+      // Establish entitlement from originals before importing any full edit text.
+      const ordered = [...incoming.filter(record => record.type === 'message'), ...incoming.filter(record => record.type !== 'message')]
+      for (const record of ordered) {
+        if (!authorized()) return { imported, deferred }
         if (scope === 'history' && record.type === 'message') imported += await options.applySnapshot({ v: 1, type: 'snapshot', rosterAt: since, appKeys: [], chats: [], groups: [], messages: [record.message] }, since, authorized, options.allowsLegacy(peer, since, until, linkId))
-        else if (scope === 'history' && record.type === 'messageMutation') await applyMessageMutation(options.owner, record.mutation, authorized)
+        else if (scope === 'history' && record.type === 'messageMutation') {
+          if (record.mutation.expiresAt !== undefined && record.mutation.expiresAt <= Date.now() / 1000) continue
+          if (await db.sessionManager.get(`history-deleted-message:${record.mutation.messageId}`) || await isHistoryChatDeleted(record.mutation.chatId)) continue
+          if (!await db.messages.get(record.mutation.messageId)) { deferred.push(deviceSyncRecordId(record)); continue }
+          if (await mutationTargetInWindow(record, since, until, peer)) await applyMessageMutation(options.owner, record.mutation, authorized)
+        }
         else if (scope === 'history' && record.type === 'reaction') await applyReactionRecord(options.owner, record.reaction, authorized)
         else if (scope === 'state' && record.type === 'groupSettings') await applyGroupSettingsRecord(options.owner, record.settings, authorized)
         else if (scope === 'state' && record.type === 'profile') await applyProfileRecord(options.owner, record.event, contacts, authorized)
       }
-      return imported
+      return { imported, deferred }
     },
   }
 }

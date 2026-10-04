@@ -43,6 +43,7 @@ describe('release site config', () => {
     expect(publishStep?.command).not.toContain('iris-chat')
     expect(portableTestStep?.command).toContain('src/lib/chat.invite.test.ts')
     expect(portableTestStep?.command).toContain('src/lib/chat.self-message.test.ts')
+    expect(portableTestStep?.command).toContain('src/lib/messageMutationHistory.test.ts')
     expect(plan.steps.find((step) => step.id === 'test-e2e-nip07')?.command).toEqual([
       'pnpm',
       'exec',
@@ -53,6 +54,7 @@ describe('release site config', () => {
       'e2e/private-contact-sync.spec.ts',
       'e2e/web-join.spec.ts',
       'e2e/direct-file-first.spec.ts',
+      'e2e/message-mutations.spec.ts',
       '--workers=2',
       '--retries=0',
     ])

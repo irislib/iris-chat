@@ -1,4 +1,4 @@
-import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
+import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, controlClock, applyGroupSettingsRecord, persistMessageWithReactions, restoreGroupSettings } from './deviceSyncRecordApply'
@@ -621,7 +621,7 @@ async function fanOutToOwnDevices(
 async function sendNativeGroupEvent(
   groupId: string,
   partialEvent: { content: string, kind: number, tags: string[][] },
-  options?: { includeSelfPairwiseCopy?: boolean; rumor?: Rumor },
+  options?: { includeSelfPairwiseCopy?: boolean; rumor?: Rumor; requireQueued?: boolean },
 ): Promise<NativeGroupSendResult | null> {
   return enqueueNativeGroupSend(groupId, async () => {
     const runtime = getNdrRuntime()
@@ -646,6 +646,7 @@ async function sendNativeGroupEvent(
       }
       return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
     } catch (error) {
+      if (options?.requireQueued) throw error
       if (!currentGroupForSend(groupId, groupData)) return null
       console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
       fanOutToMembers(
@@ -821,8 +822,10 @@ async function mutateGroupMessage(groupId: string, messageId: string, operation:
   const owner = getPubkey(), message = get(groupMessages).get(groupId)?.find(row => row.id === messageId)
   if (!owner || !currentGroupForSend(groupId) || !message?.isMine || message.call || message.deletedAt !== undefined || operation === 'edit' && !editableMessage(message)) throw new Error('This message cannot be changed.')
   const rumor = buildMessageMutation(owner, messageId, operation, content, ['l', groupId], Math.max(Date.now(), (message.editedAt ?? 0) + 1), message.expiresAt)
-  if (!await captureMessageMutation(owner, `group:${groupId}`, rumor, owner)) throw new Error('Could not update this message. Try again.')
-  await sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor })
+  await sendMessageMutation(owner, `group:${groupId}`, rumor, async () => {
+    const queued = await sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor, requireQueued: true })
+    if (!queued) throw new Error('Could not send this message update. Try again.')
+  }, () => getPubkey() === owner && !!currentGroupForSend(groupId))
 }
 
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {

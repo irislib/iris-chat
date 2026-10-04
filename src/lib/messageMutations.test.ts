@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
 import { getEventHash } from 'nostr-tools'
 import { db, deleteMessage, deleteMessagesForSession, purgeExpiredMessageMutations, type StoredMessage } from './storage'
-import { applyMessageMutation, buildMessageMutation, captureMessageMutation, messageMutationRecords, mutationFromRumor } from './messageMutations'
+import { applyMessageMutation, buildMessageMutation, captureMessageMutation, sendMessageMutation, messageMutationRecords, mutationFromRumor } from './messageMutations'
 import { persistMessageWithReactions, admitRecordMessage } from './deviceSyncRecordApply'
 import { messageDeletionSettings } from './messageDeletionSettings'
 import { deviceSyncRecordId, deviceSyncRecordScope, deviceSyncRecordTime } from './deviceSyncRecords'
@@ -132,8 +132,10 @@ it('roundtrips mutation records through the shared history wire and serves immut
   expect(exported.find(record => record.type === 'message')).toMatchObject({ message: { body: original.content } })
   expect(exported).toContainEqual(record)
   await db.messages.clear(); await db.sessionManager.clear()
-  await adapter.applyRecords('device', [record], 'history', 0, 200, undefined, () => true)
+  expect(await adapter.applyRecords('device', [record], 'history', 0, 200, undefined, () => true)).toMatchObject({ deferred: [deviceSyncRecordId(record)] })
+  expect(await records()).toEqual([])
   await persistMessageWithReactions(owner, original)
+  await adapter.applyRecords('device', [record], 'history', 0, 200, undefined, () => true)
   expect((await db.messages.get(id))?.content).toBe('corrected')
 })
 
@@ -172,4 +174,27 @@ it('never exposes an original when a pending tombstone cannot be committed', asy
   expect(await db.messages.get(id)).toBeUndefined()
   expect(await records()).toHaveLength(1)
   expect(await persistMessageWithReactions(owner, original)).toMatchObject({ content: '', deletedAt: 101000 })
+})
+it('keeps the original when encrypted queueing fails and saves the update only after acceptance', async () => {
+  await seed({ ...original, isMine: true, senderPubkey: owner })
+  const rumor = buildMessageMutation(owner, id, 'edit', 'Queued correction', ['p', peer], 101000)
+  await expect(sendMessageMutation(owner, peer, rumor, async () => { throw new Error('Queue unavailable') }, () => true)).rejects.toThrow('Queue unavailable')
+  expect((await db.messages.get(id))?.content).toBe(original.content)
+  expect(await records()).toEqual([])
+  await sendMessageMutation(owner, peer, rumor, async () => {
+    expect((await db.messages.get(id))?.content).toBe(original.content)
+  }, () => true)
+  expect((await db.messages.get(id))?.content).toBe('Queued correction')
+  // A transport self-echo can persist the same control before send resolves.
+  await expect(sendMessageMutation(owner, peer, rumor, async () => {}, () => true)).resolves.toBeUndefined()
+})
+it('preserves legacy original IDs through authenticated edits and the history wire', async () => {
+  const messageId = 'legacy-message-42'
+  await seed({ ...original, id: messageId })
+  const rumor = buildMessageMutation(peer, messageId, 'edit', 'Legacy corrected', ['p', owner], 101000)
+  expect(await captureMessageMutation(owner, peer, rumor, peer)).toBe(true)
+  const record = { type: 'messageMutation' as const, mutation: mutationFromRumor(peer, rumor, peer)! }
+  const packet = { v: 1 as const, type: 'historyRecords' as const, session: '0'.repeat(32), records: [record], requested: [] }
+  expect(parseDeviceSyncPacket(encodeDeviceSyncPacket(packet), owner)).toEqual(packet)
+  expect(await db.messages.get(messageId)).toMatchObject({ id: messageId, content: 'Legacy corrected', originalContent: original.content })
 })

@@ -36,6 +36,19 @@ describe('private pair history scope', () => {
     await saveDeviceHistoryPair(owner, device, { peer, linkId: 'd'.repeat(64), linkAt: 100, since: 0, role: 'outbound', complete: false })
     expect(deviceHistoryPair(owner, device, peer)?.complete).toBe(false)
   })
+  it('revokes retained mutation entitlement even after initial history completed', async () => {
+    const peer = 'b'.repeat(64), linkId = 'c'.repeat(64)
+    const pair = { peer, linkId, linkAt: 100, since: 0, role: 'outbound' as const, complete: true, authorized: true }
+    await saveDeviceHistoryPair(owner, device, pair)
+    await closeRevokedDeviceHistoryPairs(owner, device, [device])
+    await closeRevokedDeviceHistoryPairs(owner, device, [device, peer])
+    await loadDeviceHistoryPairs(owner, device)
+    expect(deviceHistoryPair(owner, device, peer)).toMatchObject({ complete: true, revoked: true })
+    await saveDeviceHistoryPair(owner, device, { ...pair, complete: false })
+    expect(deviceHistoryPair(owner, device, peer)?.revoked).toBe(true)
+    await saveDeviceHistoryPair(owner, device, { ...pair, linkId: 'd'.repeat(64), complete: false })
+    expect(deviceHistoryPair(owner, device, peer)?.revoked).toBeUndefined()
+  })
 })
 
 describe('durable history admission', () => {

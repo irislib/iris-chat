@@ -655,7 +655,7 @@ function currentHistoryPair(owner: string, peer: string) {
   const state = get(devices)
   const pair = deviceHistoryPair(owner, state.identityPubkey ?? '', normalizedXOnly(peer))
   const target = pair?.role === 'outbound' ? normalizedXOnly(peer) : state.identityPubkey
-  return pair && pair.linkAt === state.registeredDevices.find(device => device.identityPubkey === target)?.createdAt ? pair : undefined
+  return pair && !pair.revoked && pair.linkAt === state.registeredDevices.find(device => device.identityPubkey === target)?.createdAt ? pair : undefined
 }
 
 function servingHistorySince(owner: string, peer: string): number {
@@ -850,6 +850,7 @@ async function updateRuntime(
       messages: (since, until) => inventoryMessages(ownerPubkey, since, until),
       cachedProfiles: async contacts => (await get(nostrClient).runtime.query([{ kinds: [0], authors: contacts, limit: contacts.length }], { cache: 'cache-only' })).events,
       allowsLegacy,
+      mutationTargetSince: peer => currentHistoryPair(ownerPubkey, peer)?.since === 0 ? 0 : regularHistorySince(peer),
       applySnapshot: async (packet, since, authorized, legacy) => {
         const count = await applyDeviceSyncSnapshot(packet, ownerPubkey, since, authorized, legacy)
         for (const message of packet.messages) if (authorized() && !await isHistoryMessageSettled(message)) throw new Error('History message was not saved')

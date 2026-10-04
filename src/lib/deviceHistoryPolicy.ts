@@ -10,6 +10,7 @@ export interface DeviceHistoryPair {
   role: 'inbound' | 'outbound'
   complete: boolean
   authorized?: boolean
+  revoked?: boolean
 }
 export const deviceHistoryProgress = writable<{ phase: 'discovering' | 'transferring' | 'waiting'; imported: number; total?: number } | null>(null)
 const writes = new Map<string, Promise<void>>()
@@ -50,10 +51,10 @@ export async function saveDeviceHistoryPair(owner: string, local: string, pair: 
 export async function closeRevokedDeviceHistoryPairs(owner: string, local: string, authorized: string[]): Promise<void> {
   const allowed = new Set(authorized)
   const current = pairs.get(key(owner, local)) ?? []
-  const revoked = current.filter(pair => pair.authorized && !pair.complete && !allowed.has(pair.peer))
+  const revoked = current.filter(pair => pair.authorized && !pair.revoked && !allowed.has(pair.peer))
   if (!revoked.length && !current.some(pair => !pair.authorized && allowed.has(pair.peer))) return
   await updatePairs(owner, local, existing => existing.map(pair =>
-    revoked.some(previous => previous.peer === pair.peer && previous.linkId === pair.linkId) ? { ...pair, complete: true } :
+    revoked.some(previous => previous.peer === pair.peer && previous.linkId === pair.linkId) ? { ...pair, complete: true, revoked: true } :
       allowed.has(pair.peer) ? { ...pair, authorized: true } : pair))
   if (revoked.some(pair => pair.role === 'inbound')) deviceHistoryProgress.set(null)
 }

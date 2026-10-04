@@ -97,7 +97,7 @@ export function parseDeviceSyncRecord(value: unknown, parsers: {
   if (value.type === 'message') return { type: 'message', message: parsers.message(value.message) }
   if (value.type === 'messageMutation') {
     const m = value.mutation
-    if (object(m) && chat(m.chatId) && key(m.id) && key(m.author) && clock(m) && key(m.messageId) &&
+    if (object(m) && chat(m.chatId) && key(m.id) && key(m.author) && clock(m) && id(m.messageId) && m.id !== m.messageId &&
       (m.expiresAt === undefined || time(m.expiresAt)) && typeof m.content === 'string' && (m.operation === 'delete' ? m.content === '' : m.operation === 'edit' &&
         m.content.trim().length > 0 && new TextEncoder().encode(m.content).length <= 32768)) {
       return { type: 'messageMutation', mutation: { chatId: m.chatId, id: m.id, author: m.author, createdAt: m.createdAt,

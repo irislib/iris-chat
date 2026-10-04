@@ -8,6 +8,7 @@ import { messageDeletionSettings } from './messageDeletionSettings'
 
 export const MESSAGE_EDIT_KIND = 1009
 export const MESSAGE_DELETE_KIND = 5
+const validMessageId = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128
 export interface MessageRevision { id: string; content: string; timestamp: number }
 export function messageMutationFields(message: Pick<StoredMessage, 'originalContent' | 'editHistory' | 'editedAt' | 'deletedAt'>) {
   return { originalContent: message.originalContent, editHistory: message.editHistory, editedAt: message.editedAt, deletedAt: message.deletedAt }
@@ -20,7 +21,7 @@ export function mutationFromRumor(chatId: string, rumor: Rumor, author: string):
   if (!Number.isSafeInteger(rumor.created_at) || rumor.created_at < 0) return
   if (rumor.kind !== MESSAGE_EDIT_KIND && rumor.kind !== MESSAGE_DELETE_KIND || !/^[a-f0-9]{64}$/.test(rumor.id) || getEventHash(rumor) !== rumor.id) return
   const targets = rumor.tags.filter(tag => tag[0] === 'e'), kinds = rumor.tags.filter(tag => tag[0] === 'k')
-  if (targets.length !== 1 || !/^[a-f0-9]{64}$/.test(targets[0][1]) || kinds.length !== 1 || kinds[0][1] !== '14') return
+  if (targets.length !== 1 || !validMessageId(targets[0][1]) || targets[0][1] === rumor.id || kinds.length !== 1 || kinds[0][1] !== '14') return
   if (rumor.kind === MESSAGE_EDIT_KIND ? !rumor.content.trim() || new TextEncoder().encode(rumor.content).length > 32768 : rumor.content !== '') return
   const msTags = rumor.tags.filter(tag => tag[0] === 'ms')
   if (msTags.length > 1 || msTags.length === 1 && !/^\d+$/.test(msTags[0][1] ?? '')) return
@@ -147,8 +148,19 @@ export async function captureMessageMutation(owner: string, chatId: string, rumo
   const mutation = mutationFromRumor(chatId, rumor, author)
   return mutation ? applyMessageMutation(owner, mutation) : false
 }
+export async function sendMessageMutation(owner: string, chatId: string, rumor: Rumor, send: () => Promise<unknown>, authorized: () => boolean): Promise<void> {
+  // The encrypted runtime must accept the control before the UI reports success.
+  await send()
+  if (!authorized()) throw new Error('The account changed. Try again.')
+  const mutation = mutationFromRumor(chatId, rumor, owner)
+  if (!mutation) throw new Error('Could not save this message update. Try again.')
+  if (!await applyMessageMutation(owner, mutation, authorized)) {
+    const existing = await messageMutation(owner, chatId, rumor.id)
+    if (!existing || !(Object.keys(mutation) as Array<keyof DeviceSyncMessageMutation>).every(key => existing[key] === mutation[key])) throw new Error('Could not save this message update. Try again.')
+  }
+}
 export function buildMessageMutation(author: string, messageId: string, operation: 'edit' | 'delete', content: string, scope: string[], nowMs = Date.now(), expiresAt?: number): Rumor {
-  if (!/^[a-f0-9]{64}$/.test(messageId)) throw new Error('Wait for this message to finish sending.')
+  if (!validMessageId(messageId)) throw new Error('This message cannot be changed.')
   if (operation === 'edit' && (!content.trim() || new TextEncoder().encode(content).length > 32768)) throw new Error('Enter a message shorter than 32 KB.')
   const rumor: Rumor = { pubkey: author, kind: operation === 'edit' ? MESSAGE_EDIT_KIND : MESSAGE_DELETE_KIND,
     created_at: Math.floor(nowMs / 1000), content: operation === 'delete' ? '' : content,
