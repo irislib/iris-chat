@@ -159,8 +159,8 @@ async function joinViaUrlAndSync(inviter: Page, joiner: Page, inviteUrl: string,
   await joiner.goto(inviteUrl)
   await expect(joiner.getByRole('button', { name: 'Join Chat' })).toBeVisible()
   await joiner.getByRole('button', { name: 'Join Chat' }).click()
-  await registerDevice(inviter)
-  await registerDevice(joiner)
+  // Joining registers the device. Navigating to Settings here can cancel the
+  // pending join on slower browsers before the chat has opened.
   await expect(joiner.getByPlaceholder('Type a message...')).toBeVisible()
   await joiner.getByPlaceholder('Type a message...').fill(message)
   await joiner.getByRole('button', { name: 'Send' }).click()

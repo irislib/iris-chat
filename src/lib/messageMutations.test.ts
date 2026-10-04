@@ -213,3 +213,36 @@ it('preserves legacy original IDs through authenticated edits and the history wi
   expect(parseDeviceSyncPacket(encodeDeviceSyncPacket(packet), owner)).toEqual(packet)
   expect(await db.messages.get(messageId)).toMatchObject({ id: messageId, content: 'Legacy corrected', originalContent: original.content })
 })
+
+it('does not retain sibling edit text for an unknown or pre-link original through direct or group delivery', async () => {
+  const { devices } = await import('./devices')
+  const local = '1'.repeat(64), sibling = '2'.repeat(64)
+  devices.reset(); devices.setIdentityPubkey(local)
+  devices.setRegisteredDevices([{ identityPubkey: local, createdAt: 200 }, { identityPubkey: sibling, createdAt: 100 }], 200)
+  devices.setAppKeysManagerReady(true); devices.setSessionManagerReady(true); devices.setHasLocalAppKeys(true)
+  for (const chatId of [owner, 'group:friends']) {
+    const rumor = buildMessageMutation(owner, id, 'edit', 'Private older text', ['p', owner], 300_000)
+    expect(await captureMessageMutation(owner, chatId, rumor, owner)).toBe(false)
+    await db.messages.put({ ...original, sessionId: chatId, isMine: true, senderPubkey: owner })
+    expect(await captureMessageMutation(owner, chatId, rumor, owner)).toBe(false)
+    expect(await records()).toEqual([])
+    await db.messages.delete(id)
+  }
+  devices.reset()
+})
+
+it('keeps own-device live changes on the guarded reconciliation path even with a completed grant', async () => {
+  const { devices } = await import('./devices')
+  const { saveDeviceHistoryPair, closeRevokedDeviceHistoryPairs } = await import('./deviceHistoryPolicy')
+  const local = '3'.repeat(64), sibling = '4'.repeat(64)
+  devices.reset(); devices.setIdentityPubkey(local)
+  devices.setRegisteredDevices([{ identityPubkey: local, createdAt: 200 }, { identityPubkey: sibling, createdAt: 100 }], 200)
+  devices.setAppKeysManagerReady(true); devices.setSessionManagerReady(true); devices.setHasLocalAppKeys(true)
+  await saveDeviceHistoryPair(owner, local, { peer: sibling, linkId: 'full-history', linkAt: 200, since: 0, role: 'inbound', complete: true, authorized: true })
+  await db.messages.put({ ...original, sessionId: owner, isMine: true, senderPubkey: owner })
+  expect(await captureMessageMutation(owner, owner, buildMessageMutation(owner, id, 'edit', 'Authorized correction', ['p', owner], 300_000), owner)).toBe(false)
+  await closeRevokedDeviceHistoryPairs(owner, local, [local])
+  expect(await captureMessageMutation(owner, owner, buildMessageMutation(owner, id, 'edit', 'Revoked correction', ['p', owner], 301_000), owner)).toBe(false)
+  expect((await db.messages.get(id))?.content).toBe(original.content)
+  devices.reset()
+})

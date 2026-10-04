@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.42 - 2026-10-04
+
+- Respect the chosen message-history boundary for changes copied between your devices, including edits queued before linking.
+- Remove legacy queued copies that could bypass the history choice.
+
 ## 2.6.41 - 2026-10-04
 
 - Edit sent messages and view their edit history, or delete messages for yourself or everyone.

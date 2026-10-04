@@ -210,6 +210,7 @@ export function createReleasePlan(options) {
         'src/lib/chat.self-message.test.ts',
         'src/lib/messageMutations.test.ts',
         'src/lib/messageMutationHistory.test.ts',
+        'src/lib/sessionManagerMutationStorage.test.ts',
         'src/lib/deviceHistoryRecords.test.ts',
       ],
       cwd: appDir,

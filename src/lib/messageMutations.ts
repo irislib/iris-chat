@@ -145,6 +145,10 @@ export async function applyMessageMutation(owner: string, mutation: DeviceSyncMe
   return changed
 }
 export async function captureMessageMutation(owner: string, chatId: string, rumor: Rumor, author: string): Promise<boolean> {
+  // Own-device copies bypass the private history choice and can replay when a
+  // new sibling joins. Local changes apply after send acceptance; siblings
+  // receive them only through the guarded typed history reconciliation.
+  if (author === owner) return false
   const mutation = mutationFromRumor(chatId, rumor, author)
   return mutation ? applyMessageMutation(owner, mutation) : false
 }

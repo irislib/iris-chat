@@ -354,7 +354,7 @@ const getRuntime = (): NdrRuntime => {
   const client = getNostrClient()
   const ownerIdentityKey = getPrivkeyBytes()
   const sign = createSign(client)
-  const storage = new DexieStorageAdapter()
+  const storage = new DexieStorageAdapter(ownerPubkey)
   runtimeStorage = storage
   const publication = createRuntimePublish({
     storage,

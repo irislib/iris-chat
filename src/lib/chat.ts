@@ -1709,7 +1709,10 @@ async function mutateMessage(chatSession: ChatSession, messageId: string, operat
   if (!owner || !message?.isMine || message.call || message.deletedAt !== undefined || operation === 'edit' && !editableMessage(message)) throw new Error('This message cannot be changed.')
   const rumor = buildMessageMutation(owner, messageId, operation, content, ['p', chatSession.recipientPubkey], Math.max(Date.now(), (message.editedAt ?? 0) + 1), message.expiresAt)
   await sendMessageMutation(owner, chatSession.id, rumor,
-    async () => (await waitForSendReadyRuntime()).sendEvent(chatSession.recipientPubkey, rumor), () => getPubkey() === owner)
+    async () => {
+      if (chatSession.recipientPubkey === owner) return
+      await (await waitForSendReadyRuntime()).sendEvent(chatSession.recipientPubkey, rumor, undefined, { includeLocalSiblings: false })
+    }, () => getPubkey() === owner)
 }
 
 // Delete a single message locally

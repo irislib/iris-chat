@@ -39,14 +39,31 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={}", core.join(file).display());
     }
-    let status = fs::read_to_string(core.join("src/direct_files.rs")).unwrap();
-    modules.push_str(
-        &status
-            .split("#[derive(uniffi::Record")
-            .next()
+    // Use the production validators and selected-destination implementation.
+    // Only the foreign-language bindings are omitted from this standalone driver.
+    for name in ["direct_files", "direct_file_destination"] {
+        let path = core.join(format!("src/{name}.rs"));
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut source = fs::read_to_string(path)
             .unwrap()
-            .replace("uniffi::Enum, ", ""),
-    );
+            .replace("uniffi::Enum, ", "")
+            .replace("uniffi::Record, ", "")
+            .replace(", uniffi::Error", "")
+            .replace("#[uniffi::export(with_foreign)]", "")
+            .replace("#[uniffi::export]", "");
+        if name == "direct_file_destination" {
+            let start = source
+                .find("impl From<uniffi::UnexpectedUniFFICallbackError>")
+                .unwrap();
+            let end = source[start..].find("impl From<std::io::Error>").unwrap() + start;
+            source.replace_range(start..end, "");
+        }
+        let copied = out.join(format!("{name}.rs"));
+        fs::write(&copied, source).unwrap();
+        modules.push_str(&format!("#[path = {:?}] mod {name};\n", copied));
+    }
+    modules.push_str("pub use direct_files::{DirectFileSnapshot, DirectFileTransferStatus};\n");
+    modules.push_str("pub use direct_file_destination::{DirectFileDestination, direct_file_directory_destination};\n");
     fs::write(out.join("native.rs"), modules).unwrap();
     println!("cargo:rerun-if-env-changed=IRIS_CHAT_RS_CORE_DIR");
 }
