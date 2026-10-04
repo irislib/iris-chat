@@ -145,7 +145,7 @@
       </div>
 
       <div class="flex justify-center mb-6">
-        <div class="p-6 bg-white rounded-xl">
+        <div class="invite-qr p-6 bg-white rounded-xl min-w-0">
           <QRCode data={inviteUrl} size={320} />
         </div>
       </div>
@@ -156,7 +156,7 @@
 
       <CopyButton text={inviteUrl} maxLength={48} />
       <label class="flex items-center gap-2 mt-4 text-sm text-gray-400">
-        <input type="checkbox" class="h-4 w-4 accent-primary" style="appearance: auto" bind:checked={$closeInviteOnAccept} /> Close on accept
+        <input type="checkbox" class="h-4 w-4 accent-primary" style="appearance: auto" bind:checked={$closeInviteOnAccept} /> Open chat when someone joins
       </label>
     </div>
   </div>
@@ -193,7 +193,7 @@
     </p>
     {#if !qrModalInvite}
       <label class="flex items-center gap-2 mb-4 text-sm text-gray-400">
-        <input type="checkbox" class="h-4 w-4 accent-primary" style="appearance: auto" bind:checked={$closeInviteOnAccept} /> Close on accept
+        <input type="checkbox" class="h-4 w-4 accent-primary" style="appearance: auto" bind:checked={$closeInviteOnAccept} /> Open chat when someone joins
       </label>
     {/if}
 
@@ -296,3 +296,7 @@
     </button>
   {/if}
 </div>
+
+<style>
+  .invite-qr :global(img) { max-width: 100%; height: auto; }
+</style>

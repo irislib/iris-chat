@@ -17,7 +17,7 @@ const NDR_CWD =
   path.resolve(__dirname, '../../iris-chat-rs/core')
 const NDR_MANIFEST = path.join(NDR_CWD, 'Cargo.toml')
 const NDR_BIN = resolveNativeCliBin()
-const COMPACT_LINK_CODE_PATTERN = /^[0-9a-f]{64}\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/
+const DEVICE_LINK_PATTERN = /^nostrconnect:\/\//
 
 function skipIfNdrWorkspaceMissing() {
   if (fs.existsSync(NDR_MANIFEST)) return
@@ -324,11 +324,11 @@ async function getLinkInviteUrl(page: Page): Promise<string> {
     const count = await buttons.count()
     for (let index = 0; index < count; index += 1) {
       const url = await buttons.nth(index).getAttribute('title')
-      if (url?.match(COMPACT_LINK_CODE_PATTERN)) return url
+      if (url?.match(DEVICE_LINK_PATTERN)) return url
     }
     await page.waitForTimeout(100)
   }
-  throw new Error('Could not get compact link invite code')
+  throw new Error('Could not get device link')
 }
 
 async function acceptLinkInvite(page: Page, inviteUrl: string): Promise<void> {
@@ -337,27 +337,13 @@ async function acceptLinkInvite(page: Page, inviteUrl: string): Promise<void> {
   await page.getByRole('button', { name: 'Link another device' }).click()
   await waitForNextCreatedAtSecond()
   await page.getByPlaceholder('Paste link code').fill(inviteUrl)
+  await page.getByRole('button', { name: 'Chats and groups only', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Link another device' })).toBeHidden({
-    timeout: 750,
+    timeout: 10_000,
   })
   await page.getByRole('button', { name: 'Back' }).click()
   await expect(page).toHaveURL(/#settings$/)
   await page.getByRole('button', { name: 'Back' }).click()
-}
-
-function extractInviteField(inviteUrl: string, field: string): string | null {
-  if (field === 'inviter' && inviteUrl.match(COMPACT_LINK_CODE_PATTERN)) {
-    return inviteUrl.split('.')[0] ?? null
-  }
-
-  try {
-    const hash = new URL(inviteUrl).hash.replace(/^#/, '')
-    const decoded = decodeURIComponent(hash)
-    const parsed = JSON.parse(decoded) as Record<string, unknown>
-    return typeof parsed[field] === 'string' ? parsed[field] : null
-  } catch {
-    return null
-  }
 }
 
 async function waitForRelayEvent(
@@ -1030,26 +1016,33 @@ test('iris-chat linked devices <-> ndr interop', async ({
     })
     const createdSession = await createdSessionPromise
 
+    const priorDevices = new Set(testRelay.publishedEvents
+      .filter(event => event.kind === 37368 && event.pubkey === ownerPubkeyHex)
+      .flatMap(event => event.tags.filter(tag => tag[0] === 'device').map(tag => tag[1])))
+    // Owner signatures now require a complete roster lookup from every server.
+    // Keep this server silent for messages, but complete authorization lookups
+    // and acknowledge signer transport so linking doesn't wait for timeouts.
+    silentRelay.responsiveKinds.add(37368)
+    silentRelay.responsiveKinds.add(24133)
     await openLinkThisDevice(linkedPage)
     const linkInviteUrl = await getLinkInviteUrl(linkedPage)
-    const linkedDevicePubkey = extractInviteField(linkInviteUrl, 'inviter')
-    expect(linkedDevicePubkey).toBeTruthy()
     await acceptLinkInvite(ownerPage, linkInviteUrl)
     await expect(linkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({
       timeout: 30000,
     })
-    await waitForRelayEvent(
+    const linkedRoster = await waitForRelayEvent(
       testRelay,
       (event) =>
         event.kind === 37368 &&
         event.pubkey === ownerPubkeyHex &&
         event.tags.some((tag) => tag[0] === 'type' && tag[1] === 'app_keys_roster_snapshot') &&
         event.tags.some(
-          (tag) => tag[0] === 'device' && tag[1] === linkedDevicePubkey
+          (tag) => tag[0] === 'device' && !priorDevices.has(tag[1])
         ),
       30000,
       'owner AppKeys update authorizing linked device'
     )
+    const linkedDevicePubkey = linkedRoster.tags.find(tag => tag[0] === 'device' && !priorDevices.has(tag[1]))![1]
     await waitForRelayEvent(
       testRelay,
       (event) =>

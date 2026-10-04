@@ -297,6 +297,9 @@ export class SilentTestRelay {
   private wss: WebSocketServer
   public port = 0
   public totalConnections = 0
+  // Some scenarios require complete authorization history while deliberately
+  // keeping message subscriptions stalled.
+  public responsiveKinds = new Set<number>()
 
   constructor() {
     this.server = http.createServer()
@@ -305,8 +308,17 @@ export class SilentTestRelay {
     this.wss.on('connection', (ws) => {
       this.totalConnections += 1
 
-      ws.on('message', () => {
-        // Intentionally ignore all client traffic.
+      ws.on('message', data => {
+        if (!this.responsiveKinds.size) return
+        try {
+          const [command, id, ...filters] = JSON.parse(data.toString())
+          if (command === 'REQ' && filters.length && filters.every((filter: { kinds?: number[] }) =>
+            Array.isArray(filter.kinds) && filter.kinds.length && filter.kinds.every((kind: number) => this.responsiveKinds.has(kind)))) {
+            ws.send(JSON.stringify(['EOSE', id]))
+          } else if (command === 'EVENT' && this.responsiveKinds.has(id?.kind)) {
+            ws.send(JSON.stringify(['OK', id.id, true, '']))
+          }
+        } catch { /* All other client traffic remains silent. */ }
       })
 
       ws.on('error', (err) => {

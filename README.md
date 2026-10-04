@@ -102,6 +102,12 @@ pnpm test
 pnpm test:e2e
 ```
 
+Physical Android interop is opt-in: run `pnpm test:android-interop`. It uses
+`iris-chat-rs/scripts/native_lab.py` to check device health and reserve the phone
+for the entire run. Set `IRIS_NATIVE_LAB_SCRIPT` if that repository is elsewhere;
+`IRIS_CHAT_RS_ANDROID_SERIAL` selects a particular device. Ordinary browser tests
+do not probe or launch attached phones.
+
 Chat uses the shared FIPS runtime without application-local patches. Its session
 setup, identity, transport handover, and WebRTC negotiation regressions are
 covered in `fips-ts` and checked against the installed packages here. These

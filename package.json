@@ -22,6 +22,7 @@
     "verify:dependency-lock": "node scripts/verify-dependency-lock.mjs",
     "test:watch": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs",
     "test:e2e": "env -u NO_COLOR playwright test",
+    "test:android-interop": "node scripts/test-android-interop.mjs",
     "smoke:portable": "node ./scripts/smoke-iris-chat-portable.mjs",
     "publish:iris": "node ./scripts/publish-iris-build.mjs",
     "release:iris": "node ./scripts/release-site.mjs",

@@ -40,7 +40,7 @@ test('a hash-only join opens immediately while another chat is selected', async 
   await expect(composer(page)).toBeVisible({ timeout: 1000 })
 })
 
-test('unchecking Close on accept keeps the invite QR open when someone joins and messages', async ({ browser, testRelayUrl }) => {
+test('unchecking Open chat when someone joins keeps the invite QR open when someone joins and messages', async ({ browser, testRelayUrl }) => {
   const contexts = await Promise.all([browser.newContext(), browser.newContext()])
   try {
     await Promise.all(contexts.map(context => useTestRelay(context, testRelayUrl)))
@@ -49,7 +49,7 @@ test('unchecking Close on accept keeps the invite QR open when someone joins and
     await a.getByRole('button', { name: 'Go', exact: true }).click()
     await a.getByRole('button', { name: 'New Chat', exact: true }).click()
     await a.getByTitle('Show QR Code').first().click()
-    await a.getByLabel('Close on accept').uncheck()
+    await a.getByLabel('Open chat when someone joins').uncheck()
     await a.screenshot({ path: 'work/web-join/qr-close-on-accept.png' })
     const invite = (await a.locator('button[title*="#/invite/"]').first().getAttribute('title'))!
       .replace('https://chat.iris.to', new URL(a.url()).origin)
@@ -59,7 +59,7 @@ test('unchecking Close on accept keeps the invite QR open when someone joins and
     await send(b, 'Keep this QR open')
     await expect(a.getByTestId('sidebar-chat-list').getByText('Keep this QR open', { exact: true })).toBeVisible()
     await expect(a.getByRole('dialog')).toBeVisible()
-    await expect(a.getByLabel('Close on accept')).not.toBeChecked()
+    await expect(a.getByLabel('Open chat when someone joins')).not.toBeChecked()
     await expect(composer(a)).toHaveCount(0)
   } finally { await Promise.all(contexts.map(context => context.close())) }
 })

@@ -27,7 +27,7 @@ test('an invite can send files as its first content and streams to the chosen sa
     await a.goto('/')
     await a.getByRole('button', { name: 'Go', exact: true }).click()
     await a.getByRole('button', { name: 'New Chat', exact: true }).click()
-    await expect(a.getByLabel('Close on accept')).toBeChecked()
+    await expect(a.getByLabel('Open chat when someone joins')).toBeChecked()
     await a.getByTitle('Show QR Code').first().click()
     const copy = a.locator('button[title*="#/invite/"]').first()
     const invite = (await copy.getAttribute('title'))!.replace('https://chat.iris.to', new URL(a.url()).origin)

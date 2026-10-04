@@ -30,6 +30,11 @@ function adbCommand(args: string[]) {
 }
 
 function androidHarnessSkipReason(): string | null {
+  // A browser test run must never discover and take over an attached phone.
+  // The dedicated command reserves its allocation through native_lab first.
+  if (process.env.IRIS_CHAT_RS_ANDROID_INTEROP !== 'reserved' || !SERIAL) {
+    return 'Run pnpm test:android-interop to reserve a healthy Android device explicitly'
+  }
   if (!existsSync(HARNESS)) {
     return `Android interop harness script not found at ${HARNESS}`
   }

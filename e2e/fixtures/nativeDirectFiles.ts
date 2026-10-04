@@ -19,7 +19,7 @@ export function buildNativeDirectFiles(): Promise<string> {
     const args = ['build', '--quiet', '--locked', '--manifest-path', 'test-fixtures/direct-files-rust/Cargo.toml', '--target-dir', target]
     await new Promise<void>((resolve, reject) => {
       const process = spawn('cargo', args, { env: { ...globalThis.process.env,
-        IRIS_CHAT_RS_CORE_DIR: path.resolve(core), CARGO_INCREMENTAL: '0', CARGO_BUILD_JOBS: '2' } })
+        IRIS_CHAT_RS_CORE_DIR: path.resolve(core), CARGO_INCREMENTAL: '0', CARGO_BUILD_JOBS: globalThis.process.env.CARGO_BUILD_JOBS ?? '2' } })
       let output = ''
       process.stdout.on('data', data => { output = (output + data).slice(-16000) })
       process.stderr.on('data', data => { output = (output + data).slice(-16000) })
