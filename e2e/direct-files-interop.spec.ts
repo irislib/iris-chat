@@ -8,6 +8,7 @@ import { GroupFarmDevice } from './group-runtime-farm'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { buildNativeDirectFiles, NativeDirectFiles } from './fixtures/nativeDirectFiles'
 import { verifyDirectFileHistory } from './fixtures/directFileHistory'
+import { useDirectFileDestination } from './fixtures/directFileDestination'
 
 const payloads = [
   { filename: 'empty.txt', bytes: Buffer.alloc(0) },
@@ -49,6 +50,7 @@ test.describe('browser ↔ native direct files', () => {
         control.runtime.onSessionEvent(rumor => { if (rumor.content.startsWith('iris-direct-file-v1:')) offers.push(rumor.content) })
         context = await browser.newContext({ acceptDownloads: true, serviceWorkers: 'block' })
         await useTestRelay(context, testRelayUrl)
+        await useDirectFileDestination(context)
         await context.addInitScript(({ key, seedUrl }) => {
           localStorage.setItem('iris-chat-identity', key)
           localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seedUrl], stunServers: [] }))

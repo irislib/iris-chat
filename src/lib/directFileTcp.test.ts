@@ -98,7 +98,7 @@ describe('DirectFileTcp native wire protocol', () => {
     const received = last(b.events, 'completed')!.files!
     expect(received.map(file => file.filename)).toEqual(files.map(file => file.filename))
     for (let index = 0; index < files.length; index++) {
-      expect(new Uint8Array(await received[index].blob.arrayBuffer()))
+      expect(new Uint8Array(await received[index].blob!.arrayBuffer()))
         .toEqual(new Uint8Array(await files[index].blob.arrayBuffer()))
     }
     expect(read.mock.calls.every(([start, end]: [number?, number?, string?]) => Number(end) - Number(start) <= DIRECT_FILE_CHUNK_BYTES)).toBe(true)
@@ -166,6 +166,37 @@ describe('DirectFileTcp native wire protocol', () => {
     expect(sinks[0].finish).toHaveBeenCalledOnce()
     for (const sink of sinks) expect(sink.abort).toHaveBeenCalledOnce()
     expect(last(b.events, 'completed')).toBeUndefined()
+  })
+
+  it.each([false, true])('commits chosen destinations only after the whole batch verifies (corrupt: %s)', async (corrupt: boolean) => {
+    const sinks: DirectFileSink[] = []
+    const a = device(0), b = device(1, { createReceiveFile: async () => {
+      const parts: BlobPart[] = []
+      const sink: DirectFileSink = {
+        write: vi.fn(async (chunk: Uint8Array) => { parts.push(chunk.slice().buffer) }),
+        finish: vi.fn(async () => undefined),
+        commit: vi.fn(async () => new Blob(parts)),
+        abort: vi.fn(async () => { parts.length = 0 }),
+      }
+      sinks.push(sink)
+      return sink
+    } })
+    const files = [source('one.txt', 'first'), source('two.txt', 'second')]
+    const expected = files.map(file => ({ ...file }))
+    if (corrupt) expected[1].sha256 = '0'.repeat(64)
+    a.tcp.registerOffer('destination', token, [peers[1]], files)
+    await b.tcp.receive('destination', token, peers[0], expected)
+    await until(() => !!last(b.events, corrupt ? 'failed' : 'completed'))
+    expect(sinks).toHaveLength(2)
+    for (const sink of sinks) {
+      if (corrupt) {
+        expect(sink.commit).not.toHaveBeenCalled()
+        expect(sink.abort).toHaveBeenCalledOnce()
+      } else {
+        expect(sink.commit).toHaveBeenCalledOnce()
+        expect(sink.abort).not.toHaveBeenCalled()
+      }
+    }
   })
 
   it('cancels from the sender and keeps terminal events stable on repeated cancellation', async () => {

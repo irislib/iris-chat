@@ -94,7 +94,7 @@ describe('createRuntimeSubscribe', () => {
     expect(calls[1]?.opts).toMatchObject({
       closeOnEose: true,
       cacheUsage: CacheMode.ONLY_RELAY,
-      relayUrls: ['wss://relay.one', 'wss://relay.two'],
+      sources: [],
     })
 
     calls[1]?.subscription.emit({ id: 'backfill-event' })
@@ -151,7 +151,7 @@ describe('createRuntimeSubscribe', () => {
     expect(calls[1]?.opts).toMatchObject({
       closeOnEose: true,
       cacheUsage: CacheMode.ONLY_RELAY,
-      relayUrls: ['wss://relay.one', 'wss://relay.two'],
+      sources: [],
     })
 
     calls[1]?.subscription.emit({ id: 'appkeys-backfill' })
@@ -188,7 +188,7 @@ describe('createRuntimeSubscribe', () => {
     expect(calls[1]?.opts).toMatchObject({
       closeOnEose: true,
       cacheUsage: CacheMode.ONLY_RELAY,
-      relayUrls: ['wss://relay.one', 'wss://relay.two'],
+      sources: [],
     })
 
     calls[1]?.subscription.emit({ id: 'invite-response-backfill' })

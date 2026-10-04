@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   owner: 'a'.repeat(64), device: 'b'.repeat(64), linked: false,
   waitFor: vi.fn(), register: vi.fn(), refresh: vi.fn(), invite: vi.fn(),
+  prepare: vi.fn(),
   state: {} as Record<string, unknown>,
 }))
 vi.mock('nostr-double-ratchet', async (original) => {
@@ -14,7 +15,7 @@ vi.mock('nostr-double-ratchet', async (original) => {
       getState() { return mocks.state }
       retireLegacyPrivateContactSync = vi.fn().mockResolvedValue(undefined)
       initForOwner = vi.fn().mockResolvedValue(undefined)
-      prepareRegistration = vi.fn(async () => ({ newDeviceIdentity: mocks.device }))
+      prepareRegistration = mocks.prepare
       publishPreparedRegistration = mocks.register
       refreshOwnAppKeysFromRelay = mocks.refresh
       republishInvite = mocks.invite
@@ -40,19 +41,32 @@ vi.mock('./nostrPubsubRuntime', () => ({ publishNostrPubsub: vi.fn() }))
 vi.mock('./storage', () => ({ deleteSessionManagerValue: vi.fn(), putSessionManagerValue: vi.fn(), getSessionManagerValue: vi.fn(async () => undefined) }))
 
 import { initMultiDevice, resetManagers, waitForSendReadyRuntime, ensureDeviceRegistered } from './privateChats'
+import { identity } from './identity'
 
 const roster = (devices: string[]) => ({ getAllDevices: () => devices.map(identityPubkey => ({ identityPubkey, createdAt: 1 })) })
 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.linked = false
+  identity.set({ pubkey: mocks.owner, displayName: null, isNip07: false })
   mocks.state = { ownerPubkey: mocks.owner, currentDevicePubkey: mocks.device,
     registeredDevices: [{ identityPubkey: mocks.device, createdAt: 1 }], isCurrentDeviceRegistered: true }
   mocks.register.mockResolvedValue(undefined)
+  mocks.prepare.mockResolvedValue({ newDeviceIdentity: mocks.device })
   mocks.refresh.mockResolvedValue(undefined)
   mocks.invite.mockResolvedValue(undefined)
 })
 afterEach(() => { resetManagers(); vi.restoreAllMocks() })
+
+it.each([true, false])('only newly generated identities skip the absent roster lookup (%s)', async (freshlyGenerated: boolean) => {
+  mocks.state.registeredDevices = []
+  mocks.state.hasLocalAppKeys = false
+  identity.update(account => ({ ...account!, freshlyGenerated }))
+  mocks.waitFor.mockReturnValue(new Promise(() => {}))
+  await ensureDeviceRegistered()
+  expect(mocks.prepare).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: freshlyGenerated ? 0 : 8000 }))
+  expect(mocks.register).toHaveBeenCalledOnce()
+})
 
 describe('restored device registration on startup', () => {
   it('republishes a cached registration missing from current server records without sending a message', async () => {

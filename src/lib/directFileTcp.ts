@@ -17,11 +17,13 @@ const decoder = new TextDecoder('utf-8', { fatal: true })
 
 export interface DirectFileSpec { filename: string; sizeBytes: number; sha256: string }
 export interface DirectFileSource extends DirectFileSpec { blob: Blob }
-export interface DirectFileResult { filename: string; blob: Blob }
-/** abort must remove this transfer's local data, including after finish(). */
+export interface DirectFileResult { filename: string; blob?: Blob }
+/** User-selected destinations may defer committing their temporary file until
+ * every file has passed verification. abort must preserve pre-existing files. */
 export interface DirectFileSink {
   write(chunk: Uint8Array): Promise<void>
-  finish(): Promise<Blob>
+  finish(): Promise<Blob | undefined>
+  commit?(): Promise<Blob>
   abort(): Promise<void>
 }
 export interface DirectFileEvent {
@@ -346,6 +348,12 @@ export class DirectFileTcp {
       await this.advanceReceived(c, role)
       if (c.cancelled || c.revoked) return true
       if (role.index !== role.files.length) throw new Error('File transfer ended before all files arrived')
+      for (const [index, sink] of role.sinks.entries()) {
+        if (c.cancelled || c.revoked || this.stopped) return true
+        if (sink.commit) role.results[index].blob = await sink.commit()
+        if (role.results[index].blob?.size !== role.files[index].sizeBytes) throw new Error('Received file was not saved completely')
+      }
+      if (c.cancelled || c.revoked || this.stopped) return true
       role.committed = true
       await this.cleanup(c)
       c.role = { kind: 'finish' }
@@ -384,7 +392,7 @@ export class DirectFileTcp {
       if (role.offset !== file.sizeBytes) return
       if (toHex(role.hash.digest()) !== file.sha256.toLowerCase()) throw new Error('Received file did not match the offer')
       const blob = await role.sinks[role.index].finish()
-      if (blob.size !== file.sizeBytes) throw new Error('Received file was not saved completely')
+      if (blob ? blob.size !== file.sizeBytes : !role.sinks[role.index].commit) throw new Error('Received file was not saved completely')
       role.results.push({ filename: file.filename, blob })
       role.index += 1
       role.offset = 0

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseInviteFromUrl, parseInviteFromHash, acceptInvite, type ChatSession, isLinkInvite } from '../lib/chat'
+  import { parseInviteFromUrl, acceptInvite, type ChatSession, isLinkInvite } from '../lib/chat'
   import { getErrorMessage } from '../lib/utils'
   import QRScanner from './QRScanner.svelte'
 
@@ -58,28 +58,13 @@
     }
   })
 
-  // Check URL hash on mount
-  $effect(() => {
-    const hashInvite = parseInviteFromHash()
-    if (hashInvite) {
-      if (isLinkInvite(hashInvite)) {
-        return
-      }
-      acceptInvite(hashInvite).then(session => {
-        history.replaceState(null, '', window.location.pathname)
-        onjoin(new CustomEvent('join', { detail: { chat: session } }))
-      }).catch(e => {
-        error = getErrorMessage(e, 'Failed to join chat')
-        console.error('Failed to join from URL:', e)
-      })
-    }
-  })
 </script>
 
 <div class="w-full max-w-md p-6 bg-surface rounded-2xl shadow-xl overflow-hidden">
   <h2 class="text-2xl font-bold text-white mb-4 text-center">Join Chat</h2>
 
   <div class="space-y-4">
+    {#if joining}<p role="status" class="text-gray-400">Joining chat…</p>{/if}
     {#if showScanner}
       <div class="aspect-square rounded-lg overflow-hidden">
         <QRScanner onresult={handleQRResult} />

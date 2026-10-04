@@ -21,7 +21,9 @@
   import { acceptInvite, parseInviteFromHash, isLinkInvite, currentChat, leaveChat, loadChatsFromStorage, clearChatData, chats, loadAndMonitorInvites, setInviteAcceptedCallback, initNdrRuntimeEvents, ingestPushNostrEvent, drainPendingPushNostrEvents } from './lib/chat'
   import { startMessageExpirationCleanup, stopMessageExpirationCleanup } from './lib/messageExpirationCleanup'
   import { syncDisappearingMessagesToNdrRuntime } from './lib/disappearingMessages'
-  import type { ChatSession } from './lib/chat'
+  import type { ChatSession, ChatInvite } from './lib/chat'
+  import { closeInviteOnAccept } from './lib/chat'
+  import { getErrorMessage } from './lib/utils'
   import { loadGroupsFromStorage, clearGroupData, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
   import { getDelegateManager, initMultiDevice, resetManagers } from './lib/privateChats'
@@ -64,6 +66,11 @@
     nativeEntryHref = null
   }
   let loggedIn = $state(false)
+  let loginView = $state<{ focusName: () => Promise<void> }>()
+  let pendingInvite = $state<ChatInvite | null>(parseInviteFromHash())
+  let joiningInvite = $state(false)
+  let joinError = $state('')
+  let joinAttempt = 0
   let initializing = $state(true)
   let selectedChat = $state<ChatSession | null>(null)
   let selectedGroupId = $state<string | null>(null)
@@ -74,6 +81,40 @@
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
   let duplicateTab = $state(false)
   let pendingNotification = $state<NotificationTarget | null>(notificationFromHash(window.location.hash))
+
+  // Consume links at the router, including hash-only navigation from an open
+  // chat. Keep a failed invite in memory for Retry, never in browser history.
+  $effect(() => {
+    if (!loggedIn || initializing || !pendingInvite || isLinkInvite(pendingInvite)) return
+    const invite = pendingInvite
+    pendingInvite = null
+    void joinFromAddress(invite)
+  })
+
+  async function joinFromAddress(invite: ChatInvite) {
+    const attempt = ++joinAttempt
+    const owner = get(identity)?.pubkey
+    joiningInvite = true
+    joinError = ''
+    setHashSilently('')
+    selectedChat = null
+    selectedGroupId = null
+    currentChat.set(null)
+    currentView = 'chat'
+    mobileView = 'main'
+    try {
+      const chat = await acceptInvite(invite)
+      if (attempt === joinAttempt && get(identity)?.pubkey === owner) handleSelectChat(chat)
+    } catch (error) {
+      if (attempt === joinAttempt && get(identity)?.pubkey === owner) {
+        failedInvite = invite
+        joinError = getErrorMessage(error, 'Could not join chat')
+      }
+    } finally {
+      if (attempt === joinAttempt) joiningInvite = false
+    }
+  }
+  let failedInvite: ChatInvite | null = null
 
   // A notification may arrive before identity, chats, or groups have loaded.
   $effect(() => {
@@ -143,7 +184,15 @@
   }
 
   // Navigate to a view with history
+  function cancelPendingJoin() {
+    joinAttempt++
+    joiningInvite = false
+    joinError = ''
+    failedInvite = null
+  }
+
   function navigateTo(view: View, push = true, pubkey?: string, groupId?: string) {
+    cancelPendingJoin()
     pendingNotification = null
     clearNativeEntry()
     currentView = view
@@ -440,10 +489,12 @@
   function handleInviteAccepted(chat: ChatSession) {
     // Only open automatically while the user is on the explicit New Chat screen.
     if (currentView !== 'chat' || mobileView !== 'main' || selectedChat || selectedGroupId) return
+    if (!get(closeInviteOnAccept)) return
     handleSelectChat(chat)
   }
 
   function handleSelectChat(chat: ChatSession) {
+    cancelPendingJoin()
     clearNativeEntry()
     selectedChat = chat
     currentChat.set(chat)
@@ -459,22 +510,12 @@
   }
 
   function handleChatJoined(event: CustomEvent<{ chat: ChatSession }>) {
-    // Keep the shared destination in this tab after web onboarding, including
-    // if the browser reloads the tab while the user is installing the app.
-    if (nativeEntryHref) setHashSilently(new URL(nativeEntryHref).hash)
-    selectedChat = event.detail.chat
-    currentChat.set(event.detail.chat)
-    if (currentView !== 'chat') {
-      navigateTo('chat')
-    }
-    mobileView = 'main'
-    // Tell service worker this chat is now open (suppresses notifications)
-    postToServiceWorker({ type: 'CHAT_OPENED', chatId: event.detail.chat.id })
-    // Clear any existing notification for this chat
-    postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: event.detail.chat.id })
+    setHashSilently('')
+    handleSelectChat(event.detail.chat)
   }
 
   function handleNewChat() {
+    cancelPendingJoin()
     clearNativeEntry()
     selectedChat = null
     currentChat.set(null)
@@ -486,6 +527,7 @@
   }
 
   function handleBack() {
+    cancelPendingJoin()
     clearNativeEntry()
     selectedChat = null
     currentChat.set(null)
@@ -543,6 +585,7 @@
   $effect(() => { restoreContactNamesForNotifications($identity?.pubkey ?? null) })
 
   async function handleLogout() {
+    cancelPendingJoin()
     const owner = get(identity)?.pubkey
     pendingNotification = null
     stopMessageExpirationCleanup()
@@ -599,6 +642,7 @@
 <svelte:window onhashchange={() => {
   nativeEntryHref = currentNativeEntryHref()
   nativeEntryIsDeviceLink = isLinkInvite(parseInviteFromHash())
+  pendingInvite = parseInviteFromHash()
   const settingsRoute = parseSettingsRoute(window.location.hash)
   if (settingsRoute) {
     currentView = 'settings'
@@ -638,7 +682,7 @@
         {#if deviceRemovalNotice}
           <p role="status" class="mb-6 max-w-sm text-center text-gray-400">This device was removed. Its local data has been cleared.</p>
         {/if}
-        <LoginView onlogin={handleLogin} />
+        <LoginView bind:this={loginView} onlogin={handleLogin} />
       </div>
     </div>
   {:else}
@@ -709,14 +753,25 @@
               onViewDetails={handleGroupDetails}
             />
           {:else}
-            <MainContent
-              chat={selectedChat}
-              onChatJoined={handleChatJoined}
-              onBack={handleBack}
-              showBackButton={mobileView === 'main'}
-              onViewProfile={navigateToProfile}
-              onCreateGroup={handleNewGroup}
-            />
+            {#if joiningInvite || joinError}
+              <div class="flex-1 flex flex-col items-center justify-center gap-4 p-6">
+                {#if joiningInvite}
+                  <p role="status" class="text-gray-400">Joining chat…</p>
+                {:else}
+                  <p role="alert" class="text-red-400">{joinError}</p>
+                  <button class="btn-primary" onclick={() => { if (failedInvite) void joinFromAddress(failedInvite) }}>Retry</button>
+                {/if}
+              </div>
+            {:else}
+              <MainContent
+                chat={selectedChat}
+                onChatJoined={handleChatJoined}
+                onBack={handleBack}
+                showBackButton={mobileView === 'main'}
+                onViewProfile={navigateToProfile}
+                onCreateGroup={handleNewGroup}
+              />
+            {/if}
           {/if}
         </div>
       </div>
@@ -726,7 +781,8 @@
 </main>
 
 {#if !initializing && !duplicateTab}
-  <InstallPrompt entryHref={nativeEntryHref} welcome={!loggedIn} excluded={nativeEntryIsDeviceLink} />
+  <InstallPrompt entryHref={nativeEntryHref} welcome={!loggedIn} excluded={nativeEntryIsDeviceLink}
+    ondismiss={() => { void loginView?.focusName() }} />
 {/if}
 
 <CallView />

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { hasNip07, loginWithNip07, loginWithPrivkey, generateNewIdentity } from '../lib/identity'
   import { isLinkInvite, parseInviteFromHash } from '../lib/chat'
   import { getErrorMessage } from '../lib/utils'
@@ -22,12 +22,17 @@
   const hasInviteInUrl = !!inviteFromUrl && !isLinkInviteInUrl
   let mode = $state<'login' | 'signer'>('login')
 
-  onMount(() => {
+  export async function focusName() {
+    await tick()
+    // Native dialog closing restores focus after the click's default action.
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0
     if (!isTouchDevice && inputEl && mode === 'login') {
       inputEl.focus()
     }
-  })
+  }
+
+  onMount(() => { void focusName() })
 
   async function handleNip07Login() {
     loading = true
@@ -47,7 +52,7 @@
     error = ''
     try {
       const { privkey } = generateNewIdentity()
-      await loginWithPrivkey(privkey, displayName || null)
+      await loginWithPrivkey(privkey, displayName || null, true)
       onlogin()
     } catch (e) {
       error = getErrorMessage(e, 'Failed to generate identity')

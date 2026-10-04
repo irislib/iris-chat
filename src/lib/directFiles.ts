@@ -171,7 +171,7 @@ export async function attachDirectFiles(endpoint: FipsDatagramEndpoint, owner: s
       publish({ ...record, status,
         transferredBytes: event.transferredBytes ?? record.transferredBytes,
         ...(event.type === 'completed' ? { transferredBytes: record.totalBytes } : {}),
-        ...(event.files?.length ? { blobs: event.files.map(file => file.blob) } : {}),
+        ...(event.files?.length ? { blobs: event.files.map(file => file.blob!) } : {}),
         ...(event.error ? { error: transferError(event.error) } : {}),
         ...(!isActive(status) && status !== 'completed' ? { blobs: undefined } : {}),
       }, event.type !== 'progress')
@@ -273,7 +273,20 @@ async function incoming(id: string): Promise<{ runtime: Runtime; record: Transfe
   return { runtime, record }
 }
 
+const choosingDestinations = new WeakSet<TransferRecord>()
+
 export async function acceptDirectFiles(id: string): Promise<void> {
+  const offered = records.get(id)
+  const storage = active?.storage
+  if (!offered || offered.isSender || offered.status !== 'offered' || !storage) throw new Error('These files are unavailable.')
+  if (choosingDestinations.has(offered)) throw new Error('A save location is already being chosen.')
+  choosingDestinations.add(offered)
+  try { await storage.chooseDestination(id, offered.offer.files) }
+  catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    throw error
+  } finally { choosingDestinations.delete(offered) }
+  if (active?.storage !== storage || records.get(id) !== offered) throw new Error('This offer is no longer available.')
   const { runtime, record } = await incoming(id)
   if (active !== runtime || records.get(id) !== record || record.status !== 'offered') throw new Error('This offer has already been handled.')
   publish({ ...record, status: 'connecting', error: undefined })

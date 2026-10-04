@@ -29,6 +29,7 @@ export interface Identity {
   displayName: string | null
   isNip07: boolean
   isLinkedDevice?: boolean
+  freshlyGenerated?: boolean
 }
 
 const IDENTITY_STORAGE_KEY = 'iris-chat-identity'
@@ -138,7 +139,8 @@ export function clearStoredIdentity(): void {
   }
 }
 
-export async function loginWithPrivkey(privkeyHex: string, displayName: string | null = null): Promise<void> {
+export async function loginWithPrivkey(privkeyHex: string, displayName: string | null = null,
+  freshlyGenerated = false): Promise<void> {
   const signer = new SecretKeySigner(privkeyHex)
   const user = await signer.user()
 
@@ -152,6 +154,7 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     displayName,
     isNip07: false,
     isLinkedDevice: false,
+    freshlyGenerated,
   })
 
   // Save local profile and publish to Nostr
@@ -161,7 +164,7 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     // Publish kind 0 profile event to relays
     const profileUser = client.getUser({ pubkey: user.pubkey })
     profileUser.profile = { name: displayName, displayName: displayName }
-    await profileUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
+    void profileUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
   }
 
   saveIdentity(privkeyHex)

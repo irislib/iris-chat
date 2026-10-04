@@ -9,6 +9,7 @@ import type { DirectFileTcpOptions } from './directFileTcp'
 const state = vi.hoisted(() => ({
   owner: 'ab'.repeat(32), blocked: false, saved: new Map<string, unknown>(),
   readFile: vi.fn(),
+  chooseDestination: vi.fn(async () => {}),
   transports: [] as Array<{ options: DirectFileTcpOptions; registerOffer: ReturnType<typeof vi.fn>;
     receive: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> }>,
 }))
@@ -42,7 +43,10 @@ vi.mock('./directFileTcp', () => ({ DirectFileTcp: class {
   dispose = vi.fn(async () => undefined)
   constructor(public options: DirectFileTcpOptions) { state.transports.push(this) }
 } }))
-vi.mock('./directFileStorage', () => ({ DirectFileStorage: class { getFile = state.readFile } }))
+vi.mock('./directFileStorage', () => ({ DirectFileStorage: class {
+  getFile = state.readFile
+  chooseDestination = state.chooseDestination
+} }))
 
 import { chats, sendMessage, type ChatSession } from './chat'
 import { devices } from './devices'
@@ -75,6 +79,7 @@ describe('direct-file app consent and device roles', () => {
     state.owner = 'ab'.repeat(32)
     state.blocked = false; state.saved.clear(); state.transports.length = 0
     state.readFile.mockReset().mockRejectedValue(new Error('File not found'))
+    state.chooseDestination.mockReset().mockResolvedValue(undefined)
     vi.mocked(sendMessage).mockClear(); connect.mockClear()
     ;(devices as unknown as Writable<unknown>).set({ identityPubkey: local,
       registeredDevices: [local, sibling].map(identityPubkey => ({ identityPubkey })) })
@@ -82,6 +87,29 @@ describe('direct-file app consent and device roles', () => {
     await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
   })
   afterEach(detachDirectFiles)
+
+  it('asks for the destination before starting reception and leaves a cancelled picker retryable', async () => {
+    const id = await receiveOffer()
+    state.chooseDestination.mockRejectedValueOnce(new DOMException('Cancelled', 'AbortError'))
+    await acceptDirectFiles(id)
+    expect(state.chooseDestination).toHaveBeenCalledWith(id, incomingOffer().files)
+    expect(connect).not.toHaveBeenCalled()
+    expect(state.transports[0]!.receive).not.toHaveBeenCalled()
+    expect(get(directFileTransfers).get(id)?.status).toBe('offered')
+    await acceptDirectFiles(id)
+    expect(state.transports[0]!.receive).toHaveBeenCalledOnce()
+  })
+
+  it('hashes a selected source in bounded chunks without reading the whole file into memory', async () => {
+    const file = new File([new Uint8Array(2 * 1024 * 1024)], 'large.bin')
+    const whole = vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('Whole-file read'))
+    const slice = vi.spyOn(file, 'slice')
+    await sendDirectFiles(chat(), [file] as unknown as globalThis.File[])
+    expect(whole).not.toHaveBeenCalled()
+    expect(slice).toHaveBeenCalledTimes(32)
+    expect(slice.mock.calls.every(([start = 0, end = 0]) => end - start <= 64 * 1024)).toBe(true)
+    expect(state.transports[0]!.registerOffer.mock.calls[0]![3][0].blob).toBe(file)
+  })
 
   it('offers immutable files to another own device without uploading or reading on the receiver', async () => {
     const files = [new File(['hello'], 'notes.txt'), new File([], 'empty.txt')]
@@ -143,6 +171,7 @@ describe('direct-file app consent and device roles', () => {
     const id = await receiveOffer()
     const results = await Promise.allSettled([acceptDirectFiles(id), acceptDirectFiles(id)])
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(state.chooseDestination).toHaveBeenCalledOnce()
     expect(state.transports[0]!.receive).toHaveBeenCalledTimes(1)
     expect(get(directFileTransfers).get(id)?.status).toBe('connecting')
   })

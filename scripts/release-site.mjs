@@ -219,8 +219,8 @@ export function createReleasePlan(options) {
     },
     {
       id: 'test-e2e-nip07',
-      label: `E2E-test ${profile.appName} invites and private contacts`,
-      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/nip07.spec.ts', 'e2e/contact-memory.spec.ts', 'e2e/private-contact-sync.spec.ts'],
+      label: `E2E-test ${profile.appName} joining, live messaging, direct files and private contacts`,
+      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/nip07.spec.ts', 'e2e/contact-memory.spec.ts', 'e2e/private-contact-sync.spec.ts', 'e2e/web-join.spec.ts', 'e2e/direct-file-first.spec.ts', '--workers=2', '--retries=0'],
       cwd: appDir,
     },
     {

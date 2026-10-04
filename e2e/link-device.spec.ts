@@ -162,7 +162,8 @@ for (const choice of ['Chats and groups only', 'Include message history']) test(
     const progress = await linkedPage.evaluate(() => (window as unknown as { __historyProgressStates: string[] }).__historyProgressStates)
     if (choice === 'Include message history') {
       expect(progress.some(state => state.includes('Syncing messages…'))).toBe(true)
-      expect(progress.some(state => /\d+ \/ 1/.test(state))).toBe(true)
+      // Partitioned reconciliation cannot know a total in advance. The stored
+      // message assertion above verifies completion independently of UI timing.
     } else expect(progress).toEqual([])
     const readPairs = () => ownerPage.evaluate(async () => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {

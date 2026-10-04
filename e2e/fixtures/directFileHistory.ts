@@ -76,11 +76,10 @@ export async function verifyDirectFileHistory(options: HistoryOptions) {
   await capture('failed-history-reopened')
 
   // Losing a saved local file changes availability, never the historical outcome.
-  await page.evaluate(async ({ owner, device, id }) => {
-    let directory = await navigator.storage.getDirectory()
-    for (const name of ['iris-chat-direct-files', owner, device, id]) directory = await directory.getDirectoryHandle(name)
-    await directory.removeEntry('1')
-  }, { owner: webOwner, device: webDevice, id: receivedId })
+  await page.evaluate(async filename => {
+    const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('chosen-downloads')
+    await directory.removeEntry(filename)
+  }, payloads[1].filename)
   await reopen()
   await completedHistory(1)
   await expect(card(failedId).getByRole('status')).toHaveText('Transfer failed')

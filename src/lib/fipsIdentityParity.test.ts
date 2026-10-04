@@ -91,6 +91,7 @@ describe('authenticated FSP rekey identity parity', () => {
       logger: { debug() {}, info() {}, warn() {}, error() {} },
       routing: {
         coords: [local.nodeAddr], coordinatesFor: () => [remote.nodeAddr], learnReverseRoute() {},
+        hasUsableRoute: () => true,
         sendFspToward: async (_: Uint8Array, frame: Uint8Array) => {
           if (peekFspPhase(frame) === 1) {
             original = new FspSession({ identity: remote, role: 'responder', localEpoch: remoteEpoch })

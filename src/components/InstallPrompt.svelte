@@ -2,10 +2,11 @@
   import { onMount } from 'svelte'
   import { nativeAppPlatform, loadNativeAppDownload, NATIVE_APP_DOWNLOAD_URL, NATIVE_APP_SUGGESTION_KEY, type NativeAppPlatform, type NativeAppDownload } from '../lib/nativeApp'
 
-  let { entryHref = null, welcome = false, excluded = false }: {
+  let { entryHref = null, welcome = false, excluded = false, ondismiss }: {
     entryHref?: string | null
     welcome?: boolean
     excluded?: boolean
+    ondismiss?: () => void
   } = $props()
 
   let dialog = $state<HTMLDialogElement>()
@@ -23,6 +24,7 @@
     remember('dismissed')
     showPrompt = false
     dialog?.close()
+    ondismiss?.()
   }
 
   function download() {

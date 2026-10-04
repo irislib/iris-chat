@@ -4,7 +4,7 @@ vi.mock('./deviceSyncRecordApply', async importOriginal => ({
 }))
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
-import { CHAT_MESSAGE_KIND, RECEIPT_KIND, type Rumor, type OnEventMeta } from 'nostr-double-ratchet'
+import { CHAT_MESSAGE_KIND, RECEIPT_KIND, TYPING_KIND, type Rumor, type OnEventMeta } from 'nostr-double-ratchet'
 
 const MY_PUBKEY = 'a'.repeat(64)
 const THEIR_PUBKEY = 'b'.repeat(64)
@@ -193,6 +193,23 @@ beforeEach(() => {
 })
 
 describe('manager receipts', () => {
+  it.each([false, true])('accepts an invite bootstrap without text, respecting rejection (%s)', async (rejected: boolean) => {
+    const ephemeral = 'c'.repeat(64)
+    invites.set(new Map([['invite-bootstrap', { id: 'invite-bootstrap', invite: {
+      type: 'legacy', invite: { inviterEphemeralPublicKey: ephemeral },
+    }, createdAt: Date.now(), usedBy: [], unsubscribe: () => {} } as never]]))
+    mocks.setUserRecords(new Map([[THEIR_PUBKEY, { devices: new Map([['peer-device', {
+      activeSession: { state: { ourCurrentNostrKey: { publicKey: ephemeral } } }, inactiveSessions: [],
+    }]]) }]]))
+    messageRequests.set({ acceptedChats: {}, rejectedChats: rejected ? { [THEIR_PUBKEY]: true } : {} })
+    messageRequestSettings.set({ receiveMessageRequests: false })
+    await handleManagerEvent({ id: 'bootstrap', kind: TYPING_KIND, pubkey: THEIR_PUBKEY,
+      content: 'typing', created_at: Math.floor(Date.now() / 1000), tags: [['p', MY_PUBKEY]],
+    } as never, THEIR_PUBKEY)
+    expect(get(messageRequests).acceptedChats[THEIR_PUBKEY]).toBe(rejected ? undefined : true)
+    expect(get(chats).has(THEIR_PUBKEY)).toBe(!rejected)
+  })
+
   it('marks incoming messages as seen when seen receipt arrives from another own session', async () => {
     const now = Date.now()
     const createdAt = Math.floor(now / 1000)

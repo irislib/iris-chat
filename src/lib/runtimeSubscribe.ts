@@ -34,9 +34,6 @@ function deduplicatingForwarder(onEvent: (event: VerifiedEvent) => void) {
 }
 
 interface RuntimeSubscribeClient {
-  pool: {
-    connectedRelays: () => Array<{ url: string }>
-  }
   subscribe: (
     filter: EventFilter,
     opts: {
@@ -56,8 +53,6 @@ export const createRuntimeSubscribe = (
   const tracker = new RuntimeSubscriptionTracker()
 
   return (filter, onEvent) => {
-    const relayUrls = client.pool.connectedRelays().map((relay) => relay.url)
-    const relayOptions = relayUrls.length > 0 ? { relayUrls, sources: ['fips'] } : {}
     const forward = deduplicatingForwarder(onEvent)
     const forwardEvent = (event: AppEvent) =>
       forward(event.rawEvent() as Parameters<typeof onEvent>[0])
@@ -66,7 +61,9 @@ export const createRuntimeSubscribe = (
 
     const liveSubscription = client.subscribe(
         filter as EventFilter,
-        { closeOnEose: false, cacheUsage, ...relayOptions },
+        // Let the runtime follow all configured relays, including reconnects.
+        // A snapshot of currently connected relays can strand live interests.
+        { closeOnEose: false, cacheUsage, sources: ['fips'] },
         false
       )
     liveSubscription.on('event', forwardEvent)
@@ -81,7 +78,6 @@ export const createRuntimeSubscribe = (
           {
             closeOnEose: true,
             cacheUsage: CacheMode.ONLY_RELAY,
-            ...relayOptions,
             sources: [],
           },
           false

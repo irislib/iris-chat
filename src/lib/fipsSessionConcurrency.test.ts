@@ -107,6 +107,7 @@ describe("FspSessionManager", () => {
     const routing = {
       coords: [initiatorIdentity.nodeAddr],
       coordinatesFor: () => [responderIdentity.nodeAddr],
+      hasUsableRoute: () => true,
       learnReverseRoute: () => {},
       sendFspToward: async (_remoteNodeAddr: Uint8Array, payload: RoutedPayload) => {
         for (const frame of routedFrames(payload, peer)) {
@@ -192,6 +193,7 @@ describe("FspSessionManager", () => {
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
       routing: {
         coords: [local.nodeAddr], coordinatesFor: () => undefined,
+        hasUsableRoute: () => false,
         ensureFirstContactRoute: () => routeReady, learnReverseRoute: () => {},
         sendFspReplyToward: async (_: unknown, frame: Uint8Array) => { sent.push(frame); },
         sendFspToward: async (_: unknown, payload: RoutedPayload) => { sent.push(...routedFrames(payload, peer)); },
@@ -237,6 +239,7 @@ describe("FspSessionManager", () => {
       localEpoch: new Uint8Array(8).fill(0x54),
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
       routing: { coords: [local.nodeAddr], coordinatesFor: () => [remote.nodeAddr],
+        hasUsableRoute: () => true,
         sendFspToward: () => sendReady } as never,
       getPeerByNodeAddr: () => undefined, emitDatagram: () => {}, emitEndpointData: () => {},
       handleLinkNegotiation: async () => {}, emitSession: () => {},

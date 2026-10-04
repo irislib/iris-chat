@@ -132,6 +132,7 @@ export interface ActiveInvite {
 export const chats = writable<Map<string, ChatSession>>(new Map())
 export const currentChat = writable<ChatSession | null>(null)
 export const invites = writable<Map<string, ActiveInvite>>(new Map())
+export const closeInviteOnAccept = writable(true)
 let isInitialized = false
 let invitesInitialized = false
 let runtimePoller: ReturnType<typeof setInterval> | null = null
@@ -1196,8 +1197,15 @@ export async function handleManagerEvent(
     meta
   )
 
-  const policyCtx = getMessageRequestPolicyContext()
+  let policyCtx = getMessageRequestPolicyContext()
   const existing = get(chats).get(chatId)
+  const acceptedLocalInvite = !isFromSelf && !policyCtx.rejectedChats?.[chatId] && isChatFromLocalInvite(chatId)
+  // The authenticated invite bootstrap is sufficient; waiting for a visible
+  // text message also stranded the QR screen and file-first conversations.
+  if (acceptedLocalInvite) {
+    acceptChat(chatId)
+    policyCtx = getMessageRequestPolicyContext()
+  }
   const shouldIgnore = shouldIgnoreIncomingEvent(
     existing || { recipientPubkey: chatId, messages: [] },
     isFromSelf,
@@ -1206,6 +1214,7 @@ export async function handleManagerEvent(
   if (shouldIgnore) return
 
   const chatSession = await ensureManagerChat(chatId)
+  if (acceptedLocalInvite) triggerAutoOpen(chatSession)
 
   const isEmptyChat = (existing ? existing.messages.length : chatSession.messages.length) === 0
   const isFirstInboundMessage =

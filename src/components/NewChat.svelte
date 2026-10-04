@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import {
     invites,
+    closeInviteOnAccept,
     createAndSaveInvite,
     deleteStoredInvite,
     updateInviteLabel,
@@ -154,6 +155,9 @@
       </p>
 
       <CopyButton text={inviteUrl} maxLength={48} />
+      <label class="flex items-center gap-2 mt-4 text-sm text-gray-400">
+        <input type="checkbox" class="h-4 w-4 accent-primary" style="appearance: auto" bind:checked={$closeInviteOnAccept} /> Close on accept
+      </label>
     </div>
   </div>
 {/if}
@@ -187,6 +191,11 @@
     <p class="text-gray-400 text-center text-sm mb-4">
       Share an invite link to start a chat
     </p>
+    {#if !qrModalInvite}
+      <label class="flex items-center gap-2 mb-4 text-sm text-gray-400">
+        <input type="checkbox" class="h-4 w-4 accent-primary" style="appearance: auto" bind:checked={$closeInviteOnAccept} /> Close on accept
+      </label>
+    {/if}
 
     <div class="space-y-3 mb-4 max-h-96 overflow-y-auto overflow-x-hidden">
       {#each inviteList as invite (invite.id)}
