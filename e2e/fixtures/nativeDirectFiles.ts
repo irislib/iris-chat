@@ -15,6 +15,11 @@ export function buildNativeDirectFiles(): Promise<string> {
     if (!core || !existsSync(path.join(core, 'src/core/direct_file_tcp.rs'))) {
       throw new Error('IRIS_CHAT_RS_CORE_DIR must select the native direct-file implementation')
     }
+    const binary = process.env.IRIS_DIRECT_FILES_BIN
+    if (binary) {
+      if (!existsSync(binary)) throw new Error('IRIS_DIRECT_FILES_BIN does not exist')
+      return path.resolve(binary)
+    }
     const target = process.env.IRIS_DIRECT_FILES_TARGET_DIR ?? path.join(core, 'target')
     const args = ['build', '--quiet', '--locked', '--manifest-path', 'test-fixtures/direct-files-rust/Cargo.toml', '--target-dir', target]
     await new Promise<void>((resolve, reject) => {
