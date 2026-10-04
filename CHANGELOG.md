@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.6.41 - 2026-10-04
+
+- Edit sent messages and view their edit history, or delete messages for yourself or everyone.
+- Choose whether others can delete messages they sent you.
+- Sync edits and deletions with compatible linked devices while preserving the chosen history boundary.
+
+## 2.6.40 - 2026-10-04
+
+- Process invite links promptly, clear them from the address bar, and focus the name field after dismissing the desktop app prompt.
+- Deliver replies and start direct file transfers without requiring a previous message.
+- Stream direct files and choose their destination on acceptance in supported browsers.
+- Add a default-on “Open chat when someone joins” option to the invite view.
+
 ## 2.6.39 - 2026-10-04
 
 - Restore peer connections after another browser reloads.
