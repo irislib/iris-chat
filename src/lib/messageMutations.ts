@@ -62,12 +62,12 @@ function originalAuthor(owner: string, message: StoredMessage): string | undefin
   return message.isMine ? owner : message.senderPubkey ?? (message.sessionId.startsWith('group:') ? undefined : message.sessionId)
 }
 export function projectMessageMutations(owner: string, message: StoredMessage, records: DeviceSyncMessageMutation[]): StoredMessage {
-  if (message.deletedAt !== undefined) return { ...message, content: '', originalContent: undefined, editHistory: undefined, editedAt: undefined, reactions: undefined, replyTo: undefined, directTransferId: undefined }
+  if (message.deletedAt !== undefined) return { ...message, content: '', originalContent: undefined, editHistory: undefined, editedAt: undefined, reactions: undefined, replyTo: undefined }
   const author = originalAuthor(owner, message)
   const valid = records.filter(record => record.chatId === message.sessionId && record.messageId === message.id && record.author === author && record.createdAt >= Math.floor(message.timestamp / 1000) && (record.expiresAt === undefined || record.expiresAt > Date.now() / 1000))
   const deletion = valid.filter(record => record.operation === 'delete').sort(compareControlHead).at(-1)
   if (deletion) return { ...message, content: '', originalContent: undefined, editHistory: undefined, editedAt: undefined,
-    deletedAt: deletion.createdAtMs ?? deletion.createdAt * 1000, reactions: undefined, replyTo: undefined, directTransferId: undefined }
+    deletedAt: deletion.createdAtMs ?? deletion.createdAt * 1000, reactions: undefined, replyTo: undefined }
   if (!editableMessage(message)) return message
   const edits = valid.filter(record => record.operation === 'edit').sort(compareControlHead)
   if (!edits.length) return message

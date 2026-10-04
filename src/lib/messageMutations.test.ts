@@ -1,7 +1,8 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { get, writable } from 'svelte/store'
-import { getEventHash } from 'nostr-tools'
+import { getEventHash, getPublicKey } from 'nostr-tools'
+import { directFileMessageFields, signDirectFileOffer } from './directFileProtocol'
 import { db, deleteMessage, deleteMessagesForSession, purgeExpiredMessageMutations, type StoredMessage } from './storage'
 import { applyMessageMutation, buildMessageMutation, captureMessageMutation, sendMessageMutation, messageMutationRecords, mutationFromRumor } from './messageMutations'
 import { persistMessageWithReactions, admitRecordMessage } from './deviceSyncRecordApply'
@@ -62,14 +63,18 @@ it('deletes content and prior edit records permanently, including late edits and
   expect(get(currentChat)?.messages[0].deletedAt).toBe(102_000)
 })
 it('keeps deleted direct-file cards hidden after storage reload and original replay', async () => {
-  const file = { ...original, content: 'iris-direct-file-v1:offer', directTransferId: 'transfer-id' }
+  const secret = new Uint8Array(32).fill(1), transferId = 'ab'.repeat(16)
+  const file = { ...original, content: signDirectFileOffer({ id: transferId, token: 'cd'.repeat(32), owner: peer, recipient: owner,
+    device: getPublicKey(secret), caption: 'A file', expires_at_secs: Math.floor(Date.now() / 1000) + 3600,
+    files: [{ filename: 'empty.txt', size_bytes: 0, sha256: '34'.repeat(32) }] }, secret) }
+  expect(directFileMessageFields(file.content)).toEqual({ directTransferId: transferId })
   await seed(file)
   await applyMessageMutation(owner, mutation('delete', '', 102_000))
   db.close(); await db.open()
-  expect((await db.messages.get(id))?.directTransferId).toBeUndefined()
+  expect(directFileMessageFields((await db.messages.get(id))!.content)).toEqual({})
   await persistMessageWithReactions(owner, file)
   expect(await db.messages.get(id)).toMatchObject({ content: '', deletedAt: 102_000 })
-  expect((await db.messages.get(id))?.directTransferId).toBeUndefined()
+  expect(directFileMessageFields((await db.messages.get(id))!.content)).toEqual({})
 })
 it('handles deletion before the original and retains local-only deletion suppression', async () => {
   await applyMessageMutation(owner, mutation('edit', 'Old content'))
