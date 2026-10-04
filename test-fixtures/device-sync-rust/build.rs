@@ -10,6 +10,7 @@ fn main() {
     let framing_path = core.join("src/core/device_sync_tcp/framing.rs");
     let body_path = core.join("src/core/device_sync/body.rs");
     let records_path = core.join("src/core/device_sync/records.rs");
+    let mutations_path = core.join("src/core/message_mutations.rs");
     let model_path = core.join("src/core/model.rs");
     let mute_path = core.join("src/core/chat_mute_sync.rs");
     let pin_path = core.join("src/core/chat_pin_sync.rs");
@@ -21,6 +22,7 @@ fn main() {
         &framing_path,
         &body_path,
         &records_path,
+        &mutations_path,
         &model_path,
         &label_path,
         &private_contact_path,
@@ -72,7 +74,8 @@ fn main() {
         let start = records.find(name).expect("native typed record method");
         records[start..item_end(&records, start)].replace("pub(super) ", "")
     }).join("\n");
-    fs::write(out.join("native_records.rs"), format!("{record_types}\nimpl DeviceSyncRecord {{\n{methods}\n}}"))
+    let mutation_type = derived_item(&read(mutations_path), "struct MessageMutation").replace("pub(super) ", "");
+    fs::write(out.join("native_records.rs"), format!("{mutation_type}\n{record_types}\nimpl DeviceSyncRecord {{\n{methods}\n}}"))
         .expect("write native typed record declarations");
     fs::write(out.join("native_contract.rs"), contract).expect("write contract");
     // Preserve the production wire declarations and aliases verbatim, without
