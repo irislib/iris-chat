@@ -20,7 +20,9 @@
 
   let profileStore = $derived(pubkey ? createProfileStore(pubkey, loadProfile) : undefined)
   let profile = $derived(profileStore ? $profileStore : undefined)
-  let name = $derived.by(() => { $contactMemory; return contactMemory.get($identity?.pubkey ?? '', pubkey)?.nickname || contactMemory.get($identity?.pubkey ?? '', pubkey)?.accepted_name || getProfileName(profile) || getAnimalName(pubkey) })
+  let memory = $derived.by(() => { $contactMemory; return contactMemory.get($identity?.pubkey ?? '', pubkey) })
+  let name = $derived(memory?.nickname || memory?.accepted_name || getProfileName(profile) || getAnimalName(pubkey))
+  let badgeSize = $derived(size < 40 ? 12 : 16)
   let signals = $derived.by(() => { $peopleGraph.version; return getPeopleGraphSignals(pubkey) })
   let distance = $derived(pubkey === $identity?.pubkey ? 0 : $following.has(pubkey) ? 1 : signals.hasPublicPath ? signals.followDistance : null)
 
@@ -71,10 +73,17 @@
     class="rounded-full"
   />
 {/if}
+{#if $identity && memory?.favorite}
+  <span class="absolute -left-1 -top-1 flex items-center justify-center rounded-full bg-panel text-amber-400 pointer-events-none"
+    style:width="{badgeSize}px" style:height="{badgeSize}px"
+    role="img" aria-label="Favorite" title="Favorite" data-testid="favorite-badge">
+    <span class="i-carbon-star-filled w-full h-full" aria-hidden="true"></span>
+  </span>
+{/if}
 {#if $identity && showBadge}
   <span class="absolute -right-1 -top-1 leading-none">
     <SocialDistanceBadge {distance} followedByFriends={signals.friendsFollowing}
-      muted={signals.mutedByYou} overmuted={signals.overmuted} size={size < 40 ? 12 : 16} />
+      muted={signals.mutedByYou} overmuted={signals.overmuted} size={badgeSize} />
   </span>
 {/if}
 </span>
