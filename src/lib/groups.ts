@@ -1,3 +1,4 @@
+import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, controlClock, applyGroupSettingsRecord, persistMessageWithReactions, restoreGroupSettings } from './deviceSyncRecordApply'
@@ -634,13 +635,14 @@ async function sendNativeGroupEvent(
     try {
       const runtimeRumor = options?.rumor ?? buildScopedGroupRumor(['l', groupId], partialEvent)
       const result = await runtime.sendGroupEvent(groupId, {
-        kind: runtimeRumor.kind,
+        // Native group transport carries the canonical event inside a kind-14 envelope.
+        kind: CHAT_MESSAGE_KIND,
         content: JSON.stringify(runtimeRumor),
         tags: runtimeRumor.tags,
       })
 
       if (options?.includeSelfPairwiseCopy) {
-        await fanOutToOwnDevices(groupId, options?.rumor ? { ...partialEvent, content: JSON.stringify(runtimeRumor) } : partialEvent)
+        await fanOutToOwnDevices(groupId, options?.rumor ? { ...partialEvent, kind: CHAT_MESSAGE_KIND, content: JSON.stringify(runtimeRumor) } : partialEvent)
       }
       return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
     } catch (error) {
@@ -648,7 +650,7 @@ async function sendNativeGroupEvent(
       console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
       fanOutToMembers(
         groupId,
-        options?.rumor ? { ...partialEvent, content: JSON.stringify(options.rumor) } : partialEvent,
+        options?.rumor ? { ...partialEvent, kind: CHAT_MESSAGE_KIND, content: JSON.stringify(options.rumor) } : partialEvent,
         undefined,
         options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
       )
@@ -771,8 +773,9 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
     tags.push(['expiration', String(expiresAt)])
   }
 
+  const rumor = buildScopedGroupRumor(['l', groupId], { content: text, kind: CHAT_MESSAGE_KIND, tags })
   const message: GroupMessage = {
-    id: crypto.randomUUID(),
+    id: rumor.id,
     content: text,
     timestamp: Date.now(),
     isMine: true,
@@ -796,7 +799,7 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
       kind: CHAT_MESSAGE_KIND,
       tags,
     },
-    { includeSelfPairwiseCopy: true },
+    { includeSelfPairwiseCopy: true, rumor },
   )
     .then((result) => {
       if (result?.inner.id) {
@@ -806,6 +809,20 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
     .catch((error) => {
       console.error('[groups] Failed to send group message:', error)
     })
+}
+
+export async function editGroupMessage(groupId: string, messageId: string, content: string): Promise<void> {
+  await mutateGroupMessage(groupId, messageId, 'edit', content)
+}
+export async function deleteGroupMessageForEveryone(groupId: string, messageId: string): Promise<void> {
+  await mutateGroupMessage(groupId, messageId, 'delete', '')
+}
+async function mutateGroupMessage(groupId: string, messageId: string, operation: 'edit' | 'delete', content: string): Promise<void> {
+  const owner = getPubkey(), message = get(groupMessages).get(groupId)?.find(row => row.id === messageId)
+  if (!owner || !currentGroupForSend(groupId) || !message?.isMine || message.call || message.deletedAt !== undefined || operation === 'edit' && !editableMessage(message)) throw new Error('This message cannot be changed.')
+  const rumor = buildMessageMutation(owner, messageId, operation, content, ['l', groupId], Math.max(Date.now(), (message.editedAt ?? 0) + 1), message.expiresAt)
+  if (!await captureMessageMutation(owner, `group:${groupId}`, rumor, owner)) throw new Error('Could not update this message. Try again.')
+  await sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor })
 }
 
 export function sendGroupReaction(groupId: string, messageId: string, emoji: string): void {
@@ -849,12 +866,35 @@ export function sendGroupSettingsEvent(groupId: string, messageTtlSeconds: numbe
     .catch(error => console.error('[groups] Failed to send group settings event:', error))
 }
 
-export function handleGroupEvent(
+const incomingGroupQueues = new Map<string, Promise<void>>()
+/** Preserve arrival order across asynchronous commits, including controls before originals. */
+export function handleGroupEvent(rumor: Rumor, sender: string, outer?: OuterEvent, device?: string): Promise<void> {
+  const canonical = parseSerializedGroupRuntimeRumor(rumor.content) ?? rumor
+  const groupId = canonical.tags.find(tag => tag[0] === 'l')?.[1]
+  if (!groupId) return Promise.resolve()
+  const owner = getPubkey()
+  const operation = (incomingGroupQueues.get(groupId) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    let delay = 1000
+    while (getPubkey() === owner) {
+      try { await processGroupEvent(canonical, sender, outer, device); return }
+      catch (error) {
+        console.warn('[groups] Could not save incoming message change; retrying:', error)
+        await new Promise(resolve => setTimeout(resolve, delay))
+        delay = Math.min(delay * 2, 30000)
+      }
+    }
+  })
+  incomingGroupQueues.set(groupId, operation)
+  void operation.finally(() => { if (incomingGroupQueues.get(groupId) === operation) incomingGroupQueues.delete(groupId) })
+  return operation
+}
+
+async function processGroupEvent(
   rumor: Rumor,
   senderPubkey: string,
   outerEvent?: OuterEvent,
   senderDevicePubkey?: string
-): void {
+): Promise<void> {
   rumor = parseSerializedGroupRuntimeRumor(rumor.content) ?? rumor
   const groupTag = rumor.tags?.find((t: string[]) => t[0] === 'l')
   if (!groupTag) return
@@ -875,12 +915,20 @@ export function handleGroupEvent(
     // Queue event; the roster snapshot may arrive later due to network reordering.
     if (
       rumor.kind === CHAT_MESSAGE_KIND ||
+      rumor.kind === MESSAGE_EDIT_KIND ||
+      rumor.kind === MESSAGE_DELETE_KIND ||
       rumor.kind === REACTION_KIND ||
       rumor.kind === RECEIPT_KIND ||
       rumor.kind === CHAT_SETTINGS_KIND
     ) {
       queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
     }
+    return
+  }
+
+  if (rumor.kind === MESSAGE_EDIT_KIND || rumor.kind === MESSAGE_DELETE_KIND) {
+    const owner = getPubkey()
+    if (owner) await captureMessageMutation(owner, `group:${groupId}`, rumor, senderPubkey)
     return
   }
 
@@ -926,18 +974,18 @@ export function handleGroupEvent(
     if (!myPubkey || senderPubkey !== myPubkey) {
       clearRemoteTyping(`group:${groupId}`, rumor.created_at)
     }
-    handleGroupMessage(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
+    await handleGroupMessage(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
     return
   }
 }
 
-function handleGroupMessage(
+async function handleGroupMessage(
   groupId: string,
   rumor: Rumor,
   senderPubkey: string,
   senderDevicePubkey?: string,
   outerEventId?: string,
-): void {
+): Promise<void> {
   const myPubkey = getPubkey()
   const isOwnOwnerMessage = !!myPubkey && senderPubkey === myPubkey
   if (isOwnOwnerMessage) {
@@ -974,6 +1022,10 @@ function handleGroupMessage(
     ...(expiresAt !== undefined && { expiresAt }),
   }
 
+  if (!myPubkey) return
+  const committed = await persistMessageWithReactions(myPubkey, { ...message, sessionId: `group:${groupId}` })
+  Object.assign(message, committed)
+
   groupMessages.update(gm => {
     const msgs = gm.get(groupId) || []
     if (msgs.some(m => m.id === message.id)) return gm
@@ -981,7 +1033,6 @@ function handleGroupMessage(
     return gm
   })
 
-  saveGroupMessageToStorage(groupId, message)
   if (shouldAckDelivered) {
     sendGroupReceipt(groupId, 'delivered', [message.id])
   }
@@ -1090,6 +1141,7 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
       id: message.id,
       sessionId: `group:${groupId}`,
       content: message.content,
+      ...messageMutationFields(message),
       timestamp: message.timestamp,
       isMine: message.isMine,
       ...(message.replyTo && { replyTo: message.replyTo }),
@@ -1141,6 +1193,7 @@ export async function loadGroupsFromStorage(): Promise<void> {
         .map(m => ({
           id: m.id,
           content: m.content,
+          ...messageMutationFields(m),
           timestamp: m.timestamp,
           isMine: m.isMine,
           senderPubkey: m.senderPubkey,

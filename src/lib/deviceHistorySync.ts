@@ -8,7 +8,7 @@ export type HistoryRecord = Pick<DeviceSyncMessage, 'chatId' | 'id' | 'createdAt
 export const historyRecordId = (message: Pick<HistoryRecord, 'chatId' | 'id'>): string =>
   bytesToHex(sha256(new TextEncoder().encode(JSON.stringify([message.chatId, message.id]))))
 
-type Window = { since: number; until: number; linkId?: string; scope: DeviceSyncScope }
+type Window = { messageMutations?: 1; since: number; until: number; linkId?: string; scope: DeviceSyncScope }
 interface PartitionRun { pending: string[]; imported: number; withheld: boolean; restart?: { since: number; until?: number; linkId?: string } }
 export interface DeviceRecordReference { id: string; createdAt: number; locator?: { type: DeviceSyncRecord['type']; key: string[] } }
 interface HistorySession extends Window {
@@ -207,14 +207,14 @@ export class DeviceHistorySync {
       if (!this.valid(peer, state)) return
       session.run = run
       state[slot(true, window.scope)] = session
-      await this.send(peer, state, session, { v: 1, type: 'historyOpen', session: session.id, scope: session.scope,
+      await this.send(peer, state, session, { v: 1, type: 'historyOpen', messageMutations: 1, session: session.id, scope: session.scope,
         since: session.since, until: session.until, ...(session.linkId && { linkId: session.linkId }), ...(prefix && { prefix }), frame: bytesToHex(await session.engine.initiate()) })
       return
     }
   }
   private async session(id: string, window: Window, initiator: boolean, prefix: string): Promise<HistorySession> {
     const inventory = (await this.options.recordInventory(window.scope, window.since, window.until, initiator, prefix))
-      .filter(record => record.createdAt >= window.since && record.createdAt <= window.until && record.id.startsWith(prefix))
+      .filter(record => (initiator || window.messageMutations === 1 || record.locator?.type !== 'messageMutation') && record.createdAt >= window.since && record.createdAt <= window.until && record.id.startsWith(prefix))
     const records = new Map(inventory.map(record => [record.id, record]))
     if (records.size > Math.max(1, Math.min(this.options.maxInventoryRecords ?? 100_000, 100_000))) throw new Error('reconciliation window exceeds record limit')
     for (const peer of this.peers.values()) for (const key of ['incoming', 'outgoing', 'stateIncoming', 'stateOutgoing'] as const) {

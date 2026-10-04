@@ -5,7 +5,7 @@
   import { createDirectFileDraft, directFileSelectionMode, formatDirectFileSize } from '../lib/directFileDraft'
   import { sendDirectFiles } from '../lib/directFiles'
   import { directFilePreview } from '../lib/directFileProtocol'
-  import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
+  import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, editMessage, deleteMessageForEveryone, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
   import { identity } from '../lib/identity'
   import { following } from '../lib/following'
   import { messageRequests, acceptChat, rejectChat } from '../lib/messageRequests'
@@ -597,6 +597,8 @@
           recipientPubkey={chat.recipientPubkey}
           onreact={handleReact}
           ondelete={handleDeleteMessage}
+          onedit={(id, content) => editMessage(chat, id, content)}
+          ondeleteeveryone={id => deleteMessageForEveryone(chat, id)}
           onreply={handleReply}
         />
         {/if}

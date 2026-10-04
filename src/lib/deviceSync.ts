@@ -1,3 +1,4 @@
+import { messageMutationFields } from './messageMutations'
 import { admitRecordMessage } from './deviceSyncRecordApply'
 import { createDeviceSyncRecordAdapter } from './deviceSyncRecordAdapter'
 import { deviceRecordVersion, groupSettingsHead } from './deviceSyncRecordStore'
@@ -308,7 +309,7 @@ function collectDeviceSyncMessages(
       messages.push({
         chatId: chat.id,
         id: message.id,
-        body: message.content,
+        body: message.deletedAt !== undefined ? '' : message.originalContent ?? message.content,
         author: message.isMine ? source.ownerPubkey : message.senderPubkey || chat.recipientPubkey,
         createdAt,
         ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
@@ -324,7 +325,7 @@ function collectDeviceSyncMessages(
       messages.push({
         chatId: `group:${group.id}`,
         id: message.id,
-        body: message.content,
+        body: message.deletedAt !== undefined ? '' : message.originalContent ?? message.content,
         author,
         createdAt,
         ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
@@ -527,12 +528,13 @@ export async function applyDeviceSyncSnapshot(
     imported += 1
     const local: ChatMessage = {
       id: message.id,
-      content: message.body,
+      content: stored.content,
       ...(!message.chatId.startsWith('group:') ? directFileMessageFields(message.body) : {}),
       timestamp: message.createdAt * 1000,
       isMine,
       senderPubkey: message.author,
       reactions: stored.reactions,
+      ...messageMutationFields(stored),
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
     if (message.chatId.startsWith('group:')) {

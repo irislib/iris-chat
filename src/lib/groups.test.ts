@@ -1,7 +1,7 @@
 vi.mock('./deviceSyncRecordApply', async importOriginal => ({
   ...await importOriginal<typeof import('./deviceSyncRecordApply')>(),
   restoreGroupSettings: async () => {},
-  persistMessageWithReactions: async (_owner: string, message: import('./storage').StoredMessage) => (await import('./storage')).saveMessage(message),
+  persistMessageWithReactions: async (_owner: string, message: import('./storage').StoredMessage) => { await (await import('./storage')).saveMessage(message); return message },
 }))
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
@@ -839,16 +839,16 @@ describe('groups', () => {
       await waitForRecipients(MY_PUBKEY, MEMBER_B, MEMBER_C)
     })
 
-    it('reconciles the local message id to the serialized runtime rumor id', async () => {
+    it('uses the immutable wire message id before sending', async () => {
       const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
       const group = await createGroup('Runtime ID Test', [MEMBER_B])
 
       sendGroupMessage(group.id, 'Runtime id hello')
       const initialMessage = get(groupMessages).get(group.id)![0]
-      expect(initialMessage.id).not.toMatch(/^[0-9a-f]{64}$/)
+      expect(initialMessage.id).toMatch(/^[0-9a-f]{64}$/)
 
       await vi.waitFor(() => {
-        expect(get(groupMessages).get(group.id)![0].id).toMatch(/^[0-9a-f]{64}$/)
+        expect(get(groupMessages).get(group.id)![0].id).toBe(initialMessage.id)
       })
     })
 
@@ -941,7 +941,7 @@ describe('groups', () => {
       const group = await createGroup('Recv Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'Hi from B!', MEMBER_B)
-      handleGroupEvent(rumor, MEMBER_B, { id: 'outer-b' })
+      await handleGroupEvent(rumor, MEMBER_B, { id: 'outer-b' })
 
       const msgs = get(groupMessages).get(group.id)!
       const incoming = msgs.find(m => m.content === 'Hi from B!')
@@ -958,7 +958,7 @@ describe('groups', () => {
       const inner = { ...makeMessageRumor(group.id, 'Native runtime payload', MEMBER_B), id: '' }
       const outer = makeMessageRumor(group.id, JSON.stringify(inner), MEMBER_B)
 
-      handleGroupEvent(outer, MEMBER_B, { id: 'outer-native' }, MEMBER_B)
+      await handleGroupEvent(outer, MEMBER_B, { id: 'outer-native' }, MEMBER_B)
 
       const msgs = get(groupMessages).get(group.id)!
       const incoming = msgs.find(m => m.content === 'Native runtime payload')
@@ -972,8 +972,8 @@ describe('groups', () => {
       const group = await createGroup('Dedup Msg Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'Duplicate!', MEMBER_B)
-      handleGroupEvent(rumor, MEMBER_B)
-      handleGroupEvent(rumor, MEMBER_B)
+      await handleGroupEvent(rumor, MEMBER_B)
+      await handleGroupEvent(rumor, MEMBER_B)
 
       const msgs = get(groupMessages).get(group.id)!
       const dupes = msgs.filter(m => m.content === 'Duplicate!')
@@ -985,7 +985,7 @@ describe('groups', () => {
       const group = await createGroup('Echo Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'My own echo', MY_PUBKEY)
-      handleGroupEvent(rumor, MY_PUBKEY, undefined, MY_PUBKEY)
+      await handleGroupEvent(rumor, MY_PUBKEY, undefined, MY_PUBKEY)
 
       const msgs = get(groupMessages).get(group.id)!
       const echo = msgs.find(m => m.content === 'My own echo' && !m.isMine)
@@ -997,7 +997,7 @@ describe('groups', () => {
       const group = await createGroup('Cross Device Echo Test', [MEMBER_B])
 
       const rumor = makeMessageRumor(group.id, 'My other device echo', MY_PUBKEY)
-      handleGroupEvent(rumor, MY_PUBKEY, undefined, OTHER_DEVICE)
+      await handleGroupEvent(rumor, MY_PUBKEY, undefined, OTHER_DEVICE)
 
       const msgs = get(groupMessages).get(group.id)!
       const echo = msgs.find(m => m.content === 'My other device echo')
@@ -1016,7 +1016,7 @@ describe('groups', () => {
       })
       const messageId = get(groupMessages).get(group.id)![0].id
 
-      handleGroupEvent(makeReceiptRumor(group.id, 'seen', [messageId], MEMBER_B), MEMBER_B)
+      await handleGroupEvent(makeReceiptRumor(group.id, 'seen', [messageId], MEMBER_B), MEMBER_B)
 
       expect(get(groupMessages).get(group.id)![0].recipientStatuses).toEqual({
         [MEMBER_B]: 'seen',
@@ -1061,7 +1061,7 @@ describe('groups', () => {
       receiptSettings.set({ sendReadReceipts: false, sendDeliveryReceipts: true })
       try {
         const rumor = makeMessageRumor(groupId, 'Delivered message', MEMBER_C)
-        handleGroupEvent(rumor, MEMBER_B)
+        await handleGroupEvent(rumor, MEMBER_B)
         await waitForRecipients(MEMBER_B, MY_PUBKEY)
         expect(sendEventCalls.map(call => call.recipient).sort()).toEqual([MY_PUBKEY, MEMBER_B].sort())
         for (const call of sendEventCalls) {
@@ -1102,7 +1102,7 @@ describe('groups', () => {
       const group = await createGroup('Typing Test', [MEMBER_B])
 
       const rumor = makeTypingRumor(group.id, MEMBER_B)
-      handleGroupEvent(rumor, MEMBER_B)
+      await handleGroupEvent(rumor, MEMBER_B)
 
       expect(typingState.setRemoteTyping).toHaveBeenCalledWith(
         `group:${group.id}`,
@@ -1117,7 +1117,7 @@ describe('groups', () => {
       const group = await createGroup('Typing Off Test', [MEMBER_B])
 
       const rumor = makeTypingRumor(group.id, MEMBER_B, [['expiration', '1']])
-      handleGroupEvent(rumor, MEMBER_B)
+      await handleGroupEvent(rumor, MEMBER_B)
 
       expect(typingState.setRemoteTyping).not.toHaveBeenCalled()
       expect(typingState.clearRemoteTyping).toHaveBeenCalledWith(`group:${group.id}`)

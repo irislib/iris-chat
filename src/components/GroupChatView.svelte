@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { editGroupMessage, deleteGroupMessageForEveryone } from '../lib/groups'
   import ChatPinButton from './ChatPinButton.svelte'
   import { onDestroy } from 'svelte'
   import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
@@ -505,6 +506,8 @@
           {replyToMessage}
           onreact={attachmentAllowed ? handleReact : undefined}
           ondelete={handleDeleteMessage}
+          onedit={attachmentAllowed ? (id, content) => editGroupMessage(group.id, id, content) : undefined}
+          ondeleteeveryone={attachmentAllowed ? id => deleteGroupMessageForEveryone(group.id, id) : undefined}
           onreply={attachmentAllowed ? handleReply : undefined}
         />
       {/each}

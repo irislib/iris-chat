@@ -1,3 +1,4 @@
+import { messageWithMutations, refreshMessageMutationView } from './messageMutations'
 import { get } from 'svelte/store'
 import { getEventHash, type Event } from 'nostr-tools'
 import type { Rumor } from 'nostr-double-ratchet'
@@ -88,14 +89,16 @@ export async function applyProfileRecord(owner: string, event: Event, contacts: 
   return changed
 }
 
-export async function persistMessageWithReactions(owner: string, message: StoredMessage): Promise<void> {
+export async function persistMessageWithReactions(owner: string, message: StoredMessage): Promise<StoredMessage> {
   const updated = await db.transaction('rw', db.messages, db.sessionManager, async () => {
-    const projected = await messageWithReactionHeads(owner, message)
+    const projected = await messageWithMutations(owner, await messageWithReactionHeads(owner, message))
     await db.messages.put(projected)
     return projected
   })
   // Rebuild only when durable controls actually changed the rendered value.
+  if (updated.editedAt !== message.editedAt || updated.deletedAt !== message.deletedAt || updated.content !== message.content) await refreshMessageMutationView(updated)
   if (JSON.stringify(updated.reactions ?? {}) !== JSON.stringify(message.reactions ?? {})) await refreshReactionView(updated)
+  return updated
 }
 
 /** Recover a committed control if shutdown preceded its local preference write. */
@@ -123,7 +126,7 @@ export async function admitRecordMessage(owner: string, message: StoredMessage,
       }
       incoming.reactions = Object.fromEntries(Object.entries(reactions).filter(([, authors]) => authors.length))
     }
-    const projected = await messageWithReactionHeads(owner, incoming)
+    const projected = await messageWithMutations(owner, await messageWithReactionHeads(owner, incoming))
     return await admitHistoryMessage(projected, authorized) ? projected : undefined
   })
 }

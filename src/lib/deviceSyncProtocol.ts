@@ -71,7 +71,7 @@ export interface DeviceSyncPageEnd {
 }
 
 export type DeviceHistoryPacket =
-  | { v: 1; type: 'historyOpen'; session: string; linkId?: string; scope: DeviceSyncScope; prefix?: string; since: number; until: number; frame: string }
+  | { v: 1; type: 'historyOpen'; messageMutations?: 1; session: string; linkId?: string; scope: DeviceSyncScope; prefix?: string; since: number; until: number; frame: string }
   | { v: 1; type: 'historyFrame'; session: string; frame: string }
   | { v: 1; type: 'historyNeed'; session: string; ids: string[] }
   | { v: 1; type: 'historyRecords'; session: string; records: DeviceSyncRecord[]; requested: string[] }
@@ -221,7 +221,8 @@ function parseHistoryPacket(value: Record<string, unknown>): DeviceHistoryPacket
   if (value.scope !== 'history' && value.scope !== 'state') fail('history scope is invalid')
   if (value.scope === 'state' && (value.since !== 0 || value.until !== 0 || value.linkId !== undefined)) fail('state window is invalid')
   if (value.prefix !== undefined && (typeof value.prefix !== 'string' || !/^[0-9a-f]{0,64}$/.test(value.prefix))) fail('history prefix is invalid')
-  return { ...base, ...(value.prefix !== undefined && { prefix: value.prefix as string }), ...(value.linkId !== undefined && { linkId: value.linkId as string }), scope: value.scope as DeviceSyncScope, type: 'historyOpen', since: value.since, until: value.until, frame: value.frame }
+  if (value.messageMutations !== undefined && value.messageMutations !== 1) fail('message mutation capability is invalid')
+  return { ...base, ...(value.messageMutations === 1 && { messageMutations: 1 as const }), ...(value.prefix !== undefined && { prefix: value.prefix as string }), ...(value.linkId !== undefined && { linkId: value.linkId as string }), scope: value.scope as DeviceSyncScope, type: 'historyOpen', since: value.since, until: value.until, frame: value.frame }
 }
 
 function parsePage(value: unknown): DeviceSyncPage {

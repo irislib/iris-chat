@@ -1,3 +1,4 @@
+import type { MessageRevision } from './messageMutations'
 // IndexedDB storage using Dexie
 
 import type { CallHistory } from './callHistory'
@@ -23,6 +24,10 @@ export interface StoredMessage {
   id: string
   sessionId: string
   content: string
+  originalContent?: string
+  editHistory?: MessageRevision[]
+  editedAt?: number
+  deletedAt?: number
   timestamp: number
   isMine: boolean
   replyTo?: string
@@ -175,6 +180,7 @@ export async function deleteMessagesForSession(sessionId: string): Promise<void>
     await db.sessionManager.put({ key: `history-deleted-chat:${sessionId}`, value: Math.floor(Date.now() / 1000) })
     for (const message of await db.messages.where('sessionId').equals(sessionId).toArray()) await rememberHistoryDeletion(message)
     await db.messages.where('sessionId').equals(sessionId).delete()
+    await purgeMessageMutationRecords(value => value.chatId === sessionId)
   })
 }
 
@@ -188,7 +194,27 @@ export async function deleteMessage(id: string): Promise<void> {
     await db.sessionManager.put({ key: `history-deleted-message:${id}`, value: message
       ? { chatId: message.sessionId, id, createdAt: Math.floor(message.timestamp / 1000) } : null })
     await db.messages.delete(id)
+    await purgeMessageMutationRecords(value => value.messageId === id)
   })
+}
+
+/** Purge edit plaintext together with message/chat removal and expiry. */
+async function purgeMessageMutationRecords(matches: (value: { chatId: string; messageId: string; expiresAt?: number }) => boolean): Promise<void> {
+  const rows = await db.sessionManager.where('key').startsWith('device-record-v1:')
+    .filter(row => row.key.includes(':messageMutation:') && !!row.value && matches(row.value as { chatId: string; messageId: string })).toArray()
+  await db.sessionManager.bulkDelete(rows.map(row => row.key))
+  for (const row of rows) {
+    const value = row.value as { chatId: string; messageId: string; id: string }
+    const owner = row.key.slice('device-record-v1:'.length).split(':')[0]
+    const indexKey = `message-mutation-target:${owner}:${JSON.stringify([value.chatId, value.messageId])}`
+    const index = (await db.sessionManager.get(indexKey))?.value as string[] | undefined
+    const remaining = index?.filter(id => id !== value.id) ?? []
+    if (remaining.length) await db.sessionManager.put({ key: indexKey, value: remaining })
+    else await db.sessionManager.delete(indexKey)
+  }
+}
+export async function purgeExpiredMessageMutations(nowSeconds: number): Promise<void> {
+  await db.transaction('rw', db.sessionManager, () => purgeMessageMutationRecords(value => value.expiresAt !== undefined && value.expiresAt <= nowSeconds))
 }
 
 async function rememberHistoryDeletion(message: StoredMessage): Promise<void> {

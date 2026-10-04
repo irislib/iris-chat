@@ -135,6 +135,7 @@ vi.mock('./relayStore', () => ({
   relayStore: { getState: () => ({ relays: new Set(['wss://relay.example']) }) },
 }))
 vi.mock('./deviceSyncRecordApply', () => ({ admitRecordMessage: async (_owner: string, value: unknown) => value }))
+vi.mock('./messageMutations', async importOriginal => ({ ...await importOriginal<typeof import('./messageMutations')>(), messageMutationRecords: async function* () {} }))
 vi.mock('./deviceSyncRecordStore', () => ({ deviceRecordVersion: writable(0), messageWithReactionHeads: async (_owner: string, value: unknown) => value, hasReactionHead: async () => false, groupSettingsHead: async () => undefined, reactionHeads: async function* () {}, reactionHeadPages: async function* () {}, groupSettingsHeads: async function* () {} }))
 vi.mock('./storage', () => ({
   db: { transaction: async (...args: any[]) => args.at(-1)(), messages: { get: async () => undefined }, sessionManager: { get: async () => undefined } },

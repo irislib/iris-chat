@@ -1,3 +1,4 @@
+import { applyMessageMutation, messageMutationRecords, messageMutation } from './messageMutations'
 import { db, deletedHistoryRecords, isHistoryChatDeleted } from './storage'
 import { reactionHeadPages, reactionHead, groupSettingsHeads, groupSettingsHead, signedProfileHeads, saveSignedProfileHead } from './deviceSyncRecordStore'
 import { applyReactionRecord, applyGroupSettingsRecord, applyProfileRecord } from './deviceSyncRecordApply'
@@ -25,9 +26,9 @@ export function createDeviceSyncRecordAdapter(options: {
     return { groups, contacts, chats }
   }
   async function eligible(record: DeviceSyncRecord, current: Awaited<ReturnType<typeof state>>, inventory = false): Promise<boolean> {
-    if (record.type === 'message' || record.type === 'reaction') {
-      const value = record.type === 'message' ? record.message : record.reaction
-      const targetId = record.type === 'message' ? record.message.id : record.reaction.messageId
+    if (record.type === 'message' || record.type === 'reaction' || record.type === 'messageMutation') {
+      const value = record.type === 'message' ? record.message : record.type === 'messageMutation' ? record.mutation : record.reaction
+      const targetId = record.type === 'message' ? record.message.id : record.type === 'messageMutation' ? record.mutation.messageId : record.reaction.messageId
       const group = value.chatId.startsWith('group:') ? current.groups.find(group => group.id === value.chatId.slice(6)) : undefined
       if (value.chatId.startsWith('group:') ? !group?.members.includes(options.owner) || !group.members.includes(value.author) :
         !current.chats.has(value.chatId) || value.author !== options.owner && value.author !== value.chatId) return false
@@ -44,6 +45,9 @@ export function createDeviceSyncRecordAdapter(options: {
     const current = await state()
     if (scope === 'history') {
       for (const message of options.messages(since, until)) { const record = { type: 'message' as const, message }; if (await eligible(record, current, true)) yield record }
+      for await (const mutation of messageMutationRecords(options.owner)) {
+        if (mutation.createdAt >= since && mutation.createdAt <= until && await eligible({ type: 'messageMutation', mutation }, current)) yield { type: 'messageMutation', mutation }
+      }
       for await (const page of reactionHeadPages(options.owner)) {
         const [targets, deleted] = await Promise.all([
           db.messages.bulkGet(page.map(reaction => reaction.messageId)),
@@ -73,7 +77,7 @@ export function createDeviceSyncRecordAdapter(options: {
   }
   const bounded = (record: DeviceSyncRecord) => deviceSyncPacketByteLength({ v: 1, type: 'historyRecords', session: '0'.repeat(32), records: [record], requested: [] }) <= DEVICE_SYNC_MAX_PACKET_BYTES
   function reference(record: DeviceSyncRecord): DeviceRecordReference {
-    const key = record.type === 'message' ? [record.message.chatId, record.message.id] : record.type === 'reaction' ? [record.reaction.chatId, record.reaction.messageId, record.reaction.author] :
+    const key = record.type === 'messageMutation' ? [record.mutation.chatId, record.mutation.id] : record.type === 'message' ? [record.message.chatId, record.message.id] : record.type === 'reaction' ? [record.reaction.chatId, record.reaction.messageId, record.reaction.author] :
       record.type === 'group' ? [record.group.id] : record.type === 'groupSettings' ? [record.settings.groupId] : [record.event.pubkey]
     return { id: deviceSyncRecordId(record), createdAt: deviceSyncRecordTime(record), locator: { type: record.type, key } }
   }
@@ -84,9 +88,10 @@ export function createDeviceSyncRecordAdapter(options: {
     if (locator.type === 'message') {
       const stored = await db.messages.get(second)
       if (!stored || stored.sessionId !== first || stored.call || stored.id.startsWith('call:') || stored.expiresAt !== undefined && stored.expiresAt <= Date.now() / 1000) return
-      return { type: 'message', message: { chatId: first, id: stored.id, body: stored.content, createdAt: Math.floor(stored.timestamp / 1000),
+      return { type: 'message', message: { chatId: first, id: stored.id, body: stored.deletedAt !== undefined ? '' : stored.originalContent ?? stored.content, createdAt: Math.floor(stored.timestamp / 1000),
         author: stored.isMine ? options.owner : stored.senderPubkey ?? first, ...(stored.expiresAt !== undefined && { expiresAt: stored.expiresAt }) } }
     }
+    if (locator.type === 'messageMutation') { const mutation = await messageMutation(options.owner, first, second); return mutation && { type: 'messageMutation', mutation } }
     if (locator.type === 'reaction') { const reaction = await reactionHead(options.owner, { chatId: first, messageId: second, author: third }); return reaction && { type: 'reaction', reaction } }
     if (locator.type === 'groupSettings') { const settings = await groupSettingsHead(options.owner, first); return settings && { type: 'groupSettings', settings } }
     if (locator.type === 'profile') { const event = (await signedProfileHeads(options.owner, new Set([first])))[0]; return event && { type: 'profile', event } }
@@ -127,6 +132,7 @@ export function createDeviceSyncRecordAdapter(options: {
       for (const record of incoming) {
         if (!authorized()) return imported
         if (scope === 'history' && record.type === 'message') imported += await options.applySnapshot({ v: 1, type: 'snapshot', rosterAt: since, appKeys: [], chats: [], groups: [], messages: [record.message] }, since, authorized, options.allowsLegacy(peer, since, until, linkId))
+        else if (scope === 'history' && record.type === 'messageMutation') await applyMessageMutation(options.owner, record.mutation, authorized)
         else if (scope === 'history' && record.type === 'reaction') await applyReactionRecord(options.owner, record.reaction, authorized)
         else if (scope === 'state' && record.type === 'groupSettings') await applyGroupSettingsRecord(options.owner, record.settings, authorized)
         else if (scope === 'state' && record.type === 'profile') await applyProfileRecord(options.owner, record.event, contacts, authorized)

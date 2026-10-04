@@ -12,7 +12,7 @@ function pair(source: DeviceSyncRecord[], maxInventoryRecords?: number) {
     authorized: () => true, now: () => 200_000,
     maxInventoryRecords,
     recordInventory: async (scope, since, until, _initiator, prefix) => [...records.values()].filter(record => deviceSyncRecordScope(record) === scope && deviceSyncRecordTime(record) >= since && deviceSyncRecordTime(record) <= until && deviceSyncRecordId(record).startsWith(prefix))
-      .map(record => ({ id: deviceSyncRecordId(record), createdAt: deviceSyncRecordTime(record) })),
+      .map(record => ({ id: deviceSyncRecordId(record), createdAt: deviceSyncRecordTime(record), locator: { type: record.type, key: [] } })),
     records: async (_scope, _since, _until, ids) => ids.flatMap(ref => records.has(ref.id) ? [records.get(ref.id)!] : []),
     applyRecords: async (_peer, received) => { for (const record of received) records.set(deviceSyncRecordId(record), record); return received.filter(record => record.type === 'message').length },
     progress: () => progress.push(index), complete: async () => { complete.push(index) },
@@ -91,4 +91,21 @@ describe('typed reconciliation scopes', () => {
     await expect(p.engines[0].receive('b', { v: 1, type: 'historyRecords', session: open.session,
       records: [fixtures[0].record as DeviceSyncRecord], requested: [] })).rejects.toThrow('unsolicited')
   })
+})
+
+
+it('only offers message mutations to devices that advertise support', async () => {
+  const record: DeviceSyncRecord = { type: 'messageMutation', mutation: { chatId: 'b'.repeat(64), id: 'c'.repeat(64),
+    author: 'b'.repeat(64), createdAt: 110, messageId: 'd'.repeat(64), operation: 'edit', content: 'Corrected' } }
+  const modern = pair([record])
+  await modern.engines[0].start('b', 100, 150)
+  expect(modern.packets[0].packet).toMatchObject({ type: 'historyOpen', messageMutations: 1 })
+  await modern.drain()
+  expect(modern.contents[0].get(deviceSyncRecordId(record))).toEqual(record)
+  const legacy = pair([record])
+  await legacy.engines[0].start('b', 100, 150)
+  const open = legacy.packets[0].packet
+  if (open.type === 'historyOpen') delete open.messageMutations
+  await legacy.drain()
+  expect(legacy.contents[0].size).toBe(0)
 })

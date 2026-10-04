@@ -74,7 +74,7 @@
             <span class={lastMessage.call.video ? 'i-carbon-video-filled align-middle mr-1' : 'i-carbon-phone-filled align-middle mr-1'} aria-hidden="true"></span>
             {callHistoryLabel(lastMessage.call)}
           {:else}
-            {lastMessage.isMine ? 'You: ' : ''}{directFilePreview(lastMessage.content)}
+            {lastMessage.isMine ? 'You: ' : ''}{lastMessage.deletedAt !== undefined ? 'Message deleted' : directFilePreview(lastMessage.content)}
           {/if}
         </div>
       {:else}

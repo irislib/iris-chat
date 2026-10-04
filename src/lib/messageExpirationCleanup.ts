@@ -5,7 +5,7 @@ import {
 } from 'nostr-double-ratchet'
 import { chats, currentChat, type ChatMessage } from './chat'
 import { groupMessages } from './groups'
-import { deleteMessage as deleteMessageFromDb } from './storage'
+import { deleteMessage as deleteMessageFromDb, purgeExpiredMessageMutations } from './storage'
 
 let started = false
 let timeoutId: ReturnType<typeof setTimeout> | null = null
@@ -25,6 +25,7 @@ export function startMessageExpirationCleanup(): void {
 
   const tick = () => {
     const nowSeconds = Math.floor(Date.now() / 1000)
+    void purgeExpiredMessageMutations(nowSeconds).catch(error => console.warn('[messages] Could not clear expired edits:', error))
     let nextExpirationSeconds: number | undefined
 
     // Purge expired DM messages

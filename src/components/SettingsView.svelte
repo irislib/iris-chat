@@ -16,6 +16,7 @@
   import { resolvePictureUrl, formatHtreePicture } from '../lib/profilePicture'
   import { uploadFile } from '../lib/hashtree'
   import { relayStore, DEFAULT_RELAYS, type RelayStatus } from '../lib/relayStore'
+  import { messageDeletionSettings, setAllowDeletionByOthers } from '../lib/messageDeletionSettings'
   import { receiptSettings, setSendDeliveryReceipts, setSendReadReceipts } from '../lib/receiptSettings'
   import { typingSettings, setSendTypingIndicators } from '../lib/typingSettings'
   import { callSettings, setCallSettings } from '../lib/callSettings'
@@ -812,6 +813,21 @@
       <!-- Privacy Section -->
       <div class="bg-surface rounded-lg p-4">
         <div class="flex flex-col gap-3">
+          <div class="flex items-center justify-between gap-4">
+            <div class="flex-1 min-w-0">
+              <span class="text-sm">Allow others to delete their messages</span>
+              <p class="text-xs text-gray-500 mt-0.5">Let people delete messages they sent you</p>
+            </div>
+            <button
+              class="w-10 h-5 rounded-full shrink-0 transition-colors relative {$messageDeletionSettings.allowDeletionByOthers ? 'bg-primary' : 'bg-gray-600'}"
+              onclick={() => setAllowDeletionByOthers(!$messageDeletionSettings.allowDeletionByOthers)}
+              role="switch"
+              aria-checked={$messageDeletionSettings.allowDeletionByOthers}
+              aria-label="Allow others to delete their messages"
+            >
+              <span class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform {$messageDeletionSettings.allowDeletionByOthers ? 'translate-x-5' : ''}"></span>
+            </button>
+          </div>
           <div class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <span class="text-sm">Send delivery receipts</span>

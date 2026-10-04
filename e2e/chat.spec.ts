@@ -656,7 +656,7 @@ test.describe('iris chat', () => {
         await page1.locator('button[aria-label="Message menu"]').first().click()
 
         // Click delete option
-        await page1.getByRole('button', { name: 'Delete for you' }).click()
+        await page1.getByRole('button', { name: 'Delete for me' }).click()
 
         // First message should be gone, second message should remain
         await expect(page1.locator('.max-w-\\[85\\%\\]').filter({ hasText: 'First message' })).not.toBeVisible()

@@ -9,7 +9,7 @@ describe('shared private record contract', () => {
     const record = fixture.record as DeviceSyncRecord
     expect(deviceSyncRecordId(record)).toBe(fixture.id)
     expect(deviceSyncRecordTime(record)).toBe(fixture.timestamp)
-    expect(deviceSyncRecordScope(record)).toBe(record.type === 'message' || record.type === 'reaction' ? 'history' : 'state')
+    expect(deviceSyncRecordScope(record)).toBe(record.type === 'message' || record.type === 'reaction' || record.type === 'messageMutation' ? 'history' : 'state')
   })
   it('keeps group identity independent of order and local acceptance', () => {
     const record = fixtures.find(item => item.name === 'group')!.record as Extract<DeviceSyncRecord, { type: 'group' }>

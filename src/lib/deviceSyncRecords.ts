@@ -13,6 +13,17 @@ export interface DeviceSyncReaction {
   messageId: string
   emoji: string
 }
+export interface DeviceSyncMessageMutation {
+  chatId: string
+  id: string
+  author: string
+  createdAt: number
+  createdAtMs?: number
+  messageId: string
+  operation: 'edit' | 'delete'
+  content: string
+  expiresAt?: number
+}
 export interface DeviceSyncGroupSettings {
   groupId: string
   id: string
@@ -24,6 +35,7 @@ export interface DeviceSyncGroupSettings {
 export type DeviceSyncRecord =
   | { type: 'message'; message: DeviceSyncMessage }
   | { type: 'reaction'; reaction: DeviceSyncReaction }
+  | { type: 'messageMutation'; mutation: DeviceSyncMessageMutation }
   | { type: 'group'; group: DeviceSyncGroup }
   | { type: 'groupSettings'; settings: DeviceSyncGroupSettings }
   | { type: 'profile'; event: Event }
@@ -32,6 +44,7 @@ export function deviceSyncRecordId(record: DeviceSyncRecord): string {
   let input: unknown[]
   switch (record.type) {
     case 'message': input = [record.message.chatId, record.message.id]; break
+    case 'messageMutation': input = ['messageMutation', record.mutation.chatId, record.mutation.id]; break
     case 'reaction': input = ['reaction', record.reaction.chatId, record.reaction.id]; break
     case 'groupSettings': input = ['groupSettings', record.settings.groupId, record.settings.id]; break
     case 'profile': input = ['profile', record.event.pubkey, record.event.id]; break
@@ -46,11 +59,11 @@ export function deviceSyncRecordId(record: DeviceSyncRecord): string {
 }
 
 export function deviceSyncRecordScope(record: DeviceSyncRecord): DeviceSyncScope {
-  return record.type === 'message' || record.type === 'reaction' ? 'history' : 'state'
+  return record.type === 'message' || record.type === 'reaction' || record.type === 'messageMutation' ? 'history' : 'state'
 }
 
 export function deviceSyncRecordTime(record: DeviceSyncRecord): number {
-  return record.type === 'message' ? record.message.createdAt : record.type === 'reaction' ? record.reaction.createdAt : 0
+  return record.type === 'messageMutation' ? record.mutation.createdAt : record.type === 'message' ? record.message.createdAt : record.type === 'reaction' ? record.reaction.createdAt : 0
 }
 
 export function compareControlHead(a: { createdAt: number; createdAtMs?: number; id: string }, b: { createdAt: number; createdAtMs?: number; id: string }): number {
@@ -82,6 +95,15 @@ export function parseDeviceSyncRecord(value: unknown, parsers: {
 }): DeviceSyncRecord {
   if (!object(value)) throw new Error('Invalid device sync record')
   if (value.type === 'message') return { type: 'message', message: parsers.message(value.message) }
+  if (value.type === 'messageMutation') {
+    const m = value.mutation
+    if (object(m) && chat(m.chatId) && key(m.id) && key(m.author) && clock(m) && key(m.messageId) &&
+      (m.expiresAt === undefined || time(m.expiresAt)) && typeof m.content === 'string' && (m.operation === 'delete' ? m.content === '' : m.operation === 'edit' &&
+        m.content.trim().length > 0 && new TextEncoder().encode(m.content).length <= 32768)) {
+      return { type: 'messageMutation', mutation: { chatId: m.chatId, id: m.id, author: m.author, createdAt: m.createdAt,
+        ...(m.createdAtMs !== undefined && { createdAtMs: m.createdAtMs }), messageId: m.messageId, operation: m.operation, content: m.content, ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }) } }
+    }
+  }
   if (value.type === 'reaction') {
     const r = value.reaction
     if (object(r) && chat(r.chatId) && key(r.id) && key(r.author) && clock(r) && id(r.messageId) && typeof r.emoji === 'string' && new TextEncoder().encode(r.emoji).length <= 256) {

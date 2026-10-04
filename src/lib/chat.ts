@@ -1,3 +1,5 @@
+import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
+import type { MessageRevision } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, persistMessageWithReactions } from './deviceSyncRecordApply'
@@ -93,6 +95,10 @@ export interface ChatMessage {
   call?: CallHistory
   id: string
   content: string
+  originalContent?: string
+  editHistory?: MessageRevision[]
+  editedAt?: number
+  deletedAt?: number
   timestamp: number
   isMine: boolean
   replyTo?: string  // ID of the message being replied to
@@ -374,16 +380,21 @@ function subscribeToNdrRuntimeEvents(): void {
   const durableKinds = [PRIVATE_CONTACT_CONTROL_KIND, DEVICE_LABEL_CONTROL_KIND, CHAT_MUTE_KIND, CHAT_PIN_KIND]
   const runtime = getNdrRuntime()
   const account = getPubkey()
+  const stopMutations = runtime.onDurableSessionEvent([MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND], async (rumor, from, meta) => {
+    if (!account || getPubkey() !== account) throw new Error('Account is not ready')
+    await handleManagerEvent(rumor, from, meta)
+    if (getPubkey() !== account) throw new Error('Account changed')
+  })
   const stopDurable = registerPrivateControlEvents(runtime, {
     account, getAccount: getPubkey, getState: () => get(devices), receive: handleManagerEvent,
   })
   const stopEvents = runtime.onSessionEvent((rumor, from, meta) => {
-    if (durableKinds.includes(rumor.kind)) return
+    if (durableKinds.includes(rumor.kind) || rumor.kind === MESSAGE_EDIT_KIND || rumor.kind === MESSAGE_DELETE_KIND) return
     handleManagerEvent(rumor, from, meta).catch((e) =>
       console.error('[chat] Failed to handle NdrRuntime event:', e)
     )
   })
-  runtimeSessionEventCleanup = () => { stopDurable(); stopEvents() }
+  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents() }
 }
 
 function startNdrRuntimePoller(): void {
@@ -980,6 +991,7 @@ async function ensureManagerChat(
     .map((m) => ({
       id: m.id,
       content: m.content,
+      ...messageMutationFields(m),
       timestamp: m.timestamp,
       isMine: m.isMine,
       ...(m.replyTo && { replyTo: m.replyTo }),
@@ -1237,7 +1249,16 @@ export async function handleManagerEvent(
   }
   const outerEventId = (meta as (OnEventMeta & { outerEventId?: string }) | undefined)?.outerEventId
   const receiptAuthorPubkey = isFromSelf ? myPubkey : chatId
-  handleIncomingRumor(chatSession, rumor, isFromSelf, outerEventId, receiptAuthorPubkey)
+  if (rumor.kind === MESSAGE_EDIT_KIND || rumor.kind === MESSAGE_DELETE_KIND) {
+    // Mutations must use transport-authenticated authorship, not claims in the inner event.
+    const author = meta?.senderOwnerPubkey || (meta?.isSelf ? myPubkey : resolvedFromPubkey)
+    await captureMessageMutation(myPubkey, chatId, rumor, author)
+    for (const id of new Set([rumor.id, outerEventId].filter((id): id is string => !!id))) {
+      await saveProcessedEvent({ id, kind: rumor.kind, chatId, isSelfMessage: author === myPubkey, timestamp: Date.now() })
+    }
+    return
+  }
+  await handleIncomingRumor(chatSession, rumor, isFromSelf, outerEventId, receiptAuthorPubkey)
 }
 
 // Accept an invite and create a session
@@ -1299,7 +1320,7 @@ export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
   return chatSession
 }
 
-function handleIncomingRumor(
+async function handleIncomingRumor(
   chatSession: ChatSession,
   rumor: Rumor,
   isFromSelfOverride?: boolean,
@@ -1424,6 +1445,10 @@ function handleIncomingRumor(
     ...(expiresAt !== undefined && { expiresAt }),
   }
 
+  if (!myPubkey) return
+  const { directTransferId: _transfer, ...storedIncoming } = message
+  const committed = await persistMessageWithReactions(myPubkey, { ...storedIncoming, sessionId })
+  Object.assign(message, committed, { directTransferId: committed.deletedAt !== undefined ? undefined : message.directTransferId })
   saveProcessedRumor(directFilePreview(message.content))
 
   // Check if message already exists
@@ -1439,8 +1464,7 @@ function handleIncomingRumor(
   })
   if (!updatedSession) return
 
-  // Save message and updated session state to IndexedDB
-  saveMessageToStorage(sessionId, message)
+  // The incoming body was committed and projected before it became visible.
   saveSessionToStorage(updatedSession)
 
   // Send delivered receipt
@@ -1674,6 +1698,20 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
   })
 }
 
+export async function editMessage(chatSession: ChatSession, messageId: string, content: string): Promise<void> {
+  await mutateMessage(chatSession, messageId, 'edit', content)
+}
+export async function deleteMessageForEveryone(chatSession: ChatSession, messageId: string): Promise<void> {
+  await mutateMessage(chatSession, messageId, 'delete', '')
+}
+async function mutateMessage(chatSession: ChatSession, messageId: string, operation: 'edit' | 'delete', content: string): Promise<void> {
+  const owner = getPubkey(), message = get(chats).get(chatSession.id)?.messages.find(row => row.id === messageId)
+  if (!owner || !message?.isMine || message.call || message.deletedAt !== undefined || operation === 'edit' && !editableMessage(message)) throw new Error('This message cannot be changed.')
+  const rumor = buildMessageMutation(owner, messageId, operation, content, ['p', chatSession.recipientPubkey], Math.max(Date.now(), (message.editedAt ?? 0) + 1), message.expiresAt)
+  if (!await captureMessageMutation(owner, chatSession.id, rumor, owner)) throw new Error('Could not update this message. Try again.')
+  sendRuntimeEvent(chatSession.recipientPubkey, rumor, operation === 'edit' ? 'edit message' : 'delete message')
+}
+
 // Delete a single message locally
 export async function deleteMessage(sessionId: string, messageId: string): Promise<void> {
   // Get current state from store
@@ -1770,6 +1808,7 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
       id: message.id,
       sessionId,
       content: message.content,
+      ...messageMutationFields(message),
       timestamp: message.timestamp,
       isMine: message.isMine,
       ...(message.replyTo && { replyTo: message.replyTo }),
@@ -1807,6 +1846,7 @@ export async function loadChatsFromStorage(): Promise<void> {
           .map(m => ({
             id: m.id,
             content: m.content,
+            ...messageMutationFields(m),
             ...directFileMessageFields(m.content),
             timestamp: m.timestamp,
             isMine: m.isMine,

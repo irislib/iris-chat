@@ -52,6 +52,7 @@ export function withDeviceControlClock<T>(owner: string,
 }
 
 export function projectReactionHeads(message: StoredMessage, records: DeviceSyncReaction[]): StoredMessage {
+  if (message.deletedAt !== undefined) return message
   const reactions = Object.fromEntries(Object.entries(message.reactions ?? {}).map(([emoji, authors]) => [emoji, [...authors]]))
   for (const record of records) {
     if (record.chatId !== message.sessionId || record.messageId !== message.id) continue

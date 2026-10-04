@@ -1,4 +1,6 @@
 <script lang="ts">
+  import MessageChangeModal from './MessageChangeModal.svelte'
+  import { editableMessage } from '../lib/messageMutations'
   import { marked } from 'marked'
   import DOMPurify from 'dompurify'
   import type { ChatMessage } from '../lib/chat'
@@ -28,6 +30,8 @@
     replyToMessage?: ChatMessage | null
     onreact?: (messageId: string, emoji: string) => Promise<void>
     ondelete?: (messageId: string) => void
+    onedit?: (messageId: string, content: string) => Promise<void>
+    ondeleteeveryone?: (messageId: string) => Promise<void>
     onreply?: (message: ChatMessage) => void
   }
 
@@ -46,6 +50,8 @@
     replyToMessage = null,
     onreact,
     ondelete,
+    onedit,
+    ondeleteeveryone,
     onreply,
   }: Props = $props()
 
@@ -70,6 +76,7 @@
   let showExtendedPicker = $state(false)
   let showMenu = $state(false)
   let showInfoModal = $state(false)
+  let changeMode = $state<'edit' | 'history' | 'delete' | null>(null)
   let openUpward = $state(true)
   let openLeft = $state(false)
   let emojiPickerOffsetX = $state(0)
@@ -77,7 +84,7 @@
   let menuContent = $state<HTMLDivElement | null>(null)
   let emojiContainer = $state<HTMLDivElement | null>(null)
   let directTransfer = $derived(message.directTransferId ? $directFileTransfers.get(message.directTransferId) : undefined)
-  let displayContent = $derived(message.directTransferId ? parseDirectFileOffer(message.content)?.caption ?? '' : message.content)
+  let displayContent = $derived(message.deletedAt !== undefined ? 'Message deleted' : message.directTransferId ? parseDirectFileOffer(message.content)?.caption ?? '' : message.content)
 
 
   function checkDirection(e: MouseEvent, popupWidth = 288) {
@@ -318,7 +325,7 @@
       <!-- Action buttons - before message for own messages -->
       {#if message.isMine}
         <div class="{actionsVisible ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 transition-opacity flex items-center gap-0.5 flex-shrink-0">
-          {#if onreply}
+          {#if onreply && message.deletedAt === undefined}
             <button
               class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
               onclick={handleReply}
@@ -355,17 +362,23 @@
                   <span class="i-carbon-copy text-base"></span>
                   Copy
                 </button>
+                {#if message.isMine && onedit && editableMessage(message)}
+                  <button class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2" onclick={() => { changeMode = 'edit'; showMenu = false }}><span class="i-carbon-edit text-base"></span>Edit</button>
+                {/if}
+                {#if message.isMine && ondeleteeveryone && message.deletedAt === undefined && !message.call}
+                  <button class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 whitespace-nowrap" onclick={() => { changeMode = 'delete'; showMenu = false }}><span class="i-carbon-trash-can text-base"></span>Delete for everyone</button>
+                {/if}
                 <button
                   class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
                   onclick={handleDelete}
                 >
                   <span class="i-carbon-trash-can text-base"></span>
-                  Delete for you
+                  Delete for me
                 </button>
               </div>
             {/if}
           </div>
-          {#if onreact}
+          {#if onreact && message.deletedAt === undefined}
             <div class="relative" bind:this={emojiContainer}>
               <button
                 class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
@@ -418,13 +431,13 @@
               data-testid="message-bubble-body"
             >
               <!-- Reply preview -->
-              {#if replyToMessage}
+              {#if replyToMessage && message.deletedAt === undefined}
                 <button
                   class="text-xs text-left w-full px-3 py-1.5 mx-2 mt-2 border-l-2 rounded-sm cursor-pointer overflow-hidden {message.isMine ? 'border-white/40 bg-white/10 text-white/70' : 'border-primary/60 bg-primary/10 text-gray-300'}"
                   onclick={() => scrollToMessage(replyToMessage.id)}
                 >
                   <div class="font-semibold mb-0.5">{replyToMessage.isMine ? 'You' : 'Them'}</div>
-                  <div class="truncate">{directFilePreview(replyToMessage.content)}</div>
+                  <div class="truncate">{replyToMessage.deletedAt !== undefined ? 'Message deleted' : directFilePreview(replyToMessage.content)}</div>
                 </button>
               {/if}
               {#if message.directTransferId}
@@ -450,6 +463,9 @@
                     <FileAttachment nhash={link.nhash} filename={link.filename} isMine={message.isMine} inBubble={true} />
                   {/each}
                   <div class="flex items-center justify-end gap-1 mt-1">
+                    {#if message.editedAt !== undefined && message.deletedAt === undefined}
+                      <button class="text-[10px] underline {message.isMine ? 'text-white/60' : 'text-gray-500'}" onclick={() => changeMode = 'history'} aria-label="Edit history">Edited</button>
+                    {/if}
                     <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
                     {#if message.isMine}
                       <StatusIndicator status={bubbleStatus} variant="bubble" />
@@ -468,6 +484,9 @@
                     </div>
                   {/if}
                   <div class="flex items-center gap-1 ml-auto">
+                    {#if message.editedAt !== undefined && message.deletedAt === undefined}
+                      <button class="text-[10px] underline {message.isMine ? 'text-white/60' : 'text-gray-500'}" onclick={() => changeMode = 'history'} aria-label="Edit history">Edited</button>
+                    {/if}
                     <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
                     {#if message.isMine}
                       <StatusIndicator status={bubbleStatus} variant="bubble" />
@@ -516,7 +535,7 @@
       <!-- Action buttons - after message for their messages -->
       {#if !message.isMine}
         <div class="{actionsVisible ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 transition-opacity flex items-center gap-0.5 flex-shrink-0">
-          {#if onreply}
+          {#if onreply && message.deletedAt === undefined}
             <button
               class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
               onclick={handleReply}
@@ -525,7 +544,7 @@
               <span class="i-carbon-reply text-sm"></span>
             </button>
           {/if}
-          {#if onreact}
+          {#if onreact && message.deletedAt === undefined}
             <div class="relative" bind:this={emojiContainer}>
               <button
                 class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
@@ -599,7 +618,7 @@
                   onclick={handleDelete}
                 >
                   <span class="i-carbon-trash-can text-base"></span>
-                  Delete for you
+                  Delete for me
                 </button>
               </div>
             {/if}
@@ -609,6 +628,10 @@
     </div>
   </div>
 </div>
+
+{#if changeMode}
+  <MessageChangeModal {message} mode={changeMode} {onedit} {ondeleteeveryone} onclose={() => changeMode = null} />
+{/if}
 
 {#if showInfoModal}
   <MessageInfoModal

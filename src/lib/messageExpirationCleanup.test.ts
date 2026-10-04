@@ -6,6 +6,7 @@ import { get, writable } from 'svelte/store'
 const mockDeleteMessage = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('./storage', () => ({
+  purgeExpiredMessageMutations: vi.fn().mockResolvedValue(undefined),
   deleteMessage: (...args: unknown[]) => mockDeleteMessage(...args),
 }))
 

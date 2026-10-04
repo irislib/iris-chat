@@ -66,7 +66,7 @@
         {:else if lastMessage.senderPubkey}
           <span><Name pubkey={lastMessage.senderPubkey} />: </span>
         {/if}
-        <span class="truncate">{lastMessage.content}</span>
+        <span class="truncate">{lastMessage.deletedAt !== undefined ? 'Message deleted' : lastMessage.content}</span>
       </div>
     {:else}
       <div class="text-sm text-gray-500 italic">No messages yet</div>

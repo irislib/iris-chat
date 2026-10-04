@@ -124,5 +124,51 @@
     ],
     "timestamp": 0,
     "id": "f373f4aa03f68b855a5390e0572091e20718110bff73baf1b8b0d81d6fdea99e"
+  },
+  {
+    "name": "message-edit",
+    "record": {
+      "type": "messageMutation",
+      "mutation": {
+        "chatId": "group:group-fixture",
+        "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "author": "1111111111111111111111111111111111111111111111111111111111111111",
+        "createdAt": 1700000001,
+        "createdAtMs": 1700000001123,
+        "messageId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "operation": "edit",
+        "content": "Corrected café 🌱"
+      }
+    },
+    "input": [
+      "messageMutation",
+      "group:group-fixture",
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "timestamp": 1700000001,
+    "id": "03522c47b48d4992398418d10193e89989b495cf0b5263e4efccd4929cd1e900"
+  },
+  {
+    "name": "message-delete",
+    "record": {
+      "type": "messageMutation",
+      "mutation": {
+        "chatId": "group:group-fixture",
+        "id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "author": "1111111111111111111111111111111111111111111111111111111111111111",
+        "createdAt": 1700000001,
+        "createdAtMs": 1700000001123,
+        "messageId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "operation": "delete",
+        "content": ""
+      }
+    },
+    "input": [
+      "messageMutation",
+      "group:group-fixture",
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    ],
+    "timestamp": 1700000001,
+    "id": "5f0ed6dec7d6f2f534ca12bc51a6801c796d0557d6af18811273fe9f8441aa85"
   }
 ]
