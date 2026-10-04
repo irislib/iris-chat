@@ -61,6 +61,16 @@ it('deletes content and prior edit records permanently, including late edits and
   expect((await db.messages.get(id))?.content).toBe('')
   expect(get(currentChat)?.messages[0].deletedAt).toBe(102_000)
 })
+it('keeps deleted direct-file cards hidden after storage reload and original replay', async () => {
+  const file = { ...original, content: 'iris-direct-file-v1:offer', directTransferId: 'transfer-id' }
+  await seed(file)
+  await applyMessageMutation(owner, mutation('delete', '', 102_000))
+  db.close(); await db.open()
+  expect((await db.messages.get(id))?.directTransferId).toBeUndefined()
+  await persistMessageWithReactions(owner, file)
+  expect(await db.messages.get(id)).toMatchObject({ content: '', deletedAt: 102_000 })
+  expect((await db.messages.get(id))?.directTransferId).toBeUndefined()
+})
 it('handles deletion before the original and retains local-only deletion suppression', async () => {
   await applyMessageMutation(owner, mutation('edit', 'Old content'))
   await applyMessageMutation(owner, mutation('delete', '', 102_000))

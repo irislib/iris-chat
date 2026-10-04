@@ -34,11 +34,13 @@ async function edit(page: Page, oldContent: string, content: string) {
 }
 async function remove(page: Page, content: string) {
   const message = bubble(page, content)
+  const messageId = await message.getAttribute('id')
+  expect(messageId).toBeTruthy()
   await message.hover()
   await message.getByRole('button', { name: 'Message menu', exact: true }).click()
   await page.getByRole('button', { name: 'Delete for everyone', exact: true }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Delete for everyone', exact: true }).click()
-  await expect(bubble(page, 'Message deleted')).toBeVisible()
+  await expect(page.locator(`[id="${messageId}"]`).getByTestId('message-bubble-body').locator('.message-content')).toHaveText('Message deleted')
 }
 
 test('edit history, deletion and privacy preference survive reload on desktop and mobile', async ({ page }) => {
