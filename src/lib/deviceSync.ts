@@ -898,23 +898,8 @@ async function updateRuntime(
   })
   node.on('peer', (value) => {
     const peer = value as PeerEvent
-    const syncPeer = normalizeDeviceSyncPeer(peer.remotePubkey)
-    if (peer.state === 'disconnected') {
-      callPeers.delete(peer.remotePubkey)
-      peers.delete(syncPeer)
-      history.reset(syncPeer)
-      const pending = currentHistoryPair(ownerPubkey, syncPeer)
-      if (pending?.role === 'inbound' && !pending.complete && pending.since === 0) deviceHistoryProgress.update(progress => ({ phase: 'waiting', imported: progress?.imported ?? 0, ...(progress?.total !== undefined && { total: progress.total }) }))
-      historyPeers.delete(syncPeer)
-      tcp.setPeer(syncPeer, false)
-      return
-    }
-    callPeers.add(peer.remotePubkey)
-    if (
-      !isAuthorizedDeviceSyncSource(peer.remotePubkey, get(devices))
-    ) return
-    peers.add(syncPeer)
-    tcp.setPeer(syncPeer, true)
+    if (peer.state === 'disconnected') callPeers.delete(peer.remotePubkey)
+    else callPeers.add(peer.remotePubkey)
   })
   node.on('error', (error) => console.warn('[deviceSync] FIPS error:', error))
   attachCalls(node, () => Array.from(callPeers), async owner => {
@@ -942,6 +927,14 @@ async function updateRuntime(
     await tcp.dispose()
     await node.stop()
     return
+  }
+  // Authorize TCP by the signed device list, not physical adjacency. FIPS may
+  // route through a seed or keep a stream alive after changing its next hop.
+  for (const device of state.registeredDevices) {
+    if (device.identityPubkey === state.identityPubkey) continue
+    const peer = normalizeDeviceSyncPeer(`02${device.identityPubkey}`)
+    peers.add(peer)
+    tcp.setPeer(peer, true)
   }
   activeNode = node
   activeTcp = tcp

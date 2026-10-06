@@ -51,13 +51,12 @@ export class RemoteSigner {
   private seen = new Set<string>()
   private closed = false
   private error = new Error('Sign-in cancelled.')
-  private timer: ReturnType<typeof setTimeout>
+  private timer?: ReturnType<typeof setTimeout>
   private challenge = crypto.randomUUID().replaceAll('-', '')
   private waitingConnection?: Pending
   private abort = () => this.close(new Error('Sign-in cancelled.'))
 
   constructor(private options: RemoteSignerOptions) {
-    this.timer = setTimeout(() => this.close(new Error('Sign-in timed out. Try again.')), options.timeoutMs ?? TIMEOUT)
     options.signal.addEventListener('abort', this.abort, { once: true })
     if (options.signal.aborted) this.abort()
   }
@@ -65,6 +64,10 @@ export class RemoteSigner {
   ensureActive() { if (this.closed) throw this.error }
 
   private check() { this.ensureActive() }
+
+  private startApprovalTimer() {
+    this.timer = setTimeout(() => this.close(new Error('Sign-in timed out. Try again.')), this.options.timeoutMs ?? TIMEOUT)
+  }
 
   private async listen(urls: string[]) {
     this.check()
@@ -83,6 +86,7 @@ export class RemoteSigner {
     if (bunker) this.remoteKey = bunker.pubkey
     await this.listen(bunker?.relays ?? signerRelayUrls(this.options.relays))
     if (bunker) {
+      this.startApprovalTimer()
       const result = await this.request('connect', [bunker.pubkey, bunker.secret, 'sign_event:37368', JSON.stringify({ name: 'Iris Chat', url: 'https://chat.iris.to' })])
       if (result !== 'ack' && (!bunker.secret || result !== bunker.secret)) throw new Error('Invalid signer confirmation.')
     } else {
@@ -96,6 +100,9 @@ export class RemoteSigner {
       // Amber treats a literal '+' as a plus, rather than a query-space.
       this.options.onConnectionLink?.(link.toString().replaceAll('+', '%20'))
       await connected
+      // Waiting for someone to scan a visible code is not a network request.
+      // Bound the actual approval exchange only after the phone responds.
+      this.startApprovalTimer()
     }
     this.check()
     // Older signers may explicitly reject this newly optional command.

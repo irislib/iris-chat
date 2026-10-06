@@ -108,6 +108,21 @@ for the entire run. Set `IRIS_NATIVE_LAB_SCRIPT` if that repository is elsewhere
 `IRIS_CHAT_RS_ANDROID_SERIAL` selects a particular device. Ordinary browser tests
 do not probe or launch attached phones.
 
+Physical iPhone linking with history is a separate public-network gate:
+
+```sh
+IRIS_CHAT_RS_DIR=/path/to/iris-chat-rs IRIS_LINK_TEST_UDID=<selected-physical-iphone> pnpm test:public-device-link
+```
+
+Build that native checkout's physical iPhone development test products first.
+The test reserves the selected phone, creates an isolated account and a fresh
+Chrome profile, approves linking with history, and requires a message written
+before linking to appear exactly once after browser reload. It uses the public
+message and FIPS servers; local interop passes do not substitute for this gate.
+`IRIS_LINK_TEST_URL` selects a candidate preview; the default is `chat.iris.to`.
+Private diagnostics stay in `work/public-device-link/`. Ordinary phone storage
+is preserved and the development app is relaunched normally afterward.
+
 Chat uses the shared FIPS runtime without application-local patches. Its session
 setup, identity, transport handover, and WebRTC negotiation regressions are
 covered in `fips-ts` and checked against the installed packages here. These

@@ -41,6 +41,7 @@ export class TestRelay {
   public port: number = 0
   public deliveryFilter?: (event: NostrEvent) => boolean
   public acceptFilter?: (event: NostrEvent) => boolean
+  public acknowledgeFilter?: (event: NostrEvent) => boolean
   public observeRequest?: (filters: Filter[], browser: boolean) => void
   public deliveredEvents = 0
   public replayedEvents = 0
@@ -94,7 +95,9 @@ export class TestRelay {
       this.events.set(event.id, event)
       this.indexEvent(event, true)
       // Send OK
-      ws.send(JSON.stringify(['OK', event.id, true, '']))
+      if (!this.acknowledgeFilter || this.acknowledgeFilter(event)) {
+        ws.send(JSON.stringify(['OK', event.id, true, '']))
+      }
       // Broadcast to matching subscriptions
       this.broadcastEvent(event, ws)
     } else if (type === 'REQ') {

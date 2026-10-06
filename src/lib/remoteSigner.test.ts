@@ -90,11 +90,18 @@ describe('NIP-46 transport', () => {
     await expect(denied.connect()).rejects.toThrow('declined')
   })
 
-  it('expires and removes a pending connection', async () => {
-    const { relay, controller } = await setup()
-    const client = new RemoteSigner({ runtime, relays: [relay.url], signal: controller.signal, timeoutMs: 50 })
-    await expect(client.connect()).rejects.toThrow('timed out')
-    expect(() => client.ensureActive()).toThrow('timed out')
+  it('keeps the displayed code usable while waiting for the phone', async () => {
+    const { relay, signer, controller } = await setup()
+    let link = ''
+    const client = new RemoteSigner({ runtime, relays: [relay.url], signal: controller.signal, timeoutMs: 100,
+      onConnectionLink: value => { link = value } })
+    cleanups.push(() => client.close())
+    const connected = client.connect()
+    void connected.catch(() => {})
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(() => client.ensureActive()).not.toThrow()
+    await signer.acceptConnection(link)
+    expect(await connected).toBe(signer.ownerPubkey)
   })
 
   it('ignores late approval after cancellation', async () => {
