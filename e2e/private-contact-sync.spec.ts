@@ -10,6 +10,17 @@ test('private details sync across devices, retain offline clears, and stay accou
     const context = await browser.newContext()
     contexts.push(context)
     await useTestRelay(context, testRelayUrl)
+    // Keep the offline-queue scenario on its controlled message server.
+    // Require TURN without providing one, so direct peers cannot bypass it.
+    await context.addInitScript(() => {
+      localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [], stunServers: [] }))
+      const NativePeerConnection = window.RTCPeerConnection
+      window.RTCPeerConnection = class extends NativePeerConnection {
+        constructor(configuration?: RTCConfiguration) {
+          super({ ...configuration, iceTransportPolicy: 'relay', iceServers: [] })
+        }
+      }
+    })
     await context.addInitScript(value => localStorage.setItem('iris-chat-identity', value), Buffer.from(key).toString('hex'))
     const page = await context.newPage()
     await page.route(/https:\/\/(cdn|upload|hashtree)\.iris\.to\//, route => route.abort())
