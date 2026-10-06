@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.44 - 2026-10-06
+
+- Keep the device-link code available until you approve or cancel it.
+- Transfer message history through FIPS routes even when your devices cannot connect directly.
+- Add routed native/browser regression coverage and a physical iPhone public-network check that verifies history survives browser reload.
+- Update the approving native app to v2026.10.6.1 (iOS 2026.10.601) or later for the matching approval and history fixes.
+
 ## 2.6.43 - 2026-10-06
 
 - Link devices even when one message server is unavailable, including message history from your other device.
