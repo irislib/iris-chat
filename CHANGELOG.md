@@ -3,6 +3,7 @@
 ## 2.6.43 - 2026-10-06
 
 - Link devices even when one message server is unavailable, including message history from your other device.
+- When approving from a phone or desktop app, update that app to v2026.10.6 (iOS 2026.10.600) or later to get the same fix. Updating the website alone does not update the approving app.
 - Test native-to-browser linking and history transfer during server outages, and require device-link browser checks before publishing.
 
 ## 2.6.42 - 2026-10-04
