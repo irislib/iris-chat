@@ -261,9 +261,9 @@ export class TestRelay {
 
   async stop(): Promise<void> {
     return new Promise((resolve) => {
-      // Close all connections
+      // Teardown must not wait for a browser to acknowledge the close handshake.
       for (const ws of this.wss.clients) {
-        ws.close()
+        ws.terminate()
       }
       this.wss.close(() => {
         this.server.close(() => {
@@ -346,7 +346,7 @@ export class SilentTestRelay {
   async stop(): Promise<void> {
     return new Promise((resolve) => {
       for (const ws of this.wss.clients) {
-        ws.close()
+        ws.terminate()
       }
       this.wss.close(() => {
         this.server.close(() => {

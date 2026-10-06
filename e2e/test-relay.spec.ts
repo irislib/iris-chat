@@ -1,9 +1,30 @@
 import { test, expect } from '@playwright/test'
 import { WebSocket, type RawData } from 'ws'
-import { TestRelay } from './test-relay'
+import { TestRelay, SilentTestRelay } from './test-relay'
 
 type Frame = unknown[]
 type Filter = Record<string, unknown>
+
+for (const Relay of [TestRelay, SilentTestRelay]) {
+  test(`${Relay.name} stops even when a client cannot acknowledge closing`, async () => {
+    const relay = new Relay()
+    await relay.start()
+    const socket = new WebSocket(relay.url)
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', resolve)
+      socket.once('error', reject)
+    })
+    socket.pause()
+    let stopped = false
+    const stopping = relay.stop().then(() => { stopped = true })
+    try {
+      await expect.poll(() => stopped, { timeout: 1_000 }).toBe(true)
+    } finally {
+      socket.terminate()
+      await stopping
+    }
+  })
+}
 
 function command(socket: WebSocket, frame: Frame, done: (frame: Frame) => boolean): Promise<Frame[]> {
   return new Promise((resolve, reject) => {
