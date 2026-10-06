@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppKeys } from 'nostr-double-ratchet'
 import { finalizeEvent, generateSecretKey, getPublicKey, verifiedSymbol, type Event } from 'nostr-tools'
-import { prepareSignerAuthorization, selectSignerRoster, validateSignerAuthorization } from './signerAuthorization'
+import { fetchSignerRoster, prepareSignerAuthorization, selectSignerRoster, validateSignerAuthorization } from './signerAuthorization'
+import type { SignerRuntime } from './remoteSigner'
 
 const secret = generateSecretKey()
 const owner = getPublicKey(secret)
@@ -20,6 +21,25 @@ beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(now * 1000) })
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('one-time signer authorization', () => {
+  it('uses verified responses during outages without hiding partial newer or conflicting heads', async () => {
+    const old = roster(now - 2), latest = roster(now - 1, newDevice)
+    let events: Event[] = [old]
+    let sources = [{ id: 'live', complete: true }, { id: 'unavailable', complete: false }]
+    const runtime = { query: async () => ({ events, sources, complete: false }) } as unknown as SignerRuntime
+    const lookup = () => fetchSignerRoster(owner, ['wss://live.example', 'wss://offline.example'], new AbortController().signal, runtime)
+    expect((await lookup())?.id).toBe(old.id)
+    events = [old, latest]
+    expect((await lookup())?.id).toBe(latest.id)
+    events = [latest, roster(now - 1)]
+    await expect(lookup()).rejects.toThrow('Conflicting')
+    events = [{ ...old, sig: '0'.repeat(128) }]
+    await expect(lookup()).rejects.toThrow('signature')
+    events = []
+    await expect(lookup()).rejects.toThrow('Could not check')
+    events = [latest]
+    sources = sources.map(source => ({ ...source, complete: false }))
+    await expect(lookup()).rejects.toThrow('Could not check')
+  })
   it('preserves existing devices without copying old static-encrypted names', () => {
     const original = roster()
     const previous = finalizeEvent({ ...original, tags: [...original.tags, ['encrypted_device_labels', 'opaque-one'], ['encrypted_device_labels', 'opaque-two']] }, secret)

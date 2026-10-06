@@ -55,6 +55,7 @@ describe('release site config', () => {
       'e2e/web-join.spec.ts',
       'e2e/direct-file-first.spec.ts',
       'e2e/message-mutations.spec.ts',
+      'e2e/link-device.spec.ts',
       '--workers=2',
       '--retries=0',
     ])

@@ -107,7 +107,7 @@ describe('NIP-46 transport', () => {
     expect(() => client.ensureActive()).toThrow('cancelled')
   })
 
-  it('fails a device-list lookup when any server omits EOSE', async () => {
+  it('does not treat empty discovery as a new account when a server omits EOSE', async () => {
     const { relay, signer, controller } = await setup()
     const silent = new SilentTestRelay()
     await silent.start()

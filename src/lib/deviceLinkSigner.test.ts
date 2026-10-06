@@ -35,10 +35,11 @@ describe('private device-link approval', () => {
     expect(() => parseDeviceConnectLink(`nostrconnect://${device}?relay=wss://example.org&secret=test&perms=sign_event:1`)).toThrow('unsupported')
   })
 
-  it.each([false, true])('exchanges encrypted approval after repairing legacy duplicate heads: %s', async (duplicate: boolean) => {
+  it.each([[false, false], [true, false], [true, true]])('exchanges encrypted approval with duplicate heads=%s and unavailable server=%s', async (duplicate: boolean, outage: boolean) => {
     const relay = new TestRelay(); await relay.start(); cleanup.push(() => relay.stop())
     const runtime = createNostrRuntime({ relays: [relay.url] }); cleanup.push(() => runtime.close())
     const { secret, owner, approver, event } = roster()
+    const relays = outage ? [relay.url, 'ws://127.0.0.1:1'] : [relay.url]
     await runtime.publish(event, { requireAck: true })
     const initialHeads = [event]
     if (duplicate) {
@@ -50,10 +51,10 @@ describe('private device-link approval', () => {
     const controller = new AbortController(); cleanup.push(() => controller.abort())
     let approval: Promise<void> | undefined
     const pairs: Array<{ device: string; linkAt: number; linkId: string }> = []
-    const client = new RemoteSigner({ runtime, relays: [relay.url], signal: controller.signal,
+    const client = new RemoteSigner({ runtime, relays, signal: controller.signal,
       onConnectionLink: link => { approval = serveDeviceLink({ link, owner, approver, runtime, signal: controller.signal,
         getKnownRoster: () => ({ devices: AppKeys.fromEvent(event).getAllDevices(), createdAt: event.created_at }),
-        sign: async draft => finalizeEvent(draft, secret), savePair: async (device, linkAt, linkId) => { pairs.push({ device, linkAt, linkId }) } }) },
+        sign: async draft => finalizeEvent(draft, secret), savePair: async (device, linkAt, linkId) => { pairs.push({ device, linkAt, linkId }) } }); approval.catch(() => {}) },
     }); cleanup.push(() => client.close())
     expect(await client.connect()).toBe(owner)
     if (duplicate) {
@@ -63,7 +64,7 @@ describe('private device-link approval', () => {
       expect(AppKeys.fromEvent(repaired).getAllDevices()).toEqual(AppKeys.fromEvent(event).getAllDevices())
     }
     let checked = false
-    const result = await authorizeSignerDevice({ runtime, relays: [relay.url], signal: controller.signal, owner,
+    const result = await authorizeSignerDevice({ runtime, relays, signal: controller.signal, owner,
       signEvent: draft => client.signEvent(draft), onAuthorized: (signed, device) => {
         checked = true
         const entry = AppKeys.fromEvent(signed).getAllDevices().find(item => item.identityPubkey === device)!
@@ -77,7 +78,7 @@ describe('private device-link approval', () => {
     expect(relay.publishedEvents.every(item => item.kind === 37368 || item.kind === 24133)).toBe(true)
     expect(JSON.stringify(relay.publishedEvents)).not.toContain('iris_get_link_info')
     expect(JSON.stringify(relay.publishedEvents)).not.toContain('historyPolicy')
-  })
+  }, 100_000)
 
   it.each(['membership', 'join time', 'extra tag', 'unknown tag', 'tag order', 'malformed UUID', 'duplicate d', 'duplicate i', 'wrong i', 'local changed', 'local changed during signing', 'newer local', 'heads changed', 'signer changed', 'no ack', 'readback conflict', 'cancelled'])('does not repair %s', async (change: string) => {
     const { secret, owner, approver, event } = roster()

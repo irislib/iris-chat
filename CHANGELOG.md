@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.43 - 2026-10-06
+
+- Link devices even when one message server is unavailable, including message history from your other device.
+- Test native-to-browser linking and history transfer during server outages, and require device-link browser checks before publishing.
+
 ## 2.6.42 - 2026-10-04
 
 - Respect the chosen message-history boundary for changes copied between your devices, including edits queued before linking.

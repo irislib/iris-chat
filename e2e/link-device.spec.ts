@@ -62,12 +62,14 @@ for (const choice of ['Chats and groups only', 'Include message history']) test(
   testRelayUrl,
   testRelay,
 }) => {
+  test.setTimeout(150_000)
   const seed = await startLocalFipsWebSocketSeed()
   const ownerContext = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] })
   const linkedContext = await browser.newContext()
 
-  await useTestRelay(ownerContext, testRelayUrl)
-  await useTestRelay(linkedContext, testRelayUrl)
+  const relays = choice === 'Include message history' ? [testRelayUrl, 'ws://127.0.0.1:1'] : [testRelayUrl]
+  await useTestRelay(ownerContext, relays)
+  await useTestRelay(linkedContext, relays)
   for (const context of [ownerContext, linkedContext]) await context.addInitScript(url => localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [url], stunServers: [] })), seed.url)
   const secret = generateSecretKey(), account = getPublicKey(secret), contact = account
   await setIdentity(ownerContext, toHex(secret))
@@ -141,7 +143,7 @@ for (const choice of ['Chats and groups only', 'Include message history']) test(
     await ownerPage.getByRole('button', { name: choice, exact: true }).click()
 
     await expect(ownerPage.getByRole('heading', { name: 'Link another device' })).toBeHidden({
-      timeout: 10_000,
+      timeout: 100_000,
     })
     await expect(linkedPage.getByRole('button', { name: 'New Chat' })).toBeVisible({
       timeout: 10_000,

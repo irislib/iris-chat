@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "2.6.42",
+  "version": "2.6.43",
   "type": "module",
   "description": "Decentralized encrypted messaging over Nostr",
   "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
@@ -18,7 +18,7 @@
     "test": "pnpm verify:dependency-lock && NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run",
     "test:device-sync-interop": "env REQUIRE_DEVICE_SYNC_RUST_INTEROP=1 NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs run src/lib/deviceSyncRustInterop.test.ts",
     "test:direct-file-interop": "pnpm verify:dependency-lock && env REQUIRE_DIRECT_FILE_INTEROP=1 playwright test e2e/direct-files-interop.spec.ts --project=chromium --workers=1 --retries=0",
-    "test:interop": "pnpm verify:dependency-lock && pnpm test:device-sync-interop && env REQUIRE_NATIVE_INTEROP=1 playwright test e2e/ndr-interop.spec.ts --workers=1 --retries=0",
+    "test:interop": "pnpm verify:dependency-lock && pnpm test:device-sync-interop && env REQUIRE_NATIVE_INTEROP=1 playwright test e2e/ndr-interop.spec.ts e2e/native-link-history.spec.ts --workers=1 --retries=0",
     "verify:dependency-lock": "node scripts/verify-dependency-lock.mjs",
     "test:watch": "NODE_OPTIONS=\"--no-warnings --localstorage-file=.vitest-localstorage\" node node_modules/vitest/vitest.mjs",
     "test:e2e": "env -u NO_COLOR playwright test",

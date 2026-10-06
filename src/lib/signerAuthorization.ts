@@ -48,9 +48,15 @@ export async function fetchSignerRosterHeads(owner: string, urls: string[], sign
     includeSuperseded: true, deadline: Date.now() + LOOKUP_TIMEOUT, signal,
   })
   check(signal)
-  if (!result.complete) throw new Error('Could not check all message servers. Try again.')
   if (result.events.length >= MAX_EVENTS) throw new Error('Device list is too large.')
-  return signerRosterHeads(result.events, owner)
+  const heads = signerRosterHeads(result.events, owner)
+  // An unavailable server cannot veto a verified roster. Retain all observed
+  // heads, including partial responses, so conflicts/newer snapshots still win.
+  // Incomplete empty discovery must never be mistaken for a new account.
+  if (!result.complete && (!result.sources.some(source => source.complete) || !heads.length)) {
+    throw new Error('Could not check all message servers. Try again.')
+  }
+  return heads
 }
 
 export async function fetchSignerRoster(owner: string, urls: string[], signal: AbortSignal, runtime: SignerRuntime): Promise<VerifiedEvent | null> {
