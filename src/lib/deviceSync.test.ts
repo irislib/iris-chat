@@ -325,6 +325,70 @@ describe('device sync', () => {
     }
   })
 
+  it('preserves an active history connection when the same roster is republished', async () => {
+    const original = get(devices)
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(get(nostrClient).runtime.addSource).toHaveBeenCalled())
+      const connection = tcp.instances[0]
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({
+        ...state, lastEventTimestamp: state.lastEventTimestamp + 30,
+      }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fips.nodes).toHaveLength(1)
+      expect(fips.nodes[0].stop).not.toHaveBeenCalled()
+      expect(connection.dispose).not.toHaveBeenCalled()
+      connection.onConnected?.(`02${device}`)
+      await vi.waitFor(() => expect(connection.sendFirst).toHaveBeenCalled())
+      const requests = connection.sendFirst.mock.calls.map(([, payload]: [string, Uint8Array]) =>
+        JSON.parse(new TextDecoder().decode(payload)))
+      expect(requests).toContainEqual(expect.objectContaining({ type: 'request', rosterAt: original.lastEventTimestamp + 30 }))
+    } finally {
+      await stopDeviceSync()
+      ;(devices as unknown as Writable<DeviceState>).set(original)
+    }
+  })
+
+  it('keeps an in-flight startup when only the roster publication time advances', async () => {
+    const original = get(devices)
+    let finishStart!: () => void
+    fips.start.mockImplementationOnce(() => new Promise<void>(resolve => { finishStart = resolve }))
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(fips.nodes).toHaveLength(1))
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({
+        ...state, lastEventTimestamp: state.lastEventTimestamp + 30,
+      }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fips.nodes).toHaveLength(1)
+      expect(fips.nodes[0].stop).not.toHaveBeenCalled()
+      finishStart()
+      await vi.waitFor(() => expect(get(nostrClient).runtime.addSource).toHaveBeenCalled())
+    } finally {
+      finishStart?.()
+      await stopDeviceSync()
+      ;(devices as unknown as Writable<DeviceState>).set(original)
+    }
+  })
+
+  it('restarts history connections when a device is authorized with a new joining time', async () => {
+    const original = get(devices)
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(get(nostrClient).runtime.addSource).toHaveBeenCalled())
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({
+        ...state, registeredDevices: state.registeredDevices.map(entry =>
+          entry.identityPubkey === device ? { ...entry, createdAt: entry.createdAt + 30 } : entry),
+      }))
+      await vi.waitFor(() => expect(fips.nodes).toHaveLength(2))
+      expect(fips.nodes[0].stop).toHaveBeenCalledOnce()
+      expect(tcp.instances[0].dispose).toHaveBeenCalledOnce()
+    } finally {
+      await stopDeviceSync()
+      ;(devices as unknown as Writable<DeviceState>).set(original)
+    }
+  })
+
   it('cancels an in-flight startup when the device is removed from the roster', async () => {
     let finishStart!: () => void
     fips.start.mockImplementationOnce(() => new Promise<void>(resolve => { finishStart = resolve }))

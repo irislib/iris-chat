@@ -746,8 +746,8 @@ function runtimeKey(ownerPubkey: string, state: DeviceState): string {
     ...get(callConnectionSettings).servers,
     ...get(callConnectionSettings).stunServers,
     state.identityPubkey,
-    state.lastEventTimestamp,
-    ...state.registeredDevices.map((device) => device.identityPubkey).sort(),
+    // A newer publication of the same authorization must keep ongoing history streams.
+    ...state.registeredDevices.map((device) => `${device.identityPubkey}:${device.createdAt}`).sort(),
   ].join(':')
 }
 
