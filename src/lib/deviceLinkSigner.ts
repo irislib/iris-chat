@@ -135,11 +135,21 @@ export async function serveDeviceLink(options: DeviceLinkOptions): Promise<void>
               active()
               const addition = validateDeviceAddition(draft, options.owner, previous)
               if (!previous || !AppKeys.fromEvent(previous).getAllDevices().some(device => device.identityPubkey === options.approver)) throw new Error('This device is no longer authorized to link devices.')
+              const checkKnown = () => {
+                active()
+                const known = options.getKnownRoster?.()
+                if (!known) return
+                const devices = AppKeys.fromEvent(previous).getAllDevices()
+                if (known.createdAt > previous.created_at || known.devices.some(device => !devices.some(entry => entry.identityPubkey === device.identityPubkey && entry.createdAt === device.createdAt)) ||
+                  (known.createdAt === previous.created_at && known.devices.length !== devices.length)) throw new Error('Your device list changed. Create a new link.')
+              }
+              checkKnown()
               const candidate = validateSignerAuthorization(addition.expected, await options.sign(addition.expected))
-              active()
+              checkKnown()
               const latest = await fetchSignerRoster(options.owner, link.relays, signal, options.runtime)
               active()
               if (latest?.id !== previous.id) throw new Error('Your device list changed. Create a new link.')
+              checkKnown()
               await options.savePair(addition.device, addition.linkAt, link.client)
               signed = candidate
               info = { v: 1, linkId: link.client, approver: options.approver, device: addition.device, linkAt: addition.linkAt }

@@ -109,6 +109,31 @@ describe('private device-link approval', () => {
     expect(publish).toHaveBeenCalledTimes(['no ack', 'readback conflict'].includes(change) ? 1 : 0)
   })
 
+  it.each([false, true])('rejects an older remote roster when local state advances during signing=%s', async (duringSigning: boolean) => {
+    const relay = new TestRelay(); await relay.start(); cleanup.push(() => relay.stop())
+    const runtime = createNostrRuntime({ relays: [relay.url] }); cleanup.push(() => runtime.close())
+    const { secret, owner, approver, event } = roster()
+    await runtime.publish(event, { requireAck: true })
+    let knownAt = event.created_at + (duringSigning ? 0 : 1)
+    const savePair = vi.fn()
+    const controller = new AbortController(); cleanup.push(() => controller.abort())
+    let approval!: Promise<void>
+    const client = new RemoteSigner({ runtime, relays: [relay.url], signal: controller.signal,
+      onConnectionLink: link => {
+        approval = serveDeviceLink({ link, owner, approver, runtime, signal: controller.signal,
+          getKnownRoster: () => ({ devices: AppKeys.fromEvent(event).getAllDevices(), createdAt: knownAt }),
+          sign: async draft => { knownAt++; return finalizeEvent(draft, secret) }, savePair })
+        approval.catch(() => {})
+      },
+    }); cleanup.push(() => client.close())
+    expect(await client.connect()).toBe(owner)
+    await expect(authorizeSignerDevice({ runtime, relays: [relay.url], signal: controller.signal, owner,
+      signEvent: draft => client.signEvent(draft) })).rejects.toThrow('declined')
+    await expect(approval).rejects.toThrow('device list changed')
+    expect(savePair).not.toHaveBeenCalled()
+    expect(relay.publishedEvents.filter(item => item.kind === 37368)).toHaveLength(1)
+  })
+
   it('bounds approval preparation and cannot publish after a delayed signature returns', async () => {
     const { secret, owner, approver, event } = roster()
     const extra = finalizeEvent(AppKeys.fromEvent(event).getEvent({ ownerPubkey: owner, createdAt: event.created_at }), secret)
