@@ -1,11 +1,35 @@
 import { test, expect } from '@playwright/test'
 import { WebSocket, type RawData } from 'ws'
+import { connect } from 'node:net'
+import type { Server } from 'node:http'
 import { TestRelay, SilentTestRelay } from './test-relay'
 
 type Frame = unknown[]
 type Filter = Record<string, unknown>
 
 for (const Relay of [TestRelay, SilentTestRelay]) {
+  test(`${Relay.name} closes an unfinished HTTP request without waiting for the client`, async () => {
+    const relay = new Relay()
+    await relay.start()
+    const socket = connect(relay.port, '127.0.0.1')
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', resolve)
+      socket.once('error', reject)
+    })
+    const server = Reflect.get(relay, 'server') as Server
+    const received = new Promise<void>(resolve => server.once('request', () => resolve()))
+    socket.write('GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+    await received
+    let stopped = false
+    const stopping = relay.stop().then(() => { stopped = true })
+    try {
+      await expect.poll(() => stopped, { timeout: 1_000 }).toBe(true)
+    } finally {
+      socket.destroy()
+      await stopping
+    }
+  })
+
   test(`${Relay.name} stops even when a client cannot acknowledge closing`, async () => {
     const relay = new Relay()
     await relay.start()

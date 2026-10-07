@@ -5,7 +5,7 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws'
-import type { AddressInfo } from 'net'
+import type { AddressInfo, Socket } from 'net'
 import * as http from 'http'
 
 interface NostrEvent {
@@ -30,8 +30,28 @@ interface Filter {
   [key: string]: unknown
 }
 
+function trackConnections(server: http.Server): Set<Socket> {
+  const sockets = new Set<Socket>()
+  server.on('connection', socket => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+  })
+  return sockets
+}
+
+async function closeRelay(server: http.Server, wss: WebSocketServer, sockets: Set<Socket>): Promise<void> {
+  // Stop accepting connections before closing clients, including HTTP requests
+  // and incomplete upgrades that never became WebSocketServer clients.
+  const httpClosed = new Promise<void>(resolve => server.close(() => resolve()))
+  const webSocketsClosed = new Promise<void>(resolve => wss.close(() => resolve()))
+  for (const ws of wss.clients) ws.terminate()
+  for (const socket of sockets) socket.destroy()
+  await Promise.all([httpClosed, webSocketsClosed])
+}
+
 export class TestRelay {
   private server: http.Server
+  private sockets: Set<Socket>
   private wss: WebSocketServer
   private events: Map<string, NostrEvent> = new Map()
   private eventsByAuthor = new Map<string, Set<string>>()
@@ -50,6 +70,7 @@ export class TestRelay {
 
   constructor() {
     this.server = http.createServer()
+    this.sockets = trackConnections(this.server)
     this.wss = new WebSocketServer({ server: this.server })
 
     this.wss.on('connection', (ws, request) => {
@@ -260,17 +281,7 @@ export class TestRelay {
   }
 
   async stop(): Promise<void> {
-    return new Promise((resolve) => {
-      // Teardown must not wait for a browser to acknowledge the close handshake.
-      for (const ws of this.wss.clients) {
-        ws.terminate()
-      }
-      this.wss.close(() => {
-        this.server.close(() => {
-          resolve()
-        })
-      })
-    })
+    await closeRelay(this.server, this.wss, this.sockets)
   }
 
   get url(): string {
@@ -297,6 +308,7 @@ export class TestRelay {
  */
 export class SilentTestRelay {
   private server: http.Server
+  private sockets: Set<Socket>
   private wss: WebSocketServer
   public port = 0
   public totalConnections = 0
@@ -306,6 +318,7 @@ export class SilentTestRelay {
 
   constructor() {
     this.server = http.createServer()
+    this.sockets = trackConnections(this.server)
     this.wss = new WebSocketServer({ server: this.server })
 
     this.wss.on('connection', (ws) => {
@@ -344,16 +357,7 @@ export class SilentTestRelay {
   }
 
   async stop(): Promise<void> {
-    return new Promise((resolve) => {
-      for (const ws of this.wss.clients) {
-        ws.terminate()
-      }
-      this.wss.close(() => {
-        this.server.close(() => {
-          resolve()
-        })
-      })
-    })
+    await closeRelay(this.server, this.wss, this.sockets)
   }
 
   get url(): string {
