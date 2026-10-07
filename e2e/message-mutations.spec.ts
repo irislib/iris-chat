@@ -11,13 +11,18 @@ async function start(page: Page) {
   await page.goto('/')
   await page.getByRole('button', { name: 'Go', exact: true }).click()
 }
-async function reopen(page: Page, content: string) {
+async function reopen(page: Page, peerName: string, content: string) {
   if (await bubble(page, content).isVisible()) return
   await expect(async () => {
     for (const tab of [page.getByTestId('sidebar-tab-all'), page.getByTestId('sidebar-tab-requests')]) {
       await tab.click()
-      const item = page.getByTestId('sidebar-chat-list').getByRole('button').filter({ hasText: content }).first()
-      if (await item.isVisible()) { await item.click(); return }
+      // A timestamp tie can change the last-message preview after reload.
+      const item = page.getByTestId('sidebar-chat-list').getByRole('button').filter({ has: page.getByText(peerName, { exact: true }) })
+      if (await item.isVisible()) {
+        await item.click()
+        await expect(bubble(page, content)).toBeVisible()
+        return
+      }
     }
     throw new Error('Waiting for conversation')
   }).toPass({ timeout: 10000 })
@@ -107,27 +112,35 @@ test('encrypted peer edits arrive with history and recipient opt-out preserves a
     await start(page)
     await page.getByRole('button', { name: 'New Chat', exact: true }).click()
     await page.getByPlaceholder('Paste invite link').fill(invite)
-    await page.getByPlaceholder('Type a message...').fill('See you Monday')
+    // Establish the encrypted conversation before fixing message timestamps.
+    await page.getByPlaceholder('Type a message...').fill('Ready to edit')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(async () => {
       for (const tab of [receiver.getByTestId('sidebar-tab-all'), receiver.getByTestId('sidebar-tab-requests')]) {
         await tab.click()
-        const item = receiver.getByTestId('sidebar-chat-list').getByRole('button').filter({ hasText: 'See you Monday' }).first()
+        const item = receiver.getByTestId('sidebar-chat-list').getByRole('button').filter({ hasText: 'Ready to edit' }).first()
         if (await item.isVisible()) { await item.click(); return }
       }
       throw new Error('Waiting for incoming chat')
     }).toPass({ timeout: 30000 })
+    await expect(bubble(receiver, 'Ready to edit')).toBeVisible()
+    // Exercise reload with messages sharing the protocol's one-second timestamp.
+    await page.clock.setFixedTime(new Date())
+    await page.getByPlaceholder('Type a message...').fill('See you Monday')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(bubble(receiver, 'See you Monday')).toBeVisible()
     await edit(page, 'See you Monday', 'See you Tuesday')
     await expect(bubble(receiver, 'See you Tuesday')).toBeVisible()
     await bubble(receiver, 'See you Tuesday').getByRole('button', { name: 'Edit history' }).click()
     await expect(receiver.getByRole('dialog').getByText('See you Monday', { exact: true })).toBeVisible()
     await receiver.getByRole('button', { name: 'Close dialog' }).click()
+    const peerName = (await receiver.getByTestId('chat-file-drop-area').locator('header p').innerText()).trim()
+    expect(peerName).toBeTruthy()
     const chatUrl = receiver.url()
     await receiver.goto('/#settings/privacy')
     await receiver.getByRole('switch', { name: 'Allow others to delete their messages' }).click()
     await receiver.goto(chatUrl)
-    await reopen(receiver, 'See you Tuesday')
+    await reopen(receiver, peerName, 'See you Tuesday')
     await remove(page, 'See you Tuesday')
     await expect(bubble(receiver, 'See you Tuesday')).toBeVisible()
     // A subsequent encrypted message proves the receiver processed traffic after the ignored delete.
@@ -135,12 +148,12 @@ test('encrypted peer edits arrive with history and recipient opt-out preserves a
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(bubble(receiver, 'Next message')).toBeVisible()
     await receiver.reload()
-    await reopen(receiver, 'Next message')
+    await reopen(receiver, peerName, 'Next message')
     await expect(bubble(receiver, 'See you Tuesday')).toBeVisible()
     await receiver.goto('/#settings/privacy')
     await receiver.getByRole('switch', { name: 'Allow others to delete their messages' }).click()
     await receiver.goto(chatUrl)
-    await reopen(receiver, 'Next message')
+    await reopen(receiver, peerName, 'Next message')
     await remove(page, 'Next message')
     await expect(bubble(receiver, 'Message deleted')).toBeVisible()
     await page.getByPlaceholder('Type a message...').fill('Keep sender copy')
@@ -157,7 +170,7 @@ test('encrypted peer edits arrive with history and recipient opt-out preserves a
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await expect(bubble(receiver, 'After local deletion')).toBeVisible()
     await receiver.reload()
-    await reopen(receiver, 'After local deletion')
+    await reopen(receiver, peerName, 'After local deletion')
     await expect(bubble(receiver, 'Keep sender')).toHaveCount(0)
     await expect(bubble(page, 'Keep sender correction')).toBeVisible()
   } finally { await context.close() }
