@@ -2,7 +2,7 @@
 import { beforeEach, afterEach, describe, expect, it } from 'vitest'
 import { TestRelay } from '../../e2e/test-relay'
 import { TestRemoteSigner } from '../../e2e/nip46-signer'
-import { RemoteSigner, parseBunkerLink } from './remoteSigner'
+import { RemoteSigner, parseBunkerLink, type RemoteSignerOptions } from './remoteSigner'
 import { authorizeSignerDevice, fetchSignerRoster } from './signerAuthorization'
 import { SilentTestRelay } from '../../e2e/test-relay'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
@@ -107,13 +107,17 @@ describe('NIP-46 transport', () => {
   it('keeps the displayed code usable while waiting for the phone', async () => {
     const { relay, signer, controller } = await setup()
     let link = ''
-    const client = new RemoteSigner({ runtime, relays: [relay.url], signal: controller.signal, timeoutMs: 100,
-      onConnectionLink: value => { link = value } })
+    const options: RemoteSignerOptions = { runtime, relays: [relay.url], signal: controller.signal, timeoutMs: 100,
+      onConnectionLink: value => { link = value } }
+    const client = new RemoteSigner(options)
     cleanups.push(() => client.close())
     const connected = client.connect()
     void connected.catch(() => {})
     await new Promise(resolve => setTimeout(resolve, 200))
     expect(() => client.ensureActive()).not.toThrow()
+    // The short budget exercises waiting for a scan. Actual approval uses the
+    // normal network budget so runner load cannot turn this into a latency test.
+    options.timeoutMs = undefined
     await signer.acceptConnection(link)
     expect(await connected).toBe(signer.ownerPubkey)
   })
