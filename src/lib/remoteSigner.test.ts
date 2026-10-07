@@ -28,6 +28,20 @@ async function setup() {
 }
 
 describe('NIP-46 transport', () => {
+  it.each([
+    ['Device list changed. Try again.', 'Device list changed. Try again.'],
+    ['Could not check message servers. Try again.', 'Could not check message servers. Try again.'],
+    ['Request not authorized or unsupported.', 'Your other device could not approve this link. Try again.'],
+    ['database failed: /private/secret', 'Your other device could not approve this link. Try again.'],
+  ])('shows a safe approval failure for %s', async (error: string, message: string) => {
+    const { signer, controller } = await setup()
+    signer.signingError = error
+    const client = new RemoteSigner({ runtime, relays: [], bunkerLink: signer.bunkerLink, signal: controller.signal })
+    cleanups.push(() => client.close())
+    const owner = await client.connect()
+    await expect(client.signEvent({ pubkey: owner, kind: 37368, created_at: Math.floor(Date.now() / 1000), tags: [], content: '' })).rejects.toThrow(message)
+  })
+
   it('rejects malformed signer links and unsafe relay protocols', () => {
     for (const link of ['https://example.org', 'bunker://broken?relay=wss://example.org', `bunker://${'a'.repeat(64)}?relay=https://example.org`, `bunker://${'a'.repeat(64)}?relay=wss://user:password@example.org`]) {
       expect(() => parseBunkerLink(link)).toThrow()

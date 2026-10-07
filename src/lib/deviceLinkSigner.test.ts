@@ -128,7 +128,7 @@ describe('private device-link approval', () => {
     }); cleanup.push(() => client.close())
     expect(await client.connect()).toBe(owner)
     await expect(authorizeSignerDevice({ runtime, relays: [relay.url], signal: controller.signal, owner,
-      signEvent: draft => client.signEvent(draft) })).rejects.toThrow('declined')
+      signEvent: draft => client.signEvent(draft) })).rejects.toThrow('Device list changed. Try again.')
     await expect(approval).rejects.toThrow('device list changed')
     expect(savePair).not.toHaveBeenCalled()
     expect(relay.publishedEvents.filter(item => item.kind === 37368)).toHaveLength(1)

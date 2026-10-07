@@ -11,6 +11,7 @@ export class TestRemoteSigner {
   requests: string[] = []
   signedEvents: Event[] = []
   denySigning = false
+  signingError?: string
   mutateSigning = false
   holdSigning = false
   ignoreSwitchRelays = false
@@ -90,6 +91,7 @@ export class TestRemoteSigner {
 
   private async sign(request: { client: string; id: string; event: UnsignedEvent }) {
     await this.beforeSign?.()
+    if (this.signingError) return this.respond(request.client, request.id, '', this.signingError)
     if (this.denySigning) return this.respond(request.client, request.id, '', 'Denied')
     const event = finalizeEvent({ ...request.event, ...(this.mutateSigning ? { content: 'changed' } : {}) }, this.ownerSecret)
     this.signedEvents.push(event)

@@ -5,6 +5,29 @@ export type SignerRuntime = Pick<NostrRuntime, 'subscribe' | 'publish' | 'query'
 const HEX_KEY = /^[a-f0-9]{64}$/
 const TIMEOUT = 120_000
 const MAX_MESSAGE = 64 * 1024
+const APPROVAL_ERRORS = new Set([
+  'Device approval expired. Try again.',
+  'Device approval cancelled.',
+  'Use your primary device to approve this link.',
+  'Device list changed. Try again.',
+  'Conflicting device lists. Try again later.',
+  'Could not check message servers. Try again.',
+  'Too many linked devices.',
+  'Device list is too large.',
+  'Device list does not match. Try again.',
+  'Invalid device link. Try again.',
+  'This link already approved a device.',
+  'Could not save device link. Try again.',
+  'Could not approve this link. Try again.',
+])
+
+function approvalErrorMessage(error: unknown): string {
+  if (error === 'Your device list changed. Create a new link.') return 'Device list changed. Try again.'
+  if (typeof error === 'string' && APPROVAL_ERRORS.has(error)) return error
+  if (error === 'Denied' || error === 'Denied by user') return 'Signer declined the request. Try again.'
+  // A peer's arbitrary error can contain request data or implementation details.
+  return 'Your other device could not approve this link. Try again.'
+}
 
 export function signerRelayUrls(values: string[]): string[] {
   const urls = [...new Set(values.map(value => {
@@ -198,7 +221,10 @@ export class RemoteSigner {
         return
       }
       this.pending.delete(response.id)
-      if (response.error) pending.reject(new SignerDeniedError(/unknown method|unsupported|not supported|not implemented|method not found/i.test(String(response.error))))
+      if (response.error) pending.reject(new SignerDeniedError(
+        /unknown method|unsupported|not supported|not implemented|method not found/i.test(String(response.error)),
+        pending.method === 'sign_event' ? approvalErrorMessage(response.error) : undefined,
+      ))
       else if (pending.method === 'switch_relays' && (response.result === null || Array.isArray(response.result))) pending.resolve(JSON.stringify(response.result))
       else if (typeof response.result !== 'string') pending.reject(new Error('Invalid signer response.'))
       else pending.resolve(response.result)
@@ -223,6 +249,6 @@ export class RemoteSigner {
 }
 
 class SignerDeniedError extends Error {
-  constructor(readonly unsupported: boolean) { super('Signer declined the request. Try again.') }
+  constructor(readonly unsupported: boolean, message = 'Signer declined the request. Try again.') { super(message) }
 }
 class SignerRequestTimeout extends Error {}
