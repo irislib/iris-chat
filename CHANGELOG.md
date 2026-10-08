@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.46 - 2026-10-08
+
+- Show clearer device-link errors without waiting for a timeout.
+- Recover connections more reliably and keep repeated connection attempts bounded.
+
 ## 2.6.44 - 2026-10-06
 
 - Keep the device-link code available until you approve or cancel it.
