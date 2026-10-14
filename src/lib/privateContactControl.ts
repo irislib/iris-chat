@@ -35,6 +35,7 @@ export function sendPrivateContactDocument(owner: string, document: PrivateConta
 export async function requestPrivateContactSync(owner: string): Promise<void> {
   if (!canSend(owner)) return
   await queuePrivateContacts(owner)
+  await (await import('./privateStateControl')).retryPrivateStateControls(owner)
   await sendPrivateDeviceLabels(owner)
   if (!await send(owner, buildPrivateContactRequest(owner))) throw new Error('Private device sync is not ready')
 }

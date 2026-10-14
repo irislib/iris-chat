@@ -5,7 +5,7 @@ use std::{
 };
 
 use nostr::Event;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

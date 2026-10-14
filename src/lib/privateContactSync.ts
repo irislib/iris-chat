@@ -1,6 +1,7 @@
+import { privateContactFacts, privateContactDocumentsFromFacts, storePrivateContactFacts, restorePrivateContactFacts, type PrivateContactFact } from 'nostr-social-graph/privateContactFacts'
 import { migrateStoredPrivateContacts, privateContactStorageKey } from './privateContactMigration'
 import { get, writable } from 'svelte/store'
-import { migratePrivateContactSync, privateContactValues,
+import { privateContactValues,
   privateContactDocuments, type PrivateContactDocument, type PrivateContactPatch,
   type PrivateContactSyncState } from 'nostr-social-graph/privateContactSyncV2'
 import { createPrivateContactSyncController, type PrivateContactSyncController,
@@ -53,17 +54,18 @@ async function activate(account: Identity | null) {
   const accountOwner = owner
   const load = () => {
     const saved = localStorage.getItem(keyFor(accountOwner))
-    return saved ? migratePrivateContactSync(JSON.parse(saved), accountOwner) : null
+    return saved ? restorePrivateContactFacts(JSON.parse(saved), accountOwner) : null
   }
   let state: PrivateContactSyncState
   try {
     state = await migrateStoredPrivateContacts(accountOwner)
+    await (await import('./privateStateStore')).restorePrivateBlocks(accountOwner)
   } catch { if (token === generation) privateContactsStatus.set('error'); return }
   if (token !== generation) return
   const controller = createPrivateContactSyncController({ state,
     withLock: async run => { await navigator.locks.request(keyFor(accountOwner), run) },
     load,
-    save: next => localStorage.setItem(keyFor(accountOwner), JSON.stringify(next)),
+    save: next => localStorage.setItem(keyFor(accountOwner), JSON.stringify(storePrivateContactFacts(next))),
     send: async document => {
       if (token !== generation) return false
       const { sendPrivateContactDocument } = await import('./privateContactControl')
@@ -117,4 +119,9 @@ export function startPrivateContactSync() {
     document.removeEventListener('visibilitychange', visible)
     window.removeEventListener('storage', changed)
   }
+}
+
+export function getPrivateContactFacts(): PrivateContactFact[] { return privateContactFacts(getPrivateContactDocuments()) }
+export async function mergePrivateContactFacts(account: string, facts: PrivateContactFact[]) {
+  await mergePrivateContacts(account, privateContactDocumentsFromFacts(facts, account))
 }

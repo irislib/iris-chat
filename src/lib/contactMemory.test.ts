@@ -1,3 +1,7 @@
+vi.mock('./privateStateControl', () => ({ writeNameApproval: async (owner: string, contact: string, firstSeenName: string, change: unknown) => {
+  const key = `iris-contact-memory:v1:${owner}:${contact}`, old = JSON.parse(localStorage.getItem(key)!);
+  localStorage.setItem(key, JSON.stringify({ ...old, first_seen_name: firstSeenName, accepted_name: (change as { accepted_name: string }).accepted_name, name_changes: [change] }));
+} }))
 import { beforeEach, expect, it, vi } from 'vitest'
 vi.mock('./privateContactSync', async () => {
   const { writable } = await import('svelte/store')
@@ -15,20 +19,20 @@ beforeEach(() => {
   for (const owner of [account, other]) localStorage.removeItem(`iris-contact-memory:v1:${owner}:${person}`)
 })
 
-it('remembers only after interaction, keeps the first name, and refuses stale approval', () => {
+it('remembers only after interaction, keeps the first name, and refuses stale approval', async () => {
   observeContactProfile(account, person, 'Alice')
   expect(contactMemory.get(account, person)).toBeNull()
   rememberContact(account, person)
   observeContactProfile(account, person, 'Alicia')
   expect(contactMemory.get(account, person)?.accepted_name).toBe('Alice')
   observeContactProfile(account, person, 'Alice Again')
-  expect(approveContactName(account, person, 'Alicia')).toBe(false)
-  expect(approveContactName(account, person, 'Alice Again')).toBe(true)
+  expect(await approveContactName(account, person, 'Alicia')).toBe(false)
+  expect(await approveContactName(account, person, 'Alice Again')).toBe(true)
   expect(contactMemory.get(account, person)).toMatchObject({
     first_seen_name: 'Alice', accepted_name: 'Alice Again', favorite: false,
     name_changes: [{ previous_name: 'Alice', accepted_name: 'Alice Again' }],
   })
-  expect(approveContactName(account, person, 'Alice Again')).toBe(false)
+  expect(await approveContactName(account, person, 'Alice Again')).toBe(false)
 })
 
 it('scopes private favorites and names to each account and accepts metadata arriving later', async () => {

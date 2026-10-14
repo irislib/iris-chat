@@ -1,6 +1,7 @@
+import { privateStateControlEvent } from './privateStateProtocol'
 // @vitest-environment node
 import recordFixtures from './fixtures/deviceSyncRecords.json'
-import { type DeviceSyncRecord } from './deviceSyncRecords'
+import { deviceSyncRecordId, type DeviceSyncRecord } from './deviceSyncRecords'
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -56,7 +57,7 @@ controlInterop('native-generated private control admission', () => {
   beforeAll(() => {
     if (!controlFixturePath) throw new Error('IRIS_PRIVATE_CONTROL_FIXTURE_INPUT must select the generated native Core fixture')
     controls = readNativePrivateControls(controlFixturePath)
-    expect(controls.cases.map(entry => entry.kind).sort()).toEqual([10449, 10450, 10452, 10453])
+    expect(controls.cases.map(entry => entry.kind).sort()).toEqual([10449, 10450, 10452, 10453, 10454, 10455])
   })
 
   it.each(['event', 'legacyEvent'] as const)('dispatches native %s controls through the production durable callback', async (variant: 'event' | 'legacyEvent') => {
@@ -73,7 +74,7 @@ controlInterop('native-generated private control admission', () => {
         expect(event.tags.filter(tag => tag[0] === 'p')).toEqual(variant === 'event' ? [['p', controls.owner]] : [])
         await receiver.deliver(event, controls.owner, receiver.meta)
       }
-      expect(received.map(event => event.kind).sort()).toEqual([10449, 10450, 10452, 10453])
+      expect(received.map(event => event.kind).sort()).toEqual([10449, 10450, 10452, 10453, 10454, 10455])
     } finally { receiver.stop() }
   })
 
@@ -88,7 +89,7 @@ controlInterop('native-generated private control admission', () => {
       expect(received).toEqual([])
       receiver.state.isCurrentDeviceRegistered = true
       for (const entry of controls.cases) await receiver.deliver(entry.legacyEvent, controls.owner, receiver.meta)
-      expect(received.map(event => event.kind).sort()).toEqual([10449, 10450, 10452, 10453])
+      expect(received.map(event => event.kind).sort()).toEqual([10449, 10450, 10452, 10453, 10454, 10455])
     } finally { receiver.stop() }
   })
 
@@ -117,12 +118,32 @@ interop('iris-chat-rs device-sync interop', () => {
     if (build.status !== 0) throw new Error(build.error?.message || build.stderr || build.stdout || 'Rust fixture build failed')
   }, 120_000)
 
+  it('matches current native private facts, approvals and block records', () => {
+    const source = process.env.IRIS_PRIVATE_STATE_FIXTURE_INPUT
+    if (!source) throw new Error('IRIS_PRIVATE_STATE_FIXTURE_INPUT must select the generated native state fixture')
+    const fixture = JSON.parse(readFileSync(source, 'utf8')) as { owner: string; records: Array<{ id: string; record: DeviceSyncRecord }> }
+    expect(new Set(fixture.records.map(entry => entry.record.type))).toEqual(new Set(['privateContactFact','privateNameApproval','privateBlock']))
+    for (const entry of fixture.records) {
+      const packet = { v: 1 as const, type: 'historyRecords' as const, session: 'f'.repeat(32), records: [entry.record], requested: [entry.id] }
+      const encoded = encodeDeviceSyncPacket(packet)
+      expect(new TextDecoder().decode(runNative('record-id', new TextEncoder().encode(JSON.stringify(entry.record))))).toBe(entry.id)
+      expect(parseDeviceSyncPacket(runNative('roundtrip', encoded), fixture.owner)).toEqual(packet)
+    }
+  })
+
   it.each(recordFixtures)('matches the native typed $name identity and packet', (fixture: typeof recordFixtures[number]) => {
     const packet = { v: 1 as const, type: 'historyRecords' as const, session: 'f'.repeat(32), records: [fixture.record as DeviceSyncRecord], requested: [fixture.id] }
     const encoded = encodeDeviceSyncPacket(packet)
     const wire = JSON.parse(new TextDecoder().decode(encoded))
     expect(new TextDecoder().decode(runNative('record-id', new TextEncoder().encode(JSON.stringify(wire.records[0]))))).toBe(fixture.id)
     expect(parseDeviceSyncPacket(runNative('roundtrip', encoded), owner)).toEqual(packet)
+  })
+
+  it.each([undefined, 200])('matches native exact read markers with expiry %s', (expiresAtSecs: number | undefined) => {
+    const record: DeviceSyncRecord = { type: 'messageRead', chatId: peer, messageId: 'c'.repeat(64), read: { createdAtSecs: 100, ...(expiresAtSecs !== undefined && { expiresAtSecs }) } }
+    const packet = { v: 1 as const, type: 'historyRecords' as const, session: 'f'.repeat(32), records: [record], requested: [deviceSyncRecordId(record)] }
+    expect(new TextDecoder().decode(runNative('record-id', new TextEncoder().encode(JSON.stringify(record))))).toBe(deviceSyncRecordId(record))
+    expect(parseDeviceSyncPacket(runNative('roundtrip', encodeDeviceSyncPacket(packet)), owner)).toEqual(packet)
   })
 
   it('extracts the service, record, page, and framing bounds from native source', () => {
@@ -140,8 +161,9 @@ interop('iris-chat-rs device-sync interop', () => {
     const nativeId = recordFixtures[0].id
     const session = '1'.repeat(32), linkId = '2'.repeat(64)
     const packets = [
-      { v: 1 as const, type: 'request' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0 },
-      { v: 1 as const, type: 'pageEnd' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, next: null },
+      { v: 1 as const, type: 'request' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, privateFacts: 1 as const, privateEvents: 1 as const, nameApprovals: 1 as const, readStates: 2 as const },
+      { v: 1 as const, type: 'pageEnd' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, next: null, privateFacts: 1 as const, privateEvents: 1 as const, nameApprovals: 1 as const, readStates: 2 as const },
+      { v: 1 as const, type: 'historyOpen' as const, scope: 'state' as const, session, since: 0, until: 0, frame, privateFacts: 1 as const, privateEvents: 1 as const, nameApprovals: 1 as const, readStates: 2 as const },
       { v: 1 as const, type: 'historyOpen' as const, scope: 'history' as const, prefix: 'abc', session, linkId, since: 0, until: 100, frame },
       { v: 1 as const, type: 'historyFrame' as const, session, frame },
       { v: 1 as const, type: 'historyNeed' as const, session, ids: [nativeId] },
@@ -401,7 +423,7 @@ function nativeControlReceiver(controls: NativePrivateControls, receive: (event:
   let deliver: (event: Rumor, from: string, meta?: OnEventMeta) => Promise<void> = async () => { throw new Error('Durable callback was not registered') }
   const stop = registerPrivateControlEvents({
     onDurableSessionEvent(kinds, callback) {
-      expect([...kinds].sort()).toEqual([10449, 10450, 10452, 10453])
+      expect([...kinds].sort()).toEqual([10449, 10450, 10452, 10453, 10454, 10455])
       deliver = callback
       return () => {}
     },
@@ -412,7 +434,9 @@ function nativeControlReceiver(controls: NativePrivateControls, receive: (event:
 
 function assertNativeControlPayload(event: Rumor, controls: NativePrivateControls): void {
   const value: unknown = JSON.parse(event.content)
-  if (event.kind === 10452) {
+  if (event.kind === 10454 || event.kind === 10455) {
+    expect(privateStateControlEvent(value, event.kind, controls.owner)).toBeDefined()
+  } else if (event.kind === 10452) {
     const control = parsePrivateContactControl(value, controls.owner)
     expect(control.type).toBe('private-contact-sync')
     if (control.type !== 'private-contact-sync') throw new Error('Expected a native contact update')

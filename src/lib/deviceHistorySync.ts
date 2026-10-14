@@ -1,14 +1,14 @@
 import { Reconciliation } from 'nostr-pubsub-reconcile'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
-import { deviceSyncPacketByteLength, DEVICE_SYNC_MAX_PACKET_BYTES, DEVICE_SYNC_RECORD_BATCH, type DeviceHistoryPacket, type DeviceSyncMessage } from './deviceSyncProtocol'
+import { deviceSyncPacketByteLength, DEVICE_SYNC_MAX_PACKET_BYTES, DEVICE_SYNC_RECORD_BATCH, type PrivateStateCapabilities, type DeviceHistoryPacket, type DeviceSyncMessage } from './deviceSyncProtocol'
 import { deviceSyncRecordId, deviceSyncRecordScope, deviceSyncRecordTime, type DeviceSyncRecord, type DeviceSyncScope } from './deviceSyncRecords'
 
 export type HistoryRecord = Pick<DeviceSyncMessage, 'chatId' | 'id' | 'createdAt'>
 export const historyRecordId = (message: Pick<HistoryRecord, 'chatId' | 'id'>): string =>
   bytesToHex(sha256(new TextEncoder().encode(JSON.stringify([message.chatId, message.id]))))
 
-type Window = { messageMutations?: 1; since: number; until: number; linkId?: string; scope: DeviceSyncScope }
+type Window = PrivateStateCapabilities & { messageMutations?: 1; since: number; until: number; linkId?: string; scope: DeviceSyncScope }
 interface PartitionRun { pending: string[]; imported: number; withheld: boolean; deferred?: boolean; retried?: boolean; restart?: { since: number; until?: number; linkId?: string } }
 export interface RecordImportResult { imported: number; deferred: string[] }
 export interface DeviceRecordReference { id: string; createdAt: number; locator?: { type: DeviceSyncRecord['type']; key: string[] } }
@@ -26,6 +26,9 @@ interface HistorySession extends Window {
   run?: PartitionRun
 }
 interface HistoryPeer {
+  capabilities?: PrivateStateCapabilities
+  stateReady?: boolean
+  waitingHistory?: { since: number; end?: number; linkId?: string }
   floor: number
   latest?: number
   incoming?: HistorySession
@@ -59,10 +62,10 @@ export class DeviceHistorySync {
   }) {}
 
   reset(peer?: string): void { if (peer) this.peers.delete(peer); else this.peers.clear() }
-  negotiate(peer: string, floor: number): void {
+  negotiate(peer: string, floor: number, capabilities: PrivateStateCapabilities = {}): void {
     const state = this.peers.get(peer)
-    if (state) state.floor = floor
-    else if (this.peers.size < 32) this.peers.set(peer, { floor })
+    if (state) { state.floor = floor; state.capabilities = capabilities }
+    else if (this.peers.size < 32) this.peers.set(peer, { floor, capabilities })
   }
   observe(peer: string, timestamps: Iterable<number>): void {
     const state = this.peers.get(peer)
@@ -71,11 +74,12 @@ export class DeviceHistorySync {
       state.latest = Math.max(state.latest ?? 0, timestamp)
     }
   }
-  startState(peer: string): Promise<void> { return this.start(peer, 0, 0, undefined, 'state') }
+  startState(peer: string): Promise<void> { const state = this.peers.get(peer); if (state) state.stateReady = false; return this.start(peer, 0, 0, undefined, 'state') }
   start(peer: string, since: number, end?: number, linkId?: string, scope: DeviceSyncScope = 'history'): Promise<void> {
     return this.queue(peer, async () => {
       const state = this.peers.get(peer)
       if (!state || !this.valid(peer, state)) return
+      if (scope === 'history' && !state.stateReady && Object.values(state.capabilities ?? {}).some(Boolean)) { state.waitingHistory = { since, end, linkId }; return }
       const outgoing = state[slot(true, scope)]
       if (outgoing && this.live(peer, state, outgoing)) {
         if (!outgoing.run!.restart?.linkId || linkId) outgoing.run!.restart = { since, until: end, linkId }
@@ -83,7 +87,7 @@ export class DeviceHistorySync {
       }
       const until = scope === 'state' ? 0 : end ?? Math.max(since, Math.floor(this.now() / 1000), state.latest ?? 0)
       if (scope === 'history') this.options.progress?.(peer, since, 0)
-      await this.begin(peer, state, { scope, since, until, linkId }, { pending: [''], imported: 0, withheld: false })
+      await this.begin(peer, state, { ...state.capabilities, scope, since, until, linkId }, { pending: [''], imported: 0, withheld: false })
     })
   }
 
@@ -99,7 +103,7 @@ export class DeviceHistorySync {
         const incoming = state[slot(false, packet.scope)]
         if (incoming && this.live(peer, state, incoming)) return
         let session: HistorySession
-        try { session = await this.session(packet.session, packet, false, packet.prefix ?? '', peer) }
+        try { session = await this.session(packet.session, { ...packet, ...intersectCapabilities(packet, state.capabilities ?? {}) }, false, packet.prefix ?? '', peer) }
         catch (error) {
           if (!this.overflow(error)) throw error
           if (this.valid(peer, state)) await this.options.send(peer, { v: 1, type: 'historyOverflow', session: packet.session })
@@ -153,7 +157,7 @@ export class DeviceHistorySync {
         await this.send(peer, state, session, { v: 1, type: 'historyRecords', session: session.id, records: [], requested: packet.ids })
       } else if (packet.type === 'historyRecords' && session.initiator) {
         const ids = packet.records.map(deviceSyncRecordId)
-        if (packet.records.some((record, index) => deviceSyncRecordScope(record) !== session.scope || deviceSyncRecordTime(record) < session.since || deviceSyncRecordTime(record) > session.until ||
+        if (packet.records.some((record, index) => !privateRecordEnabled(record.type, session) || deviceSyncRecordScope(record) !== session.scope || deviceSyncRecordTime(record) < session.since || deviceSyncRecordTime(record) > session.until ||
           !ids[index].startsWith(session.prefix) || !session.requested.has(ids[index]) || session.received.has(ids[index])) || new Set(ids).size !== ids.length ||
           new Set(packet.requested).size !== packet.requested.length || packet.requested.some(id => !session.requested.has(id))) throw new Error('unsolicited history record')
         const result = await this.options.applyRecords(peer, packet.records, session.scope, session.since, session.until, session.linkId, () => this.live(peer, state, session))
@@ -193,6 +197,11 @@ export class DeviceHistorySync {
         } else if (session.scope === 'history') this.options.unavailable?.(peer, session.since)
         return
       }
+      if (session.scope === 'state' && !run.withheld) {
+        state.stateReady = true
+        const waiting = state.waitingHistory; state.waitingHistory = undefined
+        if (waiting) void this.start(peer, waiting.since, waiting.end, waiting.linkId).catch(() => this.reset(peer))
+      }
       if (session.scope === 'history') await this.options.complete?.(peer, session.since, session.until, run.withheld)
       if (run.restart && (session.since > 0 || session.scope === 'state')) {
         const { since, until, linkId } = run.restart
@@ -219,14 +228,14 @@ export class DeviceHistorySync {
       if (!this.valid(peer, state)) return
       session.run = run
       state[slot(true, window.scope)] = session
-      await this.send(peer, state, session, { v: 1, type: 'historyOpen', messageMutations: 1, session: session.id, scope: session.scope,
+      await this.send(peer, state, session, { v: 1, type: 'historyOpen', ...state.capabilities, messageMutations: 1, session: session.id, scope: session.scope,
         since: session.since, until: session.until, ...(session.linkId && { linkId: session.linkId }), ...(prefix && { prefix }), frame: bytesToHex(await session.engine.initiate()) })
       return
     }
   }
   private async session(id: string, window: Window, initiator: boolean, prefix: string, peer: string): Promise<HistorySession> {
     const inventory = (await this.options.recordInventory(window.scope, window.since, window.until, initiator, prefix, peer))
-      .filter(record => (initiator || window.messageMutations === 1 || record.locator?.type !== 'messageMutation') && record.createdAt >= window.since && record.createdAt <= window.until && record.id.startsWith(prefix))
+      .filter(record => privateRecordEnabled(record.locator?.type, window) && (initiator || window.messageMutations === 1 || record.locator?.type !== 'messageMutation') && record.createdAt >= window.since && record.createdAt <= window.until && record.id.startsWith(prefix))
     const records = new Map(inventory.map(record => [record.id, record]))
     if (records.size > Math.max(1, Math.min(this.options.maxInventoryRecords ?? 100_000, 100_000))) throw new Error('reconciliation window exceeds record limit')
     for (const peer of this.peers.values()) for (const key of ['incoming', 'outgoing', 'stateIncoming', 'stateOutgoing'] as const) {
@@ -254,4 +263,16 @@ export class DeviceHistorySync {
     void queued.finally(() => { if (this.queues.get(peer) === queued) this.queues.delete(peer) }).catch(() => undefined)
     return queued
   }
+}
+
+function privateRecordEnabled(type: string | undefined, caps: PrivateStateCapabilities): boolean {
+  return type === 'privateContactFact' ? caps.privateFacts === 1 : type === 'privateBlock' ? caps.privateEvents === 1 :
+    type === 'privateNameApproval' ? caps.nameApprovals === 1 : type === 'messageRead' ? caps.readStates === 2 : true
+}
+
+function intersectCapabilities(a: PrivateStateCapabilities, b: PrivateStateCapabilities): PrivateStateCapabilities {
+  return { privateFacts: a.privateFacts === 1 && b.privateFacts === 1 ? 1 : undefined,
+    privateEvents: a.privateEvents === 1 && b.privateEvents === 1 ? 1 : undefined,
+    nameApprovals: a.nameApprovals === 1 && b.nameApprovals === 1 ? 1 : undefined,
+    readStates: a.readStates === 2 && b.readStates === 2 ? 2 : undefined }
 }

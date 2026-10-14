@@ -15,6 +15,7 @@ jobs:
       IRIS_CHAT_RS_CORE_DIR: ${{ github.workspace }}/iris-chat-rs/core
       IRIS_DIRECT_FILES_TARGET_DIR: ${{ github.workspace }}/iris-chat-rs/core/target
       IRIS_PRIVATE_CONTROL_FIXTURE_INPUT: ${{ github.workspace }}/iris-chat/test-results/private-controls/native-private-controls.json
+      IRIS_PRIVATE_STATE_FIXTURE_INPUT: ${{ github.workspace }}/iris-chat/test-results/private-controls/native-private-state.json
     defaults:
       run:
         working-directory: iris-chat
@@ -68,9 +69,13 @@ jobs:
             cargo test --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" \
             --lib native_private_control_interop_fixture -- --nocapture
           test -s "$IRIS_PRIVATE_CONTROL_FIXTURE_INPUT"
+          IRIS_PRIVATE_STATE_FIXTURE_OUTPUT="$IRIS_PRIVATE_STATE_FIXTURE_INPUT" \
+            cargo test --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" \
+            --lib private_contacts_negentropy_repairs_dropped_snapshots_and_exports_interop -- --nocapture
+          test -s "$IRIS_PRIVATE_STATE_FIXTURE_INPUT"
           git -C "$IRIS_CHAT_RS_CORE_DIR" rev-parse HEAD > test-results/private-controls/source-commit.txt
           cd test-results/private-controls
-          sha256sum native-private-controls.json > SHA256SUMS
+          sha256sum native-private-controls.json native-private-state.json > SHA256SUMS
 
       - name: Build locked native direct-file fixture
         id: direct_fixture

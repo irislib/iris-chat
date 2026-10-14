@@ -47,7 +47,8 @@ export interface DeviceSyncMessage {
 
 export type DeviceSyncPage = { kind: 'metadata'; offset: number }
 
-export interface DeviceSyncRequest {
+export interface PrivateStateCapabilities { privateFacts?: 1; privateEvents?: 1; nameApprovals?: 1; readStates?: 2 }
+export interface DeviceSyncRequest extends PrivateStateCapabilities {
   v: 1
   type: 'request'
   rosterAt: number
@@ -61,7 +62,7 @@ export interface DeviceSyncResyncRequired {
   type: 'resyncRequired'
 }
 
-export interface DeviceSyncPageEnd {
+export interface DeviceSyncPageEnd extends PrivateStateCapabilities {
   v: 1
   type: 'pageEnd'
   rosterAt: number
@@ -71,7 +72,7 @@ export interface DeviceSyncPageEnd {
 }
 
 export type DeviceHistoryPacket =
-  | { v: 1; type: 'historyOpen'; messageMutations?: 1; session: string; linkId?: string; scope: DeviceSyncScope; prefix?: string; since: number; until: number; frame: string }
+  | (PrivateStateCapabilities & { v: 1; type: 'historyOpen'; messageMutations?: 1; session: string; linkId?: string; scope: DeviceSyncScope; prefix?: string; since: number; until: number; frame: string })
   | { v: 1; type: 'historyFrame'; session: string; frame: string }
   | { v: 1; type: 'historyNeed'; session: string; ids: string[] }
   | { v: 1; type: 'historyRecords'; session: string; records: DeviceSyncRecord[]; requested: string[] }
@@ -191,10 +192,14 @@ export function parseDeviceSyncPacket(
   }
 }
 
-function parseHistoryCapability(value: Record<string, unknown>): { recordReconcile?: 1; historySince?: number } {
+function parsePrivateCapabilities(value: Record<string, unknown>): PrivateStateCapabilities {
+  return { ...(value.privateFacts === 1 && { privateFacts: 1 }), ...(value.privateEvents === 1 && { privateEvents: 1 }),
+    ...(value.nameApprovals === 1 && { nameApprovals: 1 }), ...(value.readStates === 2 && { readStates: 2 }) }
+}
+function parseHistoryCapability(value: Record<string, unknown>): PrivateStateCapabilities & { recordReconcile?: 1; historySince?: number } {
   if (value.recordReconcile !== undefined && value.recordReconcile !== 1) fail('record capability is invalid')
   if (value.historySince !== undefined && !isTime(value.historySince)) fail('history cutoff is invalid')
-  return { ...(value.recordReconcile === 1 && { recordReconcile: 1 as const }),
+  return { ...parsePrivateCapabilities(value), ...(value.recordReconcile === 1 && { recordReconcile: 1 as const }),
     ...(value.historySince !== undefined && { historySince: value.historySince as number }) }
 }
 
@@ -222,7 +227,7 @@ function parseHistoryPacket(value: Record<string, unknown>): DeviceHistoryPacket
   if (value.scope === 'state' && (value.since !== 0 || value.until !== 0 || value.linkId !== undefined)) fail('state window is invalid')
   if (value.prefix !== undefined && (typeof value.prefix !== 'string' || !/^[0-9a-f]{0,64}$/.test(value.prefix))) fail('history prefix is invalid')
   if (value.messageMutations !== undefined && value.messageMutations !== 1) fail('message mutation capability is invalid')
-  return { ...base, ...(value.messageMutations === 1 && { messageMutations: 1 as const }), ...(value.prefix !== undefined && { prefix: value.prefix as string }), ...(value.linkId !== undefined && { linkId: value.linkId as string }), scope: value.scope as DeviceSyncScope, type: 'historyOpen', since: value.since, until: value.until, frame: value.frame }
+  return { ...base, ...parsePrivateCapabilities(value), ...(value.messageMutations === 1 && { messageMutations: 1 as const }), ...(value.prefix !== undefined && { prefix: value.prefix as string }), ...(value.linkId !== undefined && { linkId: value.linkId as string }), scope: value.scope as DeviceSyncScope, type: 'historyOpen', since: value.since, until: value.until, frame: value.frame }
 }
 
 function parsePage(value: unknown): DeviceSyncPage {

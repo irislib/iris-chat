@@ -1,3 +1,4 @@
+import { privateStateVersion } from './privateStateStore'
 import { createContactMemoryStore } from '@iris/svelte-ui/contactMemoryStore'
 import { putSessionManagerValue } from './storage'
 import { emptyContactMemory } from '@iris/svelte-ui/contactMemory'
@@ -26,7 +27,8 @@ export const contactMemory = {
     let version = 0
     const a = localMemory.subscribe(() => run(++version))
     const b = privateContactsVersion.subscribe(() => run(++version))
-    return () => { a(); b() }
+    const c = privateStateVersion.subscribe(() => run(++version))
+    return () => { a(); b(); c() }
   },
 }
 const publicNames = new Map<string, string | null>()
@@ -68,6 +70,11 @@ export async function favoriteContact(account: string, pubkey: string, favorite:
   localMemory.setFavorite(account, pubkey, favorite, publicNames.get(pubkey) ?? null)
 }
 
-export function approveContactName(account: string, pubkey: string, expected: string) {
-  return contactMemory.approve(account, pubkey, expected, publicNames.get(pubkey) ?? null, Math.floor(Date.now() / 1000))
+export async function approveContactName(account: string, pubkey: string, expected: string) {
+  const memory = contactMemory.get(account, pubkey)
+  if (!expected.trim() || expected !== publicNames.get(pubkey) || !memory?.accepted_name || memory.accepted_name === expected) return false
+  const { writeNameApproval } = await import('./privateStateControl')
+  await writeNameApproval(account, pubkey, memory.first_seen_name ?? memory.accepted_name, { previous_name: memory.accepted_name, accepted_name: expected, accepted_at_secs: Math.floor(Date.now() / 1000) })
+  localMemory.refresh()
+  return true
 }

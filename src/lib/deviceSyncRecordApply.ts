@@ -1,3 +1,4 @@
+import { projectMessageRead } from './privateStateStore'
 import { messageWithMutations, refreshMessageMutationView } from './messageMutations'
 import { get } from 'svelte/store'
 import { getEventHash, type Event } from 'nostr-tools'
@@ -91,7 +92,7 @@ export async function applyProfileRecord(owner: string, event: Event, contacts: 
 
 export async function persistMessageWithReactions(owner: string, message: StoredMessage): Promise<StoredMessage> {
   const updated = await db.transaction('rw', db.messages, db.sessionManager, async () => {
-    const projected = await messageWithMutations(owner, await messageWithReactionHeads(owner, message))
+    const projected = await projectMessageRead(owner, await messageWithMutations(owner, await messageWithReactionHeads(owner, message)))
     await db.messages.put(projected)
     return projected
   })
@@ -126,7 +127,7 @@ export async function admitRecordMessage(owner: string, message: StoredMessage,
       }
       incoming.reactions = Object.fromEntries(Object.entries(reactions).filter(([, authors]) => authors.length))
     }
-    const projected = await messageWithMutations(owner, await messageWithReactionHeads(owner, incoming))
+    const projected = await projectMessageRead(owner, await messageWithMutations(owner, await messageWithReactionHeads(owner, incoming)))
     return await admitHistoryMessage(projected, authorized) ? projected : undefined
   })
 }

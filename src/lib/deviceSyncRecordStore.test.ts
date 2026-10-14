@@ -1,3 +1,4 @@
+vi.mock('./privateContactSync', () => ({ getPrivateContactFacts: () => [], mergePrivateContactFacts: vi.fn() }))
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get, writable } from 'svelte/store'

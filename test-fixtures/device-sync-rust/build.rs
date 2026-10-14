@@ -52,7 +52,8 @@ fn main() {
         .expect("DeviceSyncPage enum");
     let contract_end = item_end(&protocol, page_at);
     let contract = format!(
-        "{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
+        derived_item(&read(model_path.clone()), "struct MessageReadState").replace("pub(super) ", ""),
         derived_item(&read(model_path), "struct ChatReadState").replace("pub(super) ", ""),
         derived_item(&read(mute_path), "struct ChatMuteState").replace("pub(crate) ", ""),
         derived_item(&read(pin_path), "struct ChatPinState").replace("pub(crate) ", ""),

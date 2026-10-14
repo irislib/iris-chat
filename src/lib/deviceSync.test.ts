@@ -1,3 +1,5 @@
+vi.mock('./privateStateView', () => ({ refreshPrivateStateView: async () => {} }))
+vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateStateRecords: async function* () {}, privateHistoryAllowed: async () => true }))
 import { get, writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
 import { Reconciliation } from 'nostr-pubsub-reconcile'
@@ -878,7 +880,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        recordReconcile: 1,
+        recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2,
         page: { kind: 'metadata', offset: 32 },
       }))
 
@@ -887,7 +889,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        recordReconcile: 1,
+        recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2,
       }))
 
       transport.send.mockRejectedValueOnce(new Error('queue full'))
@@ -895,7 +897,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        recordReconcile: 1,
+        recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2,
       }))).rejects.toThrow('queue full')
       expect(transport.sendFirst).toHaveBeenLastCalledWith(
         source,

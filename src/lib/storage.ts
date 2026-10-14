@@ -172,7 +172,13 @@ export async function saveMessage(message: StoredMessage): Promise<void> {
 }
 
 export async function getMessagesForSession(sessionId: string): Promise<StoredMessage[]> {
-  return db.messages.where('sessionId').equals(sessionId).toArray()
+  const rows = await db.messages.where('sessionId').equals(sessionId).toArray()
+  const owner = (await db.sessionManager.get('v1/device-manager/owner-pubkey'))?.value
+  if (typeof owner !== 'string') return rows
+  const { privateHistoryAllowed, projectMessageRead } = await import('./privateStateStore')
+  const filtered: StoredMessage[] = []
+  for (const row of rows) if (await privateHistoryAllowed(owner, row.isMine ? owner : row.senderPubkey ?? sessionId, Math.floor(row.timestamp / 1000))) filtered.push(await projectMessageRead(owner, row))
+  return filtered
 }
 
 export async function deleteMessagesForSession(sessionId: string): Promise<void> {

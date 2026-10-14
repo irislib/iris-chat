@@ -1,3 +1,4 @@
+import { privateBlockedContacts, blockedContacts } from './privateBlockProjection'
 import { get, writable } from 'svelte/store'
 import type { FipsNode } from '@fips/core'
 import { chats, recordCallHistory } from './chat'
@@ -138,10 +139,11 @@ export function attachCalls(node: FipsNode, peers: () => string[], connect?: (ow
   })
   const checkContact = () => { session?.checkContact() }
   const decisionsUnsubscribe = messageRequests.subscribe(checkContact)
+  const blocksUnsubscribe = privateBlockedContacts.subscribe(checkContact)
   const chatsUnsubscribe = chats.subscribe(checkContact)
   runtimeCleanup = () => {
     cancelDismissal()
-    unsubscribe(); settingsUnsubscribe(); decisionsUnsubscribe(); chatsUnsubscribe()
+    unsubscribe(); settingsUnsubscribe(); decisionsUnsubscribe(); blocksUnsubscribe(); chatsUnsubscribe()
     window.removeEventListener('pointerdown', ringtone.unlock)
     window.removeEventListener('keydown', ringtone.unlock)
     window.removeEventListener('pagehide', clearAlerts)
@@ -201,6 +203,7 @@ export async function startCall(owner: string, video: boolean) {
   let startedId: string | undefined
   const initialSession = session
   try {
+    if (blockedContacts(getPubkey()).has(owner)) throw new Error('Unblock this person to call.')
     if (!session) throw new Error('Calls are not ready yet. Register this device in Settings.')
     if (!(video ? get(callSettings).video : get(callSettings).voice)) return
     const current = session

@@ -1,3 +1,5 @@
+import { sendOwnReadState, applyOwnReadTag } from './privateStateControl'
+import { privateHistoryAllowed } from './privateStateStore'
 import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
@@ -904,6 +906,9 @@ async function processGroupEvent(
   const groupId = groupTag[1]
   const outerEventId = getOuterEventId(outerEvent)
 
+  const owner = getPubkey()
+  if (owner && !await privateHistoryAllowed(owner, senderPubkey, rumor.created_at)) return
+  if (owner && senderPubkey === owner && rumor.kind === RECEIPT_KIND) await applyOwnReadTag(owner, `group:${groupId}`, rumor)
   const groupExists = get(groups).has(groupId)
 
   if (rumor.kind === GROUP_SENDER_KEY_DISTRIBUTION_KIND) {
@@ -1245,7 +1250,6 @@ export function markGroupMessagesSeen(groupId: string, messageIds: string[]): vo
       if (!m.isMine && idSet.has(m.id) && m.status !== 'seen') {
         changed = true
         toAck.push(m.id)
-        updateMessageStatusInDb(m.id, 'seen')
         return { ...m, status: 'seen' as const }
       }
       return m
@@ -1256,6 +1260,9 @@ export function markGroupMessagesSeen(groupId: string, messageIds: string[]): vo
     return gm
   })
 
+  const owner = getPubkey()
+  if (toAck.length) void Promise.all(toAck.map(id => updateMessageStatusInDb(id, 'seen')))
+    .then(() => owner ? sendOwnReadState(owner, `group:${groupId}`, toAck) : undefined).catch(() => {})
   const group = get(groups).get(groupId)
   if (toAck.length > 0 && group?.accepted !== false && get(receiptSettings).sendReadReceipts) {
     sendGroupReceipt(groupId, 'seen', toAck)

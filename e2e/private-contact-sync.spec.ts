@@ -56,6 +56,16 @@ test('private details sync across devices, retain offline clears, and stay accou
     expect(JSON.stringify(testRelay.publishedEvents)).not.toContain('Private Alice')
     expect(JSON.stringify(testRelay.publishedEvents)).not.toContain('Met at the quiet garden')
 
+    await a.getByRole('button', {name: 'Block', exact: true}).click()
+    await expect(b.getByRole('button', {name: 'Unblock', exact: true})).toBeVisible()
+    await b.reload()
+    await expect(b.getByRole('button', {name: 'Unblock', exact: true})).toBeVisible()
+    await b.getByText('Private details', {exact: true}).click()
+    await expect(b.getByLabel('Nickname', {exact: true})).toHaveValue('Private Alice')
+    await b.getByRole('button', {name: 'Unblock', exact: true}).click()
+    await expect(a.getByRole('button', {name: 'Block', exact: true})).toBeVisible()
+    expect(testRelay.publishedEvents.some(event => [7368,10454,10455,10456].includes(event.kind) && event.tags.some(tag => tag[0] === 'type' && tag[1] === 'private_contact') || [10454,10455,10456].includes(event.kind))).toBe(false)
+
     testRelay.acceptFilter = event => ![30078, 1059, 1060].includes(event.kind)
     await a.getByLabel('Note', {exact: true}).fill('')
     await a.getByRole('button', {name: 'Save', exact: true}).click()

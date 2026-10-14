@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { isPrivatelyBlocked, privateHistoryAllowed, readState } from './lib/privateStateStore'
 import {
   Session,
   type Rumor,
@@ -49,6 +50,8 @@ interface StoredProfile {
 }
 
 interface StoredMessage {
+  senderPubkey?: string
+  status?: 'delivered' | 'seen'
   id: string
   sessionId: string
   content: string
@@ -281,6 +284,10 @@ async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: stri
 // classifies the remaining decrypted rumors before displaying them.
 
 interface DecryptResult {
+  messageId?: string
+  author?: string
+  createdAtSecs?: number
+  seen?: boolean
   success: boolean
   chatId?: string
   // Inner rumor kind, when known. Drives notification rendering.
@@ -350,7 +357,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
             chatId: entry.chatId,
             kind: CHAT_MESSAGE_KIND,
             content: storedMessage.content,
-            isSelfMessage: storedMessage.isMine,
+            isSelfMessage: storedMessage.isMine, messageId: storedMessage.id, author: storedMessage.senderPubkey ?? entry.chatId, createdAtSecs: Math.floor(storedMessage.timestamp / 1000), seen: storedMessage.status === 'seen',
           }
         }
       }
@@ -375,7 +382,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
             chatId: processedInner.chatId,
             kind: processedInner.kind,
             content: processedInner.content ?? innerEvent.content,
-            isSelfMessage,
+            isSelfMessage, messageId: innerId, author: innerEvent.pubkey, createdAtSecs: innerEvent.created_at,
           }
         }
 
@@ -386,7 +393,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
             chatId: entry.chatId || storedInnerMessage.sessionId,
             kind: CHAT_MESSAGE_KIND,
             content: storedInnerMessage.content,
-            isSelfMessage: storedInnerMessage.isMine || isSelfMessage,
+            isSelfMessage: storedInnerMessage.isMine || isSelfMessage, messageId: innerId, author: storedInnerMessage.senderPubkey ?? entry.chatId, createdAtSecs: innerEvent.created_at, seen: storedInnerMessage.status === 'seen',
           }
         }
 
@@ -405,7 +412,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           chatId,
           kind: innerEvent.kind,
           content: innerEvent.content,
-          isSelfMessage,
+          isSelfMessage, messageId: innerId, author: innerEvent.pubkey, createdAtSecs: innerEvent.created_at,
         }
       }
     } catch (err) {
@@ -535,7 +542,11 @@ self.addEventListener('push', (event) => {
         }
 
         const owner = await getOwnerPubkeyFromSessionManager()
+        if (result.seen) return
         if (owner) {
+          if (!result.chatId.startsWith('group:') && await isPrivatelyBlocked(owner, result.chatId)) return
+          if (result.author && result.createdAtSecs !== undefined && !await privateHistoryAllowed(owner, result.author, result.createdAtSecs)) return
+          if (result.messageId && result.createdAtSecs !== undefined && (await readState(owner, result.chatId, result.messageId))?.createdAtSecs === result.createdAtSecs) return
           const record = await db.sessionManager.get(chatMutesKey(owner))
           if (isChatMuted(normalizeChatMutes(record?.value), result.chatId)) return
         }

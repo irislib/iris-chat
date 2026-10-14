@@ -1,7 +1,7 @@
 import type { NdrRuntime, OnEventMeta, Rumor } from 'nostr-double-ratchet'
 import type { DeviceState } from './devices'
 
-const durableKinds = [10449, 10450, 10452, 10453]
+const durableKinds = [10449, 10450, 10452, 10453, 10454, 10455]
 const pendingRosterReads = new Map<string, number>()
 
 type Options = {

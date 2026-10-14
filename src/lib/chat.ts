@@ -1,3 +1,5 @@
+import { receivePrivateStateControl, sendOwnReadState, applyOwnReadTag } from './privateStateControl'
+import { privateHistoryAllowed, isPrivatelyBlocked } from './privateStateStore'
 import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
 import type { MessageRevision } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
@@ -377,7 +379,7 @@ onMessageRelayPublish(markMessageSentToRelays)
 function subscribeToNdrRuntimeEvents(): void {
   if (runtimeSessionSubscribed) return
   runtimeSessionSubscribed = true
-  const durableKinds = [PRIVATE_CONTACT_CONTROL_KIND, DEVICE_LABEL_CONTROL_KIND, CHAT_MUTE_KIND, CHAT_PIN_KIND]
+  const durableKinds = [PRIVATE_CONTACT_CONTROL_KIND, DEVICE_LABEL_CONTROL_KIND, CHAT_MUTE_KIND, CHAT_PIN_KIND, 10454, 10455]
   const runtime = getNdrRuntime()
   const account = getPubkey()
   const stopMutations = runtime.onDurableSessionEvent([MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND], async (rumor, from, meta) => {
@@ -1122,6 +1124,7 @@ export async function handleManagerEvent(
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
+  if (rumor.kind === 10454 || rumor.kind === 10455) { await receivePrivateStateControl(rumor, meta); return }
   if (rumor.kind === DEVICE_LABEL_CONTROL_KIND) {
     await receivePrivateDeviceLabel(rumor, meta)
     return
@@ -1225,6 +1228,7 @@ export async function handleManagerEvent(
   )
   if (shouldIgnore) return
 
+  if (!isFromSelf && (await isPrivatelyBlocked(myPubkey, chatId) || !await privateHistoryAllowed(myPubkey, chatId, rumor.created_at))) return
   const chatSession = await ensureManagerChat(chatId)
   if (acceptedLocalInvite) triggerAutoOpen(chatSession)
 
@@ -1366,6 +1370,7 @@ async function handleIncomingRumor(
     // Persist content ('delivered'|'seen') so the SW push handler can render
     // the right notification text via its fast path.
     saveProcessedRumor(rumor.content)
+    if (isMine && myPubkey) await applyOwnReadTag(myPubkey, sessionId, rumor)
     const receipt = parseReceipt(rumor)
     if (!receipt) return
     handleIncomingReceipt(currentSession, receipt, isMine, receiptAuthorPubkey)
@@ -1580,7 +1585,7 @@ function sendRuntimeEvent(
   // The caller renders and saves the pending message immediately. Keep network
   // setup asynchronous, but do not send an unprovable account/device claim.
   void waitForSendReadyRuntime()
-    .then((runtime) => runtime.sendEvent(recipientPubkey, event))
+    .then(async runtime => { const owner = getPubkey(); if (owner && !await isPrivatelyBlocked(owner, recipientPubkey)) await runtime.sendEvent(recipientPubkey, event) })
     .catch((e) => console.error(`[chat] Failed to ${context} via NdrRuntime:`, e))
 }
 
@@ -1624,10 +1629,9 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
   }))
   if (!updatedSession) return
 
-  for (const messageId of toAck) {
-    updateMessageStatusInDb(messageId, 'seen')
-  }
-
+  const owner = getPubkey()
+  void Promise.all(toAck.map(id => updateMessageStatusInDb(id, 'seen')))
+    .then(() => owner ? sendOwnReadState(owner, chatSession.id, toAck) : undefined).catch(() => {})
   const policyCtx = getMessageRequestPolicyContext()
   if (get(receiptSettings).sendReadReceipts && isChatAccepted(updatedSession, policyCtx)) {
     const messageIds = toAck.filter(id => !updatedSession.messages.find(m => m.id === id)?.call)
@@ -1638,6 +1642,8 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
 // Send a message
 export async function sendMessage(chatSession: ChatSession, text: string, replyTo?: string, isCurrent?: () => boolean): Promise<void> {
   if (isCurrent && !isCurrent()) throw new Error('The sending device has changed. Try again.')
+  const owner = getPubkey()
+  if (owner && await isPrivatelyBlocked(owner, chatSession.recipientPubkey)) throw new Error('Unblock this person to send a message.')
   const tags: string[][] = []
   if (replyTo) {
     tags.push(['e', replyTo, '', 'reply'])
@@ -1689,6 +1695,7 @@ export async function sendMessage(chatSession: ChatSession, text: string, replyT
 export async function sendReaction(chatSession: ChatSession, messageId: string, emoji: string): Promise<void> {
   const owner = getPubkey()
   if (!owner) return
+  if (await isPrivatelyBlocked(owner, chatSession.recipientPubkey)) throw new Error('Unblock this person to react.')
   await withDeviceControlClock(owner, { chatId: chatSession.id, messageId, author: owner }, async nowMs => {
     const target = get(chats).get(chatSession.id)?.messages.find(message => message.id === messageId)
     const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
@@ -1707,6 +1714,7 @@ export async function deleteMessageForEveryone(chatSession: ChatSession, message
 async function mutateMessage(chatSession: ChatSession, messageId: string, operation: 'edit' | 'delete', content: string): Promise<void> {
   const owner = getPubkey(), message = get(chats).get(chatSession.id)?.messages.find(row => row.id === messageId)
   if (!owner || !message?.isMine || message.call || message.deletedAt !== undefined || operation === 'edit' && !editableMessage(message)) throw new Error('This message cannot be changed.')
+  if (await isPrivatelyBlocked(owner, chatSession.recipientPubkey)) throw new Error('Unblock this person to change a message.')
   const rumor = buildMessageMutation(owner, messageId, operation, content, ['p', chatSession.recipientPubkey], Math.max(Date.now(), (message.editedAt ?? 0) + 1), message.expiresAt)
   await sendMessageMutation(owner, chatSession.id, rumor,
     async () => {

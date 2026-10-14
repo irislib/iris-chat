@@ -138,11 +138,29 @@ gathering timeout come from the shared WebRTC transport.
 To test device-sync packets and framing against a native checkout, run:
 
 ```sh
-IRIS_CHAT_RS_CORE_DIR=/path/to/iris-chat-rs/core pnpm test:device-sync-interop
+export IRIS_CHAT_RS_CORE_DIR=/path/to/iris-chat-rs/core
+mkdir -p work/private-controls
+export IRIS_PRIVATE_CONTROL_FIXTURE_INPUT="$PWD/work/private-controls/native-private-controls.json"
+export IRIS_PRIVATE_STATE_FIXTURE_INPUT="$PWD/work/private-controls/native-private-state.json"
+IRIS_PRIVATE_CONTROL_FIXTURE_OUTPUT="$IRIS_PRIVATE_CONTROL_FIXTURE_INPUT" \
+  cargo test --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" --lib native_private_control_interop_fixture
+IRIS_PRIVATE_STATE_FIXTURE_OUTPUT="$IRIS_PRIVATE_STATE_FIXTURE_INPUT" \
+  cargo test --locked --manifest-path "$IRIS_CHAT_RS_CORE_DIR/Cargo.toml" --lib private_contacts_negentropy_repairs_dropped_snapshots_and_exports_interop
+pnpm test:device-sync-interop
 ```
 
 This compiles the selected checkout's protocol and framing code in a small Rust
-fixture. Setting `IRIS_CHAT_RS_CORE_DIR` also enables these tests in `pnpm test`.
+fixture and checks data generated through the native app's encrypted device
+queue and Negentropy reconciliation. Keep these variables set when running
+`pnpm test` or `pnpm test:interop` against that checkout.
+
+Both apps store nicknames, notes, favorites and notification mutes as unsigned
+private contact facts from `nostr-social-graph`. Field clocks, explicit clears
+and pending edits survive migration. Facts reconcile only between authenticated
+own devices; encrypted V2 controls keep older devices compatible. Public
+publication rejects these facts and private controls. Signed private name
+approvals, block intervals and exact message-read markers use the same native
+schemas and capability negotiation, with private state applied before history.
 
 To verify messaging as well as device-sync against the native core used by iOS
 and the other native apps, run:

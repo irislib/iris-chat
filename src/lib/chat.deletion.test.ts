@@ -1,3 +1,5 @@
+vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
+vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: async () => {} }))
 vi.mock('./deviceSyncRecordApply', async importOriginal => ({
   ...await importOriginal<typeof import('./deviceSyncRecordApply')>(),
   persistMessageWithReactions: async (_owner: string, message: import('./storage').StoredMessage) => { await saveMessage(message); return message },

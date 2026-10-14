@@ -1,3 +1,4 @@
+import { storePrivateContactFacts } from 'nostr-social-graph/privateContactFacts'
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createPrivateContactSync, editPrivateContact } from 'nostr-social-graph/privateContactSync'
@@ -16,7 +17,7 @@ it('durably upgrades all old registers and clears while preserving unrelated loc
   expect(upgraded.version).toBe(2)
   expect(upgraded.contacts).toEqual(old.contacts)
   expect(Object.keys(upgraded.pending)).toEqual([contact])
-  expect(JSON.parse(localStorage.getItem(privateContactStorageKey(owner))!)).toEqual(upgraded)
+  expect(JSON.parse(localStorage.getItem(privateContactStorageKey(owner))!)).toEqual(storePrivateContactFacts(upgraded))
   expect(localStorage.getItem('first-interaction')).toBe('Original public name')
   expect(await migrateStoredPrivateContacts(owner)).toEqual(upgraded)
   expect((await migrateStoredPrivateContacts(other)).contacts).toEqual({})

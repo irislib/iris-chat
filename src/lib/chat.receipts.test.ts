@@ -1,3 +1,5 @@
+vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
+vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: mocks.sendOwnReadState }))
 vi.mock('./deviceSyncRecordApply', async importOriginal => ({
   ...await importOriginal<typeof import('./deviceSyncRecordApply')>(),
   persistMessageWithReactions: async (_owner: string, message: import('./storage').StoredMessage) => { await (await import('./storage')).saveMessage(message); return message },
@@ -19,6 +21,7 @@ const mocks = vi.hoisted(() => {
   }
 
   return {
+    sendOwnReadState: vi.fn(async () => {}),
     durableCallback: undefined as ((event: Rumor, from: string, meta?: OnEventMeta) => Promise<void>) | undefined,
     receivePrivateContact: vi.fn(async () => {}),
     refreshRoster: vi.fn(async () => false),
@@ -159,7 +162,7 @@ vi.mock('./receipts', () => ({
     mocks.shouldAdvanceStatus(...args),
 }))
 
-import { chats, clearChatData, currentChat, handleManagerEvent, initNdrRuntimeEvents, invites, type ChatSession } from './chat'
+import { chats, clearChatData, currentChat, handleManagerEvent, initNdrRuntimeEvents, invites, sendSeenReceipts, type ChatSession } from './chat'
 import { devices } from './devices'
 import { following } from './following'
 import { messageRequests } from './messageRequests'
@@ -180,6 +183,7 @@ beforeEach(() => {
     sendReadReceipts: false,
   })
   mocks.parseReceipt.mockClear()
+  mocks.sendOwnReadState.mockClear()
   mocks.shouldAdvanceStatus.mockClear()
   mocks.updateMessageStatus.mockClear()
   mocks.updateMessageRecipientStatuses.mockClear()
@@ -193,6 +197,18 @@ beforeEach(() => {
 })
 
 describe('manager receipts', () => {
+  it('syncs own read status with remote read receipts disabled and persists it once', async () => {
+    const chat: ChatSession = { id: THEIR_PUBKEY, recipientPubkey: THEIR_PUBKEY, mode: 'manager', messages: [
+      { id: 'incoming', content: 'hello', timestamp: 100000, isMine: false },
+    ] }
+    chats.set(new Map([[chat.id, chat]]))
+    sendSeenReceipts(chat, ['incoming'])
+    await vi.waitFor(() => expect(mocks.sendOwnReadState).toHaveBeenCalledWith(MY_PUBKEY, chat.id, ['incoming']))
+    expect(mocks.updateMessageStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.runtimeSendEvent).not.toHaveBeenCalled()
+    sendSeenReceipts(chat, ['incoming'])
+    expect(mocks.sendOwnReadState).toHaveBeenCalledTimes(1)
+  })
   it.each([false, true])('accepts an invite bootstrap without text, respecting rejection (%s)', async (rejected: boolean) => {
     const ephemeral = 'c'.repeat(64)
     invites.set(new Map([['invite-bootstrap', { id: 'invite-bootstrap', invite: {

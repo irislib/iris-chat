@@ -1,3 +1,7 @@
+import { privateStateRecords, privateStateEvents, savePrivateStateEvent, readState, applyMessageRead, privateHistoryAllowed } from './privateStateStore'
+import { privateEventState, validMessageRead } from './privateStateProtocol'
+import { getPrivateContactFacts, mergePrivateContactFacts } from './privateContactSync'
+import { parsePrivateContactFact } from 'nostr-social-graph/privateContactFacts'
 import { applyMessageMutation, messageMutationRecords, messageMutation } from './messageMutations'
 import { db, deletedHistoryRecords, isHistoryChatDeleted } from './storage'
 import { reactionHeadPages, reactionHead, groupSettingsHeads, groupSettingsHead, signedProfileHeads, saveSignedProfileHead } from './deviceSyncRecordStore'
@@ -29,6 +33,7 @@ export function createDeviceSyncRecordAdapter(options: {
   async function eligible(record: DeviceSyncRecord, current: Awaited<ReturnType<typeof state>>, inventory = false): Promise<boolean> {
     if (record.type === 'message' || record.type === 'reaction' || record.type === 'messageMutation') {
       const value = record.type === 'message' ? record.message : record.type === 'messageMutation' ? record.mutation : record.reaction
+      if (!await privateHistoryAllowed(options.owner, value.author, value.createdAt)) return false
       const targetId = record.type === 'message' ? record.message.id : record.type === 'messageMutation' ? record.mutation.messageId : record.reaction.messageId
       const group = value.chatId.startsWith('group:') ? current.groups.find(group => group.id === value.chatId.slice(6)) : undefined
       if (value.chatId.startsWith('group:') ? !group?.members.includes(options.owner) || !group.members.includes(value.author) :
@@ -38,6 +43,9 @@ export function createDeviceSyncRecordAdapter(options: {
       const target = await db.messages.get(targetId)
       return !(target?.expiresAt !== undefined && target.expiresAt <= Date.now() / 1000)
     }
+    if (record.type === 'privateBlock' || record.type === 'privateNameApproval') return privateEventState(record.event)?.owner === options.owner
+    if (record.type === 'messageRead') return validMessageRead(record.read) && (record.read.expiresAtSecs === undefined || record.read.expiresAtSecs > Date.now() / 1000) && !await isHistoryChatDeleted(record.chatId)
+    if (record.type === 'privateContactFact') { try { parsePrivateContactFact(record.fact, options.owner); return true } catch { return false } }
     if (record.type === 'profile') return current.contacts.has(record.event.pubkey)
     if (record.type === 'groupSettings') { const settings = record.settings; return current.groups.some(group => group.id === settings.groupId && group.members.includes(options.owner) && group.admins.includes(settings.author)) }
     return current.groups.some(group => group.id === record.group.id)
@@ -74,6 +82,8 @@ export function createDeviceSyncRecordAdapter(options: {
         }
       }
     } else {
+      yield* privateStateRecords(options.owner)
+      for (const fact of getPrivateContactFacts()) yield { type: 'privateContactFact', fact }
       for (const group of current.groups) yield { type: 'group', group }
       const groups = new Map(current.groups.map(group => [group.id, group]))
       for await (const settings of groupSettingsHeads(options.owner)) {
@@ -90,7 +100,7 @@ export function createDeviceSyncRecordAdapter(options: {
   }
   const bounded = (record: DeviceSyncRecord) => deviceSyncPacketByteLength({ v: 1, type: 'historyRecords', session: '0'.repeat(32), records: [record], requested: [] }) <= DEVICE_SYNC_MAX_PACKET_BYTES
   function reference(record: DeviceSyncRecord): DeviceRecordReference {
-    const key = record.type === 'messageMutation' ? [record.mutation.chatId, record.mutation.id] : record.type === 'message' ? [record.message.chatId, record.message.id] : record.type === 'reaction' ? [record.reaction.chatId, record.reaction.messageId, record.reaction.author] :
+    const key = record.type === 'messageRead' ? [record.chatId, record.messageId] : record.type === 'privateBlock' || record.type === 'privateNameApproval' ? [record.event.id] : record.type === 'privateContactFact' ? [record.fact.id] : record.type === 'messageMutation' ? [record.mutation.chatId, record.mutation.id] : record.type === 'message' ? [record.message.chatId, record.message.id] : record.type === 'reaction' ? [record.reaction.chatId, record.reaction.messageId, record.reaction.author] :
       record.type === 'group' ? [record.group.id] : record.type === 'groupSettings' ? [record.settings.groupId] : [record.event.pubkey]
     return { id: deviceSyncRecordId(record), createdAt: deviceSyncRecordTime(record), locator: { type: record.type, key } }
   }
@@ -98,6 +108,9 @@ export function createDeviceSyncRecordAdapter(options: {
     const locator = ref.locator
     if (!locator) return
     const [first, second, third] = locator.key
+    if (locator.type === 'messageRead') { const read = await readState(options.owner, first, second); return read && { type: 'messageRead', chatId: first, messageId: second, read } }
+    if (locator.type === 'privateBlock' || locator.type === 'privateNameApproval') { for await (const event of privateStateEvents(options.owner)) if (event.id === first) return { type: locator.type, event }; return }
+    if (locator.type === 'privateContactFact') { const fact = getPrivateContactFacts().find(fact => fact.id === first); return fact && { type: 'privateContactFact', fact } }
     if (locator.type === 'message') {
       const stored = await db.messages.get(second)
       if (!stored || stored.sessionId !== first || stored.call || stored.id.startsWith('call:') || stored.expiresAt !== undefined && stored.expiresAt <= Date.now() / 1000) return
@@ -147,6 +160,7 @@ export function createDeviceSyncRecordAdapter(options: {
       const ordered = [...incoming.filter(record => record.type === 'message'), ...incoming.filter(record => record.type !== 'message')]
       for (const record of ordered) {
         if (!authorized()) return { imported, deferred }
+        if (scope === 'history' && (record.type === 'message' || record.type === 'reaction' || record.type === 'messageMutation')) { const value = record.type === 'message' ? record.message : record.type === 'reaction' ? record.reaction : record.mutation; if (!await privateHistoryAllowed(options.owner, value.author, value.createdAt)) continue }
         if (scope === 'history' && record.type === 'message') imported += await options.applySnapshot({ v: 1, type: 'snapshot', rosterAt: since, appKeys: [], chats: [], groups: [], messages: [record.message] }, since, authorized, options.allowsLegacy(peer, since, until, linkId))
         else if (scope === 'history' && record.type === 'messageMutation') {
           if (record.mutation.expiresAt !== undefined && record.mutation.expiresAt <= Date.now() / 1000) continue
@@ -156,6 +170,9 @@ export function createDeviceSyncRecordAdapter(options: {
         }
         else if (scope === 'history' && record.type === 'reaction') await applyReactionRecord(options.owner, record.reaction, authorized)
         else if (scope === 'state' && record.type === 'groupSettings') await applyGroupSettingsRecord(options.owner, record.settings, authorized)
+        else if (scope === 'state' && (record.type === 'privateBlock' || record.type === 'privateNameApproval')) await savePrivateStateEvent(options.owner, record.event, authorized)
+        else if (scope === 'state' && record.type === 'messageRead') await applyMessageRead(options.owner, record.chatId, record.messageId, record.read, authorized)
+        else if (scope === 'state' && record.type === 'privateContactFact') await mergePrivateContactFacts(options.owner, [record.fact])
         else if (scope === 'state' && record.type === 'profile') await applyProfileRecord(options.owner, record.event, contacts, authorized)
       }
       return { imported, deferred }

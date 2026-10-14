@@ -168,3 +168,33 @@ describe('encrypted device history reconciliation', () => {
     expect(p.a.size).toBe(0)
   })
 })
+
+it('reconciles unsigned contact facts with clears and keeps old peers on the legacy format', async () => {
+  const { createPrivateContactSync, editPrivateContact, mergePrivateContactDocument, privateContactDocuments } = await import('nostr-social-graph/privateContactSyncV2')
+  const { privateContactFacts, privateContactDocumentsFromFacts, storePrivateContactFacts, restorePrivateContactFacts } = await import('nostr-social-graph/privateContactFacts')
+  const { deviceSyncRecordId } = await import('./deviceSyncRecords')
+  for (const capable of [false, true]) {
+    const states = [editPrivateContact(editPrivateContact(createPrivateContactSync(owner, '1'.repeat(32)), contact, {nickname:'Old',note:'Private note'}),contact,{nickname:null}),
+      editPrivateContact(createPrivateContactSync(owner,'2'.repeat(32)),contact,{favorite:true})]
+    states[0] = restorePrivateContactFacts(JSON.parse(JSON.stringify(storePrivateContactFacts(states[0]))),owner)
+    const queue: Array<{to:number;packet:DeviceHistoryPacket}> = [], sent: DeviceHistoryPacket[] = []
+    const records = (i:number): DeviceSyncRecord[] => privateContactFacts(privateContactDocuments(states[i])).map(fact => ({type:'privateContactFact',fact}))
+    const peers = [0,1].map(i => new DeviceHistorySync({
+      authorized: () => true, maxInventoryRecords:1,
+      recordInventory: async (scope,_since,_until,_initiator,prefix) => scope === 'state' ? records(i).map(record => ({id:deviceSyncRecordId(record),createdAt:0,locator:{type:record.type,key:[]}})).filter(ref => ref.id.startsWith(prefix)) : [],
+      records: async (_scope,_since,_until,refs) => records(i).filter(record => refs.some(ref => ref.id === deviceSyncRecordId(record))),
+      applyRecords: async (_peer,incoming) => { for (const document of privateContactDocumentsFromFacts(incoming.flatMap(record => record.type === 'privateContactFact' ? [record.fact] : []),owner)) states[i] = mergePrivateContactDocument(states[i],document); return 0 },
+      send: async (_peer,packet) => { const decoded = parseDeviceSyncPacket(encodeDeviceSyncPacket(packet),owner) as DeviceHistoryPacket; sent.push(decoded); queue.push({to:1-i,packet:decoded}) },
+    }))
+    peers[0].negotiate('b',0,capable ? {privateFacts:1} : {}); peers[1].negotiate('a',0,capable ? {privateFacts:1} : {})
+    await peers[0].startState('b'); await peers[1].startState('a')
+    for (let rounds=0; queue.length; rounds++) { expect(rounds).toBeLessThan(2000); const next=queue.shift()!; await peers[next.to].receive(next.to ? 'a':'b',next.packet) }
+    const transferred = sent.flatMap(packet => packet.type === 'historyRecords' ? packet.records : [])
+    if (capable) {
+      expect(states[0].contacts).toEqual(states[1].contacts)
+      expect(states[1].contacts[contact]).toMatchObject({nickname:{value:null,counter:2},note:{value:'Private note'},favorite:{value:true}})
+      expect(transferred.length).toBeGreaterThan(0)
+      expect(transferred.every(record => record.type !== 'privateContactFact' || !('sig' in record.fact))).toBe(true)
+    } else expect(transferred).toEqual([])
+  }
+})

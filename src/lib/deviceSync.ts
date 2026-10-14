@@ -1,3 +1,4 @@
+import { privateStateVersion } from './privateStateStore'
 import { messageMutationFields } from './messageMutations'
 import { admitRecordMessage } from './deviceSyncRecordApply'
 import { createDeviceSyncRecordAdapter } from './deviceSyncRecordAdapter'
@@ -664,7 +665,7 @@ function servingHistorySince(owner: string, peer: string): number {
 }
 
 function historyRequest(_owner: string, page?: DeviceSyncPage): DeviceSyncRequest {
-  return { v: 1, type: 'request', rosterAt: get(devices).lastEventTimestamp, recordReconcile: 1, ...(page && { page }) }
+  return { v: 1, type: 'request', rosterAt: get(devices).lastEventTimestamp, recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2, ...(page && { page }) }
 }
 
 function inventoryMessages(owner: string, since: number, until: number): DeviceSyncMessage[] {
@@ -690,7 +691,7 @@ async function handlePacket(
     const since = servingHistorySince(ownerPubkey, source)
     if (packet.recordReconcile === 1) {
       historyPeers.add(source)
-      history.negotiate(source, since)
+      history.negotiate(source, since, packet)
     }
     if (pair?.role === 'outbound') {
       await tcp.send(source, encodeDeviceSyncPacket({ v: 1, type: 'historyPolicy', linkAt: pair.linkAt, linkId: pair.linkId, since: pair.since ?? pair.linkAt }))
@@ -701,6 +702,10 @@ async function handlePacket(
     for (const reply of replies) if (packet.recordReconcile === 1 && reply.type === 'pageEnd') {
       reply.recordReconcile = 1
       reply.historySince = since
+      reply.privateFacts = packet.privateFacts
+      reply.privateEvents = packet.privateEvents
+      reply.nameApprovals = packet.nameApprovals
+      reply.readStates = packet.readStates
     }
     await sendPackets(tcp, source, replies)
     return
@@ -710,7 +715,7 @@ async function handlePacket(
     if (packet.type === 'pageEnd' && packet.next === null) {
       if (packet.recordReconcile !== 1) return
       // The peer's receive cutoff must not replace our private serving grant.
-      history.negotiate(source, servingHistorySince(ownerPubkey, source))
+      history.negotiate(source, servingHistorySince(ownerPubkey, source), packet)
       await history.startState(source)
       const pair = currentHistoryPair(ownerPubkey, source)
       if (pair?.role === 'inbound' && !pair.complete && pair.since === 0) await history.start(source, 0, pair.linkAt - 1, pair.linkId)
@@ -966,6 +971,12 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
     store.subscribe(scheduleSnapshotPush)
   )
   storeUnsubscribers.push(startChatMuteSync(ownerPubkey))
+  let privateView = Promise.resolve()
+  storeUnsubscribers.push(privateStateVersion.subscribe(() => {
+    privateView = privateView.catch(() => {}).then(async () => {
+      if (getPubkey() === ownerPubkey) await (await import('./privateStateView')).refreshPrivateStateView(ownerPubkey, () => getPubkey() === ownerPubkey)
+    }).catch(error => console.warn('Could not refresh private settings', error))
+  }))
   const key = new Uint8Array(secretKey)
   storeUnsubscribers.push(callConnectionSettings.subscribe(() => {
     void reconcileRuntime(ownerPubkey, key, get(devices)).catch(error => console.warn('[calls] Connection failed:', error))

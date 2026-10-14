@@ -1,3 +1,4 @@
+import { blockedContacts } from './privateBlockProjection'
 import { get } from 'svelte/store'
 import { getPubkey } from './identity'
 import { following } from './following'
@@ -23,7 +24,7 @@ export function getMessageRequestPolicyContext(): MessageRequestPolicyContext {
     myPubkey: getPubkey(),
     following: get(following),
     acceptedChats: decisions.acceptedChats,
-    rejectedChats: decisions.rejectedChats,
+    rejectedChats: { ...decisions.rejectedChats, ...Object.fromEntries([...blockedContacts(getPubkey())].map(key => [key, true as const])) },
     receiveMessageRequests: get(messageRequestSettings).receiveMessageRequests,
   }
 }

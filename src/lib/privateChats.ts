@@ -460,6 +460,8 @@ export const waitForSendReadyRuntime = async (): Promise<NdrRuntime> => {
 export const preparePeerNdrRuntime = async (
   recipientPubkey: string
 ): Promise<NdrRuntime> => {
+  const owner = get(identity)?.pubkey
+  if (owner && await (await import('./privateStateStore')).isPrivatelyBlocked(owner, recipientPubkey)) throw new Error('Unblock this person to send a message.')
   const currentRuntime = await waitForSendReadyRuntime()
   await currentRuntime.setupUser(recipientPubkey).catch((e) => {
     console.warn(
