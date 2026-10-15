@@ -41,6 +41,7 @@ describe('release site config', () => {
     expect(publishStep?.command[0]).toBe('htree')
     expect(publishStep?.command).not.toContain('--manifest-path')
     expect(publishStep?.command).not.toContain('iris-chat')
+    expect(portableTestStep?.command.slice(0, 2)).toEqual(['pnpm', 'test'])
     expect(portableTestStep?.command).toContain('src/lib/chat.invite.test.ts')
     expect(portableTestStep?.command).toContain('src/lib/chat.self-message.test.ts')
     expect(portableTestStep?.command).toContain('src/lib/messageMutationHistory.test.ts')

@@ -200,9 +200,7 @@ export function createReleasePlan(options) {
       label: `Test ${profile.appName} portable config`,
       command: [
         'pnpm',
-        'exec',
-        'vitest',
-        'run',
+        'test',
         'src/portableBuildConfig.test.ts',
         'src/releaseSiteConfig.test.ts',
         'src/staticAssetsWorker.test.ts',
