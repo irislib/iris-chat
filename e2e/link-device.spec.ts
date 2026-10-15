@@ -183,8 +183,13 @@ for (const choice of ['Chats and groups only', 'Include message history']) test(
     expect(policy).toBeDefined()
     expect(policy.since).toEqual(choice === 'Include message history' ? 0 : expect.any(Number))
     if (choice === 'Chats and groups only') expect(policy.since).toBeGreaterThan(0)
+    const { complete, ...persistedPolicy } = policy
     await ownerPage.reload()
-    expect((await readPairs()).flatMap(row => row.value)).toContainEqual(policy)
+    const restored = (await readPairs()).flatMap(row => row.value).find(pair => pair.linkId === linkId)
+    // Reconciliation can finish while reloading. The authorization choice must
+    // persist exactly, while completion may advance but must never go backward.
+    expect(restored).toEqual({ ...persistedPolicy, complete: expect.any(Boolean) })
+    if (complete) expect(restored.complete).toBe(true)
     expect(testRelay.publishedEvents.some(event => event.kind === 30078 && event.tags.some(tag => tag[0] === 'd' && tag[1]?.startsWith('iris-chat-history-v1:')))).toBe(false)
     expect(JSON.stringify(testRelay.publishedEvents)).not.toContain('iris-chat-history')
     expect(JSON.stringify(testRelay.publishedEvents)).not.toContain('historyPolicy')
