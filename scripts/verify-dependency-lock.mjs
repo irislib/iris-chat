@@ -35,12 +35,12 @@ const releases = {
     "integrity": "sha512-59CecbZTYxPjY0zBBvZwhbQsC9bwTkTYBKUG2v+tePw90KfUmzEolQus/CzwYns4MJNeQHq4oVYXfw7cVvDMbA=="
   },
   "nostr-double-ratchet": {
-    "url": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.176/nostr-double-ratchet-0.0.176.tgz",
-    "integrity": "sha512-tb9RvZpgzdG3TubA0UYijpiNrT0n8IWP1EE3JlxSMOBzIzIKC01S8F5qbZnnlq9H86ohSPnJ4Y5iVqj5271UDA=="
+    "url": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz",
+    "integrity": "sha512-Yi3BaxzY/iNzKXK4kwso4nnrP9ychGd4JSCS3hlNLj1f1hTvc0hl0QkHj9KAOSyyygN9HZ2bbjnXSvZTnDBrTw=="
   },
   "nostr-social-graph": {
-    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz",
-    "integrity": "sha512-X77jeQqp4P2ygJyYnSCdewdDbJTDjQRxmXa1JMzuPfk7NN5GvA7ppgMEUICROzKvLNdVmOqQUHfrPjXGuFi+OQ=="
+    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz",
+    "integrity": "sha512-WYipehbl5EGdnBiusXpTQ0rOu7eeHK708hNd/8Jd9NdpQqfNe+gy1LxiFBhdR9y+3OPuqqfqmQ/pyCTeIzK0LA=="
   },
   "@hashtree/worker": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-worker-0.4.12.tgz",

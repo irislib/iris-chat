@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store'
 import type { Event } from 'nostr-tools'
-import { db, type StoredMessage } from './storage'
+import { db, isHistoryChatDeleted, type StoredMessage } from './storage'
 import { compareControlHead, verifiedProfileEvent, type DeviceSyncReaction, type DeviceSyncGroupSettings } from './deviceSyncRecords'
 
 export const deviceRecordVersion = writable(0)
@@ -74,7 +74,7 @@ export async function saveReactionHead(owner: string, reaction: DeviceSyncReacti
     if (previous && compareControlHead(previous, reaction) >= 0) return false
     const target = await db.messages.get(reaction.messageId)
     if (target && (target.sessionId !== reaction.chatId || target.expiresAt !== undefined && target.expiresAt <= Date.now() / 1000)) return false
-    if (await db.sessionManager.get(`history-deleted-message:${reaction.messageId}`) || await db.sessionManager.get(`history-deleted-chat:${reaction.chatId}`)) return false
+    if (await db.sessionManager.get(`history-deleted-message:${reaction.messageId}`) || await isHistoryChatDeleted(reaction.chatId, reaction.createdAt)) return false
     if (!authorized()) return false
     await boundedPut(key, reaction)
     if (target) await db.messages.put(projectReactionHeads(target, [reaction]))
@@ -101,7 +101,7 @@ export async function saveGroupSettingsHead(owner: string, settings: DeviceSyncG
     const key = prefix(owner, `groupSettings:${settings.groupId}`)
     const previous = (await db.sessionManager.get(key))?.value as DeviceSyncGroupSettings | undefined
     if (previous && compareControlHead(previous, settings) >= 0) return false
-    if (await db.sessionManager.get(`history-deleted-chat:group:${settings.groupId}`) || !authorized()) return false
+    if (await isHistoryChatDeleted(`group:${settings.groupId}`, settings.createdAt) || !authorized()) return false
     await boundedPut(key, settings)
     return true
   })

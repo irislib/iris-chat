@@ -181,13 +181,45 @@ export async function getMessagesForSession(sessionId: string): Promise<StoredMe
   return filtered
 }
 
-export async function deleteMessagesForSession(sessionId: string): Promise<void> {
-  await db.transaction('rw', db.messages, db.sessionManager, async () => {
-    await db.sessionManager.put({ key: `history-deleted-chat:${sessionId}`, value: Math.floor(Date.now() / 1000) })
-    for (const message of await db.messages.where('sessionId').equals(sessionId).toArray()) await rememberHistoryDeletion(message)
-    await db.messages.where('sessionId').equals(sessionId).delete()
-    await purgeMessageMutationRecords(value => value.chatId === sessionId)
+export async function chatDeletionStates(): Promise<Array<{ id: string; deletedAt: number }>> {
+  const prefix = 'history-deleted-chat:'
+  return (await db.sessionManager.where('key').startsWith(prefix).toArray())
+    .filter(row => Number.isSafeInteger(row.value) && (row.value as number) > 0)
+    .map(row => ({ id: row.key.slice(prefix.length), deletedAt: row.value as number }))
+}
+
+export async function applyHistoryChatDeletion(sessionId: string, deletedAt: number, authorized: () => boolean = () => true): Promise<void> {
+  if (!Number.isSafeInteger(deletedAt) || deletedAt <= 0 || deletedAt > Date.now() / 1000 + 300) throw new Error('Invalid chat deletion')
+  const changed = await db.transaction('rw', db.messages, db.sessions, db.groups, db.sessionManager, async () => {
+    if (!authorized()) throw new Error('Account changed')
+    const key = `history-deleted-chat:${sessionId}`
+    const previous = (await db.sessionManager.get(key))?.value as number | undefined
+    const cutoff = Math.max(previous ?? 0, deletedAt)
+    await db.sessionManager.put({ key, value: cutoff })
+    const messages = await db.messages.where('sessionId').equals(sessionId).toArray()
+    for (const message of messages) if (Math.floor(message.timestamp / 1000) <= cutoff) {
+      await rememberHistoryDeletion(message)
+      await db.messages.delete(message.id)
+    }
+    const removed = new Set(messages.filter(message => Math.floor(message.timestamp / 1000) <= cutoff).map(message => message.id))
+    await purgeMessageMutationRecords(value => value.chatId === sessionId && (removed.has(value.messageId) || (value.createdAt ?? 0) <= cutoff))
+    if (!messages.some(message => Math.floor(message.timestamp / 1000) > cutoff)) {
+      const session = await db.sessions.get(sessionId)
+      if (session && Math.floor(session.createdAt / 1000) <= cutoff) await db.sessions.delete(sessionId)
+      if (sessionId.startsWith('group:')) {
+        const group = await db.groups.get(sessionId.slice(6))
+        if (group && (group.rosterVersion?.updatedAt ?? Math.floor(group.createdAt / 1000)) <= cutoff) await db.groups.delete(group.id)
+      }
+    }
+    return cutoff > (previous ?? 0)
   })
+  if (changed) (await import('./deviceSyncRecordStore')).deviceRecordVersion.update(n => n + 1)
+}
+
+export async function deleteMessagesForSession(sessionId: string): Promise<void> {
+  const messages = await db.messages.where('sessionId').equals(sessionId).toArray()
+  const cutoff = Math.max(Math.floor(Date.now() / 1000), ...messages.map(message => Math.floor(message.timestamp / 1000)))
+  await applyHistoryChatDeletion(sessionId, cutoff)
 }
 
 export async function getMessageById(id: string): Promise<StoredMessage | undefined> {
@@ -205,7 +237,7 @@ export async function deleteMessage(id: string): Promise<void> {
 }
 
 /** Purge edit plaintext together with message/chat removal and expiry. */
-async function purgeMessageMutationRecords(matches: (value: { chatId: string; messageId: string; expiresAt?: number }) => boolean): Promise<void> {
+async function purgeMessageMutationRecords(matches: (value: { chatId: string; messageId: string; createdAt?: number; expiresAt?: number }) => boolean): Promise<void> {
   const rows = await db.sessionManager.where('key').startsWith('device-record-v1:')
     .filter(row => row.key.includes(':messageMutation:') && !!row.value && matches(row.value as { chatId: string; messageId: string })).toArray()
   await db.sessionManager.bulkDelete(rows.map(row => row.key))
@@ -239,8 +271,15 @@ export async function* deletedHistoryRecords(): AsyncGenerator<{ chatId: string;
   }
 }
 
-export async function isHistoryChatDeleted(chatId: string): Promise<boolean> {
-  return !!await db.sessionManager.get(`history-deleted-chat:${chatId}`)
+export async function isHistoryChatDeleted(chatId: string, createdAt?: number): Promise<boolean> {
+  const deleted = (await db.sessionManager.get(`history-deleted-chat:${chatId}`))?.value as number | undefined
+  if (deleted === undefined) return false
+  if (createdAt !== undefined) return createdAt <= deleted
+  const session = await db.sessions.get(chatId)
+  if (session && session.createdAt / 1000 > deleted) return false
+  const group = chatId.startsWith('group:') ? await db.groups.get(chatId.slice(6)) : undefined
+  if (group && (group.rosterVersion?.updatedAt ?? group.createdAt / 1000) > deleted) return false
+  return !await db.messages.where('sessionId').equals(chatId).filter(message => Math.floor(message.timestamp / 1000) > deleted).first()
 }
 
 /** A transfer may complete only after storage contains the row or a durable suppression. */

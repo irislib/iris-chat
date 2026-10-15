@@ -4,7 +4,7 @@ import { get } from 'svelte/store'
 import { finalizeEvent, getPublicKey } from 'nostr-tools'
 import { db } from './storage'
 import { privateEventState, blockedIntervals } from './privateStateProtocol'
-import { savePrivateStateEvent, projectMessageRead, applyMessageRead, privateHistoryAllowed, privateStateRecords, isPrivatelyBlocked, privateStateVersion } from './privateStateStore'
+import { savePrivateStateEvent, projectMessageRead, applyMessageRead, privateHistoryAllowed, privateStateRecords, isPrivatelyBlocked, privateStateVersion, privateDirectPublicationPolicy } from './privateStateStore'
 import { assertPrivatePublicationPolicy } from './privatePublishPolicy'
 import { deviceSyncRecordId } from './deviceSyncRecords'
 import { encodeDeviceSyncPacket, parseDeviceSyncPacket } from './deviceSyncProtocol'
@@ -59,4 +59,14 @@ it('rejects private facts and controls from every public publication path', () =
     expect(() => assertPrivatePublicationPolicy({ kind, tags: [['type', 'app_keys']] })).not.toThrow()
   }
   for (const kind of [10454, 10455, 10456]) expect(() => assertPrivatePublicationPolicy({ kind, tags: [] })).toThrow()
+})
+
+it('retires old outgoing work permanently and holds newer work until unblock', async () => {
+  await savePrivateStateEvent(owner, block(true,1,100,100), () => true)
+  expect(await privateDirectPublicationPolicy(owner,contact,99)).toBe(false)
+  expect(await privateDirectPublicationPolicy(owner,contact,110)).toBe('hold')
+  await savePrivateStateEvent(owner, block(false,2,100,120), () => true)
+  db.close(); await db.open()
+  expect(await privateDirectPublicationPolicy(owner,contact,119)).toBe(false)
+  expect(await privateDirectPublicationPolicy(owner,contact,120)).toBe(true)
 })

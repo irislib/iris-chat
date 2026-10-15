@@ -186,7 +186,7 @@ it('reconciles unsigned contact facts with clears and keeps old peers on the leg
       applyRecords: async (_peer,incoming) => { for (const document of privateContactDocumentsFromFacts(incoming.flatMap(record => record.type === 'privateContactFact' ? [record.fact] : []),owner)) states[i] = mergePrivateContactDocument(states[i],document); return 0 },
       send: async (_peer,packet) => { const decoded = parseDeviceSyncPacket(encodeDeviceSyncPacket(packet),owner) as DeviceHistoryPacket; sent.push(decoded); queue.push({to:1-i,packet:decoded}) },
     }))
-    peers[0].negotiate('b',0,capable ? {privateFacts:1} : {}); peers[1].negotiate('a',0,capable ? {privateFacts:1} : {})
+    peers[0].negotiate('b',0,capable ? {privateFacts:2} : {}); peers[1].negotiate('a',0,capable ? {privateFacts:2} : {})
     await peers[0].startState('b'); await peers[1].startState('a')
     for (let rounds=0; queue.length; rounds++) { expect(rounds).toBeLessThan(2000); const next=queue.shift()!; await peers[next.to].receive(next.to ? 'a':'b',next.packet) }
     const transferred = sent.flatMap(packet => packet.type === 'historyRecords' ? packet.records : [])

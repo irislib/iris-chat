@@ -1,4 +1,4 @@
-import { verifyEvent, type Event } from 'nostr-tools'
+import { parsePrivateEvent, type PrivateEvent } from 'nostr-social-graph/privateEvents'
 export const PRIVATE_BLOCK_KIND = 10454
 export const PRIVATE_NAME_APPROVAL_KIND = 10455
 export interface NameChange { previous_name: string; accepted_name: string; accepted_at_secs: number }
@@ -10,13 +10,13 @@ const object = (value: unknown): value is Record<string, any> => !!value && type
 const time = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const name = (value: unknown): value is string => typeof value === 'string' && !!value.trim() && new TextEncoder().encode(value).length <= 320
 const exact = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).every(key => keys.includes(key))
-export function privateEventState(event: Event): NameApproval | BlockState | undefined {
+export function privateEventState(event: PrivateEvent): NameApproval | BlockState | undefined {
   if (!object(event) || ![10454, 10455].includes(event.kind) || !privateKey(event.id) || !privateKey(event.pubkey) ||
     !time(event.created_at) || event.created_at > Date.now() / 1000 + 300 || typeof event.content !== 'string' ||
     new TextEncoder().encode(event.content).length > (event.kind === 10454 ? 2048 : 4096) ||
     !Array.isArray(event.tags) || event.tags.length !== 2 || !event.tags.every(tag => Array.isArray(tag) && tag.every(v => typeof v === 'string'))) return
   try {
-    if (!verifyEvent({ kind: event.kind, pubkey: event.pubkey, id: event.id, created_at: event.created_at, tags: event.tags.map(tag => [...tag]), content: event.content, sig: event.sig })) return
+    parsePrivateEvent(event, true)
     const state = JSON.parse(event.content)
     if (!object(state) || state.v !== 1 || !privateKey(state.owner) || !time(state.revision)) return
     const target = event.kind === 10454 ? state.target : state.contact
@@ -34,13 +34,13 @@ export function privateEventState(event: Event): NameApproval | BlockState | und
   } catch { return }
 }
 /** Same order as native. Concurrent blocks win; approvals retain every transition. */
-export function comparePrivateEvents(a: Event, b: Event): number {
+export function comparePrivateEvents(a: PrivateEvent, b: PrivateEvent): number {
   const x = privateEventState(a)!, y = privateEventState(b)!
   return x.revision - y.revision || (a.kind === 10454 ? Number((x as BlockState).blocked) - Number((y as BlockState).blocked) :
     (x as NameApproval).change.accepted_at_secs - (y as NameApproval).change.accepted_at_secs) ||
     (a.pubkey < b.pubkey ? -1 : Number(a.pubkey > b.pubkey)) || (a.id < b.id ? -1 : Number(a.id > b.id))
 }
-export function blockedIntervals(events: Event[]): Array<[number, number | null]> {
+export function blockedIntervals(events: PrivateEvent[]): Array<[number, number | null]> {
   const sorted = events.filter(event => event.kind === 10454 && privateEventState(event)).sort(comparePrivateEvents)
   return sorted.flatMap((event, index) => {
     const state = privateEventState(event) as BlockState
@@ -54,7 +54,7 @@ export function validMessageRead(value: unknown): value is MessageReadState {
     (value.expiresAtSecs === undefined || time(value.expiresAtSecs))
 }
 
-export function privateStateControlEvent(value: unknown, kind: number, owner: string): Event | undefined {
+export function privateStateControlEvent(value: unknown, kind: number, owner: string): PrivateEvent | undefined {
   if (!object(value) || value.v !== 1 || value.event?.kind !== kind || value.type !== (kind === 10454 ? 'private-block-state' : 'private-name-approval') || privateEventState(value.event)?.owner !== owner) return
-  return value.event
+  return parsePrivateEvent(value.event, true)
 }

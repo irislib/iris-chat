@@ -1,3 +1,4 @@
+vi.mock('./authorizationSync', async importOriginal => ({ ...await importOriginal<typeof import('./authorizationSync')>(), authorizationEvents: async function* () {}, saveAuthorizationEvent: async () => true }))
 vi.mock('./privateStateView', () => ({ refreshPrivateStateView: async () => {} }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateStateRecords: async function* () {}, privateHistoryAllowed: async () => true }))
 import { get, writable } from 'svelte/store'
@@ -140,6 +141,7 @@ vi.mock('./deviceSyncRecordApply', () => ({ admitRecordMessage: async (_owner: s
 vi.mock('./messageMutations', async importOriginal => ({ ...await importOriginal<typeof import('./messageMutations')>(), messageMutationRecords: async function* () {} }))
 vi.mock('./deviceSyncRecordStore', () => ({ deviceRecordVersion: writable(0), messageWithReactionHeads: async (_owner: string, value: unknown) => value, hasReactionHead: async () => false, groupSettingsHead: async () => undefined, reactionHeads: async function* () {}, reactionHeadPages: async function* () {}, groupSettingsHeads: async function* () {} }))
 vi.mock('./storage', () => ({
+  chatDeletionStates: async () => [],
   db: { transaction: async (...args: any[]) => args.at(-1)(), messages: { get: async () => undefined }, sessionManager: { get: async () => undefined } },
   getSessionManagerValue: vi.fn(async () => undefined),
   putSessionManagerValue: vi.fn(async () => {}),
@@ -880,7 +882,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2,
+        recordReconcile: 1, privateFacts: 2, privateEvents: 2, nameApprovals: 2, readStates: 2,
         page: { kind: 'metadata', offset: 32 },
       }))
 
@@ -889,7 +891,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2,
+        recordReconcile: 1, privateFacts: 2, privateEvents: 2, nameApprovals: 2, readStates: 2,
       }))
 
       transport.send.mockRejectedValueOnce(new Error('queue full'))
@@ -897,7 +899,7 @@ describe('device sync', () => {
         v: 1,
         type: 'request',
         rosterAt: 100,
-        recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2,
+        recordReconcile: 1, privateFacts: 2, privateEvents: 2, nameApprovals: 2, readStates: 2,
       }))).rejects.toThrow('queue full')
       expect(transport.sendFirst).toHaveBeenLastCalledWith(
         source,

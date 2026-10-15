@@ -137,3 +137,4 @@ it('does not turn missing offline authorization into a grant', async () => {
   mocks.register.mockRejectedValue(new Error('No message server accepted authorization'))
   await expect(ensureDeviceRegistered()).rejects.toThrow('No message server accepted authorization')
 })
+vi.mock('./authorizationSync', () => ({ restoreAuthorizationProjections: async () => {}, saveAuthorizationEvent: async () => true }))

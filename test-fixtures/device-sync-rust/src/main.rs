@@ -5,6 +5,7 @@ use std::{
 };
 
 use nostr::Event;
+use nostr_identity::PrivateEvent;
 use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

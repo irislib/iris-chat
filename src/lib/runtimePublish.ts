@@ -18,7 +18,8 @@ interface RuntimePublishOptions {
     innerEventId: string | undefined,
     relayUrls: string[]
   ) => void | Promise<void>
-  canPublish?: (context: NostrPublishContext) => boolean | Promise<boolean>
+  canPublish?: (context: NostrPublishContext) => boolean | 'hold' | Promise<boolean | 'hold'>
+  resolveContext?: (innerEventId: string) => Promise<NostrPublishContext | undefined>
   onError: (error: unknown) => void
   storage?: StorageAdapter
   onlineTarget?: EventTarget
@@ -31,7 +32,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
   const controller = new AbortController()
   const { signal } = controller
   const enqueuing = new Map<string, Promise<void>>()
-  const groupAttempts = new Map<AbortController, string>()
+  const policyAttempts = new Map<AbortController, NostrPublishContext>()
   const inFlight = new Map<string, Promise<VerifiedEvent | undefined>>()
   const onlineTarget =
     options.onlineTarget ?? (typeof window !== 'undefined' ? window : undefined)
@@ -74,20 +75,27 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       signal.throwIfAborted()
       if (!row) return
       assertPrivatePublicationPolicy(row.event)
-      if (row.context && options.canPublish && !await options.canPublish(row.context)) {
-        await storage.del(key)
-        return
+      if (!row.context && row.innerEventId && options.resolveContext) {
+        row.context = await options.resolveContext(row.innerEventId)
+        signal.throwIfAborted()
+        if (row.context) await storage.put(key, row)
+      }
+      if (row.context && options.canPublish) {
+        const decision = await options.canPublish(row.context)
+        signal.throwIfAborted()
+        if (decision === false) { await storage.del(key); return }
+        if (decision === 'hold') return
       }
       signal.throwIfAborted()
       const groupController = row.context ? new AbortController() : undefined
-      if (groupController) groupAttempts.set(groupController, row.context!.groupId)
+      if (groupController) policyAttempts.set(groupController, row.context!)
       const attemptSignal = groupController ? AbortSignal.any([signal, groupController.signal]) : signal
       let accepted: RuntimePublishResult
       try {
         accepted = await options.publish(row.event, attemptSignal, row.context)
         attemptSignal.throwIfAborted()
       } finally {
-        if (groupController) groupAttempts.delete(groupController)
+        if (groupController) policyAttempts.delete(groupController)
       }
       if (accepted.size === 0)
         throw new Error('Runtime event was not accepted by any relay')
@@ -143,7 +151,10 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       return (await attempt(prefix + event.id)) ?? event
     },
     cancelGroup(groupId: string) {
-      for (const [attempt, id] of groupAttempts) if (id === groupId) attempt.abort()
+      for (const [attempt, context] of policyAttempts) if (context.groupId === groupId) attempt.abort()
+    },
+    cancelDirect(recipientOwnerPubkey: string) {
+      for (const [attempt, context] of policyAttempts) if (context.recipientOwnerPubkey === recipientOwnerPubkey) attempt.abort()
     },
     start() {
       if (started || signal.aborted) return

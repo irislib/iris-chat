@@ -200,6 +200,8 @@ const createSubscribe = (
   const subscribe = createRuntimeSubscribe(client, cacheUsage)
   return (filter, onEvent) => subscribe(filter, event => {
     observeCallWakeInvite(event)
+    const owner = get(identity)?.pubkey
+    if (owner) void import('./authorizationSync').then(({ saveAuthorizationEvent }) => saveAuthorizationEvent(owner, event, () => get(identity)?.pubkey === owner)).catch(error => console.warn('Could not save authorization', error))
     onEvent(event)
   })
 }
@@ -310,6 +312,7 @@ const republishInviteWithRetry = async (reason: string): Promise<void> => {
 }
 
 const privateRuntimeMigration = new WeakMap<NdrRuntime, Promise<void>>()
+const privateRuntimeAuthorizationRestore = new WeakMap<NdrRuntime, Promise<void>>()
 const initializePrivateRuntime = async (instance: NdrRuntime, owner: string) => {
   let ready = privateRuntimeMigration.get(instance)
   if (!ready) {
@@ -322,7 +325,15 @@ const initializePrivateRuntime = async (instance: NdrRuntime, owner: string) => 
   }
   await ready
   if (get(identity)?.pubkey !== owner) throw new Error('Account changed')
-  return instance.initForOwner(owner)
+  await instance.initForOwner(owner)
+  let restored = privateRuntimeAuthorizationRestore.get(instance)
+  if (!restored) {
+    restored = import('./authorizationSync').then(({ restoreAuthorizationProjections }) =>
+      restoreAuthorizationProjections(owner, () => get(identity)?.pubkey === owner && runtime === instance))
+    privateRuntimeAuthorizationRestore.set(instance, restored)
+    void restored.catch(() => privateRuntimeAuthorizationRestore.delete(instance))
+  }
+  await restored
 }
 
 const getRuntime = (): NdrRuntime => {
@@ -362,7 +373,20 @@ const getRuntime = (): NdrRuntime => {
     publish: createRelayPublish(client),
     onAcceptedRelays: notifyMessageRelayPublish,
     onAcceptedEvent: acceptedCallWakeBootstrap,
-    canPublish: async ({ groupId }) => {
+    resolveContext: async innerEventId => {
+      const { db } = await import('./storage')
+      const message = await db.messages.get(innerEventId)
+      if (!message?.isMine) return
+      return message.sessionId.startsWith('group:') ? { groupId: message.sessionId.slice(6) }
+        : { recipientOwnerPubkey: message.sessionId, createdAt: Math.floor(message.timestamp / 1000) }
+    },
+    canPublish: async context => {
+      if (context.recipientOwnerPubkey) {
+        const { privateDirectPublicationPolicy } = await import('./privateStateStore')
+        return privateDirectPublicationPolicy(ownerPubkey, context.recipientOwnerPubkey, context.createdAt)
+      }
+      const { groupId } = context
+      if (!groupId) return false
       const { groups, canSendToGroup } = await import('./groups')
       const { db } = await import('./storage')
       const stored = get(groups).get(groupId) ?? await db.groups.get(groupId)
@@ -376,6 +400,8 @@ const getRuntime = (): NdrRuntime => {
     nostrSubscribe: createSubscribe(client),
     nostrSign: sign,
     nostrEnqueue: async (event, innerEventId, context) => {
+      const { saveAuthorizationEvent } = await import('./authorizationSync')
+      await saveAuthorizationEvent(ownerPubkey, event, () => get(identity)?.pubkey === ownerPubkey)
       await publication.enqueue(event, innerEventId, context)
       if (get(identity)?.pubkey === ownerPubkey) {
         void queuedCallWakeEnvelope(event, innerEventId).catch(error => console.warn('Call wake could not be sent', error))
@@ -385,7 +411,10 @@ const getRuntime = (): NdrRuntime => {
       const signed = 'sig' in event && event.sig
         ? event as VerifiedEvent
         : await sign(event)
-      return publication.publish(signed, innerEventId, context)
+      const published = await publication.publish(signed, innerEventId, context)
+      const { saveAuthorizationEvent } = await import('./authorizationSync')
+      await saveAuthorizationEvent(ownerPubkey, signed, () => get(identity)?.pubkey === ownerPubkey)
+      return published
     },
     onPublishError: ({ error }) => reportPublicationError(error),
     nostrFetch: createFetch(client),
@@ -415,6 +444,10 @@ const getRuntime = (): NdrRuntime => {
   })
   publication.start()
   return runtime
+}
+
+export function cancelDirectPublications(owner: string, recipient: string): void {
+  if (runtimeOwnerPubkey === owner) runtimePublication?.cancelDirect(recipient)
 }
 
 export function cancelGroupPublications(groupId: string): void {

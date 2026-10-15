@@ -72,10 +72,10 @@
     "jsqr": "^1.4.0",
     "marked": "^15.0.12",
     "minidenticons": "^4.2.1",
-    "nostr-double-ratchet": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.176/nostr-double-ratchet-0.0.176.tgz",
+    "nostr-double-ratchet": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz",
     "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.15/nostr-pubsub-0.5.15.tgz",
     "nostr-pubsub-reconcile": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz",
-    "nostr-social-graph": "https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz",
+    "nostr-social-graph": "https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz",
     "nostr-tools": "^2.23.12",
     "qrcode": "^1.5.4"
   }

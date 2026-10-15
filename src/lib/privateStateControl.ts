@@ -1,5 +1,6 @@
 import { get } from 'svelte/store'
-import { finalizeEvent, getEventHash, getPublicKey, type Event } from 'nostr-tools'
+import { getEventHash } from 'nostr-tools'
+import { buildPrivateEvent, parsePrivateEvent, type PrivateEvent } from 'nostr-social-graph/privateEvents'
 import type { Rumor, OnEventMeta } from 'nostr-double-ratchet'
 import { getPubkey } from './identity'
 import { devices } from './devices'
@@ -9,7 +10,8 @@ import { privateStateControlEvent, privateEventState, type NameChange, type Bloc
 import { savePrivateStateEvent, contactPrivateEvents, readState, applyMessageRead } from './privateStateStore'
 const authorized = (owner: string) => getPubkey() === owner && get(devices).isCurrentDeviceRegistered
 const pendingKey = (owner: string, id: string) => `private-state-pending:${owner}:${id}`
-async function sendPrivateEvent(owner: string, event: Event): Promise<void> {
+async function sendPrivateEvent(owner: string, event: PrivateEvent): Promise<void> {
+  event = parsePrivateEvent(event, true)
   if (!authorized(owner)) return
   const runtime = await waitForNdrRuntime()
   if (!authorized(owner)) return
@@ -35,7 +37,7 @@ export async function retryPrivateStateControls(owner: string): Promise<void> {
   let after: string | undefined
   while (authorized(owner)) {
     const rows = await db.sessionManager.where('key').between(after ?? prefix, `${prefix}\uffff`, after === undefined, true).limit(64).toArray()
-    for (const row of rows) { await savePrivateStateEvent(owner, row.value as Event, () => authorized(owner)); await sendPrivateEvent(owner, row.value as Event) }
+    for (const row of rows) { await savePrivateStateEvent(owner, row.value as PrivateEvent, () => authorized(owner)); await sendPrivateEvent(owner, row.value as PrivateEvent) }
     if (rows.length < 64) return
     after = rows.at(-1)!.key
   }
@@ -43,13 +45,10 @@ export async function retryPrivateStateControls(owner: string): Promise<void> {
 async function writePrivateEvent(owner: string, target: string, kind: 10454 | 10455, content: Record<string, unknown>): Promise<void> {
   if (getPubkey() !== owner) throw new Error('Account changed')
   const runtime = await waitForNdrRuntime()
-  const raw = (await db.sessionManager.get('v1/device-manager/identity-private-key'))?.value
-  if (!Array.isArray(raw) || raw.length !== 32 || !raw.every(n => Number.isInteger(n) && n >= 0 && n < 256)) throw new Error('Device key is not ready')
-  const key = Uint8Array.from(raw)
-  if (getPubkey() !== owner || getPublicKey(key) !== runtime.getState().currentDevicePubkey) throw new Error('Device changed')
-  const event = finalizeEvent({ kind, created_at: Math.floor(Date.now() / 1000), content: JSON.stringify(content),
-    tags: [['p', owner], ['d', `iris:${kind === 10454 ? 'block' : 'name-approval'}:${target}`]] }, key)
-  key.fill(0)
+  const pubkey = runtime.getState().currentDevicePubkey
+  if (!pubkey || getPubkey() !== owner || runtime.getState().ownerPubkey !== owner) throw new Error('Device changed')
+  const event = buildPrivateEvent({ pubkey, kind, created_at: Math.floor(Date.now() / 1000), content: JSON.stringify(content),
+    tags: [['p', owner], ['d', `iris:${kind === 10454 ? 'block' : 'name-approval'}:${target}`]] })
   if (privateEventState(event)?.owner !== owner) throw new Error('Invalid private update')
   await db.transaction('rw', db.sessionManager, async () => {
     if (getPubkey() !== owner) throw new Error('Account changed')
@@ -81,10 +80,11 @@ export async function receivePrivateStateControl(rumor: Rumor, meta?: OnEventMet
   if (!owner || !authorized(owner) || meta?.senderOwnerPubkey !== owner || !sender || sender === state.identityPubkey ||
     !state.registeredDevices.some(device => device.identityPubkey === sender) || (rumor.pubkey !== owner && rumor.pubkey !== sender) ||
     rumor.tags.some(tag => tag[0] === 'p' && tag[1] !== owner) || rumor.content.length > 8192) return
-  let value: { type: string; v: number; event: Event }
+  let value: { type: string; v: number; event: PrivateEvent }
   try { value = JSON.parse(rumor.content) } catch { return }
-  if (!privateStateControlEvent(value, rumor.kind, owner)) return
-  await savePrivateStateEvent(owner, value.event, () => authorized(owner) && get(devices).registeredDevices.some(device => device.identityPubkey === sender))
+  const event = privateStateControlEvent(value, rumor.kind, owner)
+  if (!event) return
+  await savePrivateStateEvent(owner, event, () => authorized(owner) && get(devices).registeredDevices.some(device => device.identityPubkey === sender))
 }
 export async function sendOwnReadState(owner: string, chatId: string, ids: string[]): Promise<void> {
   if (!authorized(owner)) return

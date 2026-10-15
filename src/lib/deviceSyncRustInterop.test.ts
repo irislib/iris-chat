@@ -122,7 +122,7 @@ interop('iris-chat-rs device-sync interop', () => {
     const source = process.env.IRIS_PRIVATE_STATE_FIXTURE_INPUT
     if (!source) throw new Error('IRIS_PRIVATE_STATE_FIXTURE_INPUT must select the generated native state fixture')
     const fixture = JSON.parse(readFileSync(source, 'utf8')) as { owner: string; records: Array<{ id: string; record: DeviceSyncRecord }> }
-    expect(new Set(fixture.records.map(entry => entry.record.type))).toEqual(new Set(['privateContactFact','privateNameApproval','privateBlock']))
+    expect(new Set(fixture.records.map(entry => entry.record.type))).toEqual(new Set(['privateContactFact','privateNameApproval','privateBlock','privateEvent','authorization']))
     for (const entry of fixture.records) {
       const packet = { v: 1 as const, type: 'historyRecords' as const, session: 'f'.repeat(32), records: [entry.record], requested: [entry.id] }
       const encoded = encodeDeviceSyncPacket(packet)
@@ -161,9 +161,9 @@ interop('iris-chat-rs device-sync interop', () => {
     const nativeId = recordFixtures[0].id
     const session = '1'.repeat(32), linkId = '2'.repeat(64)
     const packets = [
-      { v: 1 as const, type: 'request' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, privateFacts: 1 as const, privateEvents: 1 as const, nameApprovals: 1 as const, readStates: 2 as const },
-      { v: 1 as const, type: 'pageEnd' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, next: null, privateFacts: 1 as const, privateEvents: 1 as const, nameApprovals: 1 as const, readStates: 2 as const },
-      { v: 1 as const, type: 'historyOpen' as const, scope: 'state' as const, session, since: 0, until: 0, frame, privateFacts: 1 as const, privateEvents: 1 as const, nameApprovals: 1 as const, readStates: 2 as const },
+      { v: 1 as const, type: 'request' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, privateFacts: 2 as const, privateEvents: 2 as const, nameApprovals: 2 as const, readStates: 2 as const },
+      { v: 1 as const, type: 'pageEnd' as const, rosterAt: 100, recordReconcile: 1 as const, historySince: 0, next: null, privateFacts: 2 as const, privateEvents: 2 as const, nameApprovals: 2 as const, readStates: 2 as const },
+      { v: 1 as const, type: 'historyOpen' as const, scope: 'state' as const, session, since: 0, until: 0, frame, privateFacts: 2 as const, privateEvents: 2 as const, nameApprovals: 2 as const, readStates: 2 as const },
       { v: 1 as const, type: 'historyOpen' as const, scope: 'history' as const, prefix: 'abc', session, linkId, since: 0, until: 100, frame },
       { v: 1 as const, type: 'historyFrame' as const, session, frame },
       { v: 1 as const, type: 'historyNeed' as const, session, ids: [nativeId] },

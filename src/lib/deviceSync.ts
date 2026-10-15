@@ -1,3 +1,5 @@
+import { loadMessageRequestDecisions, mergeRequestDecision } from './messageRequests'
+import { applyHistoryChatDeletion, db, getMessagesForSession } from './storage'
 import { privateStateVersion } from './privateStateStore'
 import { messageMutationFields } from './messageMutations'
 import { admitRecordMessage } from './deviceSyncRecordApply'
@@ -173,7 +175,7 @@ function emptySnapshot(rosterAt: number): DeviceSyncSnapshot {
 }
 
 function hasSnapshotData(packet: DeviceSyncSnapshot): boolean {
-  return (packet.privateDeviceLabelsV2?.length ?? 0) + (packet.privateContactsV2?.length ?? 0) + (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
+  return (packet.deletedChats?.length ?? 0) + (packet.privateDeviceLabelsV2?.length ?? 0) + (packet.privateContactsV2?.length ?? 0) + (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
 }
 
 function chunkSnapshot(
@@ -440,6 +442,32 @@ export async function applyDeviceSyncSnapshot(
 ): Promise<number> {
   let imported = 0
   if (!authorized()) return imported
+  for (const value of packet.requestDecisions ?? []) mergeRequestDecision(ownerPubkey, value)
+  for (const deletion of packet.deletedChats ?? []) {
+    if (!authorized()) return imported
+    await applyHistoryChatDeletion(deletion.id, deletion.deletedAt, authorized)
+    const remaining = await getMessagesForSession(deletion.id)
+    if (!authorized()) return imported
+    if (deletion.id.startsWith('group:')) {
+      const id = deletion.id.slice(6)
+      const exists = await db.groups.get(id)
+      if (!authorized()) return imported
+      applyStoreUpdate(() => {
+        if (!exists) groups.update(all => { const next = new Map(all); next.delete(id); return next })
+        groupMessages.update(all => { const next = new Map(all); const kept = new Set(remaining.map(m => m.id)); next.set(id, (all.get(id) ?? []).filter(m => kept.has(m.id))); return next })
+      })
+    } else {
+      const exists = await db.sessions.get(deletion.id)
+      if (!authorized()) return imported
+      applyStoreUpdate(() => chats.update(all => {
+        const next = new Map(all), previous = next.get(deletion.id)
+        if (!exists && !remaining.length) next.delete(deletion.id)
+        else if (previous) { const kept = new Set(remaining.map(m => m.id)); next.set(deletion.id, { ...previous, messages: previous.messages.filter(m => kept.has(m.id)) }) }
+        return next
+      }))
+      if (get(currentChat)?.id === deletion.id && !exists && !remaining.length) currentChat.set(null)
+    }
+  }
   if (packet.privateContactsV2?.length) await mergePrivateContacts(ownerPubkey, packet.privateContactsV2)
   if (packet.chatPins?.length) await mergeChatPins(packet.chatPins, ownerPubkey)
   if (packet.chatMutes?.length) await mergeChatMutes(packet.chatMutes, ownerPubkey)
@@ -464,7 +492,7 @@ export async function applyDeviceSyncSnapshot(
     if (!authorized()) return imported
     // Native includes group read-state rows here; groups have their own store.
     if (chat.id.startsWith('group:')) continue
-    if (await isHistoryChatDeleted(chat.id)) continue
+    if (await isHistoryChatDeleted(chat.id, chat.updatedAt)) continue
     const session: ChatSession = {
       id: chat.id,
       recipientPubkey: chat.id,
@@ -482,7 +510,7 @@ export async function applyDeviceSyncSnapshot(
 
   for (const group of additions.groups) {
     if (!authorized()) return imported
-    if (await isHistoryChatDeleted(`group:${group.id}`)) continue
+    if (await isHistoryChatDeleted(`group:${group.id}`, group.updatedAt)) continue
     const existing = get(groups).get(group.id)
     if (!existing && !group.members.includes(ownerPubkey)) continue
     const local: Group = {
@@ -665,7 +693,7 @@ function servingHistorySince(owner: string, peer: string): number {
 }
 
 function historyRequest(_owner: string, page?: DeviceSyncPage): DeviceSyncRequest {
-  return { v: 1, type: 'request', rosterAt: get(devices).lastEventTimestamp, recordReconcile: 1, privateFacts: 1, privateEvents: 1, nameApprovals: 1, readStates: 2, ...(page && { page }) }
+  return { v: 1, type: 'request', rosterAt: get(devices).lastEventTimestamp, recordReconcile: 1, privateFacts: 2, privateEvents: 2, nameApprovals: 2, readStates: 2, ...(page && { page }) }
 }
 
 function inventoryMessages(owner: string, since: number, until: number): DeviceSyncMessage[] {
@@ -853,6 +881,7 @@ async function updateRuntime(
       owner: ownerPubkey,
       snapshots: () => buildDeviceSyncSnapshots(snapshotSource(0, ownerPubkey), DEVICE_SYNC_MAX_PACKET_BYTES, false),
       messages: (since, until) => inventoryMessages(ownerPubkey, since, until),
+      cachedAuthorization: async () => getNdrRuntime().getKnownAppKeysEvents?.() ?? [],
       cachedProfiles: async contacts => (await get(nostrClient).runtime.query([{ kinds: [0], authors: contacts, limit: contacts.length }], { cache: 'cache-only' })).events,
       allowsLegacy,
       mutationTargetSince: peer => currentHistoryPair(ownerPubkey, peer)?.since === 0 ? 0 : regularHistorySince(peer),
@@ -963,6 +992,7 @@ async function updateRuntime(
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {
+  loadMessageRequestDecisions(ownerPubkey)
   deviceUnsubscribe?.()
   for (const unsubscribe of storeUnsubscribers) unsubscribe()
   void loadChatPins(ownerPubkey).catch(error => console.warn('Could not load pin settings', error))

@@ -1,3 +1,4 @@
+vi.mock('./authorizationSync', () => ({ saveAuthorizationEvent: async () => true }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
 vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: async () => {} }))
 vi.mock('./deviceSyncRecordApply', async importOriginal => ({

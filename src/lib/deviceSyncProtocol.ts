@@ -1,3 +1,4 @@
+import type { RequestDecision } from './messageRequests'
 import { validPrivateDeviceLabel, type PrivateDeviceLabel } from './privateDeviceLabelProtocol'
 import { validatePrivateContactDocument, type PrivateContactDocument } from 'nostr-social-graph/privateContactSyncV2'
 import { isChatPinState, type ChatPinState } from './chatPinSync'
@@ -47,7 +48,7 @@ export interface DeviceSyncMessage {
 
 export type DeviceSyncPage = { kind: 'metadata'; offset: number }
 
-export interface PrivateStateCapabilities { privateFacts?: 1; privateEvents?: 1; nameApprovals?: 1; readStates?: 2 }
+export interface PrivateStateCapabilities { privateFacts?: 2; privateEvents?: 2; nameApprovals?: 2; readStates?: 2 }
 export interface DeviceSyncRequest extends PrivateStateCapabilities {
   v: 1
   type: 'request'
@@ -85,6 +86,8 @@ export interface DeviceSyncSnapshot {
   rosterAt: number
   appKeys: DeviceSyncAppKeys[]
   chats: DeviceSyncChat[]
+  requestDecisions?: RequestDecision[]
+  deletedChats?: Array<{ id: string; deletedAt: number }>
   chatMutes?: ChatMuteState[]
   chatPins?: ChatPinState[]
   privateContactsV2?: PrivateContactDocument[]
@@ -193,8 +196,8 @@ export function parseDeviceSyncPacket(
 }
 
 function parsePrivateCapabilities(value: Record<string, unknown>): PrivateStateCapabilities {
-  return { ...(value.privateFacts === 1 && { privateFacts: 1 }), ...(value.privateEvents === 1 && { privateEvents: 1 }),
-    ...(value.nameApprovals === 1 && { nameApprovals: 1 }), ...(value.readStates === 2 && { readStates: 2 }) }
+  return { ...(value.privateFacts === 2 && { privateFacts: 2 }), ...(value.privateEvents === 2 && { privateEvents: 2 }),
+    ...(value.nameApprovals === 2 && { nameApprovals: 2 }), ...(value.readStates === 2 && { readStates: 2 }) }
 }
 function parseHistoryCapability(value: Record<string, unknown>): PrivateStateCapabilities & { recordReconcile?: 1; historySince?: number } {
   if (value.recordReconcile !== undefined && value.recordReconcile !== 1) fail('record capability is invalid')
@@ -248,6 +251,8 @@ function parseSnapshot(value: Record<string, unknown>, owner: string): DeviceSyn
   catch { fail('snapshot privateContactsV2 are invalid') }
   const appKeys = defaultArray(value.appKeys, 'appKeys')
   const chats = defaultArray(value.chats, 'chats')
+  const deletedChats = defaultArray(value.deletedChats, 'deletedChats')
+  if (!deletedChats.every(item => isObject(item) && typeof item.id === 'string' && validChat({id: item.id, updatedAt: item.deletedAt}) && isTime(item.deletedAt) && item.deletedAt > 0 && item.deletedAt <= Date.now() / 1000 + 300)) fail('snapshot deletedChats are invalid')
   const chatPins = defaultArray(value.chatPins, 'chatPins')
   if (!chatPins.every(isChatPinState)) fail('snapshot chatPins are invalid')
   const chatMutes = defaultArray(value.chatMutes, 'chatMutes')
@@ -268,6 +273,7 @@ function parseSnapshot(value: Record<string, unknown>, owner: string): DeviceSyn
     rosterAt: value.rosterAt,
     appKeys: appKeys as unknown as DeviceSyncAppKeys[],
     chats: chats as unknown as DeviceSyncChat[],
+    ...(deletedChats.length && { deletedChats: deletedChats as Array<{ id: string; deletedAt: number }> }),
     ...(chatPins.length && { chatPins: chatPins as ChatPinState[] }),
     ...(privateDeviceLabelsV2.length && { privateDeviceLabelsV2: privateDeviceLabelsV2 as PrivateDeviceLabel[] }),
     ...(privateContactsV2.length && { privateContactsV2: privateContactsV2 as PrivateContactDocument[] }),

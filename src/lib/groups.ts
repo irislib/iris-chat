@@ -1,3 +1,4 @@
+import { saveAuthorizationEvent } from './authorizationSync'
 import { sendOwnReadState, applyOwnReadTag } from './privateStateControl'
 import { privateHistoryAllowed } from './privateStateStore'
 import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
@@ -260,6 +261,7 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
   const event = new AppEvent(client, unsigned)
   await event.sign(signer)
   const signed = event.rawEvent() as VerifiedEvent
+  await saveAuthorizationEvent(getPubkey()!, signed)
   rememberGroupRosterFact(group.id, {
     eventId: signed.id,
     revision: Number(unsigned.tags.find((tag) => tag[0] === 'revision')?.[1] || 0),
@@ -335,12 +337,21 @@ export function handleGroupRosterFactEvent(event: VerifiedEvent): boolean {
   if (!isGroupRosterFactEvent(event)) return false
 
   try {
-    return applyGroupRosterFact(
-      parseGroupRosterFactEvent(event as unknown as Parameters<typeof parseGroupRosterFactEvent>[0])
-    )
+    const applied = applyGroupRosterFact(parseGroupRosterFactEvent(structuredClone(event)))
+    if (applied) void saveAuthorizationEvent(getPubkey()!, event).catch(error => console.warn('Could not save group authorization', error))
+    return applied
   } catch {
     return false
   }
+}
+
+export async function applySyncedGroupRosterFact(event: VerifiedEvent): Promise<void> {
+  const fact = parseGroupRosterFactEvent(structuredClone(event))
+  const { isHistoryChatDeleted } = await import('./storage')
+  if (await isHistoryChatDeleted(`group:${fact.groupId}`, fact.updatedAt)) return
+  applyGroupRosterFact(fact)
+  const current = get(groups).get(fact.groupId)
+  if (current) await saveGroupState(current)
 }
 
 export function handleGroupRosterFactRumor(rumor: Rumor): boolean {
@@ -662,7 +673,7 @@ async function sendNativeGroupEvent(
   })
 }
 
-function saveGroupState(group: Group): void {
+function saveGroupState(group: Group): Promise<void> {
   const storedGroup: StoredGroup = {
     id: group.id,
     name: group.name,
@@ -676,7 +687,9 @@ function saveGroupState(group: Group): void {
     accepted: group.accepted,
     rosterVersion: groupRosterFactCursors.get(group.id) ?? group.rosterVersion,
   }
-  saveGroupToDb(storedGroup).catch(e => console.error('[groups] Failed to save group:', e))
+  const pending = saveGroupToDb(storedGroup)
+  void pending.catch(e => console.error('[groups] Failed to save group:', e))
+  return pending
 }
 
 export async function createGroup(name: string, memberPubkeys: string[]): Promise<Group> {

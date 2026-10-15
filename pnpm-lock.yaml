@@ -41,10 +41,10 @@ importers:
         version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-nostr-pubsub-0.1.8.tgz(nostr-tools@2.23.12(typescript@5.9.3))(typescript@5.9.3)
       '@hashtree/worker':
         specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-worker-0.4.12.tgz
-        version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-worker-0.4.12.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3))(typescript@5.9.3)
+        version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-worker-0.4.12.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3))(typescript@5.9.3)
       '@iris/identity':
         specifier: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz
-        version: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3))(typescript@5.9.3)
+        version: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3))(typescript@5.9.3)
       '@iris/svelte-ui':
         specifier: file:vendor/iris-svelte-ui-3d26f8c.tgz
         version: file:vendor/iris-svelte-ui-3d26f8c.tgz(svelte@5.56.5)
@@ -70,8 +70,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.176/nostr-double-ratchet-0.0.176.tgz
-        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.176/nostr-double-ratchet-0.0.176.tgz(typescript@5.9.3)
+        specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz
+        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz(typescript@5.9.3)
       nostr-pubsub:
         specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.15/nostr-pubsub-0.5.15.tgz
         version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.15/nostr-pubsub-0.5.15.tgz(nostr-tools@2.23.12(typescript@5.9.3))
@@ -79,8 +79,8 @@ importers:
         specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz
         version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz
       nostr-social-graph:
-        specifier: https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz
-        version: https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3)
+        specifier: https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz
+        version: https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3)
       nostr-tools:
         specifier: ^2.23.12
         version: 2.23.12(typescript@5.9.3)
@@ -876,7 +876,7 @@ packages:
     version: 0.0.55
 
   '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.54/fips-transport-websocket-0.0.9.tgz':
-    resolution: {integrity: sha512-y9SkW2IbTt9ElXO89+184PuYCnMyODtojeKfzQg34iQIOpEpebvi/mPzvZjWNFk6e2gAfu3aG1/V+TiSU9XsFA==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.54/fips-transport-websocket-0.0.9.tgz}
+    resolution: {tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.54/fips-transport-websocket-0.0.9.tgz}
     version: 0.0.9
 
   '@fips/transport-websocket@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.56/fips-transport-websocket-0.0.10.tgz':
@@ -884,7 +884,7 @@ packages:
     version: 0.0.10
 
   '@hashtree/collection@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-collection-0.2.10.tgz':
-    resolution: {integrity: sha512-K50NRsrVm3a9JA24zH5E+F3ve31ibb3fYeE6L8J1hSHCBYEuNqn2r4/awXC1mheMehG8r2074dfWe8n0qPe4oA==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-collection-0.2.10.tgz}
+    resolution: {tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-collection-0.2.10.tgz}
     version: 0.2.10
 
   '@hashtree/core@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz':
@@ -903,11 +903,11 @@ packages:
       '@fips/transport-webrtc': '>=0.0.51'
 
   '@hashtree/index@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-index-0.1.14.tgz':
-    resolution: {integrity: sha512-5JAekyGQAb+6yhXramZhzaKZ8I8HpVrnDd6SZCF6y3sYOLge2zAPep0MpPJtYpNsD3HdXCIhUL1JK40YvKCgHA==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-index-0.1.14.tgz}
+    resolution: {tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-index-0.1.14.tgz}
     version: 0.1.14
 
   '@hashtree/mesh@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-mesh-0.3.2.tgz':
-    resolution: {integrity: sha512-lYHxC3N3TWAVlxdudVkTGcrz9eb0k27nwhUZTFN9AUOvGqNV9q7aFVM6VG/RjD2mdMh9s900s2uUGxDK/5D+TQ==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-mesh-0.3.2.tgz}
+    resolution: {tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-mesh-0.3.2.tgz}
     version: 0.3.2
 
   '@hashtree/nostr-pubsub@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-nostr-pubsub-0.1.8.tgz':
@@ -917,7 +917,7 @@ packages:
       nostr-tools: '>=2.18.2 <3'
 
   '@hashtree/nostr@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-nostr-0.2.5.tgz':
-    resolution: {integrity: sha512-SSFQtQOVxKPVoU4K9H/TunB7nRdyCqpjYaQV1KFV6goUAJRKFA4jqtI8PiNeSR/PmBL39jovw2bwWdPZbh/7Hg==, tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-nostr-0.2.5.tgz}
+    resolution: {tarball: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-nostr-0.2.5.tgz}
     version: 0.2.5
 
   '@hashtree/worker@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-worker-0.4.12.tgz':
@@ -2265,9 +2265,9 @@ packages:
     resolution: {integrity: sha512-wRNIrw4DmVLKQlbgOMdkMx27Wrpzes2hh5Jtbi2bjPd+4wJstWIqP5A+lscnqbm0xxmT5Bpg8Lec5ItEBwx6BQ==}
     engines: {node: '>=18'}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.176/nostr-double-ratchet-0.0.176.tgz:
-    resolution: {integrity: sha512-tb9RvZpgzdG3TubA0UYijpiNrT0n8IWP1EE3JlxSMOBzIzIKC01S8F5qbZnnlq9H86ohSPnJ4Y5iVqj5271UDA==, tarball: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.176/nostr-double-ratchet-0.0.176.tgz}
-    version: 0.0.176
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz:
+    resolution: {integrity: sha512-Yi3BaxzY/iNzKXK4kwso4nnrP9ychGd4JSCS3hlNLj1f1hTvc0hl0QkHj9KAOSyyygN9HZ2bbjnXSvZTnDBrTw==, tarball: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz}
+    version: 0.0.177
 
   nostr-pubsub-reconcile@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz:
     resolution: {integrity: sha512-F1UToi75yYrZpt5KFocPUlQH4MeU/J9A/aJBndWUuDvzx1WdQtF99tNxD3KnH2x81R4oaT721hf5OcTdSv8hRg==, tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz}
@@ -2279,9 +2279,9 @@ packages:
     peerDependencies:
       nostr-tools: '>=2.23.3 <3'
 
-  nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz:
-    resolution: {integrity: sha512-X77jeQqp4P2ygJyYnSCdewdDbJTDjQRxmXa1JMzuPfk7NN5GvA7ppgMEUICROzKvLNdVmOqQUHfrPjXGuFi+OQ==, tarball: https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz}
-    version: 2.1.1
+  nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz:
+    resolution: {integrity: sha512-WYipehbl5EGdnBiusXpTQ0rOu7eeHK708hNd/8Jd9NdpQqfNe+gy1LxiFBhdR9y+3OPuqqfqmQ/pyCTeIzK0LA==, tarball: https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz}
+    version: 3.0.0
 
   nostr-tools@2.23.12:
     resolution: {integrity: sha512-dLE9r0b4pCmrOKLUPD0KhUj9IXeh6RwiYoonEWeBh2AaDmlczUjJqJC8pQfggXzKUZ7+uZvhcrKkfwuZk0/e1g==}
@@ -3951,7 +3951,7 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  '@hashtree/worker@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-worker-0.4.12.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3))(typescript@5.9.3)':
+  '@hashtree/worker@https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-worker-0.4.12.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
       '@hashtree/core': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-core-0.3.2.tgz
       '@hashtree/dexie': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.9/hashtree-dexie-0.1.11.tgz
@@ -3963,7 +3963,7 @@ snapshots:
       nostr-pubsub: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.15/nostr-pubsub-0.5.15.tgz(nostr-tools@2.23.12(typescript@5.9.3))
       nostr-tools: 2.23.12(typescript@5.9.3)
     optionalDependencies:
-      nostr-social-graph: https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3)
+      nostr-social-graph: https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3)
     transitivePeerDependencies:
       - typescript
 
@@ -3979,9 +3979,9 @@ snapshots:
       '@iconify/types': 2.0.0
       import-meta-resolve: 4.2.0
 
-  '@iris/identity@https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3))(typescript@5.9.3)':
+  '@iris/identity@https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
-      nostr-social-graph: https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3)
+      nostr-social-graph: https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3)
       nostr-tools: 2.23.5(typescript@5.9.3)
     transitivePeerDependencies:
       - typescript
@@ -5323,7 +5323,7 @@ snapshots:
 
   node-releases@2.0.51: {}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.176/nostr-double-ratchet-0.0.176.tgz(typescript@5.9.3):
+  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz(typescript@5.9.3):
     dependencies:
       '@noble/curves': 2.0.1
       nostr-tools: 2.23.12(typescript@5.9.3)
@@ -5338,7 +5338,7 @@ snapshots:
       nostr-pubsub-reconcile: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz
       nostr-tools: 2.23.12(typescript@5.9.3)
 
-  nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v2.1.1/nostr-social-graph-2.1.1.tgz(typescript@5.9.3):
+  nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz(typescript@5.9.3):
     dependencies:
       '@msgpack/msgpack': 3.1.3
       '@noble/hashes': 2.2.0

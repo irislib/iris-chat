@@ -1,7 +1,7 @@
 import { get } from 'svelte/store'
 import { getEventHash } from 'nostr-tools'
 import type { Rumor } from 'nostr-double-ratchet'
-import { db, type StoredMessage } from './storage'
+import { db, isHistoryChatDeleted, type StoredMessage } from './storage'
 import { compareControlHead, type DeviceSyncMessageMutation } from './deviceSyncRecords'
 import { deviceRecordVersion } from './deviceSyncRecordStore'
 import { messageDeletionSettings } from './messageDeletionSettings'
@@ -125,7 +125,7 @@ export async function applyMessageMutation(owner: string, mutation: DeviceSyncMe
     if (target && (target.sessionId !== mutation.chatId || originalAuthor(owner, target) !== mutation.author || mutation.createdAt < Math.floor(target.timestamp / 1000) || target.call ||
       target.expiresAt !== undefined && target.expiresAt <= Date.now() / 1000 || target.deletedAt !== undefined ||
       mutation.operation === 'edit' && !editableMessage(target))) return false
-    if (await db.sessionManager.get(`history-deleted-message:${mutation.messageId}`) || await db.sessionManager.get(`history-deleted-chat:${mutation.chatId}`)) return false
+    if (await db.sessionManager.get(`history-deleted-message:${mutation.messageId}`) || await isHistoryChatDeleted(mutation.chatId, mutation.createdAt)) return false
     const indexKey = targetKey(owner, mutation.chatId, mutation.messageId)
     const ids = (await db.sessionManager.get(indexKey))?.value as string[] | undefined ?? []
     if (!authorized()) return false

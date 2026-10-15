@@ -1,3 +1,4 @@
+import { loadMessageRequestDecisions } from './messageRequests'
 import { receivePrivateStateControl, sendOwnReadState, applyOwnReadTag } from './privateStateControl'
 import { privateHistoryAllowed, isPrivatelyBlocked } from './privateStateStore'
 import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
@@ -1844,6 +1845,8 @@ async function saveMessageToStorage(sessionId: string, message: ChatMessage): Pr
 
 // Load chats from IndexedDB
 export async function loadChatsFromStorage(): Promise<void> {
+  const owner = getPubkey()
+  if (owner) loadMessageRequestDecisions(owner)
   if (isInitialized) return
 
   try {

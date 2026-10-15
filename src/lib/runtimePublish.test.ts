@@ -246,3 +246,42 @@ describe('durable runtime publication', () => {
   await expect(queue.enqueue({ ...event('a'), kind: 30078, tags: [['t', 'nostr-social-memory/v1']] })).rejects.toThrow('encrypted device queue')
   expect(publish).not.toHaveBeenCalled()
  })
+
+it('retires blocked direct retries and holds newer envelopes across restart without touching other recipients', async () => {
+  const target = '1'.repeat(64), other = '2'.repeat(64)
+  let blocked = true
+  const canPublish = (context: import('nostr-double-ratchet').NostrPublishContext) => {
+    if (context.recipientOwnerPubkey !== target) return true
+    if (context.createdAt! <= 100) return false
+    return blocked ? 'hold' as const : true
+  }
+  const old = queueFor(async () => accepted())
+  await old.enqueue(event('a'), 'old', { recipientOwnerPubkey: target, createdAt: 90 })
+  await old.enqueue(event('b'), 'new', { recipientOwnerPubkey: target, createdAt: 110 })
+  await old.enqueue(event('c'), 'other', { recipientOwnerPubkey: other, createdAt: 90 })
+  old.close()
+  const publish = vi.fn(async () => accepted())
+  const onlineTarget = new EventTarget()
+  const queue = queueFor(publish, { canPublish, onlineTarget })
+  queue.start()
+  await waitFor(async () => expect(await rows()).toHaveLength(1))
+  expect(publish.mock.calls).toEqual([[event('c'), expect.any(AbortSignal), { recipientOwnerPubkey: other, createdAt: 90 }]])
+  blocked = false
+  onlineTarget.dispatchEvent(new Event('online'))
+  await waitFor(async () => expect(await rows()).toEqual([]))
+  expect(publish).toHaveBeenCalledTimes(2)
+})
+
+it('aborts direct transport as soon as its block policy changes', async () => {
+  const target = '1'.repeat(64)
+  const publish = vi.fn((_event: VerifiedEvent, signal: AbortSignal) => new Promise<ReturnType<typeof accepted>>((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+  }))
+  const queue = queueFor(publish)
+  const pending = queue.publish(event('a'), 'inner', { recipientOwnerPubkey: target, createdAt: 90 })
+  const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  await waitFor(() => expect(publish).toHaveBeenCalledOnce())
+  queue.cancelDirect(target)
+  await cancelled
+  expect(await rows()).toHaveLength(1)
+})

@@ -266,13 +266,13 @@ export class DeviceHistorySync {
 }
 
 function privateRecordEnabled(type: string | undefined, caps: PrivateStateCapabilities): boolean {
-  return type === 'privateContactFact' ? caps.privateFacts === 1 : type === 'privateBlock' ? caps.privateEvents === 1 :
-    type === 'privateNameApproval' ? caps.nameApprovals === 1 : type === 'messageRead' ? caps.readStates === 2 : true
+  return type === 'privateContactFact' ? caps.privateFacts === 2 : (type === 'privateBlock' || type === 'privateEvent' || type === 'authorization') ? caps.privateEvents === 2 :
+    type === 'privateNameApproval' ? caps.nameApprovals === 2 : type === 'messageRead' ? caps.readStates === 2 : true
 }
 
 function intersectCapabilities(a: PrivateStateCapabilities, b: PrivateStateCapabilities): PrivateStateCapabilities {
-  return { privateFacts: a.privateFacts === 1 && b.privateFacts === 1 ? 1 : undefined,
-    privateEvents: a.privateEvents === 1 && b.privateEvents === 1 ? 1 : undefined,
-    nameApprovals: a.nameApprovals === 1 && b.nameApprovals === 1 ? 1 : undefined,
+  return { privateFacts: a.privateFacts === 2 && b.privateFacts === 2 ? 2 : undefined,
+    privateEvents: a.privateEvents === 2 && b.privateEvents === 2 ? 2 : undefined,
+    nameApprovals: a.nameApprovals === 2 && b.nameApprovals === 2 ? 2 : undefined,
     readStates: a.readStates === 2 && b.readStates === 2 ? 2 : undefined }
 }

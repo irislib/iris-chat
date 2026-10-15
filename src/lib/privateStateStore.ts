@@ -1,7 +1,7 @@
 import { blockedContacts, replaceBlockedContacts } from './privateBlockProjection'
 import { writable } from 'svelte/store'
-import type { Event } from 'nostr-tools'
-import { db, type StoredMessage } from './storage'
+import { parsePrivateEvent, type PrivateEvent } from 'nostr-social-graph/privateEvents'
+import { db, isHistoryChatDeleted, type StoredMessage } from './storage'
 import { privateEventState, comparePrivateEvents, blockedIntervals, validMessageRead, type NameApproval, type BlockState, type MessageReadState } from './privateStateProtocol'
 import { deviceRecordVersion } from './deviceSyncRecordStore'
 import type { DeviceSyncRecord } from './deviceSyncRecords'
@@ -9,29 +9,34 @@ const base = (owner: string) => `private-state-v1:${owner}:`
 const readKey = (owner: string, chat: string, id: string) => `${base(owner)}read:${JSON.stringify([chat, id])}`
 export const privateStateVersion = writable(0)
 const changed = () => { privateStateVersion.update(n => n + 1); deviceRecordVersion.update(n => n + 1) }
-export async function* privateStateEvents(owner: string): AsyncGenerator<Event> {
+export async function* privateStateEvents(owner: string): AsyncGenerator<PrivateEvent> {
   const prefix = `${base(owner)}event:`
   let after: string | undefined
   while (true) {
     const rows = await db.sessionManager.where('key').between(after ?? prefix, `${prefix}\uffff`, after === undefined, true).limit(256).toArray()
-    for (const row of rows) { const event = row.value as Event; if (privateEventState(event)?.owner === owner) yield event }
+    for (const row of rows) { let event: PrivateEvent; try { event = parsePrivateEvent(row.value, true) } catch { continue }; if (privateEventState(event)?.owner === owner) { if ('sig' in (row.value as object)) await db.sessionManager.put({ key: row.key, value: event }); yield event } }
     if (rows.length < 256) return
     after = rows.at(-1)!.key
   }
 }
-export async function contactPrivateEvents(owner: string, target: string, kind: number): Promise<Event[]> {
+export async function contactPrivateEvents(owner: string, target: string, kind: number): Promise<PrivateEvent[]> {
   const prefix = `${base(owner)}event:${kind}:${target}:`
   const rows = await db.sessionManager.where('key').startsWith(prefix).toArray()
-  return rows.map(row => row.value as Event).filter(event => privateEventState(event)?.owner === owner).sort(comparePrivateEvents)
+  return rows.flatMap(row => { try { return [parsePrivateEvent(row.value, true)] } catch { return [] } }).filter(event => privateEventState(event)?.owner === owner).sort(comparePrivateEvents)
 }
-export async function savePrivateStateEvent(owner: string, event: Event, authorized: () => boolean): Promise<boolean> {
+export async function savePrivateStateEvent(owner: string, event: PrivateEvent, authorized: () => boolean): Promise<boolean> {
+  event = parsePrivateEvent(event, true)
   if (!authorized() || privateEventState(event)?.owner !== owner) throw new Error('Invalid private account event')
   const eventState = privateEventState(event)!
   const target = 'contact' in eventState ? eventState.contact : eventState.target
   const key = `${base(owner)}event:${event.kind}:${target}:${event.id}`
   const inserted = await db.transaction('rw', db.sessionManager, async () => {
     if (!authorized()) throw new Error('Account changed')
-    if (await db.sessionManager.get(key)) return false
+    const previous = await db.sessionManager.get(key)
+    if (previous) {
+      if ('sig' in (previous.value as object)) await db.sessionManager.put({ key, value: event })
+      return false
+    }
     await db.sessionManager.put({ key, value: event }); return true
   })
   // Projection is repeatable if persistence succeeded before a crash/account switch.
@@ -39,7 +44,11 @@ export async function savePrivateStateEvent(owner: string, event: Event, authori
   if (authorized() && event.kind === 10454) {
     const next = new Set(blockedContacts(owner))
     if (await isPrivatelyBlocked(owner, target)) next.add(target); else next.delete(target)
-    if (authorized()) replaceBlockedContacts(owner, next)
+    if (authorized()) {
+      replaceBlockedContacts(owner, next)
+      const { cancelDirectPublications } = await import('./privateChats')
+      cancelDirectPublications(owner, target)
+    }
   }
   if (inserted) changed()
   return inserted
@@ -63,6 +72,14 @@ export async function isPrivatelyBlocked(owner: string, target: string): Promise
   const event = (await contactPrivateEvents(owner, target, 10454)).at(-1)
   return !!event && (privateEventState(event) as BlockState).blocked
 }
+/** Match native: retire sends through every block interval; hold newer work during catch-up. */
+export async function privateDirectPublicationPolicy(owner: string, target: string, createdAt: number): Promise<boolean | 'hold'> {
+  const events = await contactPrivateEvents(owner, target, 10454)
+  const cutoff = Math.max(0, ...events.map(event => (privateEventState(event) as BlockState).deletedAt),
+    ...blockedIntervals(events).map(([since, until]) => until === null ? since : until - 1))
+  if (cutoff > 0 && createdAt <= cutoff) return false
+  return events.length && (privateEventState(events.at(-1)!) as BlockState).blocked ? 'hold' : true
+}
 export async function privateHistoryAllowed(owner: string, author: string, created: number): Promise<boolean> {
   return !blockedIntervals(await contactPrivateEvents(owner, author, 10454)).some(([since, until]) => created >= since && (until === null || created < until))
 }
@@ -78,7 +95,7 @@ export async function applyMessageRead(owner: string, chatId: string, messageId:
   if (read.expiresAtSecs !== undefined && read.expiresAtSecs <= Date.now() / 1000) return
   const updated = await db.transaction('rw', db.messages, db.sessionManager, async () => {
     if (!authorized()) throw new Error('Account changed')
-    if (await db.sessionManager.get(`history-deleted-message:${messageId}`) || await db.sessionManager.get(`history-deleted-chat:${chatId}`)) return
+    if (await db.sessionManager.get(`history-deleted-message:${messageId}`) || await isHistoryChatDeleted(chatId, read.createdAtSecs)) return
     const message = await db.messages.get(messageId)
     if (message) {
       if (message.sessionId === chatId && !message.isMine && !message.call && message.status !== 'seen' && Math.floor(message.timestamp / 1000) === read.createdAtSecs && (message.expiresAt === undefined || message.expiresAt > Date.now() / 1000)) {
@@ -125,7 +142,7 @@ export async function* privateStateRecords(owner: string): AsyncGenerator<Device
 }
 
 export async function restorePrivateBlocks(owner: string): Promise<void> {
-  const heads = new Map<string, Event>()
+  const heads = new Map<string, PrivateEvent>()
   for await (const event of privateStateEvents(owner)) if (event.kind === 10454) {
     const target = (privateEventState(event) as BlockState).target, previous = heads.get(target)
     if (!previous || comparePrivateEvents(event,previous) > 0) heads.set(target,event)

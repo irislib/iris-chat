@@ -1,3 +1,6 @@
+import { authorizationEvent } from './authorizationSync'
+import { privateSettingSnapshot } from './privateSettings'
+import { parsePrivateEvent, type PrivateEvent } from 'nostr-social-graph/privateEvents'
 import { privateEventState, validMessageRead, type MessageReadState } from './privateStateProtocol'
 import { parsePrivateContactFact, type PrivateContactFact } from 'nostr-social-graph/privateContactFacts'
 import { sha256 } from '@noble/hashes/sha2.js'
@@ -35,8 +38,10 @@ export interface DeviceSyncGroupSettings {
   messageTtlSeconds: number | null
 }
 export type DeviceSyncRecord =
-  | { type: 'privateBlock'; event: Event }
-  | { type: 'privateNameApproval'; event: Event }
+  | { type: 'authorization'; event: Event }
+  | { type: 'privateEvent'; event: PrivateEvent }
+  | { type: 'privateBlock'; event: PrivateEvent }
+  | { type: 'privateNameApproval'; event: PrivateEvent }
   | { type: 'messageRead'; chatId: string; messageId: string; read: MessageReadState }
   | { type: 'privateContactFact'; fact: PrivateContactFact }
   | { type: 'message'; message: DeviceSyncMessage }
@@ -49,7 +54,7 @@ export type DeviceSyncRecord =
 export function deviceSyncRecordId(record: DeviceSyncRecord): string {
   let input: unknown[]
   switch (record.type) {
-    case 'privateBlock': case 'privateNameApproval': return record.event.id
+    case 'authorization': case 'privateEvent': case 'privateBlock': case 'privateNameApproval': return record.event.id
     case 'messageRead': input = ['messageRead', record.chatId, record.messageId, record.read.createdAtSecs, record.read.expiresAtSecs ?? null]; break
     case 'privateContactFact': return record.fact.id
     case 'message': input = [record.message.chatId, record.message.id]; break
@@ -103,9 +108,11 @@ export function parseDeviceSyncRecord(value: unknown, parsers: {
   group(value: unknown): boolean
 }): DeviceSyncRecord {
   if (!object(value)) throw new Error('Invalid device sync record')
-  if ((value.type === 'privateBlock' && value.event?.kind === 10454 || value.type === 'privateNameApproval' && value.event?.kind === 10455) && privateEventState(value.event)) return { type: value.type, event: value.event }
+  if ((value.type === 'privateBlock' && value.event?.kind === 10454 || value.type === 'privateNameApproval' && value.event?.kind === 10455) && privateEventState(value.event)) return { type: value.type, event: parsePrivateEvent(value.event, true) }
+  if (value.type === 'authorization') { const event = authorizationEvent(value.event); if (event) return { type: 'authorization', event }; throw new Error('Invalid authorization event') }
+  if (value.type === 'privateEvent') { const event = parsePrivateEvent(value.event); privateSettingSnapshot(event, event.pubkey); return { type: 'privateEvent', event } }
   if (value.type === 'messageRead' && chat(value.chatId) && id(value.messageId) && validMessageRead(value.read)) return { type: 'messageRead', chatId: value.chatId, messageId: value.messageId, read: value.read }
-  if (value.type === 'privateContactFact') { parsePrivateContactFact(value.fact, value.fact?.owner); return { type: 'privateContactFact', fact: value.fact } }
+  if (value.type === 'privateContactFact') { parsePrivateContactFact(value.fact, value.fact?.pubkey); return { type: 'privateContactFact', fact: value.fact } }
   if (value.type === 'message') return { type: 'message', message: parsers.message(value.message) }
   if (value.type === 'messageMutation') {
     const m = value.mutation
