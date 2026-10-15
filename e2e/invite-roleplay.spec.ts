@@ -25,7 +25,7 @@ test('a third member reaches both existing members without creating empty direct
     const copy = alice.locator('button[title*="#/nhash"]').first()
     await expect(copy).toBeVisible()
     const link = (await copy.getAttribute('title'))!.replace('https://chat.iris.to', new URL(alice.url()).origin)
-    for (const [page, name] of [[bob, 'Bob'], [cara, 'Cara']] as const) {
+    for (const [page, name] of [[bob, 'Bob'], [cara, 'Cara Bobcat']] as const) {
       await page.goto(link)
       await page.getByLabel('Your name (optional)').fill(name)
       await page.getByRole('button', { name: 'Join Chat', exact: true }).click()
@@ -35,7 +35,9 @@ test('a third member reaches both existing members without creating empty direct
     }
     await alice.getByRole('button', { name: 'New Chat', exact: true }).click()
     await alice.getByRole('button', { name: 'Create Group', exact: true }).click()
-    await alice.getByTestId('create-group-member').filter({ hasText: 'Bob' }).click()
+    // A substring match for Bob must not select Cara Bobcat (or a generated Bobcat name).
+    await expect(alice.getByTestId('create-group-member').getByText('Cara Bobcat', { exact: true })).toBeVisible()
+    await alice.getByTestId('create-group-member').filter({ has: alice.getByText('Bob', { exact: true }) }).click()
     await alice.getByTestId('create-group-next').click()
     await alice.getByPlaceholder('Enter group name...').fill('Picnic')
     await alice.getByTestId('create-group-submit').click()
@@ -47,7 +49,7 @@ test('a third member reaches both existing members without creating empty direct
 
     await alice.getByRole('button', { name: 'Picnic 2 members', exact: true }).click()
     await alice.getByRole('button', { name: 'Add', exact: true }).click()
-    await alice.getByRole('button', { name: 'Cara Cara', exact: true }).click()
+    await alice.getByRole('button', { name: 'Cara Bobcat Cara Bobcat', exact: true }).click()
     await alice.getByTestId('sidebar-chat-list').getByRole('button', { name: /Picnic/ }).click()
     await cara.getByTestId('sidebar-chat-list').getByRole('button', { name: /Picnic/ }).click()
     await cara.getByRole('button', { name: 'Accept', exact: true }).click()
@@ -86,7 +88,7 @@ test('a private group link admits a new person after an admin restart and enforc
     await expect(alice.getByText('Hello Alice', { exact: true }).last()).toBeVisible()
     await alice.getByRole('button', { name: 'New Chat', exact: true }).click()
     await alice.getByRole('button', { name: 'Create Group', exact: true }).click()
-    await alice.getByTestId('create-group-member').filter({ hasText: 'Bob' }).click()
+    await alice.getByTestId('create-group-member').filter({ has: alice.getByText('Bob', { exact: true }) }).click()
     await alice.getByTestId('create-group-next').click()
     await alice.getByPlaceholder('Enter group name...').fill('Weekend picnic')
     await alice.getByTestId('create-group-submit').click()
