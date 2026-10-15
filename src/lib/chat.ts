@@ -27,6 +27,7 @@ import {
   RECEIPT_KIND,
   CHAT_MESSAGE_KIND,
   CHAT_SETTINGS_KIND,
+  TYPING_KIND,
   buildReactionRumor,
   buildReceiptRumor,
   buildTextRumor,
@@ -72,14 +73,14 @@ import {
   type StoredInvite
 } from './storage'
 import { updateDMSubscription } from './notifications'
-import { handleGroupEvent, handleGroupRosterFactRumor } from './groups'
+import { handleGroupEvent, handleGroupRosterFactRumor, groups } from './groups'
 import { parseReceipt, shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { expirationStore } from './expirationStore'
 import { parseChatSettingsContent } from './chatSettings'
-import { acceptChat } from './messageRequests'
+import { acceptChat, clearChat } from './messageRequests'
 import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
 import { asVerifiedPushNostrEvent } from './pushEvents'
 import {
@@ -92,6 +93,7 @@ import {
 
 export type { RecipientDeliveryStatus } from './messageRelayStatus'
 import { rememberContact } from './contactMemory'
+import { decodeInviteReference, type InviteRecord } from './inviteRecord'
 
 export interface ChatMessage {
   directTransferId?: string
@@ -121,13 +123,15 @@ export interface ChatSession {
   recipientPubkey: string
   mode: 'manager'
   messages: ChatMessage[]
+  bootstrapOnly?: boolean
   inviteId?: string      // ID of the invite that started this chat
   inviteLabel?: string   // Label of the invite that started this chat
 }
 
 export type ChatInvite =
   | { type: 'pubkey'; pubkey: string }
-  | { type: 'legacy'; invite: Invite }
+  | { type: 'private'; reference: string }
+  | { type: 'legacy'; invite: Invite; reference?: string }
 
 export interface ActiveInvite {
   id: string
@@ -388,16 +392,20 @@ function subscribeToNdrRuntimeEvents(): void {
     await handleManagerEvent(rumor, from, meta)
     if (getPubkey() !== account) throw new Error('Account changed')
   })
+  const stopGroupInvites = runtime.onDurableSessionEvent([10461, 10462], async (rumor, _from, meta) => {
+    if (!account || getPubkey() !== account) throw new Error('Account is not ready')
+    await (await import('./groupInvites')).receiveGroupInviteControl(rumor, meta)
+  })
   const stopDurable = registerPrivateControlEvents(runtime, {
     account, getAccount: getPubkey, getState: () => get(devices), receive: handleManagerEvent,
   })
   const stopEvents = runtime.onSessionEvent((rumor, from, meta) => {
-    if (durableKinds.includes(rumor.kind) || rumor.kind === MESSAGE_EDIT_KIND || rumor.kind === MESSAGE_DELETE_KIND) return
+    if (durableKinds.includes(rumor.kind) || [10461, 10462, MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND].includes(rumor.kind)) return
     handleManagerEvent(rumor, from, meta).catch((e) =>
       console.error('[chat] Failed to handle NdrRuntime event:', e)
     )
   })
-  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents() }
+  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents(); stopGroupInvites() }
 }
 
 function startNdrRuntimePoller(): void {
@@ -503,15 +511,10 @@ function syncRuntimeChats(): void {
       )
     }
     if (currentChats.has(pubkey)) continue
+    // Group transport setup also creates pairwise sessions. A session alone
+    // is not an instruction to put a new conversation in the inbox.
+    if (!policyCtx.acceptedChats?.[pubkey]) continue
     if (policyCtx.rejectedChats?.[pubkey]) continue
-    if (
-      policyCtx.receiveMessageRequests === false &&
-      !policyCtx.following.has(pubkey) &&
-      !policyCtx.acceptedChats?.[pubkey]
-    ) {
-      continue
-    }
-
     const hasSession = Array.from(record.devices?.values() ?? []).some((device) =>
       Boolean(device.activeSession) || (device.inactiveSessions?.length ?? 0) > 0
     )
@@ -555,6 +558,28 @@ export async function createInvite(): Promise<ChatInvite> {
   return { type: 'legacy', invite }
 }
 
+export async function personalInviteRecord(invite: Invite): Promise<InviteRecord> {
+  const { getLocalProfile, getProfileName } = await import('./profile')
+  return {
+    v: 1, type: 'personal', name: (getProfileName(getLocalProfile() ?? undefined) || '').slice(0, 100),
+    nonce: Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join(''),
+    invite: { inviter: invite.inviter, ephemeralKey: invite.inviterEphemeralPublicKey,
+      sharedSecret: invite.sharedSecret, owner: invite.ownerPubkey || invite.inviter,
+      ...(invite.deviceId && { deviceId: invite.deviceId }), purpose: 'chat' },
+  }
+}
+
+export function inviteFromRecord(record: InviteRecord): Invite {
+  return Invite.fromUrl(`https://chat.iris.to/#${encodeURIComponent(JSON.stringify(record.invite))}`)
+}
+
+export async function resolvePrivateInvite(invite: ChatInvite): Promise<InviteRecord | null> {
+  if (invite.type !== 'private') return null
+  const record = await (await import('./inviteRecordStore')).loadInviteRecord(invite.reference)
+  if (record.expiresAt && record.expiresAt <= Math.floor(Date.now() / 1000)) throw new Error('This invite has expired.')
+  return record
+}
+
 // Get the base URL for invite links
 function getInviteBaseUrl(): string {
   const origin = window.location.origin
@@ -567,6 +592,9 @@ function getInviteBaseUrl(): string {
 
 // Get invite URL
 export function getInviteUrl(invite: ChatInvite): string {
+  if (invite.type === 'private' || (invite.type === 'legacy' && invite.reference)) {
+    return `${getInviteBaseUrl()}/#/${invite.reference}`
+  }
   if (invite.type === 'pubkey') {
     const url = new URL(getInviteBaseUrl())
     url.hash = `/${nip19.npubEncode(invite.pubkey)}`
@@ -594,6 +622,10 @@ function parseInviteHash(hash: string): ChatInvite | null {
     raw = raw.slice('invite/'.length).replace(/^\/+/, '')
   }
   if (!raw) return null
+  if (raw.startsWith('nhash1')) {
+    const reference = raw
+    try { decodeInviteReference(reference); return { type: 'private', reference } } catch { return null }
+  }
 
   type InvitePurpose = 'link' | 'chat'
   const parseInvitePayload = (
@@ -694,7 +726,7 @@ function parseInviteHash(hash: string): ChatInvite | null {
 
 // Parse invite from URL hash
 export function parseInviteFromHash(): ChatInvite | null {
-  const hash = window.location.hash
+  const hash = window.location.hash || window.location.pathname
   if (!hash || hash.length < 2) return null
   return parseInviteHash(hash)
 }
@@ -703,7 +735,7 @@ export function parseInviteFromHash(): ChatInvite | null {
 export function parseInviteFromUrl(url: string): ChatInvite | null {
   try {
     const trimmed = url.trim()
-    if (trimmed.startsWith('npub') || trimmed.startsWith('nprofile')) {
+    if (trimmed.startsWith('npub') || trimmed.startsWith('nprofile') || trimmed.startsWith('nhash1')) {
       return parseInviteHash(`#${trimmed}`)
     }
     if (trimmed.startsWith('nostr:')) {
@@ -711,7 +743,7 @@ export function parseInviteFromUrl(url: string): ChatInvite | null {
       return parseInviteHash(`#${raw}`)
     }
     const parsed = new URL(url)
-    return parseInviteHash(parsed.hash)
+    return parseInviteHash(parsed.hash || parsed.pathname)
   } catch {
     return null
   }
@@ -725,21 +757,23 @@ export function isLinkInvite(invite: ChatInvite | null | undefined): boolean {
 
 // Serialize invite for storage
 export function serializeInvite(invite: ChatInvite): string {
+  if (invite.type === 'private') return JSON.stringify(invite)
   if (invite.type === 'pubkey') {
     return JSON.stringify({ type: 'pubkey', pubkey: invite.pubkey })
   }
-  return invite.invite.serialize()
+  return invite.reference ? JSON.stringify({ type: 'legacy', data: invite.invite.serialize(), reference: invite.reference }) : invite.invite.serialize()
 }
 
 // Deserialize invite from storage
 export function deserializeInvite(data: string): ChatInvite {
   try {
     const parsed = JSON.parse(data)
+    if (parsed?.type === 'private') { decodeInviteReference(parsed.reference); return parsed }
     if (parsed?.type === 'pubkey' && typeof parsed.pubkey === 'string') {
       return { type: 'pubkey', pubkey: parsed.pubkey }
     }
     if (parsed?.type === 'legacy' && typeof parsed.data === 'string') {
-      return { type: 'legacy', invite: Invite.deserialize(parsed.data) }
+      return { type: 'legacy', invite: Invite.deserialize(parsed.data), reference: parsed.reference }
     }
   } catch {
     // fall back to legacy invite
@@ -770,6 +804,11 @@ export async function createAndSaveInvite(label?: string): Promise<ActiveInvite>
   if (!pubkey) throw new Error('Not logged in')
 
   const invite = await createInvite()
+  if (invite.type === 'legacy') {
+    const { publishInviteRecord } = await import('./inviteRecordStore')
+    invite.reference = await publishInviteRecord(await personalInviteRecord(invite.invite))
+  }
+  if (getPubkey() !== pubkey) throw new Error('Account changed')
   const id = crypto.randomUUID()
 
   // Save to IndexedDB
@@ -982,7 +1021,7 @@ export async function startChatWithPerson(recipientPubkey: string, support: Mess
 
 async function ensureManagerChat(
   recipientPubkey: string,
-  options: { bootstrap?: boolean } = {}
+  options: { bootstrap?: boolean; bootstrapOnly?: boolean } = {}
 ): Promise<ChatSession> {
   const { bootstrap = true } = options
   try { rememberContact(getPubkey() ?? '', recipientPubkey) } catch { /* Messaging remains available if local storage is full. */ }
@@ -991,6 +1030,7 @@ async function ensureManagerChat(
 
   const storedMessages = await getMessagesForSession(recipientPubkey)
   const messages: ChatMessage[] = storedMessages
+    .filter(message => !!message.content.trim() || message.deletedAt !== undefined || !!message.call)
     .map((m) => ({
       id: m.id,
       content: m.content,
@@ -1016,6 +1056,7 @@ async function ensureManagerChat(
     recipientPubkey,
     mode: 'manager',
     messages,
+    ...(options.bootstrapOnly && { bootstrapOnly: true }),
   }
 
   chats.update((c) => {
@@ -1143,6 +1184,11 @@ export async function handleManagerEvent(
     return
   }
 
+  // Group/session controls may also be emitted on the pairwise event stream.
+  // Only direct-chat event kinds can create or update a direct conversation.
+  if (![CHAT_MESSAGE_KIND, RECEIPT_KIND, REACTION_KIND, CHAT_SETTINGS_KIND,
+    TYPING_KIND, MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND].includes(rumor.kind)) return
+
   const effectiveFromPubkey = resolveManagerSender(fromPubkey, myPubkey)
   const resolvedFromPubkey = resolveSessionPubkeyToOwner(effectiveFromPubkey)
   const authenticatedRemoteOwner =
@@ -1215,7 +1261,17 @@ export async function handleManagerEvent(
 
   let policyCtx = getMessageRequestPolicyContext()
   const existing = get(chats).get(chatId)
-  const acceptedLocalInvite = !isFromSelf && !policyCtx.rejectedChats?.[chatId] && isChatFromLocalInvite(chatId)
+  const groupConnection = !existing && Array.from(get(groups).values()).some(group => group.members.includes(chatId))
+  const acceptedLocalInvite = !isFromSelf && !policyCtx.rejectedChats?.[chatId] &&
+    (!(groupConnection || groupInviteConnections.has(chatId)) || (rumor.kind === CHAT_MESSAGE_KIND && !!rumor.content.trim())) && isChatFromLocalInvite(chatId)
+  if (!existing && !acceptedLocalInvite && (rumor.kind !== CHAT_MESSAGE_KIND || !rumor.content.trim())) {
+    if (isTyping(rumor) && !isFromSelf) {
+      const expiresAt = getExpirationTimestampSeconds(rumor)
+      if (expiresAt !== undefined && expiresAt <= Math.floor(Date.now() / 1000)) clearRemoteTyping(chatId)
+      else setRemoteTyping(chatId, rumor.created_at)
+    }
+    return
+  }
   // The authenticated invite bootstrap is sufficient; waiting for a visible
   // text message also stranded the QR screen and file-first conversations.
   if (acceptedLocalInvite) {
@@ -1230,7 +1286,11 @@ export async function handleManagerEvent(
   if (shouldIgnore) return
 
   if (!isFromSelf && (await isPrivatelyBlocked(myPubkey, chatId) || !await privateHistoryAllowed(myPubkey, chatId, rumor.created_at))) return
-  const chatSession = await ensureManagerChat(chatId)
+  const chatSession = await ensureManagerChat(chatId, { bootstrapOnly: !existing && (rumor.kind !== CHAT_MESSAGE_KIND || !rumor.content.trim()) })
+  if (groupInviteConnections.has(chatId) && chatSession.bootstrapOnly && !chatSession.messages.length) {
+    await markGroupInviteConnection(chatId)
+    return
+  }
   if (acceptedLocalInvite) triggerAutoOpen(chatSession)
 
   const isEmptyChat = (existing ? existing.messages.length : chatSession.messages.length) === 0
@@ -1266,8 +1326,27 @@ export async function handleManagerEvent(
   await handleIncomingRumor(chatSession, rumor, isFromSelf, outerEventId, receiptAuthorPubkey)
 }
 
+// Group admission uses the same authenticated transport bootstrap as a direct
+// invite. Once its purpose is known, discard only the empty automatic UI row;
+// preserve the transport, explicit chats, and all message history.
+const groupInviteConnections = new Set<string>()
+export async function markGroupInviteConnection(peer: string): Promise<void> {
+  groupInviteConnections.add(peer)
+  const chat = get(chats).get(peer)
+  if (!chat?.bootstrapOnly || chat.messages.length) return
+  clearChat(peer)
+  chats.update(value => { value.delete(peer); return value })
+  if (get(currentChat)?.id === peer) currentChat.set(null)
+  await deleteSessionFromDb(peer)
+}
+
 // Accept an invite and create a session
 export async function acceptInvite(invite: ChatInvite): Promise<ChatSession> {
+  if (invite.type === 'private') {
+    const record = (await resolvePrivateInvite(invite))!
+    if (record.type === 'group') throw new Error('Use this link to join the group.')
+    return acceptInvite({ type: 'legacy', invite: inviteFromRecord(record) })
+  }
   if (invite.type === 'pubkey') {
     const existing = get(chats).get(invite.pubkey)
     const myPubkey = getPubkey()
@@ -1409,6 +1488,13 @@ async function handleIncomingRumor(
     } else {
       setRemoteTyping(sessionId, rumor.created_at)
     }
+    return
+  }
+
+  // Empty kind-14 messages establish a session; they are not conversation
+  // history and must not replace a real message's sidebar preview.
+  if (rumor.kind !== CHAT_MESSAGE_KIND || !rumor.content.trim()) {
+    saveProcessedRumor()
     return
   }
 
@@ -1801,6 +1887,7 @@ export async function saveSessionToStorage(chatSession: ChatSession): Promise<vo
       createdAt: Date.now(),
       inviteId: chatSession.inviteId,
       inviteLabel: chatSession.inviteLabel,
+      bootstrapOnly: chatSession.bootstrapOnly,
       mode: 'manager',
     }
     await saveSessionToDb(storedSession)
@@ -1857,6 +1944,7 @@ export async function loadChatsFromStorage(): Promise<void> {
       try {
         const storedMessages = await getMessagesForSession(stored.id)
         const messages: ChatMessage[] = storedMessages
+    .filter(message => !!message.content.trim() || message.deletedAt !== undefined || !!message.call)
           .map(m => ({
             id: m.id,
             content: m.content,
@@ -1885,6 +1973,7 @@ export async function loadChatsFromStorage(): Promise<void> {
           messages,
           inviteId: stored.inviteId,
           inviteLabel: stored.inviteLabel,
+          bootstrapOnly: stored.bootstrapOnly,
         }
 
         // Add to chats store
@@ -1947,6 +2036,7 @@ export async function clearChatData(): Promise<void> {
     }
     pendingAutoOpenChats.clear()
     autoOpenedChats.clear()
+    groupInviteConnections.clear()
     pushEventIngestInFlight.clear()
   } catch (e) {
     console.error('Failed to clear chat data:', e)

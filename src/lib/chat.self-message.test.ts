@@ -110,6 +110,7 @@ vi.mock('./privateChats', () => ({
 }))
 
 vi.mock('./groups', () => ({
+  groups: require('svelte/store').writable(new Map()),
   handleGroupEvent: vi.fn(),
 }))
 
@@ -187,6 +188,24 @@ beforeEach(() => {
 })
 
 describe('handleManagerEvent', () => {
+  it('does not turn an unknown protocol control into a direct chat or message', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    await handleManagerEvent({
+      id: 'internal-control', pubkey: PEER_PUBKEY, content: '', kind: 10448,
+      created_at: Math.floor(Date.now() / 1000), tags: [['p', MY_PUBKEY]],
+    } as never, PEER_PUBKEY)
+    expect(get(chats).has(PEER_PUBKEY)).toBe(false)
+  })
+
+  it('does not replace the latest message with an empty handshake', async () => {
+    const PEER_PUBKEY = 'c'.repeat(64)
+    const incoming = { pubkey: PEER_PUBKEY, kind: CHAT_MESSAGE_KIND,
+      created_at: Math.floor(Date.now() / 1000), tags: [['p', MY_PUBKEY]] }
+    await handleManagerEvent({ ...incoming, id: 'hello', content: 'Hello Alice' } as never, PEER_PUBKEY)
+    await handleManagerEvent({ ...incoming, id: 'handshake', content: '' } as never, PEER_PUBKEY)
+    expect(get(chats).get(PEER_PUBKEY)?.messages.map(message => message.content)).toEqual(['Hello Alice'])
+  })
+
   it('stores self manager messages (p-tag points to self)', async () => {
     const rumor = {
       id: 'msg-1',

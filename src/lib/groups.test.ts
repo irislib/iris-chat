@@ -112,7 +112,8 @@ vi.mock('./chat', () => {
   }
 })
 
-vi.mock('./privateChats', () => ({
+vi.mock('./privateChats', () => {
+ const mocked = {
   cancelGroupPublications: vi.fn(),
   ensureDeviceRegistered: vi.fn().mockResolvedValue(undefined),
   getSessionManager: () => ({
@@ -139,7 +140,7 @@ vi.mock('./privateChats', () => ({
       return Promise.resolve(undefined)
     },
   })),
-  waitForNdrRuntime: async () => (await import('./privateChats')).getNdrRuntime(),
+  waitForNdrRuntime: async (): Promise<unknown> => mocked.getNdrRuntime(),
   getNdrRuntime: () => ({
     getState: () => ({ sessionManagerReady: true }),
     sendEvent: (recipient: string, event: unknown, owner?: string, options?: { includeLocalSiblings?: boolean }) => {
@@ -247,7 +248,9 @@ vi.mock('./privateChats', () => ({
       runtimeGroups.delete(groupId)
     },
   }),
-}))
+ }
+ return mocked
+})
 
 vi.mock('nostr-double-ratchet', async () => {
   const actual = await import('nostr-double-ratchet')
@@ -442,6 +445,20 @@ describe('groups', () => {
   })
 
   describe('addGroupMember', () => {
+    it('updates the receiving runtime locally without waiting for its own roster echo', async () => {
+      const { createGroup, addGroupMember, groups } = await import('./groups')
+      const group = await createGroup('Picnic', [MEMBER_B])
+      await vi.waitFor(() => expect(runtimeGroups.get(group.id)?.members).toEqual(group.members))
+
+      addGroupMember(group.id, MEMBER_C)
+
+      await vi.waitFor(() => {
+        expect(runtimeGroups.get(group.id)?.members).toEqual(get(groups).get(group.id)?.members)
+        expect(runtimeGroups.get(group.id)?.members).toContain(MEMBER_C)
+        expect(runtimeGroups.get(group.id)?.secret).toBe(get(groups).get(group.id)?.secret)
+      })
+    })
+
     it('admin can add a new member', async () => {
       const { createGroup, addGroupMember, groups } = await import('./groups')
       const group = await createGroup('Add Test', [MEMBER_B])
@@ -474,6 +491,16 @@ describe('groups', () => {
       expect(updated!.members).not.toContain(NO_SESSION)
     })
 
+    it('reserves distinct revisions before concurrent roster signing', async () => {
+      const { createGroup, addGroupMember, updateGroupInfo } = await import('./groups')
+      const group = await createGroup('Concurrent changes', [MEMBER_B])
+      await vi.waitFor(() => expect(publishedGroupRosterFacts).toHaveLength(1))
+      addGroupMember(group.id, MEMBER_C)
+      updateGroupInfo(group.id, {name:'Updated name'})
+      await vi.waitFor(() => expect(publishedGroupRosterFacts).toHaveLength(3))
+      expect(publishedGroupRosterFacts.map(fact => Number(fact.tags.find(tag => tag[0] === 'revision')?.[1]))).toEqual([1, 2, 3])
+    })
+
     it('publishes an updated group_roster fact when membership changes', async () => {
       const { createGroup, addGroupMember } = await import('./groups')
       const group = await createGroup('Roster Member Test', [MEMBER_B])
@@ -492,7 +519,11 @@ describe('groups', () => {
       expect(fact.tags).toContainEqual(['i', group.id, 'subject'])
       expect(fact.tags).toContainEqual(['member', MEMBER_B])
       expect(fact.tags).toContainEqual(['member', MEMBER_C])
+      await vi.waitFor(() => expect(sendEventCalls.some(call => call.recipient === MEMBER_C &&
+        (call.event as { pubkey: string }).pubkey === MY_PUBKEY)).toBe(true))
       expect(fact.tags).toContainEqual(['admin', MY_PUBKEY])
+      await vi.waitFor(() => expect(sendEventCalls.some(call => call.recipient === MEMBER_C &&
+        (call.event as { tags: string[][] }).tags?.some(tag => tag[0] === 'revision' && tag[1] === fact.tags.find(t => t[0] === 'revision')?.[1]))).toBe(true))
     })
   })
 
@@ -922,7 +953,7 @@ describe('groups', () => {
       sendGroupTypingEvent(group.id)
 
       await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(sendEventCalls).toHaveLength(0)
+      expect(sendEventCalls.filter(call => (call.event as { kind: number }).kind === 24111)).toHaveLength(0)
     })
 
     it('sends after typing indicators are enabled', async () => {

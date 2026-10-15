@@ -7,9 +7,11 @@
 
   interface Props {
     onlogin: () => void
+    inviteTitle?: string
+    groupInvite?: boolean
   }
 
-  let { onlogin }: Props = $props()
+  let { onlogin, inviteTitle = '', groupInvite = false }: Props = $props()
 
   let displayName = $state('')
   let loading = $state(false)
@@ -84,6 +86,7 @@
         />
       </div>
 
+      {#if inviteTitle}<p class="text-center text-gray-300">{inviteTitle}</p>{/if}
       {#if error}
         <div class="p-3 bg-red-900/30 border border-red-700 rounded-lg text-red-400 text-sm">
           {error}
@@ -115,7 +118,7 @@
             onclick={handleGenerateIdentity}
             disabled={loading}
           >
-            {hasInviteInUrl ? 'Join Chat' : 'Go'}
+            {groupInvite ? 'Join Group' : hasInviteInUrl ? 'Join Chat' : 'Go'}
           </button>
         {/if}
 

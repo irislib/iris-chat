@@ -19,6 +19,40 @@ Decentralized encrypted messaging over Nostr using the double-ratchet protocol.
 - **Voice and video calls** use WebRTC codecs and adaptive bitrate, with signaling
   and encrypted media packets carried over authenticated FIPS links
 
+## Invitations
+
+New private invitations use `https://chat.iris.to/#/nhash1…`. The standard encrypted
+hashtree reference contains the ciphertext hash and decryption key. Its single
+CHK-encrypted JSON leaf carries the version, display name, random nonce, and
+existing authenticated double-ratchet invitation fields. Public, unkeyed invite
+records are rejected. Fragments keep the reference out of HTTP requests to the
+landing page. Anyone holding a private link can read its record and use it.
+
+Personal invitations remain reusable. Existing JSON invitation links still work,
+and the sharing view offers a link for older apps. Public contact links use
+`/#/npub1…` and the existing public device-invite discovery flow.
+
+Group records additionally contain a group ID and random admission token, with
+optional expiry and maximum uses. They never contain group message keys. The
+joiner establishes an authenticated pairwise session and sends encrypted kind
+10461 with `{v:1, groupId, token}`. Only the issuing admin's device owns that
+link's admission ledger. It checks current admin authority, revocation, expiry,
+and use count, then commits the membership and distinct-owner use atomically.
+Retries do not consume another use; a removed member cannot reuse that token.
+Encrypted kind 10462 returns the same fields plus `status` (`added`,
+`already-member`, `used`, `unavailable`, `expired`, or `full`). The joiner accepts
+results only from the owner and device pinned in its invitation. Group state and
+sender keys follow the existing authenticated group protocol.
+
+The default is unlimited uses with a 30-day expiry; the UI also offers 1, 10 or
+100 uses and revocation. Requests queue while the issuing device is offline.
+Links and counters are device-local; other admins can issue independent links.
+Clearing that device's data retires its links. The native core accepts both
+private personal and group links, while its existing legacy personal-link
+creation remains compatible. The shared wire fixture is checked by both apps;
+`e2e/invite-roleplay.spec.ts` and the private-invite case in
+`e2e/ndr-interop.spec.ts` exercise admission and real messaging.
+
 ## Tech Stack
 
 - Svelte 5, TypeScript, Vite

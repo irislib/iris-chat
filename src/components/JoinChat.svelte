@@ -24,6 +24,11 @@
       error = 'This link is for device linking'
       return
     }
+    if (invite.type === 'private') {
+      window.location.hash = `/${invite.reference}`
+      linkInput = ''
+      return
+    }
 
     joining = true
     error = ''

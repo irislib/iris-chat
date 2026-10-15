@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { liveQuery } from 'dexie'
+  import { createGroupInvite, groupInviteLinks, revokeGroupInvite, type GroupInviteGrant } from '../lib/groupInvites'
+  import CopyButton from './CopyButton.svelte'
+  import QRCode from './QRCode.svelte'
   import ChatPinButton from './ChatPinButton.svelte'
   import { groups, deleteGroup, isAdmin, canSendToGroup, addGroupMember, removeGroupMember, updateGroupInfo, addGroupAdmin, removeGroupAdmin, type Group } from '../lib/groups'
   import { chats } from '../lib/chat'
@@ -32,6 +36,35 @@
   let uploadingPicture = $state(false)
   let uploadProgress = $state(0)
   let pictureError = $state('')
+  let showInvites = $state(false)
+  let inviteLinks = $state<GroupInviteGrant[]>([])
+  let creatingInvite = $state(false)
+  let inviteError = $state('')
+  let maxUses = $state(0)
+  let expiryDays = $state(30)
+  let qrReference = $state('')
+  $effect(() => {
+    const groupId = group.id
+    if (!showInvites) return
+    const subscription = liveQuery(() => groupInviteLinks(groupId)).subscribe({
+      next: links => { inviteLinks = links },
+      error: error => { inviteError = getErrorMessage(error, 'Could not load invites') },
+    })
+    return () => subscription.unsubscribe()
+  })
+  function openInvites() { showInvites = !showInvites }
+  async function revokeLink(link: GroupInviteGrant) {
+    inviteError = ''
+    try { await revokeGroupInvite(link) }
+    catch (error) { inviteError = getErrorMessage(error, 'Could not revoke invite') }
+  }
+  async function createLink() {
+    creatingInvite = true; inviteError = ''
+    try {
+      await createGroupInvite(group.id, maxUses || undefined, expiryDays ? Math.floor(Date.now() / 1000) + expiryDays * 86400 : undefined)
+    } catch (error) { inviteError = getErrorMessage(error, 'Could not create invite') }
+    finally { creatingInvite = false }
+  }
 
   // Contacts that can be added (have chat sessions, not already members)
   let addableContacts = $derived(
@@ -213,6 +246,35 @@
       {/if}
       <p class="text-sm text-gray-500 mt-1">{group.members.length} members</p>
     </div>
+
+    {#if amAdmin}
+      <div class="p-4 border-b border-surface-lighter">
+        <button class="btn-secondary w-full" onclick={openInvites}>Invite link</button>
+        {#if showInvites}
+          <div class="flex flex-col gap-3 mt-4">
+            {#each inviteLinks as link (link.reference)}
+              <div class="p-3 rounded-lg bg-surface-light space-y-2">
+                <CopyButton text={`https://chat.iris.to/#/${link.reference}`} maxLength={32} />
+                <p class="text-xs text-gray-400">{link.usedBy.length} joined{link.record.maxUses ? ` · Limit ${link.record.maxUses}` : ''}{link.record.expiresAt ? ` · Expires ${new Date(link.record.expiresAt * 1000).toLocaleDateString()}` : ''}</p>
+                <div class="flex gap-4 text-sm">
+                  <button onclick={() => qrReference = qrReference === link.reference ? '' : link.reference}>Show QR</button>
+                  <button class="text-red-400" onclick={() => revokeLink(link)}>Revoke</button>
+                </div>
+                {#if qrReference === link.reference}<div class="bg-white p-3 w-fit rounded-lg"><QRCode data={`https://chat.iris.to/#/${link.reference}`} size={220} /></div>{/if}
+              </div>
+            {/each}
+            <label class="text-sm text-gray-400">Use limit
+              <select class="input w-full mt-1" bind:value={maxUses}><option value={0}>No limit</option><option value={1}>1 person</option><option value={10}>10 people</option><option value={100}>100 people</option></select>
+            </label>
+            <label class="text-sm text-gray-400">Expires
+              <select class="input w-full mt-1" bind:value={expiryDays}><option value={30}>In 30 days</option><option value={7}>In 7 days</option><option value={0}>Never</option></select>
+            </label>
+            {#if inviteError}<p role="alert" class="text-sm text-red-400">{inviteError}</p>{/if}
+            <button class="btn-primary" disabled={creatingInvite} onclick={createLink}>{creatingInvite ? 'Creating invite…' : 'Create invite link'}</button>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Members list -->
     <div class="p-4">

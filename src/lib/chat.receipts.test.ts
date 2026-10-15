@@ -127,6 +127,7 @@ vi.mock('./notifications', () => ({
 }))
 
 vi.mock('./groups', () => ({
+  groups: require('svelte/store').writable(new Map()),
   handleGroupEvent: vi.fn(),
 }))
 
