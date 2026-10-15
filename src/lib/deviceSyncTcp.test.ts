@@ -273,6 +273,34 @@ describe('DeviceSyncTcp', () => {
     }
   })
 
+  it('delivers an acknowledged unread frame before accepting a reconnected canonical dialer', async () => {
+    vi.useFakeTimers()
+    const aEndpoint = new MemoryFipsEndpoint('a'.repeat(64)), bEndpoint = new MemoryFipsEndpoint('b'.repeat(64))
+    aEndpoint.remote = bEndpoint; bEndpoint.remote = aEndpoint
+    const received: string[] = []
+    const options = (endpoint: MemoryFipsEndpoint) => ({ endpoint, localPeer: endpoint.id, port: 7369, maxRecordBytes: 1024,
+      onRecord: (_peer: string, bytes: Uint8Array) => { received.push(new TextDecoder().decode(bytes)) },
+    })
+    const a = new DeviceSyncTcp(options(aEndpoint))
+    const b = new DeviceSyncTcp(options(bEndpoint))
+    try {
+      a.setPeer(bEndpoint.id, true); b.setPeer(aEndpoint.id, true)
+      await vi.advanceTimersByTimeAsync(100)
+      const sent = a.send(bEndpoint.id, new TextEncoder().encode('before reload'))
+      await vi.advanceTimersByTimeAsync(0)
+      await sent
+      expect(received).toEqual([])
+      a.setPeer(bEndpoint.id, false)
+      a.setPeer(bEndpoint.id, true)
+      const next = a.send(bEndpoint.id, new TextEncoder().encode('after reload')).catch(() => {})
+      await vi.advanceTimersByTimeAsync(250)
+      expect(received).toEqual(['before reload', 'after reload'])
+      await next
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()]); vi.useRealTimers()
+    }
+  })
+
   it('reassembles split and coalesced records within the size bound', () => {
     const reader = new RecordReader(8)
     const framed = Uint8Array.from([0, 0, 0, 2, 1, 2, 0, 0, 0, 1, 3])

@@ -233,6 +233,7 @@ export class DeviceSyncTcp {
         continue
       }
       if (previous !== undefined && previous !== id) {
+        if (!this.probes.has(previous)) await this.drainReads(peer, previous)
         await this.tcp.abort(previous)
         this.removeConnection(peer, previous)
       }
