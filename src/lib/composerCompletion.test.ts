@@ -1,14 +1,14 @@
 import { expect, it } from 'vitest'
-import { decodeDraft, encodeDraft, editDraft, insertCompletion, completionAt, exactEmoji, emojiSuggestions } from './composerCompletion'
+import { decodeDraft, encodeDraft, editDraft, insertCompletion, completionAt, exactEmoji, emojiSuggestions, ComposerHistory, composerSnapshot } from './composerCompletion'
 import { formatMention, messageMentions, mentionsOwner, displayMentions } from './mentions'
 const alice = 'a'.repeat(64), bob = 'b'.repeat(64)
 it('keeps identities with equal local names through editing, insertion, drafts and rendering', () => {
   const wire = `👋 ${formatMention(alice, 'Old')} and ${formatMention(bob, 'Alex')}!`
   const draft = decodeDraft(wire, { [alice]: 'Alex', [bob]: 'Alex' })
   expect(draft.text).toBe('👋 @Alex and @Alex!')
-  expect(encodeDraft(editDraft(draft, draft.text + ' Later'))).toBe(wire + ' Later')
+  expect(encodeDraft(editDraft(draft, draft.text + ' Later',{start:draft.text.length,end:draft.text.length,inputType:'insertText'}))).toBe(wire + ' Later')
   expect(messageMentions(wire).map(m => m.pubkey)).toEqual([alice,bob])
-  expect(messageMentions(encodeDraft(editDraft(draft, '👋 @Alec and @Alex!'))).map(m => m.pubkey)).toEqual([bob])
+  expect(messageMentions(encodeDraft(editDraft(draft, '👋 @Alec and @Alex!',{start:7,end:8,inputType:'insertText'}))).map(m => m.pubkey)).toEqual([bob])
   const next = insertCompletion(decodeDraft('Before @Al after'),7,10,'@Alice',alice)
   expect(next.text).toBe('Before @Alice  after')
   expect(messageMentions(encodeDraft(next))[0].pubkey).toBe(alice)
@@ -31,4 +31,41 @@ it('opens bare mentions, bounds and filters emoji, preserves ordinary punctuatio
   expect(exactEmoji('THUMBS-UP')).toBe('👍')
   expect(emojiSuggestions('smile').length).toBeLessThanOrEqual(6)
   expect(exactEmoji('no_such_emoji')).toBeUndefined()
+})
+it('uses the actual selected range when deleting equal-looking mentions',()=>{
+  const draft=decodeDraft(`${formatMention(alice,'Alex')} ${formatMention(bob,'Alex')} `)
+  const remaining=editDraft(draft,'@Alex ',{start:0,end:6,inputType:'deleteContentBackward'})
+  expect(messageMentions(encodeDraft(remaining)).map(item=>item.pubkey)).toEqual([bob])
+})
+
+it('keeps either repeated identity with selection, backward/forward deletion, replacement and undo/redo',()=>{
+  const draft=decodeDraft(`${formatMention(alice,'Alex')} ${formatMention(bob,'Alex')} `)
+  for(const range of [{start:0,end:6,inputType:'deleteByCut'},{start:6,end:6,inputType:'deleteContentBackward'},{start:0,end:0,inputType:'deleteContentForward'}]) {
+    expect(messageMentions(encodeDraft(editDraft(draft,'@Alex ',range))).map(item=>item.pubkey)).toEqual([bob])
+  }
+  const removed=editDraft(draft,'@Alex ',{start:6,end:12,inputType:'deleteContentBackward'})
+  expect(messageMentions(encodeDraft(removed)).map(item=>item.pubkey)).toEqual([alice])
+  const plainFirst=editDraft(draft,draft.text,{start:0,end:5,inputType:'insertFromPaste'})
+  expect(messageMentions(encodeDraft(plainFirst)).map(item=>item.pubkey)).toEqual([bob])
+  expect(editDraft(draft,'@Alex ').mentions).toEqual([])
+  const history=new ComposerHistory()
+  history.record(composerSnapshot(draft,6,12),composerSnapshot(removed,6))
+  expect(encodeDraft(history.undo()!.draft)).toBe(encodeDraft(draft))
+  expect(encodeDraft(history.redo()!.draft)).toBe(encodeDraft(removed))
+  history.undo()
+  history.record(composerSnapshot(draft,0,5),composerSnapshot(plainFirst,5))
+  expect(history.redo()).toBeUndefined()
+})
+it('undo restores the exact inserted token or edited token, without matching visible names',()=>{
+  const plain=decodeDraft('@')
+  const inserted=insertCompletion(plain,0,1,'@Alex',bob)
+  const history=new ComposerHistory()
+  history.record(composerSnapshot(plain,1),composerSnapshot(inserted,6))
+  expect(encodeDraft(history.undo()!.draft)).toBe('@')
+  expect(messageMentions(encodeDraft(history.redo()!.draft))[0].pubkey).toBe(bob)
+  const edited=editDraft(inserted,'@Alec ',{start:4,end:5,inputType:'insertText'})
+  expect(edited.mentions).toEqual([])
+  history.record(composerSnapshot(inserted,4,5),composerSnapshot(edited,5))
+  expect(messageMentions(encodeDraft(history.undo()!.draft))[0].pubkey).toBe(bob)
+  expect(history.redo()!.draft.mentions).toEqual([])
 })

@@ -19,15 +19,46 @@ export function encodeDraft(draft: ComposerDraft): string {
   for (const mention of [...draft.mentions].reverse()) text = text.slice(0, mention.start) + mention.wire + text.slice(mention.end)
   return text
 }
-/** Edits touching a token make it ordinary text; untouched tokens retain identity. */
-export function editDraft(draft: ComposerDraft, text: string): ComposerDraft {
-  let start = 0, oldEnd = draft.text.length, end = text.length
-  while (start < oldEnd && start < end && draft.text[start] === text[start]) start++
-  while (oldEnd > start && end > start && draft.text[oldEnd - 1] === text[end - 1]) { oldEnd--; end-- }
-  return { text, mentions: draft.mentions.flatMap(mention => mention.end <= start ? [mention] : mention.start >= oldEnd ? [{ ...mention, start: mention.start + end - oldEnd, end: mention.end + end - oldEnd }] : []) }
+export interface DraftEditRange { start: number; end: number; inputType: string }
+/** Use the editor's pre-edit selection, never a diff of equal-looking names.
+ * Unknown/non-matching native edits conservatively leave plain text. */
+export function editDraft(draft: ComposerDraft, text: string, edit?: DraftEditRange): ComposerDraft {
+  if (!edit) return { text, mentions: [] }
+  let { start, end } = edit
+  if (start === end && edit.inputType.startsWith('delete')) {
+    const removed = draft.text.length - text.length
+    if (removed < 0) return { text, mentions: [] }
+    if (edit.inputType.endsWith('Backward')) start -= removed
+    else if (edit.inputType.endsWith('Forward')) end += removed
+    else return { text, mentions: [] }
+  }
+  const insertedEnd = text.length - (draft.text.length - end)
+  if (start < 0 || end < start || end > draft.text.length || insertedEnd < start ||
+    text.slice(0,start) !== draft.text.slice(0,start) || text.slice(insertedEnd) !== draft.text.slice(end)) return { text, mentions: [] }
+  const shift = insertedEnd - end
+  return { text, mentions: draft.mentions.flatMap(mention => mention.end <= start ? [mention] : mention.start >= end ? [{ ...mention, start: mention.start + shift, end: mention.end + shift }] : []) }
+}
+export interface ComposerSnapshot { draft: ComposerDraft; start: number; end: number }
+export function composerSnapshot(draft: ComposerDraft, start: number, end = start): ComposerSnapshot {
+  return { draft: { text: draft.text, mentions: draft.mentions.map(mention => ({ ...mention })) }, start, end }
+}
+/** Native textarea undo cannot restore our identity metadata after a completion. */
+export class ComposerHistory {
+  private entries: Array<{ before: ComposerSnapshot; after: ComposerSnapshot }> = []
+  private cursor = 0
+  clear() { this.entries = []; this.cursor = 0 }
+  record(before: ComposerSnapshot, after: ComposerSnapshot) {
+    if (before.draft.text === after.draft.text && encodeDraft(before.draft) === encodeDraft(after.draft)) return
+    this.entries.splice(this.cursor)
+    this.entries.push({ before: composerSnapshot(before.draft,before.start,before.end), after: composerSnapshot(after.draft,after.start,after.end) })
+    if (this.entries.length > 100) this.entries.shift()
+    this.cursor = this.entries.length
+  }
+  undo(): ComposerSnapshot | undefined { return this.cursor > 0 ? this.entries[--this.cursor].before : undefined }
+  redo(): ComposerSnapshot | undefined { return this.cursor < this.entries.length ? this.entries[this.cursor++].after : undefined }
 }
 export function insertCompletion(draft: ComposerDraft, start: number, end: number, label: string, pubkey?: string, trailingSpace = true): ComposerDraft {
-  const next = editDraft(draft, draft.text.slice(0, start) + label + (trailingSpace ? ' ' : '') + draft.text.slice(end))
+  const next = editDraft(draft, draft.text.slice(0, start) + label + (trailingSpace ? ' ' : '') + draft.text.slice(end), { start, end, inputType:'insertReplacementText' })
   if (pubkey) next.mentions.push({ start, end: start + label.length, pubkey, label, wire: formatMention(pubkey, label) })
   next.mentions.sort((a,b) => a.start - b.start)
   return next
