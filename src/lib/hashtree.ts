@@ -17,7 +17,7 @@ import {
 import { DexieStore } from '@hashtree/dexie'
 import { TcpBlobTransport } from '@hashtree/fips-transport'
 import type { FipsDatagramEndpoint } from '@fips/tcp'
-import { getPubkey, getPrivkeyBytes, isNip07Login } from './identity'
+import { getPubkey, getPrivkeyBytes, isNip07Login, isLinkedDeviceLogin } from './identity'
 import { finalizeEvent } from 'nostr-tools'
 
 // Default Blossom servers
@@ -64,6 +64,15 @@ export function createSigner(): BlossomSigner {
       // NIP-07 extension signing
       const signed = await window.nostr.signEvent(event as Parameters<typeof window.nostr.signEvent>[0])
       return signed as ReturnType<typeof finalizeEvent>
+    }
+
+    if (isLinkedDeviceLogin() && event.kind === 24242) {
+      const owner = getPubkey()
+      const { getDelegateManager } = await import('./privateChats')
+      if (!owner || getPubkey() !== owner || !isLinkedDeviceLogin()) throw new Error('Account changed')
+      // Blossom authenticates the blob upload, not an owner profile statement.
+      // A linked device signs with its own existing key; owner authority stays private.
+      return finalizeEvent(event, getDelegateManager().getIdentityKey())
     }
 
     throw new Error('No signer available')
