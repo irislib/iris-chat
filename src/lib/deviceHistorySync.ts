@@ -63,9 +63,12 @@ export class DeviceHistorySync {
 
   reset(peer?: string): void { if (peer) this.peers.delete(peer); else this.peers.clear() }
   negotiate(peer: string, floor: number, capabilities: PrivateStateCapabilities = {}): void {
+    // Callers pass complete handshake packets. Retain only feature fields so
+    // their type/session/window cannot override a later reconciliation packet.
+    const negotiated = intersectCapabilities(capabilities, capabilities)
     const state = this.peers.get(peer)
-    if (state) { state.floor = floor; state.capabilities = capabilities }
-    else if (this.peers.size < 32) this.peers.set(peer, { floor, capabilities })
+    if (state) { state.floor = floor; state.capabilities = negotiated }
+    else if (this.peers.size < 32) this.peers.set(peer, { floor, capabilities: negotiated })
   }
   observe(peer: string, timestamps: Iterable<number>): void {
     const state = this.peers.get(peer)

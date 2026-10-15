@@ -47,6 +47,22 @@ function pair(initialA: DeviceSyncMessage[], initialB: DeviceSyncMessage[], sinc
 }
 
 describe('encrypted device history reconciliation', () => {
+  it('negotiates features from full handshake packets without copying their packet type', async () => {
+    const p = pair([], [message('approved-old-message')])
+    const request = { v: 1 as const, type: 'request' as const, rosterAt: 150, recordReconcile: 1 as const, privateEvents: 2 as const }
+    const pageEnd = { ...request, type: 'pageEnd' as const, next: null, historySince: 0 }
+    p.first.negotiate('b', 0, pageEnd)
+    p.second.negotiate('a', 0, request)
+    await p.first.startState('b')
+    await p.first.start('b', 0, 149)
+    await p.drain()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await p.drain()
+    expect(p.sent.filter(packet => packet.type === 'historyOpen').map(packet => packet.scope)).toEqual(['state', 'history'])
+    expect(p.sent.some(packet => ['request', 'pageEnd'].includes(packet.type))).toBe(false)
+    expect([...p.a.values()].map(message => message.id)).toEqual(['approved-old-message'])
+  })
+
   it('fetches only missing messages in both directions and repairs an offline gap after reconnect', async () => {
     const shared = Array.from({ length: 120 }, (_, i) => message(`shared-${i}`))
     const p = pair([...shared, message('only-a')], [...shared, message('only-b')])
