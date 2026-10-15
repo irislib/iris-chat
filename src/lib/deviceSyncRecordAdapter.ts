@@ -1,3 +1,5 @@
+import { parsePrivateSetting } from 'nostr-social-graph/privateEvents'
+import { mergeMentionNotificationEvent } from './mentionNotificationRecords'
 import { authorizationEvent, authorizationEvents, authorizationById, saveAuthorizationEvent, applyAuthorizationEvent } from './authorizationSync'
 import { privateSettingEvents, privateSettingSnapshot } from './privateSettings'
 import { privateStateRecords, privateStateEvents, savePrivateStateEvent, readState, applyMessageRead, privateHistoryAllowed } from './privateStateStore'
@@ -181,7 +183,10 @@ export function createDeviceSyncRecordAdapter(options: {
         else if (scope === 'history' && record.type === 'reaction') await applyReactionRecord(options.owner, record.reaction, authorized)
         else if (scope === 'state' && record.type === 'groupSettings') await applyGroupSettingsRecord(options.owner, record.settings, authorized)
         else if (scope === 'state' && record.type === 'authorization') await applyAuthorizationEvent(options.owner, record.event, authorized)
-        else if (scope === 'state' && record.type === 'privateEvent') await options.applySnapshot(privateSettingSnapshot(record.event, options.owner), 0, authorized)
+        else if (scope === 'state' && record.type === 'privateEvent') {
+          if (parsePrivateSetting(record.event, options.owner).setting === 'mentionNotifications') await mergeMentionNotificationEvent(options.owner,record.event,authorized)
+          else await options.applySnapshot(privateSettingSnapshot(record.event, options.owner), 0, authorized)
+        }
         else if (scope === 'state' && (record.type === 'privateBlock' || record.type === 'privateNameApproval')) await savePrivateStateEvent(options.owner, record.event, authorized)
         else if (scope === 'state' && record.type === 'messageRead') await applyMessageRead(options.owner, record.chatId, record.messageId, record.read, authorized)
         else if (scope === 'state' && record.type === 'privateContactFact') await mergePrivateContactFacts(options.owner, [record.fact])

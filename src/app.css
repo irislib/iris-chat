@@ -138,3 +138,9 @@ a {
 .chat-header-button:active:not(:disabled) { background: color-mix(in srgb, currentColor 14%, transparent); }
 .chat-header-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .chat-header-button:disabled { opacity: 0.4; cursor: default; }
+
+/* Interactive targets keep their affordance without changing selectable text. */
+a[href]:not([aria-disabled="true"]), button:not(:disabled):not([aria-disabled="true"]),
+[role="button"]:not([aria-disabled="true"]), select:not(:disabled),
+input[type="checkbox"]:not(:disabled), input[type="radio"]:not(:disabled), summary { cursor: pointer; }
+button:disabled, [aria-disabled="true"] { cursor: default; }

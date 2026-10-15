@@ -1,3 +1,4 @@
+import { mentionSetting } from './mentionNotificationPolicy'
 import { validRequestDecision, requestDecisionStates } from './messageRequests'
 import { buildPrivateSetting, parsePrivateSetting, type PrivateEvent } from 'nostr-social-graph/privateEvents'
 import { isChatPinState } from './chatPinSync'
@@ -12,7 +13,8 @@ export function privateSettingSnapshot(event: PrivateEvent, owner: string): Devi
   const { setting, target, value } = parsePrivateSetting(event, owner)
   const packet: DeviceSyncSnapshot = { v: 1, type: 'snapshot', rosterAt: 0, chats: [], appKeys: [], groups: [], messages: [] }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid private setting value')
-  if (setting === 'chatPin' && Object.keys(value).length === 3 && isChatPinState(value) && value.chatId === target && value.updatedAtMs <= Date.now() + 300_000) packet.chatPins = [value]
+  if (setting === 'mentionNotifications') mentionSetting(event, owner)
+  else if (setting === 'chatPin' && Object.keys(value).length === 3 && isChatPinState(value) && value.chatId === target && value.updatedAtMs <= Date.now() + 300_000) packet.chatPins = [value]
   else if (setting === 'chatMute' && Object.keys(value).length === 3 && isChatMuteState(value) && value.chatId === target && value.updatedAtMs <= Date.now() + 300_000) packet.chatMutes = [value]
   else if (setting === 'deviceLabel' && validPrivateDeviceLabel(value, owner) && value.device === target) packet.privateDeviceLabelsV2 = [value]
   else if (setting === 'chat' && chat(target) && value.id === target && time(value.updatedAt) && Object.keys(value).length === 2) packet.chats = [value]
@@ -38,5 +40,7 @@ export async function* privateSettingEvents(owner: string, snapshots: DeviceSync
   const { chatDeletionStates } = await import('./storage')
   for (const value of await chatDeletionStates()) add('chatDeletion', value.id, value)
   for (const value of requestDecisionStates(owner)) add('requestDecision', value.chatId, value)
+  const { mentionNotificationEvents } = await import('./mentionNotificationRecords')
+  for await (const event of mentionNotificationEvents(owner)) events.set(event.id,event)
   yield* events.values()
 }

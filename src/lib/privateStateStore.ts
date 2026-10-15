@@ -95,6 +95,8 @@ export async function applyMessageRead(owner: string, chatId: string, messageId:
   if (read.expiresAtSecs !== undefined && read.expiresAtSecs <= Date.now() / 1000) return
   const updated = await db.transaction('rw', db.messages, db.sessionManager, async () => {
     if (!authorized()) throw new Error('Account changed')
+    const activeOwner = (await db.sessionManager.get('v1/device-manager/owner-pubkey'))?.value
+    if (activeOwner && activeOwner !== owner) return false
     if (await db.sessionManager.get(`history-deleted-message:${messageId}`) || await isHistoryChatDeleted(chatId, read.createdAtSecs)) return
     const message = await db.messages.get(messageId)
     if (message) {
@@ -113,6 +115,9 @@ export async function applyMessageRead(owner: string, chatId: string, messageId:
     return false
   })
   if (updated) changed()
+  // Also dismiss on replay; a browser enqueue may have raced the first read.
+  if (authorized() && (await readState(owner,chatId,messageId))?.createdAtSecs === read.createdAtSecs)
+    await (await import('./readNotifications')).dismissReadNotification({ownerPubkey:owner,chatId,messageId,createdAtSecs:read.createdAtSecs})
 }
 export async function projectMessageRead(owner: string, message: StoredMessage): Promise<StoredMessage> {
   const read = await readState(owner, message.sessionId, message.id)

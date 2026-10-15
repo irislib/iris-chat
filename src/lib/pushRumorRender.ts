@@ -1,3 +1,4 @@
+import { messagePreview } from './messagePreview'
 import {
   CHAT_MESSAGE_KIND,
   REACTION_KIND,
@@ -8,7 +9,6 @@ import {
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   GROUP_SENDER_KEY_MESSAGE_KIND,
 } from 'nostr-double-ratchet'
-import { directFilePreview } from './directFileProtocol'
 
 export type RenderedRumor = {
   body: string
@@ -27,7 +27,7 @@ export type RenderedRumor = {
 export function renderRumor(kind: number | undefined, content: string | undefined): RenderedRumor | null {
   switch (kind) {
     case CHAT_MESSAGE_KIND:
-      return { body: directFilePreview(content ?? '').trim() || 'New message', durable: true }
+      return { body: messagePreview(content ?? '').trim() || 'New message', durable: true }
     case REACTION_KIND: {
       const emoji = content?.trim()
       return { body: emoji ? `Reacted ${emoji}` : 'Reacted', durable: true }

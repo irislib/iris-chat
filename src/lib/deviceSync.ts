@@ -1,3 +1,4 @@
+import { loadMentionNotificationSettings } from './mentionNotificationSettings'
 import { loadMessageRequestDecisions, mergeRequestDecision } from './messageRequests'
 import { applyHistoryChatDeletion, db, getMessagesForSession } from './storage'
 import { privateStateVersion } from './privateStateStore'
@@ -992,6 +993,7 @@ async function updateRuntime(
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {
+  void loadMentionNotificationSettings(ownerPubkey).catch(error => console.warn('Could not load mention settings',error))
   loadMessageRequestDecisions(ownerPubkey)
   deviceUnsubscribe?.()
   for (const unsubscribe of storeUnsubscribers) unsubscribe()

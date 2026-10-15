@@ -77,6 +77,9 @@ export interface StoredInvite {
 }
 
 export interface ProcessedEvent {
+  messageId?: string
+  author?: string
+  createdAtSecs?: number
   id: string           // outer event ID
   kind: number         // inner event kind (7=reaction, 15=receipt, 25=typing)
   chatId: string       // session/chat ID

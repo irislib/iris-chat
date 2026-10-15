@@ -1,9 +1,10 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { writable } from 'svelte/store'
-const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map() }))
+const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map(), groups: [] as Array<{chatId:string;authors:string[];subscriptionAuthors:string[]}> }))
 vi.mock('./identity', () => ({ identity: writable(null), nostrClient: writable({ signer: {} }) }))
 vi.mock('./chatMuteControl', () => ({ sendChatMuteControl: vi.fn(async () => {}) }))
+vi.mock('./groupPush',()=>({groupPushChannels:async()=>fixture.groups}))
 vi.mock('./chat', () => ({ getInviteEphemeralPubkeys: () => [] }))
 vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getSessionUserRecords: () => fixture.authors }) }))
 vi.mock('./notificationPermission', () => ({ getNotificationSupportError: () => null, requestNotificationPermission: async () => ({ permission: 'granted' }) }))
@@ -16,6 +17,7 @@ import { clearAllData } from './storage'
 
 beforeEach(() => {
   fixture.requests = []
+  fixture.groups = []
   fixture.supported = true
   fixture.authors = new Map(['alice', 'bob'].map(owner => [owner === 'alice' ? 'a'.repeat(64) : 'b'.repeat(64), { devices: new Map([['device', {
     activeSession: { state: { theirCurrentNostrPublicKey: `${owner}-current`, theirNextNostrPublicKey: `${owner}-next` } }, inactiveSessions: [],
@@ -24,7 +26,7 @@ beforeEach(() => {
   notificationSettings.setEnabled(false)
   vi.stubGlobal('Notification', { permission: 'granted' })
   vi.stubGlobal('navigator', { serviceWorker: { ready: Promise.resolve({ pushManager: {
-    getSubscription: async () => ({ endpoint: 'https://push.invalid/device', options: {}, getKey: () => new ArrayBuffer(2) }),
+    getSubscription: async () => ({ endpoint: 'https://push.invalid/device', options: {userVisibleOnly:true}, getKey: () => new ArrayBuffer(2) }),
   } }) } })
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith('/info')) return new Response(JSON.stringify({ vapid_public_key: 'AQID', supports_timed_filters: fixture.supported }))
@@ -58,4 +60,13 @@ it('muting every chat replaces the old subscription with an empty author list, n
   expect((await subscribeToDMNotifications()).success).toBe(true)
   expect(fixture.requests.at(-1)?.filter).toEqual({ kinds: [1060], authors: [] })
   expect(fixture.requests.at(-1)?.filters).toEqual([{ kinds: [1060], authors: [] }])
+})
+
+it('keeps unmuted group authors but excludes muted groups and own controls on visible-only browser push',async()=>{
+  fixture.groups=[{chatId:'group:open',authors:['group-open','group-own'],subscriptionAuthors:['group-open']},{chatId:'group:quiet',authors:['group-quiet'],subscriptionAuthors:['group-quiet']}]
+  fixture.authors.set('profile',{devices:new Map([['own',{activeSession:{state:{theirCurrentNostrPublicKey:'own-control'}},inactiveSessions:[]}]])})
+  await setChatMute('group:quiet',0)
+  expect((await subscribeToDMNotifications()).success).toBe(true)
+  const all=(fixture.requests.at(-1)?.filters as Array<{authors:string[];subscriptionAuthors:string[]}>).flatMap(filter=>filter.authors)
+  expect(all).toContain('group-open');expect(all).not.toContain('group-quiet');expect(all).not.toContain('own-control');expect(all).not.toContain('group-own')
 })

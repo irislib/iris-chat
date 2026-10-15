@@ -1,8 +1,9 @@
 <script lang="ts">
   import MessageChangeModal from './MessageChangeModal.svelte'
   import { editableMessage } from '../lib/messageMutations'
-  import { marked } from 'marked'
-  import DOMPurify from 'dompurify'
+  import { messageMarkdown } from '../lib/messageMarkdown'
+  import { messageMentions, displayMentions } from '../lib/mentions'
+  import { mentionNames } from '../lib/mentionNames'
   import type { ChatMessage } from '../lib/chat'
   import { FILE_LINK_REGEX, parseFileLink } from '../lib/hashtree'
   import { openMediaModal } from '../lib/mediaModal'
@@ -111,10 +112,10 @@
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(directFilePreview(message.content))
+      await navigator.clipboard.writeText(displayMentions(directFilePreview(message.content), $names))
     } catch {
       const textarea = document.createElement('textarea')
-      textarea.value = directFilePreview(message.content)
+      textarea.value = displayMentions(directFilePreview(message.content), $names)
       textarea.setAttribute('readonly', '')
       textarea.style.position = 'fixed'
       textarea.style.opacity = '0'
@@ -145,20 +146,6 @@
     showMenu = false
   }
 
-  // Configure marked for GFM (GitHub Flavored Markdown)
-  const renderer = new marked.Renderer()
-  const originalLinkRenderer = renderer.link.bind(renderer)
-  renderer.link = function (token) {
-    const html = originalLinkRenderer(token)
-    // Add target="_blank" and rel="noopener noreferrer" to all links
-    return html.replace('<a ', '<a target="_blank" rel="noopener noreferrer" ')
-  }
-  marked.setOptions({
-    gfm: true,
-    breaks: true, // Convert \n to <br>
-    renderer,
-  })
-
   // Extract file links from content
   let fileLinks = $derived.by(() => {
     const links: { nhash: string; filename: string }[] = []
@@ -177,14 +164,8 @@
     return message.directTransferId ? displayContent.trim() : displayContent.replace(FILE_LINK_REGEX, '').trim()
   })
 
-  // Render markdown content safely
-  let htmlContent = $derived.by(() => {
-    if (!textContent) return ''
-    const raw = marked.parse(textContent, { async: false }) as string
-    return DOMPurify.sanitize(raw, {
-      ADD_ATTR: ['target'], // Allow target="_blank" on links
-    })
-  })
+  let names = $derived(mentionNames(messageMentions(displayContent).map(mention => mention.pubkey), false))
+  let htmlContent = $derived(textContent ? messageMarkdown(textContent, $names) : '')
 
   let showCombinedTextAndFiles = $derived(Boolean(htmlContent && fileLinks.length > 0))
 
@@ -437,7 +418,7 @@
                   onclick={() => scrollToMessage(replyToMessage.id)}
                 >
                   <div class="font-semibold mb-0.5">{replyToMessage.isMine ? 'You' : 'Them'}</div>
-                  <div class="truncate">{replyToMessage.deletedAt !== undefined ? 'Message deleted' : directFilePreview(replyToMessage.content)}</div>
+                  <div class="truncate">{replyToMessage.deletedAt !== undefined ? 'Message deleted' : displayMentions(directFilePreview(replyToMessage.content))}</div>
                 </button>
               {/if}
               {#if message.directTransferId}
@@ -764,7 +745,7 @@
     color: #60a5fa; /* blue-400 */
   }
   /* Inverted for sent messages */
-  .message-content.prose-invert :global(a) {
+  .prose-invert .message-content :global(a) {
     color: white;
   }
 </style>

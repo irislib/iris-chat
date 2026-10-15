@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { displayMentions } from '../lib/mentions'
+  import ComposerInput from './ComposerInput.svelte'
   import ChatPinButton from './ChatPinButton.svelte'
   import { onDestroy } from 'svelte'
   import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
@@ -642,7 +644,7 @@
               <Name pubkey={chat.recipientPubkey} />
             {/if}
           </div>
-          <div class="text-sm text-gray-400 truncate">{directFilePreview(replyingTo.content)}</div>
+          <div class="text-sm text-gray-400 truncate">{displayMentions(directFilePreview(replyingTo.content))}</div>
         </div>
         <button
           class="w-7 h-7 flex-shrink-0 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
@@ -807,18 +809,8 @@
           {/if}
         </div>
 
-        <!-- svelte-ignore a11y_autofocus -->
-        <textarea
-          bind:this={inputRef}
-          bind:value={messageText}
-          onkeydown={handleKeydown}
-          onpaste={handlePaste}
-          oninput={handleTypingInput}
-          placeholder="Type a message..."
-          class="input-field flex-1 resize-none min-h-[44px] max-h-32 py-3"
-          rows="1"
-          autofocus
-        ></textarea>
+        <ComposerInput bind:inputRef bind:value={messageText} members={[chat.recipientPubkey, ...($identity?.pubkey ? [$identity.pubkey] : [])]}
+          onkeydown={handleKeydown} onpaste={handlePaste} oninput={handleTypingInput} />
 
         <!-- Voice/Send button -->
         {#if messageText.trim() || $attachmentDraft.length || $directFileDraft.length}

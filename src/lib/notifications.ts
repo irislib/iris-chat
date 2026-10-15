@@ -1,3 +1,6 @@
+import { groupPushChannels } from './groupPush'
+import { loadMentionNotificationSettings, mentionNotificationSettings } from './mentionNotificationSettings'
+import { subscriptionMutes } from './mentionNotificationPolicy'
 // Notification utilities for iris-chat
 import { get } from 'svelte/store'
 import { identity, nostrClient } from './identity'
@@ -226,7 +229,7 @@ export async function getOrCreatePushSubscription(): Promise<PushSubscription | 
 }
 
 // Extract session pubkeys from active chats
-function getSessionAuthorsByChat(): Map<string, string[]> {
+async function getSessionAuthorsByChat(supportsSilentPush = false): Promise<Map<string, string[]>> {
   const currentIdentity = get(identity)
   if (!currentIdentity) return new Map()
 
@@ -234,8 +237,8 @@ function getSessionAuthorsByChat(): Map<string, string[]> {
 
   const userRecords = getNdrRuntime().getSessionUserRecords()
   for (const [userPubkey, record] of userRecords.entries()) {
-    // Skip self-sessions (our own devices) to avoid notifications for our own messages
-    if (userPubkey === currentIdentity.pubkey) continue
+    // A standard userVisibleOnly subscription cannot safely wake for read controls.
+    if (userPubkey === currentIdentity.pubkey && !supportsSilentPush) continue
     const authors: string[] = []
     for (const device of record.devices?.values() ?? []) {
       const sessions = [
@@ -258,6 +261,7 @@ function getSessionAuthorsByChat(): Map<string, string[]> {
     byChat.set(userPubkey, [...new Set(authors)].sort())
   }
 
+  for (const group of await groupPushChannels(currentIdentity.pubkey)) byChat.set(group.chatId,supportsSilentPush ? group.authors : group.subscriptionAuthors)
   return byChat
 }
 
@@ -293,10 +297,11 @@ async function syncDMNotifications(): Promise<SubscriptionResult> {
     }
 
     // Get session authors for DM notifications
-    await loadChatMutes(currentIdentity.pubkey)
+    await Promise.all([loadChatMutes(currentIdentity.pubkey), loadMentionNotificationSettings(currentIdentity.pubkey)])
     if (get(identity)?.pubkey !== currentIdentity.pubkey) return { success: false, error: 'Profile changed' }
-    const mutes = get(chatMutes)
-    const authorsByChat = getSessionAuthorsByChat()
+    const supportsSilentPush = pushSubscription.options.userVisibleOnly === false
+    const mutes = subscriptionMutes(get(chatMutes), get(mentionNotificationSettings), supportsSilentPush)
+    const authorsByChat = await getSessionAuthorsByChat(supportsSilentPush)
     const desiredFilters = mutedMessageFilters(authorsByChat, mutes, MESSAGE_EVENT_KIND, true)
     const messageInput = currentIdentity.pubkey + ':' + JSON.stringify(desiredFilters)
 
@@ -471,10 +476,15 @@ export async function updateDMSubscription(): Promise<void> {
   if (!get(notificationSettings).enabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
   const account = get(identity)?.pubkey
   if (!account) return
-  await loadChatMutes(account)
+  await Promise.all([loadChatMutes(account),loadMentionNotificationSettings(account)])
   if (get(identity)?.pubkey !== account) return
   let currentMessageInput: string
-  try { currentMessageInput = account + ':' + JSON.stringify(mutedMessageFilters(getSessionAuthorsByChat(), get(chatMutes), MESSAGE_EVENT_KIND, true)) }
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration()
+    const subscription = await registration?.pushManager.getSubscription()
+    const supportsSilentPush = subscription?.options.userVisibleOnly === false
+    currentMessageInput = account + ':' + JSON.stringify(mutedMessageFilters(await getSessionAuthorsByChat(supportsSilentPush), subscriptionMutes(get(chatMutes),get(mentionNotificationSettings),supportsSilentPush), MESSAGE_EVENT_KIND, true))
+  }
   catch { return } // The messaging runtime may still be restoring.
   const recipients = getInviteRecipients()
   if (currentMessageInput === lastSyncedMessageInput && arraysEqual(recipients, lastSyncedInviteRecipients)) return

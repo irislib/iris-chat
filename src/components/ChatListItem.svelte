@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { messagePreview } from '../lib/messagePreview'
+  import { messageMentions } from '../lib/mentions'
+  import { mentionNames } from '../lib/mentionNames'
   import { pinnedChatIds } from '../lib/chatPinStore'
   import { callHistoryLabel } from '../lib/callHistory'
   import type { ChatSession } from '../lib/chat'
@@ -8,7 +11,6 @@
   import Name from './Name.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
   import { identity } from '../lib/identity'
-  import { directFilePreview } from '../lib/directFileProtocol'
 
   interface Props {
     chat: ChatSession
@@ -21,6 +23,7 @@
   let { chat, onopen, showRequestActions = false, onaccept, onreject }: Props = $props()
 
   let lastMessage = $derived(chat.messages[chat.messages.length - 1])
+  let names = $derived(mentionNames(messageMentions(lastMessage?.content ?? '').map(m => m.pubkey),false))
   let unseenCount = $derived(countUnseenMessages(chat.messages))
   let unseenCountLabel = $derived(formatUnseenCount(unseenCount))
 
@@ -74,7 +77,7 @@
             <span class={lastMessage.call.video ? 'i-carbon-video-filled align-middle mr-1' : 'i-carbon-phone-filled align-middle mr-1'} aria-hidden="true"></span>
             {callHistoryLabel(lastMessage.call)}
           {:else}
-            {lastMessage.isMine ? 'You: ' : ''}{lastMessage.deletedAt !== undefined ? 'Message deleted' : directFilePreview(lastMessage.content)}
+            {lastMessage.isMine ? 'You: ' : ''}{lastMessage.deletedAt !== undefined ? 'Message deleted' : messagePreview(lastMessage.content,$names)}
           {/if}
         </div>
       {:else}

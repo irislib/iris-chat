@@ -317,6 +317,7 @@ vi.mock('./storage', () => ({
   getAllGroups: vi.fn().mockResolvedValue([]),
   deleteGroupFromDb: vi.fn().mockResolvedValue(undefined),
   saveMessage: vi.fn().mockResolvedValue(undefined),
+  saveProcessedEvent: vi.fn().mockResolvedValue(undefined),
   getMessagesForSession: vi.fn().mockResolvedValue([]),
   deleteMessage: vi.fn().mockResolvedValue(undefined),
   deleteMessagesForSession: vi.fn().mockResolvedValue(undefined),
@@ -953,6 +954,7 @@ describe('groups', () => {
       expect(incoming!.senderPubkey).toBe(MEMBER_B)
       expect(incoming!.deliveryChannels).toEqual(['message servers'])
       expect(incoming!.outerEventIds).toEqual(['outer-b'])
+      expect((await import('./storage')).saveProcessedEvent).toHaveBeenCalledWith(expect.objectContaining({id:'outer-b',messageId:rumor.id,chatId:`group:${group.id}`,author:MEMBER_B,createdAtSecs:rumor.created_at,content:rumor.content}))
     })
 
     it('unwraps serialized runtime rumors from native group payloads', async () => {

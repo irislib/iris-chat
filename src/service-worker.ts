@@ -1,5 +1,12 @@
 /// <reference lib="webworker" />
-import { isPrivatelyBlocked, privateHistoryAllowed, readState } from './lib/privateStateStore'
+import { messageNotificationAllowed } from './lib/messageNotificationPolicy'
+import { decryptGroupPush } from './lib/groupPush'
+import { showUnreadNotification } from './lib/readNotifications'
+import { applyAuthenticatedOwnRead } from './lib/ownReadState'
+import { AppKeys } from 'nostr-double-ratchet'
+import { mentionSetting, mentionSettingKey, shouldNotifyMutedMessage } from './lib/mentionNotificationPolicy'
+import type { PrivateEvent } from 'nostr-social-graph/privateEvents'
+import { readState } from './lib/privateStateStore'
 import {
   Session,
   type Rumor,
@@ -8,8 +15,9 @@ import {
   MESSAGE_EVENT_KIND,
   INVITE_RESPONSE_KIND,
   CHAT_MESSAGE_KIND,
+  getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
-import { chatMutesKey, normalizeChatMutes, isChatMuted } from './lib/chatMutePolicy'
+import { chatMutesKey, normalizeChatMutes } from './lib/chatMutePolicy'
 import { renderRumor } from './lib/pushRumorRender'
 import {
   extractPushNostrEvent,
@@ -67,6 +75,9 @@ interface StoredInvite {
 }
 
 interface ProcessedEvent {
+  messageId?: string
+  author?: string
+  createdAtSecs?: number
   id: string
   kind: number
   chatId: string
@@ -87,6 +98,7 @@ interface SessionManagerRecord {
 }
 
 interface SessionManagerStateEntry {
+  deviceId?: string
   stateJson: string
   chatId?: string
 }
@@ -104,6 +116,7 @@ interface StoredDeviceRecord {
 }
 
 interface StoredUserRecord {
+  appKeys?: string
   publicKey: string
   devices: StoredDeviceRecord[]
   knownDeviceIdentities?: string[]
@@ -243,10 +256,10 @@ async function getSessionManagerStates(): Promise<SessionManagerStateEntry[]> {
       if (!data?.devices) continue
       for (const device of data.devices) {
         if (device.activeSession?.state) {
-          states.push({ stateJson: device.activeSession.state, chatId })
+          states.push({ stateJson: device.activeSession.state, chatId, deviceId:device.deviceId })
         }
         for (const inactive of device.inactiveSessions || []) {
-          if (inactive.state) states.push({ stateJson: inactive.state, chatId })
+          if (inactive.state) states.push({ stateJson: inactive.state, chatId, deviceId:device.deviceId })
         }
       }
     }
@@ -260,6 +273,10 @@ async function getSessionManagerStates(): Promise<SessionManagerStateEntry[]> {
 async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: string }> {
   const fallbackIcon = appLogoUrl
   try {
+    if (pubkey.startsWith('group:')) {
+      const group = await db.table('groups').get(pubkey.slice(6))
+      if (group) return {name:group.name,icon:fallbackIcon}
+    }
     const owner = await getOwnerPubkeyFromSessionManager()
     const memory = owner ? (await db.sessionManager.get(`iris-contact-memory:v1:${owner}:${pubkey}`))?.value as { accepted_name?: unknown; nickname?: unknown } | undefined : undefined
     const acceptedName = typeof memory?.nickname === 'string' && memory.nickname ? memory.nickname : typeof memory?.accepted_name === 'string' ? memory.accepted_name : undefined
@@ -284,6 +301,7 @@ async function getSenderInfo(pubkey: string): Promise<{ name: string; icon: stri
 // classifies the remaining decrypted rumors before displaying them.
 
 interface DecryptResult {
+  expiresAt?: number;
   messageId?: string
   author?: string
   createdAtSecs?: number
@@ -312,7 +330,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           chatId: processed.chatId,
           kind: processed.kind,
           content: processed.content,
-          isSelfMessage: processed.isSelfMessage,
+          isSelfMessage: processed.isSelfMessage, messageId: processed.messageId, author: processed.author, createdAtSecs: processed.createdAtSecs,
         }
       }
     } catch (err) {
@@ -322,7 +340,12 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
 
   const ownerPubkey = await getOwnerPubkeyFromSessionManager()
 
-  const sessionEntries: Array<{ chatId?: string; stateJson: string }> = []
+  if (ownerPubkey) {
+    const group = await decryptGroupPush(ownerPubkey,eventData as unknown as NostrEvent)
+    if (group) return group
+  }
+
+  const sessionEntries: SessionManagerStateEntry[] = []
   const sessions = await db.sessions.toArray()
   for (const storedSession of sessions) {
     if (storedSession.sessionState) {
@@ -373,7 +396,19 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
 
       if (innerEvent) {
         const innerId = innerEvent.id
-        const isSelfMessage = ownerPubkey != null && innerEvent.pubkey === ownerPubkey
+        const ownSession = !!ownerPubkey && entry.chatId === ownerPubkey
+        const isSelfMessage = ownSession || ownerPubkey != null && innerEvent.pubkey === ownerPubkey
+        if (ownSession && innerEvent.kind === 15) {
+          const record = (await db.sessionManager.get(`v1/user/${ownerPubkey}`))?.value as StoredUserRecord | undefined
+          const roster = record?.appKeys ? AppKeys.deserialize(record.appKeys) : undefined
+          if (entry.deviceId && roster?.getDevice(entry.deviceId) &&
+            (innerEvent.pubkey === ownerPubkey || innerEvent.pubkey === entry.deviceId) && await getOwnerPubkeyFromSessionManager() === ownerPubkey) {
+            const groupId = innerEvent.tags.find(tag => tag[0] === 'l')?.[1]
+            const target = groupId ? `group:${groupId}` : innerEvent.tags.find(tag => tag[0] === 'p')?.[1]
+            if (target) await applyAuthenticatedOwnRead(ownerPubkey,target,innerEvent,() => true)
+          }
+          return {success:true,chatId:ownerPubkey,isSelfMessage:true}
+        }
 
         const processedInner = await db.processedEvents.get(innerId)
         if (processedInner) {
@@ -382,7 +417,7 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
             chatId: processedInner.chatId,
             kind: processedInner.kind,
             content: processedInner.content ?? innerEvent.content,
-            isSelfMessage, messageId: innerId, author: innerEvent.pubkey, createdAtSecs: innerEvent.created_at,
+            isSelfMessage, messageId: innerId, author: entry.chatId ?? innerEvent.pubkey, createdAtSecs: innerEvent.created_at,
           }
         }
 
@@ -398,7 +433,8 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
         }
 
         const pTag = innerEvent.tags?.find((t) => t[0] === 'p')?.[1]
-        let chatId = entry.chatId
+        const groupId = innerEvent.tags.find(tag => tag[0] === 'l')?.[1]
+        let chatId = groupId ? `group:${groupId}` : entry.chatId
         if (!chatId) {
           if (isSelfMessage && pTag) {
             chatId = pTag
@@ -411,8 +447,8 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           success: true,
           chatId,
           kind: innerEvent.kind,
-          content: innerEvent.content,
-          isSelfMessage, messageId: innerId, author: innerEvent.pubkey, createdAtSecs: innerEvent.created_at,
+          content: innerEvent.content, expiresAt: getExpirationTimestampSeconds(innerEvent),
+          isSelfMessage, messageId: innerId, author: entry.chatId ?? innerEvent.pubkey, createdAtSecs: innerEvent.created_at,
         }
       }
     } catch (err) {
@@ -492,7 +528,7 @@ self.addEventListener('push', (event) => {
         const engagement = await getEngagementState()
         if (engagement.focused) {
           // User is actively in iris-chat — UA considers them engaged, the
-          // in-app UI will surface the new chat, and silent push is allowed.
+          // in-app UI surfaces the new chat; browsers may still show a fallback.
           return
         }
 
@@ -532,28 +568,27 @@ self.addEventListener('push', (event) => {
         const engagement = await getEngagementState()
 
         if (!result.success || !result.chatId) {
-          // Couldn't identify a session for this push. If a client is
-          // visible the main app's relay subscription will catch up.
-          // Otherwise fall back to a generic notification so the user knows
-          // something happened.
           if (engagement.anyVisible) return
-          await showFallbackNotification()
+          // Unknown ciphertext may be a muted group message or own-device control.
+          // Keep it queued. A userVisibleOnly browser can still generate its own
+          // fallback alert; this is why silent-only channels are not subscribed.
           return
         }
 
         const owner = await getOwnerPubkeyFromSessionManager()
         if (result.seen) return
         if (owner) {
-          if (!result.chatId.startsWith('group:') && await isPrivatelyBlocked(owner, result.chatId)) return
-          if (result.author && result.createdAtSecs !== undefined && !await privateHistoryAllowed(owner, result.author, result.createdAtSecs)) return
+          if (!await messageNotificationAllowed(owner,{...result,chatId:result.chatId})) return
           if (result.messageId && result.createdAtSecs !== undefined && (await readState(owner, result.chatId, result.messageId))?.createdAtSecs === result.createdAtSecs) return
           const record = await db.sessionManager.get(chatMutesKey(owner))
-          if (isChatMuted(normalizeChatMutes(record?.value), result.chatId)) return
+          const setting = (await db.sessionManager.get(mentionSettingKey(owner,result.chatId)))?.value as PrivateEvent | undefined
+          const enabled = setting ? mentionSetting(setting,owner).enabled : true
+          if (!shouldNotifyMutedMessage(normalizeChatMutes(record?.value), result.chatId, result.content ?? '', owner, enabled, result.kind)) return
         }
 
-        // User is already looking at this exact conversation — silent push
-        // allowed by spec, in-app UI shows the update.
-        if (engagement.focused && engagement.openChatId === result.chatId) {
+        // The open app presents this update. Browser fallback behavior still varies.
+        const openChatId = result.chatId.startsWith('group:') ? result.chatId.slice(6) : result.chatId
+        if (engagement.focused && engagement.openChatId === openChatId) {
           return
         }
 
@@ -572,14 +607,17 @@ self.addEventListener('push', (event) => {
 
         const sender = await getSenderInfo(result.chatId)
         const tag = rendered.durable ? `dm-${result.chatId}` : `dm-${result.chatId}-status`
-        await self.registration.showNotification(sender.name, {
+        const options: NotificationOptions = {
           body: rendered.body,
           icon: sender.icon,
           badge: appLogoUrl,
           tag,
           silent: !rendered.durable,
-          data: { chatId: result.chatId, ownerPubkey: (await getOwnerPubkeyFromSessionManager()) ?? undefined }
-        })
+          data: { chatId: result.chatId, ownerPubkey: owner ?? undefined }
+        }
+        if (owner && result.messageId && result.createdAtSecs !== undefined) await showUnreadNotification(self.registration,
+          {ownerPubkey:owner,chatId:result.chatId,messageId:result.messageId,createdAtSecs:result.createdAtSecs},sender.name,options)
+        else await self.registration.showNotification(sender.name,options)
         return
       }
 
@@ -587,7 +625,8 @@ self.addEventListener('push', (event) => {
       // subscription, skip the notification.
     } catch (error) {
       console.error('[sw] push error:', error)
-      await showFallbackNotification()
+      // Leave undeciphered events queued. userVisibleOnly browsers may show
+      // their own fallback alert even when the app does not display one.
     }
   }
 

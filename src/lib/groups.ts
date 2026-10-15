@@ -1,4 +1,5 @@
 import { saveAuthorizationEvent } from './authorizationSync'
+import { saveProcessedEvent } from './storage'
 import { sendOwnReadState, applyOwnReadTag } from './privateStateControl'
 import { privateHistoryAllowed } from './privateStateStore'
 import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
@@ -673,6 +674,10 @@ async function sendNativeGroupEvent(
   })
 }
 
+function refreshGroupPushSubscriptions(): void {
+  void import('./notifications').then(({updateDMSubscription}) => updateDMSubscription()).catch(() => {})
+}
+
 function saveGroupState(group: Group): Promise<void> {
   const storedGroup: StoredGroup = {
     id: group.id,
@@ -688,7 +693,7 @@ function saveGroupState(group: Group): Promise<void> {
     rosterVersion: groupRosterFactCursors.get(group.id) ?? group.rosterVersion,
   }
   const pending = saveGroupToDb(storedGroup)
-  void pending.catch(e => console.error('[groups] Failed to save group:', e))
+  void pending.then(refreshGroupPushSubscriptions).catch(e => console.error('[groups] Failed to save group:', e))
   return pending
 }
 
@@ -925,6 +930,7 @@ async function processGroupEvent(
   const groupExists = get(groups).has(groupId)
 
   if (rumor.kind === GROUP_SENDER_KEY_DISTRIBUTION_KIND) {
+    refreshGroupPushSubscriptions()
     if (!groupExists) {
       // Queue event; the roster snapshot may arrive later due to network reordering.
       queuePendingEvent(groupId, rumor, senderPubkey, senderDevicePubkey, outerEventId)
@@ -1046,14 +1052,19 @@ async function handleGroupMessage(
   if (!myPubkey) return
   const committed = await persistMessageWithReactions(myPubkey, { ...message, sessionId: `group:${groupId}` })
   Object.assign(message, committed)
+  if (outerEventId) await saveProcessedEvent({id:outerEventId,messageId:rumor.id,author:senderPubkey,
+    createdAtSecs:rumor.created_at,kind:rumor.kind,chatId:`group:${groupId}`,content:rumor.content,isSelfMessage:isOwnOwnerMessage,timestamp:Date.now()})
 
+  let inserted = false
   groupMessages.update(gm => {
     const msgs = gm.get(groupId) || []
     if (msgs.some(m => m.id === message.id)) return gm
+    inserted = true
     gm.set(groupId, [...msgs, message].sort((a, b) => a.timestamp - b.timestamp))
     return gm
   })
 
+  if (inserted) void import('./foregroundMessageNotifications').then(({notifyForegroundMessage}) => notifyForegroundMessage(myPubkey,committed)).catch(()=>{})
   if (shouldAckDelivered) {
     sendGroupReceipt(groupId, 'delivered', [message.id])
   }
@@ -1304,6 +1315,7 @@ export async function deleteGroup(groupId: string): Promise<void> {
   }
 
   await deleteGroupFromDb(groupId)
+  refreshGroupPushSubscriptions()
   await deleteMessagesForSession(`group:${groupId}`)
 }
 

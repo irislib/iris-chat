@@ -7,7 +7,7 @@ import { devices } from './devices'
 import { db } from './storage'
 import { waitForNdrRuntime } from './privateChats'
 import { privateStateControlEvent, privateEventState, type NameChange, type BlockState } from './privateStateProtocol'
-import { savePrivateStateEvent, contactPrivateEvents, readState, applyMessageRead } from './privateStateStore'
+import { savePrivateStateEvent, contactPrivateEvents, readState } from './privateStateStore'
 const authorized = (owner: string) => getPubkey() === owner && get(devices).isCurrentDeviceRegistered
 const pendingKey = (owner: string, id: string) => `private-state-pending:${owner}:${id}`
 async function sendPrivateEvent(owner: string, event: PrivateEvent): Promise<void> {
@@ -103,11 +103,5 @@ export async function sendOwnReadState(owner: string, chatId: string, ids: strin
 }
 /** Caller admits only an authenticated own-device receipt, never a remote peer receipt. */
 export async function applyOwnReadTag(owner: string, chatId: string, rumor: Rumor): Promise<void> {
-  const encoded = rumor.tags.find(tag => tag[0] === 'iris-read-state')?.[1]
-  if (!encoded || encoded.length > 32768) return
-  let state: { seenMessages?: Record<string, unknown> }
-  try { state = JSON.parse(encoded) } catch { return }
-  if (!state.seenMessages || Object.keys(state.seenMessages).length > 128) return
-  const { validMessageRead } = await import('./privateStateProtocol')
-  for (const [id, read] of Object.entries(state.seenMessages)) if (id && id.length <= 128 && validMessageRead(read)) await applyMessageRead(owner, chatId, id, read, () => authorized(owner))
+  await (await import('./ownReadState')).applyAuthenticatedOwnRead(owner,chatId,rumor,() => authorized(owner))
 }

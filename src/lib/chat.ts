@@ -1353,7 +1353,7 @@ async function handleIncomingRumor(
   const processedId = rumor.id
   const saveProcessedRumor = (content?: string) => {
     const event = {
-      id: processedId,
+      id: processedId, messageId: rumor.id, author: receiptAuthorPubkey || rumor.pubkey, createdAtSecs: rumor.created_at,
       kind: rumor.kind,
       chatId: sessionId,
       content,
@@ -1455,7 +1455,7 @@ async function handleIncomingRumor(
   const { directTransferId: _transfer, ...storedIncoming } = message
   const committed = await persistMessageWithReactions(myPubkey, { ...storedIncoming, sessionId })
   Object.assign(message, committed, { directTransferId: committed.deletedAt !== undefined ? undefined : message.directTransferId })
-  saveProcessedRumor(directFilePreview(message.content))
+  saveProcessedRumor(message.content)
 
   // Check if message already exists
   const updatedSession = updateChatSession(sessionId, (latestSession) => {
@@ -1469,6 +1469,7 @@ async function handleIncomingRumor(
     return { ...latestSession, messages: updatedMessages }
   })
   if (!updatedSession) return
+  void import('./foregroundMessageNotifications').then(({notifyForegroundMessage}) => notifyForegroundMessage(myPubkey,committed)).catch(()=>{})
 
   // The incoming body was committed and projected before it became visible.
   saveSessionToStorage(updatedSession)

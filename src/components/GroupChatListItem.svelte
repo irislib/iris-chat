@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { messagePreview } from '../lib/messagePreview'
+  import { messageMentions } from '../lib/mentions'
+  import { mentionNames } from '../lib/mentionNames'
   import { pinnedChatIds } from '../lib/chatPinStore'
   import type { Group, GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
@@ -15,6 +18,7 @@
   let { group, messages, onopen }: Props = $props()
 
   let lastMessage = $derived(messages[messages.length - 1])
+  let names = $derived(mentionNames(messageMentions(lastMessage?.content ?? '').map(m => m.pubkey),false))
   let unseenCount = $derived(countUnseenMessages(messages))
   let unseenCountLabel = $derived(formatUnseenCount(unseenCount))
 
@@ -66,7 +70,7 @@
         {:else if lastMessage.senderPubkey}
           <span><Name pubkey={lastMessage.senderPubkey} />: </span>
         {/if}
-        <span class="truncate">{lastMessage.deletedAt !== undefined ? 'Message deleted' : lastMessage.content}</span>
+        <span class="truncate">{lastMessage.deletedAt !== undefined ? 'Message deleted' : messagePreview(lastMessage.content,$names)}</span>
       </div>
     {:else}
       <div class="text-sm text-gray-500 italic">No messages yet</div>
