@@ -142,7 +142,7 @@ vi.mock('./messageMutations', async importOriginal => ({ ...await importOriginal
 vi.mock('./deviceSyncRecordStore', () => ({ deviceRecordVersion: writable(0), messageWithReactionHeads: async (_owner: string, value: unknown) => value, hasReactionHead: async () => false, groupSettingsHead: async () => undefined, reactionHeads: async function* () {}, reactionHeadPages: async function* () {}, groupSettingsHeads: async function* () {} }))
 vi.mock('./storage', () => ({
   chatDeletionStates: async () => [],
-  db: { transaction: async (...args: any[]) => args.at(-1)(), messages: { get: async () => undefined }, sessionManager: { get: async () => undefined } },
+  db: { transaction: async (...args: any[]) => args.at(-1)(), messages: { get: async () => undefined }, sessionManager: { get: async () => undefined, where: () => ({ between: () => ({ limit: () => ({ toArray: async () => [] }) }) }) } },
   getSessionManagerValue: vi.fn(async () => undefined),
   putSessionManagerValue: vi.fn(async () => {}),
   deleteSessionManagerValue: vi.fn(async () => {}),
@@ -914,6 +914,25 @@ describe('device sync', () => {
     } finally {
       await stopDeviceSync()
     }
+  })
+
+  it('announces later private record changes to established peers so they pull the new state', async () => {
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
+      const transport = tcp.instances.at(-1)!, source = `02${device}`
+      await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 100,
+        recordReconcile: 1, privateFacts: 2, privateEvents: 2, nameApprovals: 2, readStates: 2 }))
+      // Finish startup's debounced snapshot before changing a durable private head.
+      await new Promise(resolve => setTimeout(resolve, 150))
+      transport.send.mockClear()
+      const { deviceRecordVersion } = await import('./deviceSyncRecordStore')
+      deviceRecordVersion.update(version => version + 1)
+      await vi.waitFor(() => expect(transport.send.mock.calls.map((call: unknown[]) =>
+        parseDeviceSyncPacket(call[1] as Uint8Array, owner))).toContainEqual(expect.objectContaining({
+          type: 'pageEnd', next: null, recordReconcile: 1, privateEvents: 2,
+        })))
+    } finally { await stopDeviceSync() }
   })
 
   it('keeps an advertised history demand valid across a new metadata request', async () => {

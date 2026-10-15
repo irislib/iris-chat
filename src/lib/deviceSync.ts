@@ -656,9 +656,14 @@ async function pushCurrentSnapshot(): Promise<void> {
   )
   await Promise.all(Array.from(activePeers).map(async (peer) => {
     if (!isAuthorizedDeviceSyncSource(peer, state)) return
-    if (historyPeers.has(peer)) {
-      await tcp.send(peer, encodeDeviceSyncPacket(historyRequest(activeOwnerPubkey)))
-    } else await sendPackets(tcp, peer, packets)
+    // PageEnd asks the receiving peer to reconcile our updated inventory.
+    // A Request alone only pulls their state, leaving our later private edits
+    // invisible until another handshake happens to start the reverse round.
+    const reply = historyPeers.has(peer) ? packets.map(packet => packet.type === 'pageEnd'
+      ? { ...packet, recordReconcile: 1 as const, privateFacts: 2 as const, privateEvents: 2 as const,
+          nameApprovals: 2 as const, readStates: 2 as const, historySince: servingHistorySince(activeOwnerPubkey!, peer) }
+      : packet) : packets
+    await sendPackets(tcp, peer, reply)
   }))
 }
 
