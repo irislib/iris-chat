@@ -8,6 +8,7 @@
 - Show readable attachment labels in chat lists and notifications, and clearer clickable links.
 - Share private personal and group invitation links with reliable group admission.
 - Keep linked devices signed in when an older device list arrives during reload, while honoring newer removals.
+- Resume private sync after reloading a linked browser, even when devices cannot connect directly. Update the native app for the matching recovery fix.
 
 ## 2.6.46 - 2026-10-08
 

@@ -3,15 +3,16 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { verifyEvent, type Event } from 'nostr-tools'
+import { generateSecretKey, getPublicKey, verifyEvent, type Event } from 'nostr-tools'
 import { test, expect, useTestRelay } from './fixtures'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { TestRelay } from './test-relay'
 
 const execute = promisify(execFile)
 
-for (const routedOnly of [false, true]) {
-  test(`native approval links a browser and transfers history ${routedOnly ? 'through a FIPS seed without WebRTC' : 'with an unavailable server'}`, async ({ browser, testRelay, testRelayUrl }, testInfo) => {
+for (const route of ['direct', 'native-dials', 'browser-dials'] as const) {
+  const routedOnly = route !== 'direct'
+  test(`native approval links a browser and transfers history ${routedOnly ? `through a FIPS seed without WebRTC (${route})` : 'with an unavailable server'}`, async ({ browser, testRelay, testRelayUrl }, testInfo) => {
     test.setTimeout(240_000)
     const core = process.env.IRIS_CHAT_RS_CORE_DIR
     if (!core) {
@@ -42,6 +43,7 @@ ${serviceErrors}`) })
     }
     let owner = ''
     let groupChat = ''
+    let expectedBrowserDevice: string | undefined
     let service: ChildProcess | undefined
     let serviceErrors = ''
     const diagnostics: string[] = []
@@ -86,10 +88,45 @@ ${serviceErrors}`) })
       const code = page.locator('button[title^="nostrconnect://"]')
       await expect(code).toBeVisible()
       const link = (await code.getAttribute('title'))!
+      if (routedOnly) {
+        // The signer transport key already exists. Supply one random, prechecked
+        // key-generation seed for the upcoming authorization device only. All
+        // other random calls (and every call after it) retain platform entropy.
+        const nativeFirst = route === 'native-dials'
+        const random = crypto.getRandomValues.bind(crypto)
+        let entropy: number[] = [], device = ''
+        for (let attempt = 0; attempt < 4096; attempt++) {
+          try {
+            crypto.getRandomValues = array => {
+              const result = random(array)
+              entropy = Array.from(array as Uint8Array)
+              return result
+            }
+            device = getPublicKey(generateSecretKey())
+          } finally { crypto.getRandomValues = random }
+          if ((account.device_id < device) === nativeFirst) break
+        }
+        expect(entropy).toHaveLength(48)
+        expect((account.device_id < device) === nativeFirst).toBe(true)
+        expectedBrowserDevice = device
+        await page.evaluate(entropy => {
+          const random = crypto.getRandomValues.bind(crypto)
+          crypto.getRandomValues = array => {
+            if (array instanceof Uint8Array && array.byteLength === entropy.length) {
+              crypto.getRandomValues = random
+              array.set(entropy)
+              return array
+            }
+            return random(array)
+          }
+        }, entropy)
+        writeFileSync(testInfo.outputPath('stream-ordering.json'), JSON.stringify({ nativeDevice: account.device_id, browserDevice: device, nativeFirst }))
+      }
       const approval = run('link', 'accept', link, '--include-message-history')
       await expect(page.getByRole('button', { name: 'New Chat', exact: true })).toBeVisible({ timeout: 110_000 })
       const accepted = await approval
       expect(accepted.device_roster.device_count).toBe(2)
+      if (expectedBrowserDevice) expect(accepted.device_roster.devices).toContainEqual(expect.objectContaining({ device_id: expectedBrowserDevice, authorized: true }))
       const chat = page.getByTestId('sidebar-chat-list').getByRole('button').filter({ hasText: body })
       await expect(chat).toBeVisible({ timeout: 60_000 })
       await chat.click()

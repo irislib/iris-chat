@@ -7,6 +7,8 @@ import {
 } from '@fips/tcp'
 
 const POLL_MS = 25
+const PASSIVE_DIAL_GRACE_MS = 2_000
+const MAX_PASSIVE_DIAL_DELAY_MS = 30_000
 const FRAME_HEADER_BYTES = 4
 const MAX_PENDING_RECORDS_PER_PEER = 64
 const MAX_PENDING_BYTES_PER_PEER = 4 * 1024 * 1024
@@ -35,6 +37,7 @@ export interface DeviceSyncTcpOptions {
 export class DeviceSyncTcp {
   private readonly tcp: FipsTcpEndpoint
   private readonly peers = new Set<string>()
+  private readonly passiveDials = new Map<string, { after: number; delay: number }>()
   private readonly connections = new Map<string, ConnectionId>()
   private readonly established = new Set<ConnectionId>()
   private readonly readers = new Map<ConnectionId, RecordReader>()
@@ -71,6 +74,7 @@ export class DeviceSyncTcp {
       if (connected) this.peers.add(peer)
       else {
         this.peers.delete(peer)
+        this.passiveDials.delete(peer)
         const id = this.connections.get(peer)
         if (id !== undefined) {
           try {
@@ -131,6 +135,7 @@ export class DeviceSyncTcp {
       for (const write of writes) write.reject(error)
     }
     this.pending.clear()
+    this.passiveDials.clear()
     this.pendingBytesByPeer.clear()
     this.pendingBytes = 0
   }
@@ -147,7 +152,19 @@ export class DeviceSyncTcp {
 
   private async ensureConnections(): Promise<void> {
     for (const peer of this.peers) {
-      if (this.connections.has(peer) || !shouldInitiate(this.options.localPeer, peer)) continue
+      if (this.connections.has(peer)) continue
+      if (!shouldInitiate(this.options.localPeer, peer)) {
+        // A routed peer can retain its old stream when this page reloads. Give
+        // the normal dialer priority, then recover pending writes ourselves.
+        // Only configured peers are eligible; failed probes back off per peer.
+        if (!this.pending.get(peer)?.length) continue
+        const now = Date.now()
+        const retry = this.passiveDials.get(peer) ?? { after: now + PASSIVE_DIAL_GRACE_MS, delay: PASSIVE_DIAL_GRACE_MS }
+        this.passiveDials.set(peer, retry)
+        if (now < retry.after) continue
+        retry.delay = Math.min(MAX_PASSIVE_DIAL_DELAY_MS, retry.delay * 2)
+        retry.after = now + retry.delay
+      }
       const id = await this.tcp.connect(peer)
       this.connections.set(peer, id)
       this.readers.set(id, new RecordReader(this.options.maxRecordBytes))
@@ -231,6 +248,7 @@ export class DeviceSyncTcp {
         this.removeConnection(peer, id, false)
         throw error
       }
+      if (records.length) this.passiveDials.delete(peer)
       for (const record of records) this.deliver(peer, record)
     }
   }

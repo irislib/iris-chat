@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { FipsDatagramEndpoint, FipsServiceContext } from '@fips/tcp'
+import { Flags, Segment, type FipsDatagramEndpoint, type FipsServiceContext } from '@fips/tcp'
 import { DeviceSyncTcp, RecordReader, frameRecord } from './deviceSyncTcp'
 
 type Handler = (context: FipsServiceContext) => Promise<void> | void
@@ -79,6 +79,83 @@ describe('DeviceSyncTcp', () => {
       await pending
     } finally {
       await Promise.all([a.dispose(), b.dispose()])
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([false, true])('recovers a reloaded peer over a persistent carrier; reloaded peer is dialer=%s', async (reloadDialer: boolean) => {
+    vi.useFakeTimers()
+    const aEndpoint = new MemoryFipsEndpoint('a'.repeat(64))
+    const bEndpoint = new MemoryFipsEndpoint('b'.repeat(64))
+    aEndpoint.remote = bEndpoint
+    bEndpoint.remote = aEndpoint
+    const received: string[] = []
+    const connected: string[] = []
+    const options = (endpoint: MemoryFipsEndpoint) => ({
+      endpoint, localPeer: endpoint.id, port: 7369, maxRecordBytes: 1024,
+      onRecord: (_peer: string, bytes: Uint8Array) => { received.push(new TextDecoder().decode(bytes)) },
+      onConnected: () => { connected.push(endpoint.id) },
+    })
+    let a = new DeviceSyncTcp(options(aEndpoint))
+    let b = new DeviceSyncTcp(options(bEndpoint))
+    try {
+      a.setPeer(bEndpoint.id, true)
+      b.setPeer(aEndpoint.id, true)
+      const initial = a.send(bEndpoint.id, new TextEncoder().encode('before reload'))
+      await vi.advanceTimersByTimeAsync(250)
+      await initial
+      expect(received).toEqual(['before reload'])
+      // Abrupt page teardown drops TCP state, while the authenticated carrier
+      // and remote endpoint keep their old Established stream.
+      if (reloadDialer) { await a.dispose(); a = new DeviceSyncTcp(options(aEndpoint)); a.setPeer(bEndpoint.id, true) }
+      else { await b.dispose(); b = new DeviceSyncTcp(options(bEndpoint)); b.setPeer(aEndpoint.id, true) }
+      connected.length = 0
+      const reloaded = reloadDialer ? a : b
+      const peer = reloadDialer ? bEndpoint.id : aEndpoint.id
+      const sent = reloaded.send(peer, new TextEncoder().encode('after reload')).catch(() => {})
+      if (!reloadDialer) {
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(received).toEqual(['before reload'])
+        expect(connected).toEqual([])
+      }
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(received).toEqual(['before reload', 'after reload'])
+      expect(connected).toContain(reloadDialer ? aEndpoint.id : bEndpoint.id)
+      await sent
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()])
+      vi.useRealTimers()
+    }
+  })
+
+  it('bounds passive recovery attempts and stops when the peer is no longer allowed', async () => {
+    vi.useFakeTimers()
+    const endpoint = new MemoryFipsEndpoint('b'.repeat(64))
+    endpoint.dropAll = true
+    const outgoing = vi.spyOn(endpoint, 'sendDatagram')
+    const peer = 'a'.repeat(64)
+    const tcp = new DeviceSyncTcp({ endpoint, localPeer: endpoint.id, port: 7369, maxRecordBytes: 1024,
+      onRecord: () => undefined,
+      tcpConfig: { initialRtoMs: 25, minRtoMs: 25, maxRtoMs: 25, maxRetransmissions: 1 },
+    })
+    const attempts = () => {
+      const segments: Segment[] = outgoing.mock.calls.map(([args]: Parameters<MemoryFipsEndpoint['sendDatagram']>) => Segment.decode(args.payload))
+      return new Set(segments.filter(segment => segment.flags.has(Flags.Syn)).map(segment => segment.srcPort)).size
+    }
+    try {
+      const pending = tcp.send(peer, new TextEncoder().encode('pending')).catch(() => undefined)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(attempts()).toBe(0) // Queuing a record does not authorize its recipient.
+      tcp.setPeer(peer, true)
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(attempts()).toBe(3) // 2s grace, then 4s and 8s retry delays.
+      tcp.setPeer(peer, false)
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(attempts()).toBe(3)
+      await tcp.dispose()
+      await pending
+    } finally {
+      await tcp.dispose()
       vi.useRealTimers()
     }
   })

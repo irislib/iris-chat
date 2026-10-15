@@ -46,6 +46,7 @@ describe('release site config', () => {
     expect(portableTestStep?.command).toContain('src/lib/chat.self-message.test.ts')
     expect(portableTestStep?.command).toContain('src/lib/messageMutationHistory.test.ts')
     expect(portableTestStep?.command).toContain('src/lib/privateRuntimeInitialization.test.ts')
+    expect(portableTestStep?.command).toContain('src/lib/deviceSyncTcp.test.ts')
     expect(plan.steps.find((step) => step.id === 'test-e2e-nip07')?.command).toEqual([
       'pnpm',
       'exec',

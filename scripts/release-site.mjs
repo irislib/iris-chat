@@ -215,6 +215,7 @@ export function createReleasePlan(options) {
         'src/lib/composerCompletion.test.ts',
         'src/lib/messagePreview.test.ts',
         'src/lib/deviceSync.test.ts',
+        'src/lib/deviceSyncTcp.test.ts',
         'src/lib/hashtreeSigner.test.ts',
         'src/lib/privateRuntimeInitialization.test.ts',
         'src/lib/privateChats.registration.test.ts',
