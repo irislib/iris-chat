@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { resolvePrivateInvite, inviteFromRecord } from './lib/chat'
+  import { requestGroupJoin, groupJoinStatus, retryGroupJoin } from './lib/groupInvites'
   import { loadChatMutes, clearChatMutes } from './lib/chatMuteStore'
   import { loadChatPins, clearChatPins } from './lib/chatPinStore'
   import { onMount } from 'svelte'
@@ -68,6 +70,19 @@
   let loggedIn = $state(false)
   let loginView = $state<{ focusName: () => Promise<void> }>()
   let pendingInvite = $state<ChatInvite | null>(parseInviteFromHash())
+  let inviteTitle = $state('')
+  let groupInviteEntry = $state(false)
+  $effect(() => {
+    const invite = pendingInvite
+    if (!invite || loggedIn) return
+    let cancelled = false
+    void resolvePrivateInvite(invite).then(record => {
+      if (cancelled || !record) return
+      groupInviteEntry = record.type === 'group'
+      inviteTitle = record.name ? (groupInviteEntry ? `Join ${record.name}` : `Chat with ${record.name}`) : ''
+    }).catch(() => {})
+    return () => { cancelled = true }
+  })
   let joiningInvite = $state(false)
   let joinError = $state('')
   let joinAttempt = 0
@@ -103,7 +118,13 @@
     currentView = 'chat'
     mobileView = 'main'
     try {
-      const chat = await acceptInvite(invite)
+      const record = await resolvePrivateInvite(invite)
+      if (record?.type === 'group') {
+        const groupId = await requestGroupJoin(record)
+        if (attempt === joinAttempt && get(identity)?.pubkey === owner) handleSelectGroup(groupId)
+        return
+      }
+      const chat = await acceptInvite(record ? { type: 'legacy', invite: inviteFromRecord(record) } : invite)
       if (attempt === joinAttempt && get(identity)?.pubkey === owner) handleSelectChat(chat)
     } catch (error) {
       if (attempt === joinAttempt && get(identity)?.pubkey === owner) {
@@ -131,7 +152,7 @@
     selectedGroupId = destination === 'group' ? target.chatId : null
     selectedChat = destination === 'chat' ? $chats.get(target.chatId)! : null
     currentChat.set(selectedChat)
-    navigateTo('chat', false, undefined, selectedGroupId ?? undefined)
+    navigateTo('chat', false, selectedChat?.id, selectedGroupId ?? undefined)
     mobileView = 'main'
     postToServiceWorker({ type: 'CLEAR_NOTIFICATION', chatId: target.chatId })
   })
@@ -206,6 +227,7 @@
     else if (view === 'createGroup') hash = '#create-group'
     else if (view === 'groupDetails' && groupId) hash = `#group-details-${groupId}`
     else if (view === 'chat' && groupId) hash = `#group-${groupId}`
+    else if (view === 'chat' && pubkey) hash = `#chat-${encodeURIComponent(pubkey)}`
 
     if (push) {
       history.pushState({ view, pubkey, groupId }, '', hash || window.location.pathname)
@@ -499,9 +521,7 @@
     selectedChat = chat
     currentChat.set(chat)
     selectedGroupId = null
-    if (currentView !== 'chat') {
-      navigateTo('chat')
-    }
+    navigateTo('chat', true, chat.id)
     mobileView = 'main'
     // Tell service worker this chat is now open (suppresses notifications)
     postToServiceWorker({ type: 'CHAT_OPENED', chatId: chat.id })
@@ -682,7 +702,7 @@
         {#if deviceRemovalNotice}
           <p role="status" class="mb-6 max-w-sm text-center text-gray-400">This device was removed. Its local data has been cleared.</p>
         {/if}
-        <LoginView bind:this={loginView} onlogin={handleLogin} />
+        <LoginView bind:this={loginView} onlogin={handleLogin} {inviteTitle} groupInvite={groupInviteEntry} />
       </div>
     </div>
   {:else}
@@ -752,6 +772,11 @@
               showBackButton={mobileView === 'main'}
               onViewDetails={handleGroupDetails}
             />
+          {:else if selectedGroupId}
+            <div class="flex-1 flex flex-col items-center justify-center gap-4 p-6">
+              <p role="status" class="text-gray-400">{$groupJoinStatus[selectedGroupId] || 'Waiting for the group admin to connect…'}</p>
+              <button class="btn-secondary" onclick={() => { if (selectedGroupId) void retryGroupJoin(selectedGroupId).catch(error => groupJoinStatus.update(s => ({ ...s, [selectedGroupId!]: getErrorMessage(error, 'Could not join group') }))) }}>Retry</button>
+            </div>
           {:else}
             {#if joiningInvite || joinError}
               <div class="flex-1 flex flex-col items-center justify-center gap-4 p-6">
@@ -781,7 +806,7 @@
 </main>
 
 {#if !initializing && !duplicateTab}
-  <InstallPrompt entryHref={nativeEntryHref} welcome={!loggedIn} excluded={nativeEntryIsDeviceLink}
+  <InstallPrompt entryHref={nativeEntryHref} welcome={!loggedIn} excluded={nativeEntryIsDeviceLink} {inviteTitle}
     ondismiss={() => { void loginView?.focusName() }} />
 {/if}
 

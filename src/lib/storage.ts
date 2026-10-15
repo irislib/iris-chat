@@ -10,6 +10,7 @@ import { clearDirectFileStorage } from './directFileStorage'
 export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet'
 
 export interface StoredSession {
+  bootstrapOnly?: boolean
   id: string
   recipientPubkey: string
   sessionState?: string // JSON-serialized session state (hex encoded by nostr-double-ratchet)

@@ -97,6 +97,7 @@ const MAX_PENDING_PER_GROUP = 50
 const PENDING_MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
 const nativeGroupSendQueue = new Map<string, Promise<void>>()
 const groupRosterFactCursors = new Map<string, GroupRosterFactCursor>()
+const reservedRosterRevisions = new Map<string, number>()
 const seenGroupRosterFactIds = new Set<string>()
 let groupRosterFactSyncCleanup: (() => void) | null = null
 let groupRosterFactSyncOwner: string | null = null
@@ -224,8 +225,10 @@ function shouldApplyGroupRosterFact(fact: GroupRosterFact): boolean {
 }
 
 function nextGroupRosterRevision(groupId: string): number {
-  const previous = groupRosterFactCursors.get(groupId)?.revision ?? 0
-  return previous + 1
+  const revision = Math.max(groupRosterFactCursors.get(groupId)?.revision ?? 0, reservedRosterRevisions.get(groupId) ?? 0) + 1
+  // Reserve before asynchronous signing so concurrent changes stay ordered.
+  reservedRosterRevisions.set(groupId, revision)
+  return revision
 }
 
 function getGroupRosterSignerPubkey(group: Group): string | null {
@@ -274,6 +277,14 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
   void event.publish({ requireAck: true }).catch((error) => {
     console.warn('[groups] Failed to publish group roster fact:', error)
   })
+  // Deliver membership changes through each member's durable encrypted queue.
+  // Public replaceable facts alone can lose same-second updates or be missed
+  // while a newly invited member is still starting its subscriptions.
+  const runtime = await waitForNdrRuntime()
+  await Promise.all(group.members.filter(member => member !== signerPubkey).map(member =>
+    runtime.sendEvent(member, { kind: signed.kind, content: signed.content, tags: signed.tags,
+      pubkey: signed.pubkey, created_at: signed.created_at },
+      undefined, { includeLocalSiblings: false })))
 }
 
 function publishGroupRosterFactSnapshotInBackground(group: Group): void {
@@ -744,6 +755,9 @@ function mutateGroup(
 
   groups.update((current) => current.set(groupId, updated))
   saveGroupState(updated)
+  // Our signed roster echo is deliberately deduplicated. Apply the new members
+  // and rotated secret to the local transport before that echo can be ignored.
+  syncNativeGroupTransport(groupId)
   publishGroupRosterFactSnapshotInBackground(updated)
 }
 
@@ -751,6 +765,13 @@ export function addGroupMember(groupId: string, pubkey: string): void {
   // Verify we have a chat session with the new member
   if (!get(chats).has(pubkey)) return
   mutateGroup(groupId, (group, myPubkey) => libAddMember(group, pubkey, myPubkey))
+}
+
+// Admission already committed the roster and invite use in one transaction.
+export async function publishAdmittedGroup(group: Group): Promise<void> {
+  groups.update(current => current.set(group.id, group))
+  await (await waitForNdrRuntime()).syncGroups(Array.from(get(groups).values()), getPubkey()!)
+  await publishGroupRosterFactSnapshot(group)
 }
 
 export function removeGroupMember(groupId: string, pubkey: string): void {
@@ -1331,6 +1352,7 @@ export function clearGroupData(): void {
   groupRosterFactSyncCleanup = null
   groupRosterFactSyncOwner = null
   groupRosterFactCursors.clear()
+  reservedRosterRevisions.clear()
   seenGroupRosterFactIds.clear()
   pendingGroupEvents.clear()
   groups.set(new Map())

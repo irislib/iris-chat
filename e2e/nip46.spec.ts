@@ -75,7 +75,7 @@ test('scan signer authorizes only a device, preserves roster, reloads and messag
     const peer = await peerContext.newPage()
     await peer.goto('/')
     await peer.getByRole('button', { name: 'New Chat' }).click()
-    const invite = peer.locator('button[title*="/invite/"]').first()
+    const invite = peer.locator('button[title*="#/nhash"]').first()
     await expect(invite).toBeVisible()
     const inviteLink = (await invite.getAttribute('title'))!
     await page.getByRole('button', { name: 'New Chat' }).click()

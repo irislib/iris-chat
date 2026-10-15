@@ -470,7 +470,6 @@
     {#if messages.length === 0}
       <div class="text-center py-8">
         <div class="i-carbon-group text-4xl text-primary mx-auto mb-2"></div>
-        <p class="text-gray-400">Group created</p>
         <p class="text-sm text-gray-500">Messages are end-to-end encrypted</p>
       </div>
     {:else}

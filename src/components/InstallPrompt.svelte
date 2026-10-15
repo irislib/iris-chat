@@ -2,10 +2,11 @@
   import { onMount } from 'svelte'
   import { nativeAppPlatform, loadNativeAppDownload, NATIVE_APP_DOWNLOAD_URL, NATIVE_APP_SUGGESTION_KEY, type NativeAppPlatform, type NativeAppDownload } from '../lib/nativeApp'
 
-  let { entryHref = null, welcome = false, excluded = false, ondismiss }: {
+  let { entryHref = null, welcome = false, excluded = false, inviteTitle = '', ondismiss }: {
     entryHref?: string | null
     welcome?: boolean
     excluded?: boolean
+    inviteTitle?: string
     ondismiss?: () => void
   } = $props()
 
@@ -70,7 +71,7 @@
     <div class="download-content">
       <img src={`${import.meta.env.BASE_URL}iris-logo.png`} alt="" class="app-logo" draggable="false" />
       <h1 id="native-download-title">Download Iris</h1>
-      <p class="download-description">Private messages and calls on {platform}.</p>
+      <p class="download-description">{inviteTitle || `Private messages and calls on ${platform}.`}</p>
       <div class="download-actions">
         <div>
           <a href={downloadTarget.href} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
@@ -82,7 +83,6 @@
             <p id="native-download-detail" class="download-detail">{downloadTarget.detail}</p>
           {/if}
         </div>
-        <button class="browser-button" onclick={dismiss}>Continue in browser</button>
       </div>
       <a href={NATIVE_APP_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"
         class="other-downloads">Other downloads</a>
@@ -92,6 +92,7 @@
           <a href={entryHref}>Open Iris</a>
         </div>
       {/if}
+      <button class="browser-button" onclick={dismiss}>Continue in browser</button>
     </div>
   </dialog>
 {/if}
@@ -134,7 +135,7 @@
   h1 { margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.035em; line-height: 1.2; }
   .download-description { margin: 12px 0 32px; color: rgb(var(--color-muted)); font-size: 16px; }
   .download-actions { display: flex; flex-direction: column; gap: 12px; }
-  .download-button, .browser-button {
+  .download-button {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -147,8 +148,8 @@
   .download-button { background: rgb(var(--color-primary)); color: white; }
   .download-button:hover { background: rgb(var(--color-primary-dark)); }
   .download-detail { margin: 8px 0 0; font-size: 13px; color: rgb(var(--color-muted)); }
-  .browser-button { color: rgb(var(--color-muted)); }
-  .browser-button:hover { background: rgb(var(--color-surface)); color: rgb(var(--color-text)); }
+  .browser-button { display: block; margin: 20px auto 0; min-height: 44px; padding: 8px; font-size: 13px; color: rgb(var(--color-muted)); }
+  .browser-button:hover { text-decoration: underline; color: rgb(var(--color-text)); }
   .other-downloads { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; color: rgb(var(--color-muted)); }
   .other-downloads:hover { text-decoration: underline; }
   .installed-action { margin-top: 24px; font-size: 14px; }

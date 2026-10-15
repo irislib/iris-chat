@@ -1,3 +1,4 @@
+vi.mock('./inviteRecordStore', () => ({ publishInviteRecord: async () => 'nhash-test-reference' }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
 vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: async () => {} }))
 vi.mock('./deviceSyncRecordApply', async importOriginal => ({
@@ -103,6 +104,7 @@ vi.mock('./notifications', () => ({
 }))
 
 vi.mock('./groups', () => ({
+  groups: require('svelte/store').writable(new Map()),
   handleGroupEvent: vi.fn(),
 }))
 

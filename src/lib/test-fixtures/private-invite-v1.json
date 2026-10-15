@@ -1,0 +1,21 @@
+{
+  "record": {
+    "v": 1,
+    "type": "group",
+    "name": "Picnic",
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "invite": {
+      "inviter": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "ephemeralKey": "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+      "sharedSecret": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "owner": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "purpose": "chat"
+    },
+    "groupId": "test-picnic",
+    "token": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "expiresAt": 2000000000,
+    "maxUses": 3
+  },
+  "reference": "nhash1qqszmy69qm5qaj8hynac4r2tlczdqmtscv3y59qlpvgjl6kq5jtfgws9yzkv26y93cdc4j00ql9nmfzzazwq4sf35ymflpw6glgxp677lzqcu56ywqa",
+  "ciphertext": "a560c0cdc7a997abc113e75a2a0acf3be6e794eb62a82133d64f5911db4e04d1fdced718f5c835ca981d3e15982c32b90acd7a5d074c566913038273b24f19ae585eb9612c098d62c64834080fbca24a6cd002b0fa24a38e1115ddaf87ab8750a7e7ffff1f84e6a421b9564853949d81c411eb622093a9b3dfbc74bbc6b9c94e7ad00b8a1c7d3dc880bd935ca609bda46898f023db95412445c1b6f67d2a5df0635e811a6db0253b4f2e3c69075df58cd2b9f3f8873262deeb7989740ad9eca0b8a089eb93fbc31bedcdc2481306e3813a5fa1e138d6b05cc86fd309ac5682742310173c6e5cc43f61083222fbb10b5ba00a43814b4bdd23b5b108c55989fe00e6b989081b9ed0ca2253b4fca3dad3943b854771088a1cbc365dbfebe7e04b69b3e3acf9a1c921a68c7f913c1059acfb5c0c5f75f33f4c67e554d8cdf6ec7319d2320a1362fcc537a109343c7eacbb84fcc8106666ac9bb53f164bc91be1be983cf846f15774510bd47618737efb43789cbebb14a26f4f8be87547129b1106f8cb8c765609dc7a59a01c7016f029c2f583b463533c6cdd5345a11954286b541e2242fca4f8ae202cd960b1d44cd0b06dfb5c1f4f6de179d43d4c4a01970951b94b8ffdfd7f946bcc178d2b3cb3d19f6b2de136a0234e4c7b71867384b876300c9643d9c03025636307b9f5fbbdd7446d1e49abff429fb3ae681661ee51c19d3a623a38767e68e7bd4189d679320d0e2dfcee2acd6aa2e3fcb855da6e671eb7d7b3d0fc124b1709a53e19576d7e69c5bc89df0114a7438e8f17333b4ed006485ce4e7f0616dd7e0a34277c280d8c955394dbd7ebf4338f89565449872b64375"
+}

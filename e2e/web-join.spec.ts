@@ -36,7 +36,7 @@ test('a hash-only join opens immediately while another chat is selected', async 
   await page.getByPlaceholder('Paste invite link').fill(nip19.npubEncode('b'.repeat(64)))
   await expect(composer(page)).toBeVisible()
   await page.goto(`/#/${nip19.npubEncode('c'.repeat(64))}`)
-  await expect(page).toHaveURL(new URL('/', page.url()).href, { timeout: 1000 })
+  await expect(page).toHaveURL(/#chat-/)
   await expect(composer(page)).toBeVisible({ timeout: 1000 })
 })
 
@@ -51,7 +51,7 @@ test('unchecking Open chat when someone joins keeps the invite QR open when some
     await a.getByTitle('Show QR Code').first().click()
     await a.getByLabel('Open chat when someone joins').uncheck()
     await a.screenshot({ path: 'work/web-join/qr-close-on-accept.png' })
-    const invite = (await a.locator('button[title*="#/invite/"]').first().getAttribute('title'))!
+    const invite = (await a.locator('button[title*="#/nhash"]').first().getAttribute('title'))!
       .replace('https://chat.iris.to', new URL(a.url()).origin)
     await b.goto(invite)
     await b.getByRole('button', { name: 'Join Chat', exact: true }).click()
@@ -79,7 +79,7 @@ for (const entry of ['url', 'paste'] as const) {
       await alice.goto('/')
       await alice.getByRole('button', { name: 'Go', exact: true }).click()
       await alice.getByRole('button', { name: 'New Chat', exact: true }).click()
-      const copy = alice.locator('button[title*="#/invite/"]').first()
+      const copy = alice.locator('button[title*="#/nhash"]').first()
       await expect(copy).toBeVisible()
       const invite = (await copy.getAttribute('title'))!.replace('https://chat.iris.to', new URL(alice.url()).origin)
       if (entry === 'url') {

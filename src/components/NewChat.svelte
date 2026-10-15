@@ -14,6 +14,7 @@
   import QRCode from './QRCode.svelte'
   import Name from './Name.svelte'
   import CopyButton from './CopyButton.svelte'
+  import { getPubkey } from '../lib/identity'
 
   interface Props {
     onjoin: (event: CustomEvent<{ chat: ChatSession }>) => void
@@ -155,6 +156,12 @@
       </p>
 
       <CopyButton text={inviteUrl} maxLength={48} />
+      {#if qrModalInvite.invite.type === 'legacy'}
+        <details class="mt-4 text-sm text-gray-400">
+          <summary class="cursor-pointer">Link for older apps</summary>
+          <div class="mt-2"><CopyButton text={getInviteUrl({ type: 'legacy', invite: qrModalInvite.invite.invite })} maxLength={40} /></div>
+        </details>
+      {/if}
       <label class="flex items-center gap-2 mt-4 text-sm text-gray-400">
         <input type="checkbox" class="h-4 w-4 accent-primary" style="appearance: auto" bind:checked={$closeInviteOnAccept} /> Open chat when someone joins
       </label>
@@ -294,6 +301,12 @@
       {/if}
       Create New Invite
     </button>
+  {/if}
+  {#if getPubkey()}
+    <details class="mt-4 text-sm text-gray-400">
+      <summary class="cursor-pointer">Public contact link</summary>
+      <div class="mt-2"><CopyButton text={getInviteUrl({ type: 'pubkey', pubkey: getPubkey()! })} maxLength={32} /></div>
+    </details>
   {/if}
 </div>
 

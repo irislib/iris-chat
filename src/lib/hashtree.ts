@@ -47,7 +47,7 @@ export async function deactivateAttachmentPeers() {
 /**
  * Create a Nostr signer for Blossom NIP-98 auth
  */
-function createSigner(): BlossomSigner {
+export function createSigner(): BlossomSigner {
   return async (event) => {
     const privkeyBytes = getPrivkeyBytes()
 

@@ -1,4 +1,4 @@
-import { test, expect, useTestRelay } from './fixtures'
+import { test, expect, useTestRelay, serveInviteBlobs } from './fixtures'
 import { spawn, spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -65,6 +65,7 @@ function nativeCliEnv(dataDir?: string): NodeJS.ProcessEnv {
     IRIS_FIPS_WEBSOCKET_SEED_URLS: '',
   }
   if (dataDir) {
+    if (fs.existsSync(path.join(dataDir, 'hashtree', 'config.toml'))) env.HTREE_CONFIG_DIR = path.join(dataDir, 'hashtree')
     try {
       const config = JSON.parse(
         fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8')
@@ -1345,4 +1346,55 @@ test('iris-chat message edit history and deletion <-> native interop', async ({ 
     const deletedGroup = (await runNdr(['read', groupChat], dataDir)).data.messages.find((message: any) => message.id === webGroupMessage.data.id)
     expect(deletedGroup).toMatchObject({ body: '', deleted_for_everyone: true, edit_history: [] })
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }) }
+})
+
+
+test('native joins private hashtree personal and group invitations from the browser', async ({ page, testRelay, testRelayUrl }) => {
+  testRelay.deliveryFilter = event => !event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
+  skipIfNdrWorkspaceMissing()
+  test.setTimeout(240000)
+  const blobs = await serveInviteBlobs(testRelayUrl)
+  const dirs = [createNdrDataDir([testRelayUrl]), createNdrDataDir([testRelayUrl])]
+  try {
+    for (const dir of dirs) {
+      fs.mkdirSync(path.join(dir, 'hashtree'))
+      fs.writeFileSync(path.join(dir, 'hashtree', 'config.toml'), `[blossom]\nread_servers = ["${blobs.url}"]\nwrite_servers = []\n`)
+      await runNdr(['account', 'create'], dir)
+    }
+    await disablePublicCallServers(page.context())
+    await loginAnonymously(page)
+    const copy = page.locator('button[title*="#/nhash"]').first()
+    await expect(copy).toBeVisible()
+    const personal = (await copy.getAttribute('title'))!
+    const accepted = await runNdr(['invite', 'accept', personal], dirs[0])
+    expect(accepted.status).toBe('ok')
+    const webOwner = await waitForWebDeviceRoster(page, testRelay)
+    await runNdrRetry(['send', webOwner, 'Native Bob is here'], dirs[0], 30000, 500)
+    await expectChatBubbleVisible(page, 'Native Bob is here')
+    await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+    await page.getByRole('button', { name: 'Create Group', exact: true }).click()
+    await page.getByTestId('create-group-member').first().click()
+    await page.getByTestId('create-group-next').click()
+    await page.getByPlaceholder('Enter group name...').fill('Native picnic')
+    await page.getByTestId('create-group-submit').click()
+    await waitForNativeGroupByName(dirs[0], 'Native picnic', 60000, 'initial native member')
+    await page.getByRole('button', { name: 'Native picnic 2 members', exact: true }).click()
+    await page.getByRole('button', { name: 'Invite link', exact: true }).click()
+    await page.getByRole('button', { name: 'Create invite link', exact: true }).click()
+    await expect(copy).toBeVisible()
+    const groupLink = (await copy.getAttribute('title'))!
+    const groupAccepted = await runNdr(['invite', 'accept', groupLink], dirs[1])
+    expect(groupAccepted.status).toBe('ok')
+    const joined = await waitForNativeGroupByName(dirs[1], 'Native picnic', 60000, 'native joins private group link')
+    await page.getByTestId('sidebar-chat-list').getByRole('button', { name: /Native picnic/ }).click()
+    await runNdrRetry(['group', 'send', joined.group_id, 'Native Cara brought strawberries'], dirs[1], 30000, 500)
+    await expectChatBubbleVisible(page, 'Native Cara brought strawberries')
+    await waitForNativeMessage(dirs[0], `group:${joined.group_id}`, 'Native Cara brought strawberries', 60000)
+    await page.getByPlaceholder('Type a message...').fill('Welcome Cara')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await waitForNativeMessage(dirs[1], `group:${joined.group_id}`, 'Welcome Cara', 60000)
+  } finally {
+    await blobs.close()
+    for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
