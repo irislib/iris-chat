@@ -8,6 +8,7 @@ test('three browsers share cached encrypted files on the existing FIPS node with
   const seed = await startLocalFipsWebSocketSeed()
   const contexts: BrowserContext[] = []
   const logs: string[] = []
+  let sharingFiles = false
   async function user() {
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'], serviceWorkers: 'block' })
     contexts.push(context)
@@ -18,7 +19,13 @@ test('three browsers share cached encrypted files on the existing FIPS node with
         construct() { throw new Error('Direct WebRTC disabled: test uses the existing routed FIPS node') },
       })
     }, seed.url)
-    await context.route('**/*', route => ['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort())
+    await context.route('**/*', route => {
+      if (['127.0.0.1', 'localhost'].includes(new URL(route.request().url()).hostname)) return route.continue()
+      // Private invite exchange uses the local encrypted-blob fixture; file
+      // transfer below still has every external Blossom request blocked.
+      if (!sharingFiles && /^https:\/\/(upload|cdn)\.iris\.to\//.test(route.request().url())) return route.fallback()
+      return route.abort()
+    })
     await context.routeWebSocket('**/*', socket => [seed.url, testRelayUrl].includes(socket.url().replace(/\/$/, '')) ? socket.connectToServer() : socket.close())
     const page = await context.newPage()
     page.on('console', message => logs.push(message.text()))
@@ -68,6 +75,7 @@ test('three browsers share cached encrypted files on the existing FIPS node with
   try {
     const a = await user(), b = await user(), c = await user()
     await connect(a, b, 'First peer')
+    sharingFiles = true
     const bytes = [...readFileSync(new URL('./fixtures/test-blob.jpeg', import.meta.url))]
     await a.locator('input[type=file]').first().setInputFiles({ name: 'peer.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(bytes) })
     await expect(a.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
@@ -84,7 +92,9 @@ test('three browsers share cached encrypted files on the existing FIPS node with
     await b.getByTestId('sidebar-chat-list').getByRole('button').first().click()
     expect(await imageBytes(b)).toEqual(bytes)
     await b.getByRole('button', { name: 'Back', exact: true }).click()
+    sharingFiles = false
     await connect(b, c, 'Cached peer')
+    sharingFiles = true
     await b.getByPlaceholder('Type a message...').fill(link)
     await b.getByRole('button', { name: 'Send', exact: true }).click()
     expect(await imageBytes(c)).toEqual(bytes)

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { verifyEvent, type Event } from 'nostr-tools'
 import { test, expect, useTestRelay } from './fixtures'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { TestRelay } from './test-relay'
@@ -33,14 +34,24 @@ for (const routedOnly of [false, true]) {
     const args = ['--json', '--data-dir', directory]
     const run = async (...command: string[]) => {
       const { stdout } = await execute(binary, [...args, ...command], { env, timeout: 210_000, maxBuffer: 1024 * 1024 })
+        .catch(error => { throw new Error(`Native ${command.slice(0, 2).join(' ')} failed: ${error.stdout || error.stderr || error.message}
+${serviceErrors}`) })
       const result = JSON.parse(stdout)
       expect(result.status, JSON.stringify(result)).toBe('ok')
       return result.data
     }
+    let owner = ''
+    let groupChat = ''
     let service: ChildProcess | undefined
     let serviceErrors = ''
     const diagnostics: string[] = []
+    const uploadAuthorizations: Event[] = []
     const context = await browser.newContext()
+    context.on('request', request => {
+      if (request.method() !== 'PUT' || request.url() !== 'https://upload.iris.to/upload') return
+      const auth = request.headers()['authorization']
+      if (auth?.startsWith('Nostr ')) uploadAuthorizations.push(JSON.parse(Buffer.from(auth.slice(6), 'base64').toString()))
+    })
     try {
       service = spawn(binary, [...args, 'service', 'run'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
       service.stderr!.on('data', data => { serviceErrors = (serviceErrors + data).slice(-16_000) })
@@ -50,11 +61,16 @@ for (const routedOnly of [false, true]) {
         service!.stdout!.on('data', data => { if (String(data).includes('"ready":true')) { clearTimeout(timeout); resolve() } })
       })
       const account = await run('account', 'create', '--name', 'Link history test')
-      const owner = account.user_id
+      owner = account.user_id
       expect(typeof owner, JSON.stringify(account)).toBe('string')
       const body = 'A message written on the phone before linking'
       await run('send', owner, body)
       expect((await run('read', owner)).messages.some((message: { body: string }) => message.body === body)).toBe(true)
+
+      const groupName = 'Private mention preferences'
+      const created = await run('group', 'create', groupName)
+      groupChat = created.groups.find((group: { name: string }) => group.name === groupName).chat_id
+      expect(await run('chat', 'mention-notifications', groupChat, 'false')).toEqual({ chat_id: groupChat, enabled: false })
 
       if (routedOnly) await context.addInitScript(() => {
         // Force the production TCP stream to use a routed path through the seed.
@@ -63,7 +79,7 @@ for (const routedOnly of [false, true]) {
       await useTestRelay(context, relays)
       await context.addInitScript(url => localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [url], stunServers: [] })), seed.url)
       const page = await context.newPage()
-      page.on('console', message => { if (diagnostics.length < 300) diagnostics.push(message.text()) })
+      page.on('console', message => { diagnostics.push(message.text()); if (diagnostics.length > 2000) diagnostics.shift() })
       page.on('pageerror', error => diagnostics.push(error.message))
       await page.goto('/')
       await page.getByRole('button', { name: 'Link this device', exact: true }).click()
@@ -82,7 +98,45 @@ for (const routedOnly of [false, true]) {
       await page.reload()
       await chat.click()
       await expect(page.getByTestId('message-bubble-body').filter({ hasText: body })).toHaveCount(1)
+
+      // The same linked production runtimes reconcile a private kind-7368 setting
+      // both ways, independently of sender-visible read receipts or public tags.
+      await page.getByTestId('sidebar-chat-list').getByRole('button').filter({ hasText: groupName }).click()
+      const openMute = async () => {
+        await page.getByRole('button', { name: 'Chat menu', exact: true }).click()
+        await page.getByRole('button', { name: 'Mute notifications', exact: true }).click()
+      }
+      await openMute()
+      const mentions = page.getByRole('checkbox', { name: 'Notify me when mentioned', exact: true })
+      await expect(mentions).not.toBeChecked()
+      await mentions.check()
+      await expect(mentions).toBeChecked()
+      const preferenceRows = await page.evaluate(async () => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('iris-chat'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+        const rows = await new Promise<Array<{key:string;value:unknown}>>((resolve, reject) => { const request = db.transaction('sessionManager').objectStore('sessionManager').getAll(); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+        db.close(); return rows.filter(row => row.key.includes('mention') || row.key.includes('history-pair'))
+      })
+      writeFileSync(testInfo.outputPath('web-private-setting-heads.json'), JSON.stringify(preferenceRows,null,2))
+      await expect.poll(async () => (await run('chat', 'mention-notifications', groupChat)).enabled, { timeout: 60_000 }).toBe(true)
+      expect(await run('chat', 'mention-notifications', groupChat, 'false')).toEqual({ chat_id: groupChat, enabled: false })
+      await expect(mentions).not.toBeChecked({ timeout: 60_000 })
+      await page.screenshot({ path: testInfo.outputPath('native-web-private-mention-setting.png'), fullPage: true })
+      await page.reload()
+      await openMute()
+      await expect(mentions).not.toBeChecked()
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+      await expect(page.locator('button[title*="#/nhash1"]')).toBeVisible()
+      expect(uploadAuthorizations.some(event => event.pubkey !== owner && event.kind === 24242 && verifyEvent(event))).toBe(true)
     } finally {
+      if (owner && groupChat) {
+        const headKey = `iris-chat-sync-record-v1:${owner}:private-state:` + JSON.stringify(['privateEvent', 'mentionNotifications', groupChat])
+        const nativeHead = await execute('python3', ['-c', 'import sqlite3,sys,json; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro", uri=True); print(json.dumps(c.execute("SELECT value FROM app_meta WHERE key=?", (sys.argv[2],)).fetchone()))', path.join(directory, 'core.sqlite3'), headKey]).catch(error => ({ stdout: String(error) }))
+        writeFileSync(testInfo.outputPath('native-private-setting-head.json'), nativeHead.stdout)
+        const debug = await run('debug', '--wait-ms', '0').catch(error => ({ error: String(error) }))
+        writeFileSync(testInfo.outputPath('native-runtime-diagnostics.json'), JSON.stringify(debug, null, 2))
+      }
+      writeFileSync(testInfo.outputPath('connection-diagnostics.json'), JSON.stringify({ diagnostics, seedPeers: seed.connectedPeers(), serviceErrors, serviceExit: service?.exitCode, serviceSignal: service?.signalCode }, null, 2))
       await testInfo.attach('connection-diagnostics', { body: JSON.stringify({ diagnostics, seedPeers: seed.connectedPeers(), serviceErrors }, null, 2), contentType: 'application/json' })
       await context.close()
       if (service?.exitCode === null) {

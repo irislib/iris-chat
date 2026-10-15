@@ -26,7 +26,6 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     const context = await browser.newContext({ baseURL, permissions: ['microphone', 'camera', 'notifications'], viewport: { width: 1100, height: 780 }, serviceWorkers: 'block' })
     contexts.push(context)
     await observeCallMedia(context)
-    await useTestRelay(context, testRelayUrl)
     await context.addInitScript(({ seed, stun }) => {
       localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seed], stunServers: [stun] }))
     }, { seed: seed.url, stun: stun.url })
@@ -125,6 +124,8 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
       if (!['127.0.0.1', 'localhost'].includes(new URL(socket.url()).hostname)) { socket.close(); return }
       socket.connectToServer()
     })
+    // Install local encrypted-invitation fixtures after the blanket Internet block.
+    await useTestRelay(context, testRelayUrl)
     const page = await context.newPage()
     const userIndex = contexts.length
     page.on('console', message => logs.push(`${userIndex} @ ${Date.now()}: ${message.text()}`))
@@ -274,7 +275,8 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     }
     await a.screenshot({ path: 'work/calls/active-video.png' })
     // Real UDP STUN receives requests but sends no replies; HTTP interception
-    // alone cannot establish this. Only local host candidates can succeed.
+    // alone cannot establish this. Direct ICE checks may also learn peer-reflexive
+    // candidates (RFC 5245 §7.2.1.3), without a STUN server response.
     await expect.poll(stun.requests).toBeGreaterThan(0)
     for (const page of [a, b]) {
       await expect.poll(async () => (await directStats(page)).received).toBeGreaterThan(65536)
@@ -283,7 +285,7 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
       for (const peer of peers) {
         expect(peer.configuration.iceServers?.flatMap(server => typeof server.urls === 'string' ? [server.urls] : server.urls)).toEqual([stun.url])
         expect(peer.stats.filter(stat => stat.type === 'local-candidate' || stat.type === 'remote-candidate')
-          .every(candidate => candidate.candidateType === 'host')).toBe(true)
+          .every(candidate => candidate.candidateType === 'host' || candidate.candidateType === 'prflx')).toBe(true)
       }
     }
     await testRelay.stop()

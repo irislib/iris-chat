@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { getEventHash } from 'nostr-tools'
+import { buildPrivateSetting } from 'nostr-social-graph/privateEvents'
 import type { OnEventMeta, Rumor } from 'nostr-double-ratchet'
 import { createPrivateContactSync, editPrivateContact, parsePrivateContactControl, privateContactDocuments } from 'nostr-social-graph/privateContactSyncV2'
 import { isChatMuteState } from './chatMuteSync'
@@ -144,6 +145,18 @@ interop('iris-chat-rs device-sync interop', () => {
     const packet = { v: 1 as const, type: 'historyRecords' as const, session: 'f'.repeat(32), records: [record], requested: [deviceSyncRecordId(record)] }
     expect(new TextDecoder().decode(runNative('record-id', new TextEncoder().encode(JSON.stringify(record))))).toBe(deviceSyncRecordId(record))
     expect(parseDeviceSyncPacket(runNative('roundtrip', encodeDeviceSyncPacket(packet)), owner)).toEqual(packet)
+  })
+
+  it('agrees with native typed private mention settings and their reconciliation identities', () => {
+    for (const enabled of [false, true]) {
+      const chatId = 'group:friends'
+      const event = buildPrivateSetting(owner, 'mentionNotifications', chatId, { chatId, enabled, updatedAtMs: 100 })
+      const record: DeviceSyncRecord = { type: 'privateEvent', event }
+      const id = deviceSyncRecordId(record)
+      const packet = { v: 1 as const, type: 'historyRecords' as const, session: 'f'.repeat(32), records: [record], requested: [id] }
+      expect(new TextDecoder().decode(runNative('record-id', new TextEncoder().encode(JSON.stringify(record))))).toBe(id)
+      expect(parseDeviceSyncPacket(runNative('roundtrip', encodeDeviceSyncPacket(packet)), owner)).toEqual(packet)
+    }
   })
 
   it('extracts the service, record, page, and framing bounds from native source', () => {

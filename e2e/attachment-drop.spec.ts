@@ -6,6 +6,8 @@ async function openChat(page: Page) {
   await page.goto('/')
   await page.getByRole('button', { name: 'Go', exact: true }).click()
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+  // Finish the separate private invitation upload before holding file uploads.
+  await expect(page.locator('button[title*="#/nhash1"]')).toBeVisible()
   await page.getByPlaceholder('Paste invite link').fill(nip19.npubEncode('c'.repeat(64)))
   await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
 }
@@ -51,8 +53,8 @@ async function drop(page: Page, names: string[], hover = false) {
 }
 
 for (const group of [false, true]) test(`whole ${group ? 'group' : 'direct'} chat stages every file and caption until Send`, async ({ page }, testInfo) => {
-  const upload = await uploads(page)
   await openChat(page)
+  const upload = await uploads(page)
   if (group) {
     await page.getByRole('button', { name: 'New Chat', exact: true }).click()
     await page.getByRole('button', { name: 'Create Group', exact: true }).click()
@@ -90,8 +92,8 @@ for (const group of [false, true]) test(`whole ${group ? 'group' : 'direct'} cha
 })
 
 test('late upload cannot reappear after removal or a chat switch', async ({ page }) => {
-  const upload = await uploads(page)
   await openChat(page)
+  const upload = await uploads(page)
   await drop(page, ['Old.txt'])
   await expect.poll(upload.count).toBe(1)
   await page.getByRole('button', { name: 'Remove attachment', exact: true }).click()
@@ -110,8 +112,8 @@ test('late upload cannot reappear after removal or a chat switch', async ({ page
 })
 
 test('folder and URL drops do not upload or replace the caption', async ({ page }) => {
-  const upload = await uploads(page)
   await openChat(page)
+  const upload = await uploads(page)
   await page.getByPlaceholder('Type a message...').fill('Keep my caption')
   await page.getByTestId('chat-file-drop-area').evaluate(element => {
     const directory = new DataTransfer()

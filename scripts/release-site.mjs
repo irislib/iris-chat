@@ -210,6 +210,12 @@ export function createReleasePlan(options) {
         'src/lib/messageMutationHistory.test.ts',
         'src/lib/sessionManagerMutationStorage.test.ts',
         'src/lib/deviceHistoryRecords.test.ts',
+        'src/lib/mentionNotificationSettings.test.ts',
+        'src/lib/readNotifications.test.ts',
+        'src/lib/composerCompletion.test.ts',
+        'src/lib/messagePreview.test.ts',
+        'src/lib/deviceSync.test.ts',
+        'src/lib/hashtreeSigner.test.ts',
       ],
       cwd: appDir,
     },
@@ -222,7 +228,7 @@ export function createReleasePlan(options) {
     {
       id: 'test-e2e-nip07',
       label: `E2E-test ${profile.appName} joining, message changes, direct files and private contacts`,
-      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/nip07.spec.ts', 'e2e/contact-memory.spec.ts', 'e2e/private-contact-sync.spec.ts', 'e2e/web-join.spec.ts', 'e2e/direct-file-first.spec.ts', 'e2e/message-mutations.spec.ts', 'e2e/link-device.spec.ts', '--workers=2', '--retries=0'],
+      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/nip07.spec.ts', 'e2e/contact-memory.spec.ts', 'e2e/private-contact-sync.spec.ts', 'e2e/web-join.spec.ts', 'e2e/direct-file-first.spec.ts', 'e2e/message-mutations.spec.ts', 'e2e/link-device.spec.ts', 'e2e/invite-roleplay.spec.ts', 'e2e/composer-identity.spec.ts', 'e2e/composer-completions.spec.ts', 'e2e/timed-mute.spec.ts', 'e2e/notification-navigation.spec.ts', 'e2e/sw-push-handler.spec.ts', '--workers=2', '--retries=0'],
       cwd: appDir,
     },
     {

@@ -39,6 +39,29 @@ export async function useTestRelay(context: BrowserContext, relayUrlOrUrls: stri
   let blobs = inviteBlobs.get(relayUrls[0])
   if (!blobs) { blobs = new Map(); inviteBlobs.set(relayUrls[0], blobs) }
   const sharedBlobs = blobs
+  // WebKit's interception protocol omits Blob request bodies. Capture that same
+  // encrypted upload at fetch's boundary instead, retaining real hash validation
+  // and sharing the bytes with the ordinary read fixture across contexts.
+  if (context.browser()?.browserType().name() === 'webkit') {
+    await context.exposeBinding('__irisTestEncryptedUpload', (_source, bytes: number[]) => {
+      const data = Buffer.from(bytes), hash = createHash('sha256').update(data).digest('hex')
+      sharedBlobs.set(hash, data)
+      return { sha256: hash, size: data.length, url: `https://cdn.iris.to/${hash}` }
+    })
+    await context.addInitScript(() => {
+      const original = window.fetch.bind(window)
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+        if (url === 'https://upload.iris.to/upload' && method.toUpperCase() === 'PUT') {
+          const body = await new Request(input, init).arrayBuffer()
+          const capture = (window as unknown as { __irisTestEncryptedUpload: (bytes: number[]) => Promise<unknown> }).__irisTestEncryptedUpload
+          return new Response(JSON.stringify(await capture(Array.from(new Uint8Array(body)))), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        return original(input, init)
+      }
+    })
+  }
   await context.route(/^https:\/\/(?:upload|cdn)\.iris\.to\/(?:upload|[a-f0-9]{64})$/, async route => {
     const request = route.request(), path = new URL(request.url()).pathname.slice(1)
     if (request.method() === 'PUT' && path === 'upload') {

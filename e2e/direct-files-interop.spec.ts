@@ -39,6 +39,7 @@ test.describe('browser ↔ native direct files', () => {
       let native: NativeDirectFiles | undefined
       let context: BrowserContext | undefined
       const logs: string[] = [], writes: string[] = []
+      let transferring = false
       const offers: string[] = []
       try {
         await control.start()
@@ -70,6 +71,7 @@ test.describe('browser ↔ native direct files', () => {
         }, { key: Buffer.from(webKey).toString('hex'), seedUrl: seed.url })
         await context.route('**/*', route => {
           const url = new URL(route.request().url())
+          if (!transferring && url.href === 'https://upload.iris.to/upload' && route.request().method() === 'PUT') return route.fallback()
           if (['POST', 'PUT', 'PATCH'].includes(route.request().method())) writes.push(url.toString())
           return ['localhost', '127.0.0.1'].includes(url.hostname) ? route.continue() : route.abort()
         })
@@ -80,6 +82,9 @@ test.describe('browser ↔ native direct files', () => {
         await page.goto(baseURL!)
         await expect(page.getByRole('button', { name: 'New Chat', exact: true })).toBeVisible()
         await registerBrowser(page)
+        await page.getByRole('button', { name: 'New Chat', exact: true }).click()
+        await expect(page.locator('button[title*="#/nhash1"]')).toBeVisible()
+        transferring = true
         await expect.poll(() => testRelay.publishedEvents.filter(event => event.kind === 37368 && event.pubkey === webOwner).length).toBeGreaterThan(0)
         const roster = testRelay.publishedEvents.filter(event => event.kind === 37368 && event.pubkey === webOwner).sort((a, b) => b.created_at - a.created_at)[0]!
         const devices = AppKeys.fromEvent(roster as any, webKey).getAllDevices()

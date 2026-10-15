@@ -338,7 +338,7 @@ test('choosing the browser preserves the shared chat without a download topbar a
   await expect(page.getByRole('link', { name: 'Download for iPhone', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Open Iris', exact: true })).toHaveCount(0)
   await page.reload()
-  await page.getByTestId('sidebar-chat-list').getByRole('button').filter({ hasText: 'No messages yet' }).click()
+  // Reload restores the selected chat, including when the mobile sidebar is hidden.
   await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
   expect(new URL(page.url()).hash).toMatch(/^#chat-/)
   await expect(suggestion(page)).toHaveCount(0)

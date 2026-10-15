@@ -23,7 +23,7 @@ async function safeReload(page: Page) {
 // Rewrites public invite URLs to the current test server.
 async function getInviteUrl(page: Page): Promise<string> {
   await registerDevice(page)
-  const copyButton = page.locator('button[title*="#"]').first()
+  const copyButton = page.locator('button[title*="#/nhash1"]').first()
   await expect(copyButton).toBeVisible()
   const url = await copyButton.getAttribute('title')
   if (!url) throw new Error('Could not get invite URL')
@@ -352,7 +352,7 @@ test.describe('iris chat', () => {
         await safeReload(page2)
 
         // Should see chat in list with own message preview
-        await expect(page2.getByText('My own message')).toBeVisible()
+        await expect(page2.getByTestId('sidebar-chat-list').getByText('My own message')).toBeVisible()
 
         // Open the chat by clicking on it
         await page2.locator('button').filter({ hasText: 'My own message' }).click()
@@ -560,7 +560,7 @@ test.describe('iris chat', () => {
       // Should auto-create invite with default label
       await expect(page.getByText('Invite #1')).toBeVisible()
       // Should show copy button with URL
-      await expect(page.locator('button[title*="#"]')).toBeVisible()
+      await expect(page.locator('button[title*="#/nhash1"]')).toBeVisible()
       await page.getByTitle('Show QR Code').click()
       await expect(page.getByRole('img', { name: 'QR Code' })).toBeVisible()
     })
@@ -573,10 +573,10 @@ test.describe('iris chat', () => {
       await page.getByRole('button', { name: 'New Chat' }).click()
 
       // Click copy button (has the URL in title)
-      await page.locator('button[title*="#"]').click()
+      await page.locator('button[title*="#/nhash1"]').click()
 
       // Should show checkmark after copy
-      await expect(page.locator('button:has(.i-carbon-checkmark)')).toBeVisible()
+      await expect(page.locator('button[title*="#/nhash1"]:has(.i-carbon-checkmark)')).toBeVisible()
 
       // Verify clipboard contains invite URL
       const clipboardText = await page.evaluate(() => navigator.clipboard.readText())
@@ -1799,7 +1799,7 @@ test.describe('iris chat', () => {
         await page1.getByRole('button', { name: 'Back' }).click()
         await page1.getByTestId('sidebar-tab-all').click()
         // Verify sidebar shows the message preview before reload
-        await expect(page1.getByText('Before reload')).toBeVisible()
+        await expect(page1.getByTestId('sidebar-chat-list').getByText('Before reload')).toBeVisible()
         // Small delay to ensure IndexedDB async save completes
         await page1.waitForTimeout(200)
         // Reload page 1
@@ -1809,7 +1809,7 @@ test.describe('iris chat', () => {
         await expect(page1.getByRole('button', { name: 'New Chat' })).toBeVisible()
 
         // Should see the chat in the list with message preview
-        await expect(page1.getByText('Before reload')).toBeVisible()
+        await expect(page1.getByTestId('sidebar-chat-list').getByText('Before reload')).toBeVisible()
 
         // Click on the chat to open it
         await page1.locator('button').filter({ hasText: 'Before reload' }).click()

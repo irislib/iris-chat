@@ -70,7 +70,7 @@ test('edit history, deletion and privacy preference survive reload on desktop an
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await remove(page, 'Meet at eight')
   await page.reload()
-  if (!await bubble(page, 'Message deleted').isVisible()) await page.getByTestId('sidebar-chat-list').getByRole('button').first().click()
+  // Reload restores this route asynchronously; a mobile sidebar is hidden.
   await expect(bubble(page, 'Message deleted')).toBeVisible()
   await page.goto('/#settings/privacy')
   const preference = page.getByRole('switch', { name: 'Allow others to delete their messages' })
@@ -96,7 +96,7 @@ test('group messages use stable IDs for immediate edits and deletion', async ({ 
   await expect(bubble(page, 'Bring dinner').getByRole('button', { name: 'Edit history' })).toBeVisible()
   await remove(page, 'Bring dinner')
   await page.reload()
-  if (!await bubble(page, 'Message deleted').isVisible()) await page.getByTestId('sidebar-chat-list').getByRole('button').first().click()
+  // Reload restores this route asynchronously; a mobile sidebar is hidden.
   await expect(bubble(page, 'Message deleted')).toBeVisible()
 })
 

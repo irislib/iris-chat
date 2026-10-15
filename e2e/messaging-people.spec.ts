@@ -9,7 +9,10 @@ const SIRIUS = '4523be58d395b1b196a9b8c82b038b6895cb02b683d0c253a955068dba1facd0
 test.beforeEach(async ({ page }) => {
   // The remote index has its own real-tree tests; keep these browser scenarios
   // deterministic while exercising cached discovery and the local relay.
-  await page.route(/https:\/\/(cdn|upload|hashtree)\.iris\.to\//, route => route.abort())
+  await page.route(/https:\/\/(cdn|upload|hashtree)\.iris\.to\//, route =>
+    route.request().method() === 'PUT' && route.request().url() === 'https://upload.iris.to/upload'
+      ? route.fallback() // The shared fixture stores encrypted invites locally.
+      : route.abort())
 })
 
 async function publish(url: string, events: ReturnType<typeof finalizeEvent>[]) {

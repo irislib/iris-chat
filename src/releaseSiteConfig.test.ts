@@ -57,6 +57,12 @@ describe('release site config', () => {
       'e2e/direct-file-first.spec.ts',
       'e2e/message-mutations.spec.ts',
       'e2e/link-device.spec.ts',
+      'e2e/invite-roleplay.spec.ts',
+      'e2e/composer-identity.spec.ts',
+      'e2e/composer-completions.spec.ts',
+      'e2e/timed-mute.spec.ts',
+      'e2e/notification-navigation.spec.ts',
+      'e2e/sw-push-handler.spec.ts',
       '--workers=2',
       '--retries=0',
     ])

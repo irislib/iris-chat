@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.6.48 - 2026-10-15
+
+- Mention people with `@` and add emoji with `:` in direct and group chats. Mention identities survive editing, undo, and redo, including people with the same name.
+- Choose whether mentions can notify in muted groups, with the preference synced privately between compatible linked devices. In browsers, muted mentions notify only while the app is running.
+- Clear the matching notification when a read arrives from another device, without clearing other unread messages.
+- Show readable attachment labels in chat lists and notifications, and clearer clickable links.
+- Share private personal and group invitation links with reliable group admission.
+
 ## 2.6.46 - 2026-10-08
 
 - Show clearer device-link errors without waiting for a timeout.

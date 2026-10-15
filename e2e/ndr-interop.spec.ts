@@ -18,6 +18,10 @@ const NDR_CWD =
 const NDR_MANIFEST = path.join(NDR_CWD, 'Cargo.toml')
 const NDR_BIN = resolveNativeCliBin()
 const DEVICE_LINK_PATTERN = /^nostrconnect:\/\//
+let nativeInviteBlobs: Awaited<ReturnType<typeof serveInviteBlobs>> | undefined
+// The browser's encrypted invite fixture must also be readable by native clients.
+test.beforeEach(async ({ testRelayUrl }) => { nativeInviteBlobs = await serveInviteBlobs(testRelayUrl) })
+test.afterEach(async () => { await nativeInviteBlobs?.close(); nativeInviteBlobs = undefined })
 
 function skipIfNdrWorkspaceMissing() {
   if (fs.existsSync(NDR_MANIFEST)) return
@@ -478,6 +482,10 @@ async function waitForRelayConnectionCount(
 
 function createNdrDataDir(relayUrls: string[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ndr-interop-'))
+  if (nativeInviteBlobs) {
+    fs.mkdirSync(path.join(dir, 'hashtree'))
+    fs.writeFileSync(path.join(dir, 'hashtree', 'config.toml'), `[blossom]\nread_servers = ["${nativeInviteBlobs.url}"]\nwrite_servers = []\n`)
+  }
   fs.writeFileSync(
     path.join(dir, 'config.json'),
     JSON.stringify({ relays: relayUrls })
@@ -873,7 +881,7 @@ for (const accountMode of ['created', 'restored'] as const) {
       await registerDevice(page)
       await waitForWebDeviceRoster(page, testRelay)
       await page.getByRole('button', { name: 'New Chat' }).click()
-      const copy = page.locator('button[title*="#"]').first()
+      const copy = page.locator('button[title*="#/nhash1"]').first()
       await expect(copy).toBeVisible()
       const inviteUrl = await copy.getAttribute('title')
       expect(inviteUrl).toBeTruthy()
@@ -1357,7 +1365,7 @@ test('native joins private hashtree personal and group invitations from the brow
   const dirs = [createNdrDataDir([testRelayUrl]), createNdrDataDir([testRelayUrl])]
   try {
     for (const dir of dirs) {
-      fs.mkdirSync(path.join(dir, 'hashtree'))
+      fs.mkdirSync(path.join(dir, 'hashtree'), { recursive: true })
       fs.writeFileSync(path.join(dir, 'hashtree', 'config.toml'), `[blossom]\nread_servers = ["${blobs.url}"]\nwrite_servers = []\n`)
       await runNdr(['account', 'create'], dir)
     }
