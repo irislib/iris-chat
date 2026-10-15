@@ -18,6 +18,7 @@
  * his subscriptions simply receive nothing.
  */
 
+import { writeFileSync } from 'node:fs'
 import { test, expect, useTestRelay } from './fixtures'
 import type { Page, BrowserContext, Worker } from '@playwright/test'
 
@@ -218,9 +219,12 @@ test.use({ channel: 'chromium' })
 test.describe('SW push handler', () => {
   test.setTimeout(180_000)
 
-  test('decrypts inner rumors and shows kind-specific notifications', async ({ browser, testRelay, testRelayUrl }) => {
+  test('decrypts inner rumors and shows kind-specific notifications', async ({ browser, testRelay, testRelayUrl }, testInfo) => {
+    const diagnostics: string[] = []
     const aliceContext = await browser.newContext()
     const bobContext = await browser.newContext()
+    bobContext.on('console', message => diagnostics.push(message.text()))
+    bobContext.on('weberror', error => diagnostics.push(error.error().message))
     await useTestRelay(aliceContext, testRelayUrl)
     await useTestRelay(bobContext, testRelayUrl)
     // Typing is private by default; this scenario explicitly exercises the
@@ -259,6 +263,9 @@ test.describe('SW push handler', () => {
       // 2. Re-point Bob to a dead relay and reload, so his main app cannot
       //    consume the events Alice is about to publish (which would
       //    advance ratchet state and starve the SW push handler).
+      // The app now restores the open conversation on reload. Explicitly leave it
+      // so the notification test does not trip its intentional engagement guard.
+      await bob.getByRole('button', { name: 'Go to home', exact: true }).click()
       await configureRelays(bobContext, [DEAD_RELAY_URL])
       await bob.reload({ waitUntil: 'domcontentloaded' })
       await waitForServiceWorkerReady(bob)
@@ -389,6 +396,7 @@ test.describe('SW push handler', () => {
         `expected empty-payload fallback notification, got ${JSON.stringify(notifications)}`
       ).toBeTruthy()
     } finally {
+      writeFileSync(testInfo.outputPath('worker-diagnostics.json'), JSON.stringify(diagnostics, null, 2))
       // Clear input to avoid throttled typing leaking into other tests.
       await alice.getByPlaceholder('Type a message...').fill('').catch(() => {})
       await aliceContext.close()

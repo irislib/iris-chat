@@ -540,7 +540,7 @@
     selectedChat = null
     currentChat.set(null)
     selectedGroupId = null
-    if (currentView !== 'chat' || window.location.hash.startsWith('#group-')) {
+    if (currentView !== 'chat' || window.location.hash) {
       navigateTo('chat')
     }
     mobileView = 'main'
@@ -554,7 +554,7 @@
     selectedGroupId = null
     // Tell service worker no chat is open
     postToServiceWorker({ type: 'CHAT_OPENED', chatId: null })
-    if (currentView !== 'chat') {
+    if (currentView !== 'chat' || window.location.hash) {
       navigateTo('chat')
     }
     mobileView = 'sidebar'

@@ -42,6 +42,19 @@ test('notification taps select the exact chat warm and after startup, and reject
   await expect(page).toHaveURL(new RegExp(`#profile-${second}$`))
 })
 
+test('leaving a direct chat clears its route so reload does not reopen or mark it read', async ({ page }) => {
+  await login(page)
+  const peer = 'c'.repeat(64)
+  await contact(page, peer, 'Keep this draft')
+  await expect(page).toHaveURL(new RegExp(`#chat-${peer}$`))
+  if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Back', exact: true }).click()
+  else await page.getByRole('button', { name: 'Go to home', exact: true }).click()
+  await expect(page).not.toHaveURL(/#chat-/)
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'New Chat', exact: true })).toBeVisible()
+  await expect(page.getByPlaceholder('Type a message...')).not.toBeVisible()
+})
+
 test('Log out is cancelable and clears this browser identity and chat data', async ({ page }) => {
   await login(page)
   await contact(page, 'c'.repeat(64), 'Private unsent draft')
@@ -50,6 +63,8 @@ test('Log out is cancelable and clears this browser identity and chat data', asy
     localStorage.setItem('iris-chat-expirations', JSON.stringify({ expirations: { oldPeer: 60 } }))
   })
   await page.reload()
+  await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
+  if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Back', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   page.once('dialog', async dialog => { expect(dialog.message()).toContain('other devices are not affected'); await dialog.dismiss() })

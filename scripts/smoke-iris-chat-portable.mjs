@@ -15,6 +15,11 @@ async function main() {
     screenshotPath,
     async validatePage(page) {
       await page.getByText('Secure, private messaging').waitFor({ state: 'visible', timeout: 15000 })
+      // Exercise the built classic worker, including its shared notification imports.
+      await page.evaluate(async () => {
+        await navigator.serviceWorker.register('./service-worker.js')
+        await navigator.serviceWorker.ready
+      })
     },
   })
 }

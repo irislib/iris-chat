@@ -1,3 +1,4 @@
+import { dismissReadNotification } from './readNotifications'
 import { blockedContacts, replaceBlockedContacts } from './privateBlockProjection'
 import { writable } from 'svelte/store'
 import { parsePrivateEvent, type PrivateEvent } from 'nostr-social-graph/privateEvents'
@@ -117,7 +118,7 @@ export async function applyMessageRead(owner: string, chatId: string, messageId:
   if (updated) changed()
   // Also dismiss on replay; a browser enqueue may have raced the first read.
   if (authorized() && (await readState(owner,chatId,messageId))?.createdAtSecs === read.createdAtSecs)
-    await (await import('./readNotifications')).dismissReadNotification({ownerPubkey:owner,chatId,messageId,createdAtSecs:read.createdAtSecs})
+    await dismissReadNotification({ownerPubkey:owner,chatId,messageId,createdAtSecs:read.createdAtSecs})
 }
 export async function projectMessageRead(owner: string, message: StoredMessage): Promise<StoredMessage> {
   const read = await readState(owner, message.sessionId, message.id)
