@@ -10,6 +10,8 @@ class MemoryFipsEndpoint implements FipsDatagramEndpoint {
   dropNext = false
   dropAll = false
   sourceIdentity?: string
+  held?: Array<() => void>
+  holdOnly?: (payload: Uint8Array) => boolean
 
   constructor(readonly id: string) {}
 
@@ -31,12 +33,14 @@ class MemoryFipsEndpoint implements FipsDatagramEndpoint {
     if (this.remote?.id !== args.dst) throw new Error('unknown peer')
     const handler = this.remote.handlers.get(args.dstPort)
     if (!handler) throw new Error('missing service')
-    queueMicrotask(() => void handler({
+    const deliver = () => void handler({
       src: this.sourceIdentity ?? this.id,
       srcPort: args.srcPort ?? 0,
       dstPort: args.dstPort,
       payload: args.payload.slice(),
-    }))
+    })
+    if (this.held && (!this.holdOnly || this.holdOnly(args.payload))) this.held.push(deliver)
+    else queueMicrotask(deliver)
   }
 }
 
@@ -157,6 +161,115 @@ describe('DeviceSyncTcp', () => {
     } finally {
       await tcp.dispose()
       vi.useRealTimers()
+    }
+  })
+
+  it.each([[false, false], [true, false], [false, true], [true, true]])('settles crossing handshakes; higher-first=%s, delayed final ACK=%s', async (higherFirst: boolean, delayedAck: boolean) => {
+    vi.useFakeTimers()
+    const aEndpoint = new MemoryFipsEndpoint('a'.repeat(64)), bEndpoint = new MemoryFipsEndpoint('b'.repeat(64))
+    aEndpoint.remote = bEndpoint; bEndpoint.remote = aEndpoint
+    const held: Array<() => void> = []
+    aEndpoint.held = held; bEndpoint.held = held
+    const received: string[] = [], connected: string[] = []
+    const options = (endpoint: MemoryFipsEndpoint) => ({ endpoint, localPeer: endpoint.id, port: 7369, maxRecordBytes: 1024,
+      onRecord: (_peer: string, bytes: Uint8Array) => { received.push(new TextDecoder().decode(bytes)) },
+      onConnected: () => { connected.push(endpoint.id) },
+    })
+    const first = new DeviceSyncTcp(options(higherFirst ? bEndpoint : aEndpoint))
+    const second = new DeviceSyncTcp(options(higherFirst ? aEndpoint : bEndpoint))
+    const a = higherFirst ? second : first, b = higherFirst ? first : second
+    try {
+      a.setPeer(bEndpoint.id, true); b.setPeer(aEndpoint.id, true)
+      const sends = [a.send(bEndpoint.id, new TextEncoder().encode('from a')).catch(() => {}),
+        b.send(aEndpoint.id, new TextEncoder().encode('from b')).catch(() => {})]
+      // Routing can delay the original SYN beyond the passive recovery grace.
+      await vi.advanceTimersByTimeAsync(2_100)
+      aEndpoint.held = undefined; bEndpoint.held = undefined
+      const late: Array<() => void> = []
+      if (delayedAck) {
+        bEndpoint.held = late
+        bEndpoint.holdOnly = payload => {
+          const segment = Segment.decode(payload)
+          return segment.srcPort !== 7369 && segment.flags.has(Flags.Ack) && !segment.flags.has(Flags.Syn)
+        }
+      }
+      for (const deliver of held) deliver()
+      if (delayedAck) {
+        await vi.advanceTimersByTimeAsync(250)
+        expect(late.length).toBeGreaterThan(0)
+        expect(connected).toContain(aEndpoint.id)
+        bEndpoint.held = undefined
+        for (const deliver of late) deliver()
+      }
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(received.sort()).toEqual(['from a', 'from b'])
+      expect([...new Set(connected)].sort()).toEqual([aEndpoint.id, bEndpoint.id])
+      expect(connected.length).toBeLessThanOrEqual(4)
+      const settled = connected.length
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(connected.length).toBe(settled)
+      expect(received.sort()).toEqual(['from a', 'from b'])
+      await Promise.all(sends)
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()]); vi.useRealTimers()
+    }
+  })
+
+  it('keeps a canonical SYN in flight and never writes app records on a recovery probe', async () => {
+    vi.useFakeTimers()
+    const aEndpoint = new MemoryFipsEndpoint('a'.repeat(64)), bEndpoint = new MemoryFipsEndpoint('b'.repeat(64))
+    aEndpoint.remote = bEndpoint; bEndpoint.remote = aEndpoint
+    const held: Array<() => void> = []
+    aEndpoint.held = held
+    aEndpoint.holdOnly = payload => {
+      const flags = Segment.decode(payload).flags
+      return flags.has(Flags.Syn) && !flags.has(Flags.Ack)
+    }
+    const received: string[] = [], connected: string[] = []
+    const options = (endpoint: MemoryFipsEndpoint) => ({ endpoint, localPeer: endpoint.id, port: 7369, maxRecordBytes: 1024,
+      onRecord: (_peer: string, bytes: Uint8Array) => { received.push(new TextDecoder().decode(bytes)) },
+      onConnected: () => { connected.push(endpoint.id) },
+    })
+    const a = new DeviceSyncTcp(options(aEndpoint)), b = new DeviceSyncTcp(options(bEndpoint))
+    try {
+      a.setPeer(bEndpoint.id, true); b.setPeer(aEndpoint.id, true)
+      const sends = [a.send(bEndpoint.id, new TextEncoder().encode('from a')).catch(() => {}),
+        b.send(aEndpoint.id, new TextEncoder().encode('from b')).catch(() => {})]
+      await vi.advanceTimersByTimeAsync(2_100)
+      expect(connected).toEqual([])
+      expect(received).toEqual([])
+      aEndpoint.held = undefined
+      for (const deliver of held) deliver()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(connected.sort()).toEqual([aEndpoint.id, bEndpoint.id])
+      expect(received.sort()).toEqual(['from a', 'from b'])
+      await Promise.all(sends)
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()]); vi.useRealTimers()
+    }
+  })
+
+  it('delivers an acknowledged complete frame before retiring a peer-closed stream', async () => {
+    vi.useFakeTimers()
+    const aEndpoint = new MemoryFipsEndpoint('a'.repeat(64)), bEndpoint = new MemoryFipsEndpoint('b'.repeat(64))
+    aEndpoint.remote = bEndpoint; bEndpoint.remote = aEndpoint
+    const received: string[] = []
+    const options = (endpoint: MemoryFipsEndpoint) => ({ endpoint, localPeer: endpoint.id, port: 7369, maxRecordBytes: 1024,
+      onRecord: (_peer: string, bytes: Uint8Array) => { received.push(new TextDecoder().decode(bytes)) },
+    })
+    const a = new DeviceSyncTcp(options(aEndpoint)), b = new DeviceSyncTcp(options(bEndpoint))
+    try {
+      a.setPeer(bEndpoint.id, true); b.setPeer(aEndpoint.id, true)
+      await vi.advanceTimersByTimeAsync(100)
+      const sent = a.send(bEndpoint.id, new TextEncoder().encode('final frame'))
+      await vi.advanceTimersByTimeAsync(0)
+      await sent
+      expect(received).toEqual([])
+      a.setPeer(bEndpoint.id, false)
+      await vi.advanceTimersByTimeAsync(25)
+      expect(received).toEqual(['final frame'])
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()]); vi.useRealTimers()
     }
   })
 
@@ -287,12 +400,13 @@ describe('DeviceSyncTcp', () => {
       await vi.advanceTimersByTimeAsync(100)
       expect(connected).toBe(1)
       aEndpoint.dropAll = true
-      await a.send(bEndpoint.id, new TextEncoder().encode('lost-with-stream'))
+      const lost = a.send(bEndpoint.id, new TextEncoder().encode('lost-with-stream')).catch(() => undefined)
       await vi.advanceTimersByTimeAsync(250)
       aEndpoint.dropAll = false
       await vi.advanceTimersByTimeAsync(1_000)
       expect(connected).toBeGreaterThan(1)
-      expect(received).toEqual(['recover'])
+      expect(received).toEqual(['recover', 'lost-with-stream'])
+      await lost
     } finally {
       await Promise.all([a.dispose(), b.dispose()])
       vi.useRealTimers()

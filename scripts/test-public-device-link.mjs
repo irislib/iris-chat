@@ -23,6 +23,7 @@ let phoneLog
 let passed = false
 let phoneExit = null
 let relays = []
+let deviceSyncOrder = null
 try {
   const context = await browser.newContext()
   if (process.env.IRIS_LINK_TEST_FIPS_SEEDS) {
@@ -78,6 +79,27 @@ try {
     await chat.click()
     await expect(page.getByTestId('message-bubble-body').filter({ hasText: body })).toHaveCount(1)
     console.log('Pre-link history survives reload exactly once')
+    // Public device identities only. Record the actual physical run's ordering;
+    // deterministic live sync in both orders is covered by native-link-history.
+    deviceSyncOrder = await page.evaluate(async () => {
+      const database = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('iris-chat')
+        request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
+      })
+      const read = key => new Promise((resolve, reject) => {
+        const request = database.transaction('sessionManager').objectStore('sessionManager').get(key)
+        request.onsuccess = () => resolve(request.result?.value); request.onerror = () => reject(request.error)
+      })
+      try {
+        const browserDevice = await read('v1/device-manager/identity-public-key')
+        const proof = await read('iris/signer-device-authorization')
+        if (typeof browserDevice !== 'string' || !/^[0-9a-f]{64}$/.test(browserDevice) || !proof?.pubkey) return null
+        const pairs = await read(`device-history-pairs:${proof.pubkey}:${browserDevice}`)
+        return { browserDevice, approvers: (Array.isArray(pairs) ? pairs : [])
+          .filter(pair => pair.role === 'inbound' && /^[0-9a-f]{64}$/.test(pair.peer))
+          .map(pair => ({ device: pair.peer, canonicalDialer: browserDevice < pair.peer ? 'browser' : 'phone' })) }
+      } finally { database.close() }
+    }).catch(error => ({ error: String(error) }))
     passed = true
   } catch (error) {
     fs.writeFileSync(path.join(run, 'browser-failure.txt'), `${error}\n${await page.locator('body').innerText()}`)
@@ -90,7 +112,7 @@ try {
 } finally {
   if (childResult) phoneExit = await childResult
   if (phoneLog) await new Promise(resolve => phoneLog.end(resolve))
-  const result = { passed: passed && phoneExit === 0, phoneExit, relays, errors }
+  const result = { passed: passed && phoneExit === 0, phoneExit, relays, errors, deviceSyncOrder }
   fs.writeFileSync(path.join(run, 'result.json'), JSON.stringify(result, null, 2))
   fs.writeFileSync(path.join(run, 'browser-diagnostics.json'), JSON.stringify(diagnostics, null, 2))
   await browser.close()

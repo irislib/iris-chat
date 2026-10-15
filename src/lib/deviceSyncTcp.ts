@@ -1,6 +1,8 @@
 import {
   FipsTcpEndpoint,
+  MarkerStatus,
   State,
+  type SendMarker,
   type Config,
   type ConnectionId,
   type FipsDatagramEndpoint,
@@ -17,6 +19,7 @@ const MAX_PENDING_BYTES_TOTAL = 16 * 1024 * 1024
 interface PendingWrite {
   bytes: Uint8Array
   offset: number
+  marker?: SendMarker
   resolve: () => void
   reject: (error: Error) => void
 }
@@ -40,6 +43,7 @@ export class DeviceSyncTcp {
   private readonly passiveDials = new Map<string, { after: number; delay: number }>()
   private readonly connections = new Map<string, ConnectionId>()
   private readonly established = new Set<ConnectionId>()
+  private readonly probes = new Set<ConnectionId>()
   private readonly readers = new Map<ConnectionId, RecordReader>()
   private readonly pending = new Map<string, PendingWrite[]>()
   private readonly pendingBytesByPeer = new Map<string, number>()
@@ -166,6 +170,7 @@ export class DeviceSyncTcp {
         retry.after = now + retry.delay
       }
       const id = await this.tcp.connect(peer)
+      if (!shouldInitiate(this.options.localPeer, peer)) this.probes.add(id)
       this.connections.set(peer, id)
       this.readers.set(id, new RecordReader(this.options.maxRecordBytes))
     }
@@ -174,8 +179,15 @@ export class DeviceSyncTcp {
   private async progress(): Promise<void> {
     await this.acceptConnections()
     for (const [peer, id] of [...this.connections]) {
-      if (await this.tcp.state(id) !== State.Established) continue
-      if (!this.established.has(id)) {
+      const state = await this.tcp.state(id)
+      if (state === State.CloseWait) {
+        if (!this.probes.has(id)) await this.drainReads(peer, id)
+        await this.tcp.close(id)
+        this.removeConnection(peer, id)
+        continue
+      }
+      if (state !== State.Established) continue
+      if (!this.probes.has(id) && !this.established.has(id)) {
         this.established.add(id)
         try {
           this.options.onConnected?.(peer)
@@ -183,8 +195,10 @@ export class DeviceSyncTcp {
           this.report(error)
         }
       }
-      await this.drainWrites(peer, id)
-      await this.drainReads(peer, id)
+      if (!this.probes.has(id)) {
+        await this.drainWrites(peer, id)
+        await this.drainReads(peer, id)
+      }
       if (await this.tcp.isReadClosed(id)) {
         try {
           await this.tcp.close(id)
@@ -206,8 +220,20 @@ export class DeviceSyncTcp {
         continue
       }
       const previous = this.connections.get(peer)
+      if (shouldInitiate(this.options.localPeer, peer)) {
+        // A higher-key recovery handshake wakes the canonical dialer; it never
+        // becomes an app stream. This also resolves crossing handshakes after
+        // either endpoint has observed Established, without timing heuristics.
+        await this.tcp.abort(id)
+        if (previous !== undefined && await this.tcp.state(previous) !== State.SynSent) {
+          await this.drainReads(peer, previous)
+          await this.tcp.abort(previous)
+          this.removeConnection(peer, previous)
+        }
+        continue
+      }
       if (previous !== undefined && previous !== id) {
-        await this.tcp.close(previous)
+        await this.tcp.abort(previous)
         this.removeConnection(peer, previous)
       }
       this.connections.set(peer, id)
@@ -219,13 +245,25 @@ export class DeviceSyncTcp {
     const writes = this.pending.get(peer)
     while (writes?.[0]) {
       const write = writes[0]
-      const accepted = await this.tcp.write(id, write.bytes.subarray(write.offset))
+      if (write.marker) {
+        const status = await this.tcp.markerStatus(write.marker)
+        if (status === MarkerStatus.Acked && write.offset === write.bytes.byteLength) {
+          writes.shift()
+          this.removePendingBytes(peer, write.bytes.byteLength)
+          write.resolve()
+          continue
+        }
+        if (status === MarkerStatus.ConnectionGone) {
+          write.offset = 0
+          write.marker = undefined
+        }
+      }
+      if (write.offset === write.bytes.byteLength) break
+      const { accepted, marker } = await this.tcp.writeWithMarker(id, write.bytes.subarray(write.offset))
       if (accepted === 0) break
       write.offset += accepted
+      write.marker = marker
       if (write.offset < write.bytes.byteLength) break
-      writes.shift()
-      this.removePendingBytes(peer, write.bytes.byteLength)
-      write.resolve()
     }
     if (writes?.length === 0) this.pending.delete(peer)
   }
@@ -271,6 +309,7 @@ export class DeviceSyncTcp {
   private removeConnection(peer: string, id: ConnectionId, checkReader = true): void {
     if (this.connections.get(peer) === id) this.connections.delete(peer)
     this.established.delete(id)
+    this.probes.delete(id)
     const reader = this.readers.get(id)
     this.readers.delete(id)
     if (checkReader && reader) {
@@ -284,7 +323,7 @@ export class DeviceSyncTcp {
   }
 
   private rewindPending(peer: string): void {
-    for (const write of this.pending.get(peer) ?? []) write.offset = 0
+    for (const write of this.pending.get(peer) ?? []) { write.offset = 0; write.marker = undefined }
   }
 
   private exceedsPendingLimit(peer: string, count: number, addedBytes: number): boolean {
