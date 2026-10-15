@@ -916,12 +916,14 @@ describe('device sync', () => {
     }
   })
 
-  it('announces later private record changes to established peers so they pull the new state', async () => {
+  it.each(['request', 'pageEnd'] as const)('announces later private record changes after a peer %s so they pull the new state', async (type: 'request' | 'pageEnd') => {
+    chats.set(new Map())
+    groups.set(new Map())
     startDeviceSync(owner, new Uint8Array(32))
     try {
       for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
       const transport = tcp.instances.at(-1)!, source = `02${device}`
-      await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 100,
+      await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, ...(type === 'pageEnd' ? { type, next: null } : { type }), rosterAt: 100,
         recordReconcile: 1, privateFacts: 2, privateEvents: 2, nameApprovals: 2, readStates: 2 }))
       // Finish startup's debounced snapshot before changing a durable private head.
       await new Promise(resolve => setTimeout(resolve, 150))

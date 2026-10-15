@@ -45,6 +45,7 @@ describe('release site config', () => {
     expect(portableTestStep?.command).toContain('src/lib/chat.invite.test.ts')
     expect(portableTestStep?.command).toContain('src/lib/chat.self-message.test.ts')
     expect(portableTestStep?.command).toContain('src/lib/messageMutationHistory.test.ts')
+    expect(portableTestStep?.command).toContain('src/lib/privateRuntimeInitialization.test.ts')
     expect(plan.steps.find((step) => step.id === 'test-e2e-nip07')?.command).toEqual([
       'pnpm',
       'exec',
@@ -63,6 +64,7 @@ describe('release site config', () => {
       'e2e/timed-mute.spec.ts',
       'e2e/notification-navigation.spec.ts',
       'e2e/sw-push-handler.spec.ts',
+      'e2e/device-removal.spec.ts',
       '--workers=2',
       '--retries=0',
     ])

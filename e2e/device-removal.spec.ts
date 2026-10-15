@@ -37,6 +37,14 @@ test('a verified device removal runs normal logout and clears local private data
     forged.content = 'tampered'
     await publish(forged)
     await expect(page.getByText('This device', { exact: true }).first()).toBeVisible()
+    // The cached registration must retain its version while historical events
+    // replay during startup. A later real revocation must still clear the app.
+    await page.reload()
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Devices', exact: true }).click()
+    await expect(page.getByText('This device', { exact: true }).first()).toBeVisible()
+    await publish(sign(registered.created_at - 2))
+    await expect(page.getByText('This device', { exact: true }).first()).toBeVisible()
     await publish(sign(registered.created_at + 2))
     await expect(page.getByRole('button', { name: 'Go', exact: true })).toBeVisible()
     await expect(page.getByRole('status')).toHaveText('This device was removed. Its local data has been cleared.')

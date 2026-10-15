@@ -7,6 +7,7 @@
 - Clear the matching notification when a read arrives from another device, without clearing other unread messages.
 - Show readable attachment labels in chat lists and notifications, and clearer clickable links.
 - Share private personal and group invitation links with reliable group admission.
+- Keep linked devices signed in when an older device list arrives during reload, while honoring newer removals.
 
 ## 2.6.46 - 2026-10-08
 

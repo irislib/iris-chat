@@ -748,6 +748,9 @@ async function handlePacket(
   if (packet.type === 'resyncRequired' || packet.type === 'pageEnd') {
     if (packet.type === 'pageEnd' && packet.next === null) {
       if (packet.recordReconcile !== 1) return
+      // A reconnect may receive only a reply to our request. Its advertised
+      // capabilities also enable announcements of subsequent local changes.
+      historyPeers.add(source)
       // The peer's receive cutoff must not replace our private serving grant.
       history.negotiate(source, servingHistorySince(ownerPubkey, source), packet)
       await history.startState(source)

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   owner: 'a'.repeat(64), device: 'b'.repeat(64), linked: false,
   waitFor: vi.fn(), register: vi.fn(), refresh: vi.fn(), invite: vi.fn(),
   prepare: vi.fn(),
+  restoreAuthorization: vi.fn(async () => {}),
   state: {} as Record<string, unknown>,
 }))
 vi.mock('nostr-double-ratchet', async (original) => {
@@ -14,6 +15,8 @@ vi.mock('nostr-double-ratchet', async (original) => {
     NdrRuntime: class {
       getState() { return mocks.state }
       retireLegacyPrivateContactSync = vi.fn().mockResolvedValue(undefined)
+      initManagers = vi.fn().mockResolvedValue(undefined)
+      initSessionManager = vi.fn().mockResolvedValue({ getKnownAppKeysSnapshots: () => [] })
       initForOwner = vi.fn().mockResolvedValue(undefined)
       prepareRegistration = mocks.prepare
       publishPreparedRegistration = mocks.register
@@ -40,7 +43,7 @@ vi.mock('./messageRelayStatus', () => ({ notifyMessageRelayPublish: vi.fn() }))
 vi.mock('./nostrPubsubRuntime', () => ({ publishNostrPubsub: vi.fn() }))
 vi.mock('./storage', () => ({ deleteSessionManagerValue: vi.fn(), putSessionManagerValue: vi.fn(), getSessionManagerValue: vi.fn(async () => undefined) }))
 
-import { initMultiDevice, resetManagers, waitForSendReadyRuntime, ensureDeviceRegistered } from './privateChats'
+import { initMultiDevice, resetManagers, waitForNdrRuntime, waitForSendReadyRuntime, ensureDeviceRegistered } from './privateChats'
 import { identity } from './identity'
 
 const roster = (devices: string[]) => ({ getAllDevices: () => devices.map(identityPubkey => ({ identityPubkey, createdAt: 1 })) })
@@ -137,4 +140,18 @@ it('does not turn missing offline authorization into a grant', async () => {
   mocks.register.mockRejectedValue(new Error('No message server accepted authorization'))
   await expect(ensureDeviceRegistered()).rejects.toThrow('No message server accepted authorization')
 })
-vi.mock('./authorizationSync', () => ({ restoreAuthorizationProjections: async () => {}, saveAuthorizationEvent: async () => true }))
+it('keeps concurrent runtime callers behind durable authorization restoration', async () => {
+  mocks.state.sessionManagerReady = true
+  let finish!: () => void
+  mocks.restoreAuthorization.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+  let ready = false
+  const first = waitForNdrRuntime().then(() => { ready = true })
+  const second = waitForNdrRuntime()
+  await vi.waitFor(() => expect(mocks.restoreAuthorization).toHaveBeenCalledOnce())
+  expect(ready).toBe(false)
+  finish()
+  await Promise.all([first, second])
+  expect(ready).toBe(true)
+  expect(mocks.restoreAuthorization).toHaveBeenCalledOnce()
+})
+vi.mock('./authorizationSync', () => ({ restoreAuthorizationProjections: mocks.restoreAuthorization, saveAuthorizationEvent: async () => true }))

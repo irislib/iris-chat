@@ -47,6 +47,7 @@ import { createRuntimePublish } from './runtimePublish'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 import { restoreSignerAuthorization } from './signerAuthorizationStorage'
+import { initializeAuthorizedRuntime } from './privateRuntimeInitialization'
 
 let runtime: NdrRuntime | null = null
 let runtimeStorage: DexieStorageAdapter | null = null
@@ -312,28 +313,35 @@ const republishInviteWithRetry = async (reason: string): Promise<void> => {
 }
 
 const privateRuntimeMigration = new WeakMap<NdrRuntime, Promise<void>>()
-const privateRuntimeAuthorizationRestore = new WeakMap<NdrRuntime, Promise<void>>()
+const privateRuntimeInitialization = new WeakMap<NdrRuntime, Promise<void>>()
 const initializePrivateRuntime = async (instance: NdrRuntime, owner: string) => {
-  let ready = privateRuntimeMigration.get(instance)
+  let ready = privateRuntimeInitialization.get(instance)
   if (!ready) {
     ready = (async () => {
-      await migrateStoredPrivateContacts(owner)
-      await instance.retireLegacyPrivateContactSync(owner)
+      let migrated = privateRuntimeMigration.get(instance)
+      if (!migrated) {
+        migrated = (async () => {
+          await migrateStoredPrivateContacts(owner)
+          await instance.retireLegacyPrivateContactSync(owner)
+        })()
+        privateRuntimeMigration.set(instance, migrated)
+        void migrated.catch(() => privateRuntimeMigration.delete(instance))
+      }
+      await migrated
+      const authorized = () => get(identity)?.pubkey === owner && runtime === instance
+      if (!authorized()) throw new Error('Account changed')
+      await initializeAuthorizedRuntime(instance, owner, async () => {
+        if (isLinkedDeviceLogin()) await restoreSignerAuthorization(instance, owner)
+        const { restoreAuthorizationProjections } = await import('./authorizationSync')
+        await restoreAuthorizationProjections(owner, authorized)
+        if (!authorized()) throw new Error('Account changed')
+      })
     })()
-    privateRuntimeMigration.set(instance, ready)
-    void ready.catch(() => privateRuntimeMigration.delete(instance))
+    privateRuntimeInitialization.set(instance, ready)
+    void ready.catch(() => privateRuntimeInitialization.delete(instance))
   }
   await ready
   if (get(identity)?.pubkey !== owner) throw new Error('Account changed')
-  await instance.initForOwner(owner)
-  let restored = privateRuntimeAuthorizationRestore.get(instance)
-  if (!restored) {
-    restored = import('./authorizationSync').then(({ restoreAuthorizationProjections }) =>
-      restoreAuthorizationProjections(owner, () => get(identity)?.pubkey === owner && runtime === instance))
-    privateRuntimeAuthorizationRestore.set(instance, restored)
-    void restored.catch(() => privateRuntimeAuthorizationRestore.delete(instance))
-  }
-  await restored
 }
 
 const getRuntime = (): NdrRuntime => {
@@ -473,10 +481,6 @@ export const initNdrRuntime = async (ownerPubkey: string): Promise<void> => {
 
 export const waitForNdrRuntime = async (): Promise<NdrRuntime> => {
   const currentRuntime = getRuntime()
-  if (currentRuntime.getState().sessionManagerReady) {
-    return currentRuntime
-  }
-
   const ownerPubkey = currentRuntime.getState().ownerPubkey || get(identity)?.pubkey
   if (!ownerPubkey) {
     throw new Error('NdrRuntime owner not initialized')
@@ -548,8 +552,6 @@ export const initMultiDevice = async (ownerPubkey: string): Promise<void> => {
 
   const currentRuntime = getRuntime()
   await initializePrivateRuntime(currentRuntime, ownerPubkey)
-
-  if (isLinkedDeviceLogin()) await restoreSignerAuthorization(currentRuntime, ownerPubkey)
 
   let linkedDeviceAuthorized = currentRuntime.getState().isCurrentDeviceRegistered
   if (isLinkedDeviceLogin() && !linkedDeviceAuthorized) {

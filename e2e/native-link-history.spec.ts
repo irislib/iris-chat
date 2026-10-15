@@ -11,7 +11,7 @@ import { TestRelay } from './test-relay'
 const execute = promisify(execFile)
 
 for (const routedOnly of [false, true]) {
-  test(`native approval links a browser and transfers history ${routedOnly ? 'through a FIPS seed without WebRTC' : 'with an unavailable server'}`, async ({ browser, testRelayUrl }, testInfo) => {
+  test(`native approval links a browser and transfers history ${routedOnly ? 'through a FIPS seed without WebRTC' : 'with an unavailable server'}`, async ({ browser, testRelay, testRelayUrl }, testInfo) => {
     test.setTimeout(240_000)
     const core = process.env.IRIS_CHAT_RS_CORE_DIR
     if (!core) {
@@ -95,6 +95,16 @@ ${serviceErrors}`) })
       await chat.click()
       await expect(page.getByTestId('message-bubble-body').filter({ hasText: body })).toHaveCount(1)
       await page.screenshot({ path: testInfo.outputPath('native-linked-history.png'), fullPage: true })
+      const authorization = await page.evaluate(async () => {
+        const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('iris-chat'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+        const rows = await new Promise<Array<{key:string;value:any}>>((resolve, reject) => { const request = database.transaction('sessionManager').objectStore('sessionManager').getAll(); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+        database.close()
+        // Public proof metadata only; never export ratchets, private keys or messages.
+        return rows.filter(row => row.key.startsWith('authorization-event-v1:') || row.key === 'iris/signer-device-authorization')
+          .filter(row => row.value?.kind === 37368 && row.value.tags.some((tag: string[]) => tag[0] === 'type' && tag[1] === 'app_keys_roster_snapshot'))
+          .map(({ value }) => ({ id: value.id, pubkey: value.pubkey, createdAt: value.created_at, devices: value.tags.filter((tag: string[]) => tag[0] === 'device') }))
+      })
+      writeFileSync(testInfo.outputPath('web-rosters-before-reload.json'), JSON.stringify(authorization, null, 2))
       await page.reload()
       await chat.click()
       await expect(page.getByTestId('message-bubble-body').filter({ hasText: body })).toHaveCount(1)
@@ -129,6 +139,19 @@ ${serviceErrors}`) })
       await expect(page.locator('button[title*="#/nhash1"]')).toBeVisible()
       expect(uploadAuthorizations.some(event => event.pubkey !== owner && event.kind === 24242 && verifyEvent(event))).toBe(true)
     } finally {
+      const page = context.pages()[0]
+      if (page && !page.isClosed()) {
+        const settings = await page.evaluate(async () => {
+          const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('iris-chat'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+          const rows = await new Promise<Array<{key:string;value:unknown}>>((resolve, reject) => { const request = database.transaction('sessionManager').objectStore('sessionManager').getAll(); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+          database.close()
+          return rows.filter(row => row.key.startsWith('mention-notifications:') || row.key.startsWith('device-history-pairs:'))
+        }).catch(error => ({ error: String(error) }))
+        writeFileSync(testInfo.outputPath('web-private-settings-final.json'), JSON.stringify(settings, null, 2))
+      }
+      writeFileSync(testInfo.outputPath('relay-rosters.json'), JSON.stringify(testRelay.publishedEvents
+        .filter(event => event.kind === 37368 && event.pubkey === owner && event.tags.some(tag => tag[0] === 'type' && tag[1] === 'app_keys_roster_snapshot'))
+        .map(event => ({ id: event.id, pubkey: event.pubkey, createdAt: event.created_at, devices: event.tags.filter(tag => tag[0] === 'device') })), null, 2))
       if (owner && groupChat) {
         const headKey = `iris-chat-sync-record-v1:${owner}:private-state:` + JSON.stringify(['privateEvent', 'mentionNotifications', groupChat])
         const nativeHead = await execute('python3', ['-c', 'import sqlite3,sys,json; c=sqlite3.connect("file:"+sys.argv[1]+"?mode=ro", uri=True); print(json.dumps(c.execute("SELECT value FROM app_meta WHERE key=?", (sys.argv[2],)).fetchone()))', path.join(directory, 'core.sqlite3'), headKey]).catch(error => ({ stdout: String(error) }))
