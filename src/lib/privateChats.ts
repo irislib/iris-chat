@@ -379,6 +379,9 @@ const getRuntime = (): NdrRuntime => {
     storage,
     owner: ownerPubkey,
     publish: createRelayPublish(client),
+    subscribeConnected: onChange => relayStore.subscribe(state => onChange(
+      [...state.statuses].filter(([, status]) => status === 'connected').map(([url]) => url)
+    )),
     onAcceptedRelays: notifyMessageRelayPublish,
     onAcceptedEvent: acceptedCallWakeBootstrap,
     resolveContext: async innerEventId => {

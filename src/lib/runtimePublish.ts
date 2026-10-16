@@ -23,6 +23,8 @@ interface RuntimePublishOptions {
   onError: (error: unknown) => void
   storage?: StorageAdapter
   onlineTarget?: EventTarget
+  /** Wake durable retries when a configured relay becomes connected. */
+  subscribeConnected?: (onChange: (relayUrls: readonly string[]) => void) => () => void
   retryIntervalMs?: number
 }
 
@@ -37,6 +39,8 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
   const onlineTarget =
     options.onlineTarget ?? (typeof window !== 'undefined' ? window : undefined)
   let timer: ReturnType<typeof setInterval> | undefined
+  let unsubscribeConnected: (() => void) | undefined
+  let connectionRevision = 0
   let started = false
   let scanning = false
 
@@ -68,6 +72,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
     const existing = inFlight.get(key)
     if (existing) return existing
 
+    const startedRevision = connectionRevision
     const publishing = (async () => {
       await enqueuing.get(key)
       signal.throwIfAborted()
@@ -116,7 +121,11 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
         }
       }
       return row.event
-    })().finally(() => inFlight.delete(key))
+    })().finally(() => {
+      inFlight.delete(key)
+      // A connection may arrive while the prior offline attempt is settling.
+      if (connectionRevision !== startedRevision && !signal.aborted) void retry()
+    })
     inFlight.set(key, publishing)
     return publishing
   }
@@ -160,6 +169,15 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       if (started || signal.aborted) return
       started = true
       onlineTarget?.addEventListener('online', retry)
+      let connected = new Set<string>()
+      unsubscribeConnected = options.subscribeConnected?.(urls => {
+        const next = new Set(urls)
+        const newlyConnected = urls.some(url => !connected.has(url))
+        connected = next
+        if (!newlyConnected || signal.aborted) return
+        connectionRevision++
+        void retry()
+      })
       timer = setInterval(retry, Math.max(1000, options.retryIntervalMs ?? 30_000))
       void retry()
     },
@@ -167,6 +185,8 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       controller.abort()
       clearInterval(timer)
       onlineTarget?.removeEventListener('online', retry)
+      unsubscribeConnected?.()
+      unsubscribeConnected = undefined
       enqueuing.clear()
       inFlight.clear()
     },

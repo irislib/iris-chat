@@ -184,6 +184,78 @@ describe('durable runtime publication', () => {
     expect(onAcceptedRelays).not.toHaveBeenCalledWith('group-inner', expect.anything())
   })
 
+  it('retries durable work on a new relay connection without waiting for the interval', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let notify!: (urls: readonly string[]) => void
+    let connected = false
+    const unsubscribe = vi.fn()
+    const publish = vi.fn(async () => {
+      if (!connected) throw new Error('No connected message server')
+      return accepted()
+    })
+    const queue = queueFor(publish, {
+      subscribeConnected: listener => { notify = listener; listener([]); return unsubscribe },
+    })
+    queue.start()
+    await expect(queue.publish(event('a'), 'private-unblock')).rejects.toThrow('No connected')
+    expect(await rows()).toHaveLength(1)
+    connected = true
+    notify(['wss://relay.example'])
+    await waitFor(async () => expect(await rows()).toEqual([]))
+    expect(publish).toHaveBeenCalledTimes(2)
+    notify(['wss://relay.example'])
+    expect(publish).toHaveBeenCalledTimes(2)
+    queue.close()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    notify(['wss://another.example'])
+    expect(publish).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps a connection wake-up that arrives while an offline attempt is settling', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let notify!: (urls: readonly string[]) => void
+    const offline = deferred<void>()
+    const publish = vi.fn(async () => {
+      if (publish.mock.calls.length === 1) {
+        await offline.promise
+        throw new Error('offline attempt')
+      }
+      return accepted()
+    })
+    const queue = queueFor(publish, {
+      subscribeConnected: listener => { notify = listener; return () => {} },
+    })
+    await queue.enqueue(event('a'), 'private-unblock')
+    queue.start()
+    await waitFor(() => expect(publish).toHaveBeenCalledOnce())
+    notify(['wss://relay.example'])
+    offline.resolve()
+    await waitFor(async () => expect(await rows()).toEqual([]))
+    expect(publish).toHaveBeenCalledTimes(2)
+  })
+
+  it('rechecks policy and owner scope when a relay connection wakes pending work', async () => {
+    let notify!: (urls: readonly string[]) => void
+    let allowed: boolean | 'hold' = 'hold'
+    const other = queueFor(async () => accepted(), { owner: 'owner-b' })
+    await other.enqueue(event('b'), 'other-owner')
+    other.close()
+    const publish = vi.fn(async () => accepted())
+    const canPublish = vi.fn(() => allowed)
+    const queue = queueFor(publish, {
+      canPublish,
+      subscribeConnected: listener => { notify = listener; return () => {} },
+    })
+    await queue.enqueue(event('a'), 'blocked-direct', { recipientOwnerPubkey: 'blocked' })
+    queue.start()
+    await waitFor(() => expect(canPublish).toHaveBeenCalledOnce())
+    allowed = false
+    notify(['wss://relay.example'])
+    await waitFor(async () => expect(await rows()).toEqual([{ event: event('b'), innerEventId: 'other-owner' }]))
+    expect(publish).not.toHaveBeenCalled()
+  })
+
   it('aborts an in-flight group attempt and checks membership again before retrying', async () => {
     let member = true
     const onlineTarget = new EventTarget()
