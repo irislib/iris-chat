@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
-import { HashTree, nhashDecode, nhashEncode, MemoryStore } from '@hashtree/core'
+import { HashTree, nhashDecode, nhashEncode, MemoryStore, sha256 } from '@hashtree/core'
 import { TcpBlobTransport } from '@hashtree/fips-transport'
 import type { FipsDatagramEndpoint, FipsServiceContext } from '@fips/tcp'
 import { AttachmentStore } from './attachmentStore'
@@ -16,12 +16,18 @@ it('accepts the production upload before unavailable HTTP completes, and reads t
     init?.signal?.addEventListener('abort', () => reject(new Error('offline')), { once: true })
   })))
   const bytes = new Uint8Array(2 * 1024 * 1024 + 30).fill(57)
+  const expectedHash = await sha256(bytes)
+  const verifyBytes = async (actual: Uint8Array | null) => {
+    if (!actual) throw new Error('Expected the original attachment bytes')
+    expect(actual.byteLength).toBe(bytes.byteLength)
+    expect(await sha256(actual)).toEqual(expectedHash)
+  }
   const result = await uploadFile(new File([bytes], 'offline.bin'))
-  expect(await downloadFile(result.nhash)).toEqual(bytes)
+  await verifyBytes(await downloadFile(result.nhash))
   expect((await getAttachmentCache().receipts(getPubkey()!, [result.nhash]))[0]!.uploadedUrls).toEqual([])
   setAttachmentAccount(null)
   const reopened = new AttachmentStore()
-  expect(await new HashTree({ store: reopened }).readFile(nhashDecode(result.nhash))).toEqual(bytes)
+  await verifyBytes(await new HashTree({ store: reopened }).readFile(nhashDecode(result.nhash)))
   reopened.close()
 }, 10_000)
 it('cleans a partial local write when the account changes instead of returning a cross-account attachment', async () => {
