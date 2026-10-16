@@ -5,7 +5,7 @@
   import ChatPinButton from './ChatPinButton.svelte'
   import { onDestroy } from 'svelte'
   import { createAttachmentDraft, filesFromTransfer, hasFileData } from '../lib/attachmentDraft'
-  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, isAdmin, canSendToGroup, type Group, type GroupMessage } from '../lib/groups'
+  import { sendGroupMessage, sendGroupReaction, sendGroupTypingEvent, deleteGroup, acceptGroupInvitation, markGroupMessagesSeen, groupMessages, currentGroupId, isAdmin, canSendToGroup, groups, type Group, type GroupMessage } from '../lib/groups'
   import { isTyping } from '../lib/typingState'
   import { createTypingThrottle } from '../lib/typingState'
   import { uploadFile, formatFileLink, isImageFile, isVideoFile } from '../lib/hashtree'
@@ -65,7 +65,7 @@
   let replyingTo = $state<GroupMessage | null>(null)
   let showDisappearingModal = $state(false)
   let removed = $derived(!!$identity && !group.members.includes($identity.pubkey))
-  let attachmentAllowed = $derived(canSendToGroup(group, $identity?.pubkey))
+  let attachmentAllowed = $derived(canSendToGroup($groups.get(group.id), $identity?.pubkey))
   let canAttach = $derived(attachmentAllowed && !isRecordingVoice)
   $effect(() => {
     if (!attachmentAllowed) {

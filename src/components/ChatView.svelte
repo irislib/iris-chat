@@ -7,7 +7,8 @@
   import { createDirectFileDraft, directFileSelectionMode, formatDirectFileSize } from '../lib/directFileDraft'
   import { sendDirectFiles } from '../lib/directFiles'
   import { directFilePreview } from '../lib/directFileProtocol'
-  import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, editMessage, deleteMessageForEveryone, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
+  import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, editMessage, deleteMessageForEveryone, type ChatSession, type ChatMessage, currentChat, chats } from '../lib/chat'
+  import { privateBlockedContacts } from '../lib/privateBlockProjection'
   import { identity } from '../lib/identity'
   import { following } from '../lib/following'
   import { messageRequests, requestDecisionsByChat, acceptChat, rejectChat } from '../lib/messageRequests'
@@ -114,7 +115,8 @@
 
   let effectiveChat = $derived($currentChat || chat)
   let isRequest = $derived(isMessageRequestChat(effectiveChat, policyCtx))
-  let attachmentAllowed = $derived(!!$identity && !isRequest && !$messageRequests.rejectedChats[chat.recipientPubkey])
+  let blocked = $derived(!!$identity && !!$privateBlockedContacts.get($identity.pubkey)?.has(chat.recipientPubkey))
+  let attachmentAllowed = $derived(!!$identity && $chats.has(chat.id) && !blocked && !isRequest && !$messageRequests.rejectedChats[chat.recipientPubkey])
   let canAttach = $derived(attachmentAllowed && !isRecordingVoice && !sendingDirectFiles)
   $effect(() => {
     if (!attachmentAllowed) {
@@ -432,7 +434,7 @@
 
   let canSend = $derived(
     !preparingAttachments &&
-    !!$identity && !sendingDirectFiles && !$messageRequests.rejectedChats[chat.recipientPubkey] &&
+    !!$identity && $chats.has(chat.id) && !blocked && !sendingDirectFiles && !$messageRequests.rejectedChats[chat.recipientPubkey] &&
     ($attachmentDraft.length + $directFileDraft.length === 0 || attachmentAllowed) &&
     !!(messageText.trim() || $attachmentDraft.length || $directFileDraft.length) &&
     $attachmentDraft.every(item => !!item.nhash && !item.uploading && !item.error)
