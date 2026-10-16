@@ -353,6 +353,9 @@ vi.mock('./typingState', () => ({
 
 describe('groups', () => {
   beforeEach(async () => {
+    const { clearMessageRequestDecisions } = await import('./messageRequests')
+    clearMessageRequestDecisions()
+    localStorage.removeItem(`iris-chat-message-request-decisions:${MY_PUBKEY}`)
     sendEventCalls.length = 0
     publishedGroupRosterFacts.length = 0
     sessionManagerValues.clear()
@@ -625,6 +628,13 @@ describe('groups', () => {
       vi.mocked(storage.saveGroup).mockRejectedValueOnce(new Error('quota'))
       await expect(receivePrivateGroupRosterFact(rumor, { senderOwnerPubkey: ROSTER_ADMIN } as never)).rejects.toThrow('quota')
       await expect(receivePrivateGroupRosterFact(rumor, { senderOwnerPubkey: ROSTER_ADMIN } as never)).resolves.toBeUndefined()
+      const deviceGroup = 'private-native-device-admission'
+      const deviceRumor = { ...makeRosterFactEvent({ groupId: deviceGroup, name: 'Native device group',
+        members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN] }), pubkey: OTHER_DEVICE }
+      await receivePrivateGroupRosterFact(deviceRumor, { senderOwnerPubkey: ROSTER_ADMIN, senderDevicePubkey: MEMBER_B } as never)
+      expect(get(groups).has(deviceGroup)).toBe(false)
+      await receivePrivateGroupRosterFact(deviceRumor, { senderOwnerPubkey: ROSTER_ADMIN, senderDevicePubkey: OTHER_DEVICE } as never)
+      expect(get(groups).get(deviceGroup)?.admins).toEqual([ROSTER_ADMIN])
     })
     it.each(['sender_key_v1', 'pairwise_fanout_v1'] as const)('retains signed %s group metadata through storage and a local rename', async (protocol: 'sender_key_v1' | 'pairwise_fanout_v1') => {
       const { handleGroupRosterFactEvent, groups, clearGroupData, loadGroupsFromStorage, updateGroupInfo, acceptGroupInvitation } = await import('./groups')

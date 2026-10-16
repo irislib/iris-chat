@@ -399,13 +399,15 @@ export function handleGroupRosterFactRumor(rumor: Rumor): boolean {
 
 export async function receivePrivateGroupRosterFact(rumor: Rumor, meta?: OnEventMeta): Promise<void> {
   const owner = getPubkey(), sender = meta?.senderOwnerPubkey
-  // An encrypted rumor has no standalone signature. Its claimed roster author
-  // must be the account authenticated by the pairwise session.
-  if (!owner || !sender || rumor.pubkey !== sender || !isGroupRosterFactEvent(rumor)) return
+  // Native metadata is authored by its device; web metadata by its owner.
+  // Both must match the identities authenticated by the pairwise session.
+  if (!owner || !sender || (rumor.pubkey !== sender && rumor.pubkey !== meta?.senderDevicePubkey) || !isGroupRosterFactEvent(rumor)) return
   let fact: GroupRosterFact
   try { fact = parseGroupRosterFactRumor(rumor as GroupRosterFactRumor) } catch { return }
   if (!await privateHistoryAllowed(owner, sender, rumor.created_at) || getPubkey() !== owner) return
-  applyGroupRosterFact(fact)
+  // Group admin/member identities are accounts, even when the inner event was
+  // authored by an authorized device. Preserve the original rumor and event ID.
+  applyGroupRosterFact({ ...fact, signerPubkey: sender })
   const current = get(groups).get(fact.groupId)
   // Retry persistence even if an earlier delivery already applied this fact in
   // memory. The durable session event is acknowledged only after storage works.
