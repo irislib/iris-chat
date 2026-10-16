@@ -124,25 +124,26 @@ test.describe('Notifications', () => {
       await expect(page.locator('#server-url')).toHaveValue('https://custom.server.com')
     })
 
-    test('should show permission denied status in headless browser', async ({ page }) => {
-      // In headless Chromium, notification permission is 'denied' by default
+    test('should show permission denied status when notifications are blocked', async ({ context, page, baseURL }) => {
+      await context.grantPermissions([], { origin: baseURL })
       await page.goto('/')
+      expect(await page.evaluate(() => Notification.permission)).toBe('denied')
       await page.getByRole('button', { name: 'Go' }).click()
 
       // Navigate to Settings
       await page.getByRole('button', { name: 'Settings' }).click()
       await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
-      // Permission should show as Denied in headless browser
+      // The settings view reflects the browser's actual denied permission.
       await expect(page.getByText('Denied')).toBeVisible()
     })
   })
 
   test.describe('Notification Prompt', () => {
-    test('should not show notification prompt when permission is denied', async ({ page }) => {
-      // In headless Chromium, notification permission is 'denied' by default
-      // The prompt only shows when permission is 'default'
+    test('should not show notification prompt when permission is denied', async ({ context, page, baseURL }) => {
+      await context.grantPermissions([], { origin: baseURL })
       await page.goto('/')
+      expect(await page.evaluate(() => Notification.permission)).toBe('denied')
       await page.getByRole('button', { name: 'Go' }).click()
 
       // Prompt should NOT be visible when permission is denied
@@ -197,7 +198,7 @@ test.describe('Notifications', () => {
       await page.getByRole('button', { name: 'Settings' }).click()
       await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Notifications', exact: true }).click()
 
-      // Test notification button should be disabled (permission is denied in headless)
+      // A notification cannot be sent without granted permission.
       const testButton = page.getByRole('button', { name: 'Send Test Notification' })
       await expect(testButton).toBeDisabled()
     })
