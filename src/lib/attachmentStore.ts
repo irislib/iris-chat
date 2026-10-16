@@ -130,6 +130,9 @@ export class AttachmentStore implements Store {
     })
   }
   async retain(id: string) {
+    // Commit before message publication. Later send failures can be ambiguous, so
+    // retained trees never expire as drafts; they count against the bounded quota
+    // until a complete remote copy makes their blocks safely evictable.
     await this.transaction(async () => {
       const file = await this.files.get(id)
       if (!file || file.state === 'writing' || (file.draftUntil !== undefined && file.draftUntil < this.now())) throw new Error('Attachment was canceled')

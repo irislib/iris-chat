@@ -81,7 +81,7 @@ it('cleans an expired interrupted writer without deleting committed pending tree
   await expect(store.writer(interrupted).put(hash, bytes)).rejects.toThrow('canceled')
 })
 
-it('expires only abandoned drafts and preserves explicitly retained message attachments across restart', async () => {
+it('expires abandoned drafts but preserves possibly published retained attachments across restart', async () => {
   let now = 1; const name = crypto.randomUUID(), store = create(1024, name, () => now)
   const makeDraft = async (value: number) => {
     const id = await store.begin(owner, [server]), bytes = new Uint8Array(20).fill(value)
