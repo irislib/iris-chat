@@ -33,7 +33,7 @@ it('cleans a partial local write when the account changes instead of returning a
   expect(await getAttachmentCache().stats()).toEqual(before)
 })
 
-it('fetches ciphertext despite an unavailable first provider and authenticated Noise peers exposing odd parity', async () => {
+it.each([true, false])('fetches ciphertext with a hanging first provider and odd Noise parity (transport ready initially: %s)', async (readyInitially: boolean) => {
   const secret = generateSecretKey(); vi.mocked(getPubkey).mockReturnValue(getPublicKey(secret)); vi.mocked(getPrivkeyBytes).mockReturnValue(secret)
   setAttachmentAccount(getPubkey())
   const handlers = [new Map<number, (context: FipsServiceContext) => void | Promise<void>>(), new Map<number, (context: FipsServiceContext) => void | Promise<void>>()] as const
@@ -50,7 +50,26 @@ it('fetches ciphertext despite an unavailable first provider and authenticated N
   const result = await new HashTree({ store, chunkSize: 65_536 }).putFile(bytes)
   const server = new TcpBlobTransport({ endpoint: endpoint(1), localStore: store, allowIncomingPeer: peer => peer.slice(2) === peers[0]!.slice(2) })
   const http = vi.fn(() => { throw new Error('HTTP unavailable') }); vi.stubGlobal('fetch', http)
-  activateAttachmentPeers(endpoint(0), () => ['02' + 'c'.repeat(64), '02' + peers[1]!.slice(2)], peer => peer.slice(2) === peers[1]!.slice(2))
-  try { expect(await downloadFile(nhashEncode(result.cid))).toEqual(bytes); expect(http).not.toHaveBeenCalled() }
+  const activate = () => activateAttachmentPeers(endpoint(0), () => ['02' + 'c'.repeat(64), '02' + peers[1]!.slice(2)], peer => peer.slice(2) === peers[1]!.slice(2))
+  if (readyInitially) activate()
+  try {
+    const download = downloadFile(nhashEncode(result.cid))
+    void download.catch(() => {})
+    if (!readyInitially) { await vi.waitFor(() => expect(http).toHaveBeenCalled()); activate() }
+    expect(await download).toEqual(bytes)
+    if (readyInitially) expect(http).not.toHaveBeenCalled()
+  }
   finally { await deactivateAttachmentPeers(); await server.close() }
 }, 10_000)
+
+it('cancels a startup download on account change and releases its reader journal', async () => {
+  const secret = generateSecretKey(); vi.mocked(getPubkey).mockReturnValue(getPublicKey(secret)); vi.mocked(getPrivkeyBytes).mockReturnValue(secret)
+  const result = await new HashTree({ store: new MemoryStore() }).putFile(new Uint8Array(5).fill(9))
+  const http = vi.fn(() => { throw new Error('HTTP unavailable') }); vi.stubGlobal('fetch', http)
+  const download = downloadFile(nhashEncode(result.cid))
+  const outcome = download.then(() => undefined, error => error as Error)
+  await vi.waitFor(() => expect(http).toHaveBeenCalled())
+  vi.mocked(getPubkey).mockReturnValue('b'.repeat(64)); setAttachmentAccount('b'.repeat(64))
+  expect((await outcome)?.message).toBe('Account changed')
+  expect((await getAttachmentCache().stats()).files).toBe(0)
+})

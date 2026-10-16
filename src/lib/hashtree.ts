@@ -35,6 +35,21 @@ let attachmentPeers: TcpBlobTransport | undefined
 let attachmentPeerCleanup: (() => Promise<void>) | undefined
 let peerIds: () => readonly string[] = () => []
 let activeAccount: { owner: string; replication: AttachmentReplication } | undefined
+const peerReadyWaiters = new Set<() => void>()
+function notifyPeerReady() { for (const complete of peerReadyWaiters) complete() }
+function waitForAttachmentPeers(account: NonNullable<typeof activeAccount>): Promise<boolean> {
+  if (activeAccount !== account || attachmentPeers) return Promise.resolve(activeAccount === account && !!attachmentPeers)
+  // At most the store's 16 admitted readers can wait. A transport becoming ready
+  // resolves immediately; unavailable/unregistered devices have a bounded wait.
+  return new Promise(resolve => {
+    const complete = () => {
+      clearTimeout(timeout); peerReadyWaiters.delete(complete)
+      resolve(activeAccount === account && !!attachmentPeers)
+    }
+    const timeout = setTimeout(complete, 15_000)
+    peerReadyWaiters.add(complete)
+  })
+}
 const activeWrites = new Set<string>()
 const stagedWrites = new Set<string>()
 let draftHeartbeat: ReturnType<typeof setInterval> | undefined
@@ -55,6 +70,7 @@ export const getAttachmentCache = (): AttachmentStore => attachmentCache ??= new
 export function setAttachmentAccount(owner: string | null) {
   if (activeAccount?.owner === owner) return
   activeAccount?.replication.stop(); activeAccount = undefined
+  notifyPeerReady()
   for (const id of activeWrites) void getAttachmentCache().abort(id).catch(() => {})
   activeWrites.clear()
   for (const id of stagedWrites) void getAttachmentCache().abort(id, true).catch(() => {})
@@ -90,6 +106,7 @@ export function prepareAttachmentPeers(node: FipsDatagramEndpoint, peers: () => 
       void deactivateAttachmentPeers()
       peerIds = () => peers().map(normalizeDeviceSyncPeer)
       attachmentPeers = tcp; attachmentPeerCleanup = dispose
+      notifyPeerReady()
     },
     dispose,
   }
@@ -152,9 +169,17 @@ function getHashTree(readId: string): HashTree {
       if (activeAccount !== account) throw new Error('Account changed')
       const cached = await cache.get(hash)
       if (cached) { await cache.writer(readId).put(hash, cached); return cached }
-      const peers = peerIds()
-      const data = (peers.length ? await attachmentPeers?.get(hash, peers).catch(() => null) : null) ?? await blossom.get(hash)
+      const peers = peerIds(), readyAtStart = !!attachmentPeers
+      let remoteError: unknown
+      let data = (peers.length ? await attachmentPeers?.get(hash, peers).catch(() => null) : null) ?? await blossom.get(hash).catch(error => { remoteError = error; return null })
+      // History can render before device initialization starts file transport.
+      // An offline HTTP server must not turn that startup ordering into a permanent failure.
+      if (!data && !readyAtStart && await waitForAttachmentPeers(account)) {
+        const readyPeers = peerIds()
+        data = readyPeers.length ? await attachmentPeers?.get(hash, readyPeers).catch(() => null) ?? null : null
+      }
       if (activeAccount !== account) throw new Error('Account changed')
+      if (!data && remoteError) throw remoteError
       // Read-through caching is best effort. A full protected cache must not break a download.
       if (data) await cache.writer(readId).put(hash, data).catch(() => {})
       return data
