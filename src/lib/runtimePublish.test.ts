@@ -247,7 +247,7 @@ describe('durable runtime publication', () => {
       canPublish,
       subscribeConnected: listener => { notify = listener; return () => {} },
     })
-    await queue.enqueue(event('a'), 'blocked-direct', { recipientOwnerPubkey: 'blocked' })
+    await queue.enqueue(event('a'), 'blocked-direct', { recipientOwnerPubkey: 'blocked', createdAt: 100 })
     queue.start()
     await waitFor(() => expect(canPublish).toHaveBeenCalledOnce())
     allowed = false
