@@ -1,4 +1,5 @@
 import { deviceRecordVersion } from './deviceSyncRecordStore'
+import { blockedContacts } from './privateBlockProjection'
 import { get, writable } from 'svelte/store'
 
 type ChatFlagMap = Record<string, true | undefined>
@@ -49,6 +50,23 @@ export function loadMessageRequestDecisions(owner: string): void {
 export function requestDecisionStates(owner: string): RequestDecision[] {
   return activeOwner === owner ? Object.values(versions) : []
 }
+export function requestDecisionsByChat(owner: string): Readonly<Record<string, RequestDecision>> {
+  return activeOwner === owner ? versions : {}
+}
+export function requestDecision(owner: string, chatId: string): RequestDecision | undefined {
+  return requestDecisionsByChat(owner)[chatId]
+}
+/** Authenticated own activity keeps its original clock, never its arrival time. */
+export function acceptChatFromActivity(owner: string, chatId: string, updatedAtMs: number): boolean {
+  const value: RequestDecision = { chatId, decision: 'accepted', updatedAtMs }
+  if (activeOwner !== owner || blockedContacts(owner).has(chatId) || !validRequestDecision(value) || !newer(value, versions[chatId])) return false
+  mergeRequestDecision(owner, value)
+  return true
+}
+export function groupRequestAccepted(owner: string, groupId: string, fallback: boolean | undefined): boolean | undefined {
+  const decision = requestDecision(owner, `group:${groupId}`)
+  return decision ? decision.decision === 'accepted' : fallback
+}
 export function mergeRequestDecision(owner: string, value: RequestDecision): void {
   if (activeOwner !== owner || !validRequestDecision(value)) throw new Error('Invalid request decision or account')
   if (!newer(value, versions[value.chatId])) return
@@ -95,6 +113,10 @@ function saveToStorage(state: MessageRequestDecisions): void {
 export const messageRequests = writable<MessageRequestDecisions>(loadFromStorage())
 
 export function acceptChat(chatId: string): void {
+  if (activeOwner) {
+    mergeRequestDecision(activeOwner, { chatId, decision: 'accepted', updatedAtMs: Math.max(Date.now(), (versions[chatId]?.updatedAtMs ?? 0) + 1) })
+    return
+  }
   messageRequests.update((state) => {
     const acceptedChats: ChatFlagMap = { ...state.acceptedChats, [chatId]: true }
     const rejectedChats: ChatFlagMap = { ...state.rejectedChats }
@@ -106,6 +128,10 @@ export function acceptChat(chatId: string): void {
 }
 
 export function rejectChat(chatId: string): void {
+  if (activeOwner) {
+    mergeRequestDecision(activeOwner, { chatId, decision: 'rejected', updatedAtMs: Math.max(Date.now(), (versions[chatId]?.updatedAtMs ?? 0) + 1) })
+    return
+  }
   messageRequests.update((state) => {
     const rejectedChats: ChatFlagMap = { ...state.rejectedChats, [chatId]: true }
     const acceptedChats: ChatFlagMap = { ...state.acceptedChats }

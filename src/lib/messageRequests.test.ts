@@ -65,5 +65,30 @@ describe('messageRequests', () => {
     expect(state.acceptedChats[chatId]).toBeUndefined()
     expect(state.rejectedChats[chatId]).toBeUndefined()
   })
+
+  it('orders sibling activity by its original time and preserves later rejections', async () => {
+    const { loadMessageRequestDecisions, mergeRequestDecision, acceptChatFromActivity, requestDecisionStates } = await import('./messageRequests')
+    const owner = 'a'.repeat(64), peer = 'b'.repeat(64)
+    loadMessageRequestDecisions(owner)
+    mergeRequestDecision(owner, { chatId: peer, decision: 'rejected', updatedAtMs: 2000 })
+    expect(acceptChatFromActivity(owner, peer, 1000)).toBe(false)
+    expect(acceptChatFromActivity(owner, peer, 2000)).toBe(false)
+    expect(acceptChatFromActivity(owner, peer, 3000)).toBe(true)
+    expect(requestDecisionStates(owner)).toEqual([{ chatId: peer, decision: 'accepted', updatedAtMs: 3000 }])
+    expect(acceptChatFromActivity(owner, peer, 3000)).toBe(false)
+    expect(acceptChatFromActivity('c'.repeat(64), peer, 4000)).toBe(false)
+  })
+
+  it('does not accept activity from blocked people or invalid future timestamps', async () => {
+    const { loadMessageRequestDecisions, acceptChatFromActivity, requestDecisionStates } = await import('./messageRequests')
+    const { replaceBlockedContacts } = await import('./privateBlockProjection')
+    const owner = 'a'.repeat(64), peer = 'b'.repeat(64)
+    loadMessageRequestDecisions(owner)
+    replaceBlockedContacts(owner, new Set([peer]))
+    expect(acceptChatFromActivity(owner, peer, 1000)).toBe(false)
+    replaceBlockedContacts(owner, new Set())
+    expect(acceptChatFromActivity(owner, peer, Date.now() + 600_000)).toBe(false)
+    expect(requestDecisionStates(owner)).toEqual([])
+  })
 })
 

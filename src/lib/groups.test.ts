@@ -1,3 +1,4 @@
+vi.mock('./requestActivity', async importOriginal => ({ ...await importOriginal<typeof import('./requestActivity')>(), restoreOwnReactionAcceptance: async () => {} }))
 vi.mock('./authorizationSync', () => ({ saveAuthorizationEvent: async () => true }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
 vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: async () => {} }))
@@ -1255,6 +1256,22 @@ describe('groups', () => {
   })
 
   describe('group acceptance', () => {
+    it('projects sibling request decisions independently of stale group acceptance metadata', async () => {
+      const { handleGroupRosterFactEvent, acceptGroupInvitation, groups } = await import('./groups')
+      const { loadMessageRequestDecisions, mergeRequestDecision, requestDecisionStates, clearMessageRequestDecisions } = await import('./messageRequests')
+      clearMessageRequestDecisions(); loadMessageRequestDecisions(MY_PUBKEY)
+      const groupId = 'test-private-acceptance'
+      handleGroupRosterFactEvent(makeRosterFactEvent({ groupId, name: 'Request', members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN] }))
+      mergeRequestDecision(MY_PUBKEY, { chatId: `group:${groupId}`, decision: 'accepted', updatedAtMs: 1000 })
+      expect(get(groups).get(groupId)!.accepted).toBe(true)
+      mergeRequestDecision(MY_PUBKEY, { chatId: `group:${groupId}`, decision: 'rejected', updatedAtMs: 2000 })
+      expect(get(groups).get(groupId)!.accepted).toBe(false)
+      mergeRequestDecision(MY_PUBKEY, { chatId: `group:${groupId}`, decision: 'accepted', updatedAtMs: 1000 })
+      expect(get(groups).get(groupId)!.accepted).toBe(false)
+      acceptGroupInvitation(groupId)
+      expect(requestDecisionStates(MY_PUBKEY).find(value => value.chatId === `group:${groupId}`)?.decision).toBe('accepted')
+      expect(get(groups).get(groupId)!.accepted).toBe(true)
+    })
     it('roster facts from another admin create pending groups without secrets', async () => {
       const { handleGroupRosterFactEvent, groups } = await import('./groups')
       const groupId = 'test-group-pending'

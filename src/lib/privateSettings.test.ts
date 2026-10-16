@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import { beforeEach, expect, it } from 'vitest'
 import { buildPrivateSetting } from 'nostr-social-graph/privateEvents'
 import { db, applyHistoryChatDeletion, chatDeletionStates, admitHistoryMessage } from './storage'
-import { privateSettingSnapshot } from './privateSettings'
+import { privateSettingEvents, privateSettingSnapshot } from './privateSettings'
 import { deviceSyncRecordId } from './deviceSyncRecords'
 import { encodeDeviceSyncPacket, parseDeviceSyncPacket } from './deviceSyncProtocol'
 const owner = 'a'.repeat(64), first = 'b'.repeat(64), second = 'c'.repeat(64)
@@ -60,4 +60,18 @@ it('merges request decisions per chat, retains explicit clears and isolates acco
   loadMessageRequestDecisions(second)
   expect(requestDecisionStates(second)).toEqual([])
   expect(()=>mergeRequestDecision(owner,states[0])).toThrow()
+})
+
+it('exports inferred acceptance as a private state event after restart and message expiry', async () => {
+  const { loadMessageRequestDecisions, clearMessageRequestDecisions, acceptChatFromActivity, requestDecisionStates } = await import('./messageRequests')
+  localStorage.clear(); clearMessageRequestDecisions(); loadMessageRequestDecisions(owner)
+  acceptChatFromActivity(owner, first, 123456)
+  clearMessageRequestDecisions(); loadMessageRequestDecisions(owner)
+  const events = []
+  for await (const event of privateSettingEvents(owner, [])) {
+    const packet = privateSettingSnapshot(event, owner)
+    if (packet.requestDecisions) events.push(...packet.requestDecisions)
+  }
+  expect(events).toEqual(requestDecisionStates(owner))
+  expect(events).toEqual([{ chatId: first, decision: 'accepted', updatedAtMs: 123456 }])
 })

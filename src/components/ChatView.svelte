@@ -10,7 +10,7 @@
   import { sendMessage, sendReaction, sendSeenReceipts, sendTypingEvent, deleteChat, deleteMessage, editMessage, deleteMessageForEveryone, type ChatSession, type ChatMessage, currentChat } from '../lib/chat'
   import { identity } from '../lib/identity'
   import { following } from '../lib/following'
-  import { messageRequests, acceptChat, rejectChat } from '../lib/messageRequests'
+  import { messageRequests, requestDecisionsByChat, acceptChat, rejectChat } from '../lib/messageRequests'
   import { messageRequestSettings } from '../lib/messageRequestSettings'
   import { isMessageRequestChat, type MessageRequestPolicyContext } from '../lib/messageRequestPolicy'
   import { isTyping } from '../lib/typingState'
@@ -107,6 +107,7 @@
     myPubkey: $identity?.pubkey || null,
     following: $following,
     acceptedChats: $messageRequests.acceptedChats,
+    decisions: requestDecisionsByChat($identity?.pubkey ?? ''),
     rejectedChats: $messageRequests.rejectedChats,
     receiveMessageRequests: $messageRequestSettings.receiveMessageRequests,
   }))

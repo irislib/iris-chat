@@ -18,6 +18,9 @@ import { chats, currentChat } from './chat'
 import { groups, groupMessages } from './groups'
 import { addProfileToCache } from './profile'
 import { expirationStore } from './expirationStore'
+import { loadMessageRequestDecisions, clearMessageRequestDecisions, mergeRequestDecision, requestDecisionStates } from './messageRequests'
+import { restoreOwnReactionAcceptance } from './requestActivity'
+import { replaceBlockedContacts } from './privateBlockProjection'
 async function reactionHeads(owner: string) { const records = []; for await (const head of iterReactions(owner)) records.push(head); return records }
 async function groupSettingsHeads(owner: string) { const records = []; for await (const head of iterSettings(owner)) records.push(head); return records }
 const owner = 'a'.repeat(64), peer = 'b'.repeat(64), outsider = 'c'.repeat(64)
@@ -27,6 +30,7 @@ const settings = (id: string, createdAt: number, ttl: number | null, author = ow
 
 beforeEach(async () => {
   await db.messages.clear(); await db.sessionManager.clear(); vi.clearAllMocks(); expirationStore.clear()
+  localStorage.clear(); clearMessageRequestDecisions(); loadMessageRequestDecisions(owner); replaceBlockedContacts(owner, new Set())
   currentChat.set(null)
   chats.set(new Map([[peer, { id: peer, recipientPubkey: peer, messages: [], mode: 'manager' }]]))
   groups.set(new Map([['friends', { id: 'friends', name: 'Friends', members: [owner, peer], admins: [owner], createdAt: 1_000 }]]))
@@ -34,6 +38,47 @@ beforeEach(async () => {
 })
 
 describe('durable private controls', () => {
+  it('accepts authenticated own messages and reactions with original clocks, retaining newer rejection and blocks', async () => {
+    const accepted = () => requestDecisionStates(owner).find(value => value.chatId === peer)
+    await admitRecordMessage(owner, { ...message, isMine: false }, undefined, false, new Set([owner, peer]), () => true)
+    expect(accepted()).toBeUndefined()
+    await persistMessageWithReactions(owner, { ...message, id: 'own', timestamp: 101_234 })
+    expect(accepted()).toEqual({ chatId: peer, decision: 'accepted', updatedAtMs: 101_234 })
+    mergeRequestDecision(owner, { chatId: peer, decision: 'rejected', updatedAtMs: 102_000 })
+    await persistMessageWithReactions(owner, { ...message, id: 'replay' })
+    await applyReactionRecord(owner, { ...reaction('a', 102, '❤️'), author: owner })
+    expect(accepted()?.decision).toBe('rejected')
+    await applyReactionRecord(owner, { ...reaction('b', 102, '👍'), createdAtMs: 102_123, author: owner })
+    expect(accepted()).toEqual({ chatId: peer, decision: 'accepted', updatedAtMs: 102_123 })
+    replaceBlockedContacts(owner, new Set([peer]))
+    await applyReactionRecord(owner, { ...reaction('c', 103, '👍'), author: owner })
+    expect(accepted()?.updatedAtMs).toBe(102_123)
+    await admitRecordMessage(owner, { ...message, sessionId: outsider }, undefined, false, new Set([owner]), () => false)
+    expect(requestDecisionStates(owner)).toHaveLength(1)
+  })
+  it('does not borrow a later target-message clock from a typed own reaction', async () => {
+    await saveReactionHead(owner, { ...reaction('a', 100, '❤️'), author: owner })
+    mergeRequestDecision(owner, { chatId: peer, decision: 'rejected', updatedAtMs: 150_000 })
+    await admitRecordMessage(owner, { ...message, isMine: false, timestamp: 200_000 }, [{ author: owner, emoji: '❤️' }], true, new Set([owner, peer]), () => true)
+    expect(requestDecisionStates(owner)).toEqual([{ chatId: peer, decision: 'rejected', updatedAtMs: 150_000 }])
+  })
+  it('recovers committed own activity after restart, with a separate group decision and no incoming/read/call acceptance', async () => {
+    await saveReactionHead(owner, { ...reaction('a', 104, '❤️'), author: owner })
+    await saveReactionHead(owner, { ...reaction('b', 105, '❤️'), chatId: 'group:friends', author: owner })
+    db.close(); await db.open()
+    clearMessageRequestDecisions(); loadMessageRequestDecisions(owner)
+    await restoreOwnReactionAcceptance(owner)
+    expect(requestDecisionStates(owner)).toEqual([
+      { chatId: peer, decision: 'accepted', updatedAtMs: 104_000 },
+      { chatId: 'group:friends', decision: 'accepted', updatedAtMs: 105_000 },
+    ])
+    await persistMessageWithReactions(owner, { ...message, id: 'incoming', sessionId: outsider, isMine: false, status: 'seen' })
+    await persistMessageWithReactions(owner, { ...message, id: 'empty-bootstrap', sessionId: outsider, content: '' })
+    await persistMessageWithReactions(owner, { ...message, id: 'call', sessionId: outsider, call: { callId: 'call', direction: 'outgoing', outcome: 'canceled', video: false, startedAt: 100_000, endedAt: 100_010, durationSeconds: 0 } })
+    expect(requestDecisionStates(owner)).toHaveLength(2)
+    clearMessageRequestDecisions(); loadMessageRequestDecisions(owner)
+    expect(requestDecisionStates(owner)).toHaveLength(2)
+  })
   it('keeps a removal received before its message and rejects older adds after restart', async () => {
     expect(await applyReactionRecord(owner, reaction('b', 102, ''))).toBe(true)
     expect(await applyReactionRecord(owner, reaction('a', 101, '❤️'))).toBe(false)

@@ -1,3 +1,4 @@
+import { restoreStoredRequestAcceptance, restoreOwnReactionAcceptance } from './requestActivity'
 import { loadMessageRequestDecisions } from './messageRequests'
 import { receivePrivateStateControl, sendOwnReadState, applyOwnReadTag } from './privateStateControl'
 import { privateHistoryAllowed, isPrivatelyBlocked } from './privateStateStore'
@@ -5,7 +6,7 @@ import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMe
 import type { MessageRevision } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
-import { captureReaction, persistMessageWithReactions } from './deviceSyncRecordApply'
+import { captureReaction, controlClock, persistMessageWithReactions } from './deviceSyncRecordApply'
 import { registerPrivateControlEvents } from './privateControlEvents'
 import { DEVICE_LABEL_CONTROL_KIND, receivePrivateDeviceLabel } from './privateDeviceLabels'
 import { CHAT_PIN_KIND } from './chatPinSync'
@@ -1528,7 +1529,7 @@ async function handleIncomingRumor(
     id: processedId,
     content: rumor.content,
     ...directFileMessageFields(rumor.content),
-    timestamp: rumor.created_at * 1000,
+    timestamp: controlClock(rumor).createdAtMs ?? rumor.created_at * 1000,
     isMine,
     ...(replyTag && { replyTo: replyTag }),
     ...(shouldAckDelivered && { status: 'delivered' as const }),
@@ -1749,10 +1750,7 @@ export async function sendMessage(chatSession: ChatSession, text: string, replyT
   if (!currentSession) return
 
   // Sending a message is an implicit accept for message requests.
-  const policyCtx = getMessageRequestPolicyContext()
-  if (!isChatAccepted(currentSession, policyCtx)) {
-    acceptChat(currentSession.recipientPubkey)
-  }
+  acceptChat(currentSession.recipientPubkey)
 
   // Add message optimistically - use outer event ID for service worker lookup
   const message: ChatMessage = {
@@ -1789,6 +1787,7 @@ export async function sendReaction(chatSession: ChatSession, messageId: string, 
     const nextEmoji = target?.reactions?.[emoji]?.includes(owner) ? '' : emoji
     const rumor = buildReactionRumor(messageId, nextEmoji, { ...buildManagerRumorOptions(chatSession.recipientPubkey), nowMs })
     await captureReaction(owner, chatSession.id, rumor, owner, messageId, nextEmoji)
+    if (getPubkey() === owner) acceptChat(chatSession.id)
     sendRuntimeEvent(chatSession.recipientPubkey, rumor, 'send reaction')
   })
 }
@@ -1944,6 +1943,7 @@ export async function loadChatsFromStorage(): Promise<void> {
     for (const stored of storedSessions) {
       try {
         const storedMessages = await getMessagesForSession(stored.id)
+        if (owner) for (const message of storedMessages) await restoreStoredRequestAcceptance(owner, message)
         const messages: ChatMessage[] = storedMessages
     .filter(message => !!message.content.trim() || message.deletedAt !== undefined || !!message.call)
           .map(m => ({
@@ -1988,6 +1988,7 @@ export async function loadChatsFromStorage(): Promise<void> {
     }
 
     canonicalizeKnownManagerChats()
+    if (owner) await restoreOwnReactionAcceptance(owner)
     isInitialized = true
   } catch (e) {
     console.error('Failed to load chats from storage:', e)

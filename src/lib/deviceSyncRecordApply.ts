@@ -1,3 +1,5 @@
+import { acceptChatFromActivity } from './messageRequests'
+import { acceptFromStoredActivity, restoreStoredRequestAcceptance } from './requestActivity'
 import { projectMessageRead } from './privateStateStore'
 import { messageWithMutations, refreshMessageMutationView } from './messageMutations'
 import { get } from 'svelte/store'
@@ -44,6 +46,7 @@ export async function applyReactionRecord(owner: string, reaction: DeviceSyncRea
     if (!get(chats).has(reaction.chatId) || reaction.author !== owner && reaction.author !== reaction.chatId) return false
   }
   const changed = await saveReactionHead(owner, reaction, authorized)
+  if (changed && authorized() && reaction.author === owner) acceptChatFromActivity(owner, reaction.chatId, reaction.createdAtMs ?? reaction.createdAt * 1000)
   const message = changed && authorized() ? await db.messages.get(reaction.messageId) : undefined
   if (message && authorized()) await refreshReactionView(message)
   return changed
@@ -58,6 +61,10 @@ export async function captureReaction(owner: string, chatId: string, rumor: Rumo
     if (target?.sessionId !== chatId) return
     const projected = projectReactionHeads(target, [{ ...controlClock(rumor), chatId, author, messageId, emoji }])
     await persistMessageWithReactions(owner, projected)
+    if (author === owner) {
+      const clock = controlClock(rumor)
+      acceptChatFromActivity(owner, chatId, clock.createdAtMs ?? clock.createdAt * 1000)
+    }
     await refreshReactionView(await db.messages.get(messageId) ?? projected)
     return
   }
@@ -96,6 +103,7 @@ export async function persistMessageWithReactions(owner: string, message: Stored
     await db.messages.put(projected)
     return projected
   })
+  acceptFromStoredActivity(owner, updated)
   // Rebuild only when durable controls actually changed the rendered value.
   if (updated.editedAt !== message.editedAt || updated.deletedAt !== message.deletedAt || updated.content !== message.content) await refreshMessageMutationView(updated)
   if (JSON.stringify(updated.reactions ?? {}) !== JSON.stringify(message.reactions ?? {})) await refreshReactionView(updated)
@@ -116,7 +124,7 @@ export async function restoreGroupSettings(owner: string, groupId: string): Prom
 export async function admitRecordMessage(owner: string, message: StoredMessage,
   legacyReactions: Array<{ author: string; emoji: string }> | undefined, allowLegacy: boolean,
   allowedAuthors: Set<string>, authorized: () => boolean): Promise<StoredMessage | undefined> {
-  return db.transaction('rw', db.messages, db.sessionManager, async () => {
+  const admitted = await db.transaction('rw', db.messages, db.sessionManager, async () => {
     const incoming = { ...message }
     if (allowLegacy && legacyReactions) {
       const reactions: Record<string, string[]> = {}
@@ -130,4 +138,9 @@ export async function admitRecordMessage(owner: string, message: StoredMessage,
     const projected = await projectMessageRead(owner, await messageWithMutations(owner, await messageWithReactionHeads(owner, incoming)))
     return await admitHistoryMessage(projected, authorized) ? projected : undefined
   })
+  if (admitted && authorized()) {
+    acceptFromStoredActivity(owner, admitted)
+    if (allowLegacy && legacyReactions?.some(reaction => reaction.author === owner)) await restoreStoredRequestAcceptance(owner, admitted)
+  }
+  return admitted
 }

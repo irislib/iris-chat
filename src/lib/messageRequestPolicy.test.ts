@@ -19,6 +19,17 @@ function ctx(partial?: Partial<MessageRequestPolicyContext>): MessageRequestPoli
 }
 
 describe('messageRequestPolicy', () => {
+  it('keeps a rejection ahead of following and old outgoing history', () => {
+    const peer = 'b'.repeat(64)
+    const chat = { recipientPubkey: peer, messages: [{ isMine: true }] }
+    const c = ctx({ following: new Set([peer]), acceptedChats: { [peer]: true }, rejectedChats: { [peer]: true } })
+    expect(isChatAccepted(chat, c)).toBe(false)
+    expect(shouldIgnoreIncomingEvent(chat, false, c)).toBe(true)
+  })
+  it('retains an explicit clear ahead of old outgoing history', () => {
+    const peer = 'b'.repeat(64)
+    expect(isChatAccepted({ recipientPubkey: peer, messages: [{ isMine: true }] }, ctx({ decisions: { [peer]: { chatId: peer, decision: 'none', updatedAtMs: 2000 } } }))).toBe(false)
+  })
   it('treats followed users as accepted', () => {
     const chat: MessageRequestChatLike = {
       recipientPubkey: 'f'.repeat(64),

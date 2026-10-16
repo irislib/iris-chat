@@ -29,6 +29,21 @@ function pair(source: DeviceSyncRecord[], maxInventoryRecords?: number) {
 }
 
 describe('typed reconciliation scopes', () => {
+  it('reconciles an offline request decision as state without message history or snapshots', async () => {
+    const { buildPrivateSetting } = await import('nostr-social-graph/privateEvents')
+    const { privateSettingSnapshot } = await import('./privateSettings')
+    const owner = 'a'.repeat(64), chatId = 'b'.repeat(64)
+    const decision = { chatId, decision: 'accepted', updatedAtMs: 123456 }
+    const event = buildPrivateSetting(owner, 'requestDecision', chatId, decision)
+    const p = pair([{ type: 'privateEvent', event }])
+    p.engines[0].negotiate('b', 100, { privateEvents: 2 }); p.engines[1].negotiate('a', 100, { privateEvents: 2 })
+    await p.engines[0].startState('b'); await p.drain()
+    const received = [...p.contents[0].values()]
+    expect(received).toHaveLength(1)
+    if (received[0].type !== 'privateEvent') throw new Error('Expected private event')
+    expect(privateSettingSnapshot(received[0].event, owner).requestDecisions).toEqual([decision])
+    expect(p.progress).toEqual([])
+  })
   it('syncs current state with history opt-out and keeps old reactions excluded', async () => {
     const base = (fixtures.find(item => item.name === 'reaction-remove')!.record as Extract<DeviceSyncRecord, { type: 'reaction' }>).reaction
     const source: DeviceSyncRecord[] = [

@@ -1,3 +1,5 @@
+import { acceptChat, groupRequestAccepted, loadMessageRequestDecisions, messageRequests } from './messageRequests'
+import { restoreStoredRequestAcceptance, restoreOwnReactionAcceptance } from './requestActivity'
 import { saveAuthorizationEvent } from './authorizationSync'
 import { saveProcessedEvent } from './storage'
 import { sendOwnReadState, applyOwnReadTag } from './privateStateControl'
@@ -88,6 +90,24 @@ export interface GroupMessage extends ChatMessage {
 
 export const groups = writable<Map<string, Group>>(new Map())
 export const groupMessages = writable<Map<string, GroupMessage[]>>(new Map())
+
+let requestProjectionCleanup: (() => void) | undefined
+function startRequestProjection(): void {
+  if (requestProjectionCleanup) return
+  requestProjectionCleanup = messageRequests.subscribe(() => {
+    const owner = getPubkey()
+    if (!owner) return
+    for (const group of get(groups).values()) {
+      if (!group.members.includes(owner)) continue
+      const accepted = groupRequestAccepted(owner, group.id, group.accepted)
+      if (accepted === group.accepted) continue
+      const updated = { ...group, accepted }
+      groups.update(all => new Map(all).set(group.id, updated))
+      void saveGroupState(updated)
+      syncNativeGroupTransport(group.id)
+    }
+  })
+}
 export const currentGroupId = writable<string | null>(null)
 
 // Queue for group events that arrive before the group's roster snapshot
@@ -310,6 +330,7 @@ function applyGroupRosterFact(fact: GroupRosterFact): boolean {
   const myPubkey = getPubkey()
   if (!myPubkey) return false
 
+  startRequestProjection()
   const metadata = groupMetadataFromRosterFact(fact)
   const existing = get(groups).get(fact.groupId)
   if (existing) {
@@ -331,7 +352,7 @@ function applyGroupRosterFact(fact: GroupRosterFact): boolean {
       ...metadata,
       protocol: fact.protocol,
       createdAt: fact.group.createdAt,
-      accepted: fact.signerPubkey === myPubkey,
+      accepted: groupRequestAccepted(myPubkey, fact.groupId, fact.signerPubkey === myPubkey),
     }
     rememberGroupRosterFact(fact.groupId, fact)
     groups.update(g => { g.set(fact.groupId, group); return g })
@@ -387,6 +408,7 @@ async function backfillGroupRosterFacts(): Promise<void> {
 }
 
 export function initGroupRosterFactSync(): () => void {
+  startRequestProjection()
   const ownerPubkey = getPubkey()
   const client = get(nostrClient)
   if (!ownerPubkey || typeof client.subscribe !== 'function') {
@@ -879,6 +901,7 @@ export function sendGroupReaction(groupId: string, messageId: string, emoji: str
       content: nextEmoji, kind: REACTION_KIND, tags: [['e', messageId]],
     }, false, nowMs)
     await captureReaction(owner, `group:${groupId}`, rumor, owner, messageId, nextEmoji)
+    if (getPubkey() === owner) acceptChat(`group:${groupId}`)
     return rumor
   }).then(rumor => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
     .catch(error => console.error('[groups] Failed to send group reaction:', error))
@@ -1060,7 +1083,7 @@ async function handleGroupMessage(
   const message: GroupMessage = {
     id: rumor.id,
     content: rumor.content,
-    timestamp: rumor.created_at * 1000,
+    timestamp: controlClock(rumor).createdAtMs ?? rumor.created_at * 1000,
     isMine: isOwnOwnerMessage,
     senderPubkey,
     ...(replyTag && { replyTo: replyTag }),
@@ -1217,6 +1240,9 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
 }
 
 export async function loadGroupsFromStorage(): Promise<void> {
+  const owner = getPubkey()
+  if (owner) loadMessageRequestDecisions(owner)
+  startRequestProjection()
   try {
     const storedGroups = await getAllGroups()
 
@@ -1231,7 +1257,7 @@ export async function loadGroupsFromStorage(): Promise<void> {
         createdAt: stored.createdAt,
         secret: stored.secret,
         protocol: stored.protocol,
-        accepted: stored.accepted,
+        accepted: owner ? groupRequestAccepted(owner, stored.id, stored.accepted) : stored.accepted,
         rosterVersion: stored.rosterVersion,
       }
       if (stored.rosterVersion) rememberGroupRosterFact(group.id, stored.rosterVersion)
@@ -1242,6 +1268,7 @@ export async function loadGroupsFromStorage(): Promise<void> {
       })
 
       const storedMessages = await getMessagesForSession(`group:${group.id}`)
+      if (owner) for (const message of storedMessages) await restoreStoredRequestAcceptance(owner, message)
       const messages: GroupMessage[] = storedMessages
         .map(m => ({
           id: m.id,
@@ -1267,13 +1294,13 @@ export async function loadGroupsFromStorage(): Promise<void> {
         return gm
       })
 
-      const owner = getPubkey()
       if (owner) await restoreGroupSettings(owner, group.id)
       syncNativeGroupTransport(group.id)
 
       // Flush any events that arrived before this group was loaded
       flushPendingEvents(group.id)
     }
+    if (owner) await restoreOwnReactionAcceptance(owner)
     initGroupRosterFactSync()
   } catch (e) {
     console.error('[groups] Failed to load groups from storage:', e)
@@ -1341,6 +1368,8 @@ export async function deleteGroup(groupId: string): Promise<void> {
 }
 
 export function clearGroupData(): void {
+  requestProjectionCleanup?.()
+  requestProjectionCleanup = undefined
   const groupIds = Array.from(get(groups).keys())
   for (const groupId of groupIds) {
     clearRemoteTyping(`group:${groupId}`)
@@ -1365,6 +1394,7 @@ export function acceptGroupInvitation(groupId: string): void {
   const group = currentGroups.get(groupId)
   if (!group || !group.members.includes(getPubkey() || '')) return
 
+  acceptChat(`group:${groupId}`)
   const updated: Group = { ...group, accepted: true }
 
   groups.update(g => {

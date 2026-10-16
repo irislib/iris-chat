@@ -5,7 +5,7 @@
   import { groups, groupMessages } from '../lib/groups'
   import { relayStore } from '../lib/relayStore'
   import { following } from '../lib/following'
-  import { messageRequests, acceptChat, rejectChat } from '../lib/messageRequests'
+  import { messageRequests, requestDecisionsByChat, acceptChat, rejectChat } from '../lib/messageRequests'
   import { messageRequestSettings } from '../lib/messageRequestSettings'
   import { isMessageRequestChat, type MessageRequestPolicyContext } from '../lib/messageRequestPolicy'
   import Avatar from './Avatar.svelte'
@@ -33,6 +33,7 @@
     myPubkey: $identity?.pubkey || null,
     following: $following,
     acceptedChats: $messageRequests.acceptedChats,
+    decisions: requestDecisionsByChat($identity?.pubkey ?? ''),
     rejectedChats: $messageRequests.rejectedChats,
     receiveMessageRequests: $messageRequestSettings.receiveMessageRequests,
   }))

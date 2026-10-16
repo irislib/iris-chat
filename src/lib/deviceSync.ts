@@ -1,7 +1,7 @@
 import { groupAttachmentOwner } from './attachmentPeerPolicy'
 import { getMessageRequestPolicyContext } from './messageRequestPolicy'
 import { loadMentionNotificationSettings } from './mentionNotificationSettings'
-import { loadMessageRequestDecisions, mergeRequestDecision } from './messageRequests'
+import { loadMessageRequestDecisions, mergeRequestDecision, groupRequestAccepted } from './messageRequests'
 import { applyHistoryChatDeletion, db, getMessagesForSession } from './storage'
 import { privateStateVersion } from './privateStateStore'
 import { messageMutationFields } from './messageMutations'
@@ -540,9 +540,7 @@ export async function applyDeviceSyncSnapshot(
       protocol: group.protocol ?? existing?.protocol,
       rosterVersion: { revision: group.revision, updatedAt: group.updatedAt, eventCreatedAt: group.updatedAt, eventId: '' },
       ...(existing?.secret && { secret: existing.secret }),
-      ...((group.accepted ?? existing?.accepted) !== undefined && {
-        accepted: group.accepted ?? existing?.accepted,
-      }),
+      accepted: groupRequestAccepted(ownerPubkey, group.id, group.accepted ?? existing?.accepted),
     }
     applyStoreUpdate(() => {
       groups.update((all) => new Map(all).set(group.id, local))
