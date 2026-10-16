@@ -1407,7 +1407,7 @@ test('native joins private hashtree personal and group invitations from the brow
   }
 })
 
-test('browser joins a native private group after admin restart and enforces its use limit and revocation', async ({ browser, testRelay, testRelayUrl, baseURL }) => {
+test('browser joins a native private group after admin restart and enforces its use limit and revocation', async ({ browser, testRelay, testRelayUrl, baseURL }, info) => {
   skipIfNdrWorkspaceMissing()
   test.setTimeout(240_000)
   testRelay.deliveryFilter = event => !event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
@@ -1431,10 +1431,24 @@ test('browser joins a native private group after admin restart and enforces its 
     }
     const restartAdminUntil = async (ready: () => Promise<boolean>) => {
       const deadline = Date.now() + 60_000
+      const attempts: unknown[] = []
       while (Date.now() < deadline) {
-        await runNdr(['sync', '--wait-ms', '2500'], dir)
+        // Debug with a wait uses the same foreground/readiness path as sync,
+        // but preserves protocol and pending-delivery evidence before exit.
+        attempts.push(await runNdr(['debug', '--wait-ms', '2500'], dir))
+        if (attempts.length > 4) attempts.shift()
         if (await ready()) return
       }
+      await info.attach('native-group-admission', {
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify({
+          attempts,
+          group: await runNdr(['group', 'show', groupId], dir),
+          relayEvents: testRelay.publishedEvents.map(({ id, kind, pubkey, tags }) => ({
+            id, kind, pubkey, tags: tags.filter(tag => ['p', 'type', 'd'].includes(tag[0])),
+          })).slice(-100),
+        }, null, 2)),
+      })
       throw new Error('Native admin did not finish the persisted invite request')
     }
     // CLI has exited: no administrator process is available when the browser asks to join.
