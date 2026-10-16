@@ -5,8 +5,12 @@ const owner = 'a'.repeat(64), issuer = 'b'.repeat(64), peer1 = 'c'.repeat(64), p
 const mocks = vi.hoisted(() => ({ send: vi.fn(), publish: vi.fn() }))
 vi.mock('./privateStateStore', () => ({ isPrivatelyBlocked: async () => false }))
 vi.mock('./identity', () => ({ getPubkey: () => 'a'.repeat(64) }))
-vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getState: () => ({ currentDevicePubkey: 'b'.repeat(64) }), sendEvent: mocks.send }), waitForSendReadyRuntime: vi.fn() }))
-vi.mock('./chat', () => ({ createInvite: vi.fn(), personalInviteRecord: vi.fn(), inviteFromRecord: vi.fn(), markGroupInviteConnection: vi.fn() }))
+vi.mock('./privateChats', () => {
+  const runtime = { getState: () => ({ currentDevicePubkey: 'b'.repeat(64) }), sendEvent: mocks.send, acceptInvite: vi.fn() }
+  return { getNdrRuntime: () => runtime, waitForSendReadyRuntime: async () => runtime }
+})
+vi.mock('./chat', () => ({ createInvite: vi.fn(), personalInviteRecord: vi.fn(), inviteFromRecord: vi.fn(), markGroupInviteConnection: vi.fn(),
+  buildManagerRumorOptions: (recipient: string) => ({ pubkey: 'a'.repeat(64), tags: [['p', recipient]] }) }))
 vi.mock('./inviteRecordStore', () => ({ publishInviteRecord: vi.fn() }))
 vi.mock('./groups', async () => {
   const { writable } = await import('svelte/store')
@@ -15,7 +19,7 @@ vi.mock('./groups', async () => {
     isAdmin: (group: {admins:string[]}, owner:string) => group.admins.includes(owner) }
 })
 import { db } from './storage'
-import { admissionDecision, receiveGroupInviteControl, type GroupInviteGrant } from './groupInvites'
+import { admissionDecision, requestGroupJoin, receiveGroupInviteControl, type GroupInviteGrant } from './groupInvites'
 import { groups, type Group } from './groups'
 const group: Group = { id: 'picnic', name: 'Picnic', members: [owner], admins: [owner], accepted: true, createdAt: 1, secret: 'f'.repeat(64), protocol: 'sender_key_v1' }
 const grant: GroupInviteGrant = { reference: 'private-reference', revoked: false, usedBy: [], record: { v: 1, type: 'group', name: 'Picnic', nonce: token, groupId: group.id, token, maxUses: 1,
@@ -36,6 +40,14 @@ it('atomically enforces a use limit for simultaneous authenticated requests', as
   const saved = (await db.sessionManager.get(key))!.value as GroupInviteGrant
   expect(saved.usedBy).toHaveLength(1)
   expect(mocks.send.mock.calls.map((call: unknown[]) => JSON.parse((call[1] as {content:string}).content).status).sort()).toEqual(['added', 'full'])
+})
+it('authors join requests and results as the authenticated account for native peers', async () => {
+  await requestGroupJoin(grant.record)
+  expect(mocks.send).toHaveBeenLastCalledWith(owner,
+    expect.objectContaining({ kind: 10461, pubkey: owner, tags: [['p', owner]] }), owner, { includeLocalSiblings: false })
+  await join(peer1)
+  expect(mocks.send).toHaveBeenLastCalledWith(peer1,
+    expect.objectContaining({ kind: 10462, pubkey: owner, tags: [['p', peer1]] }), owner, { includeLocalSiblings: false })
 })
 it('does not spend another use on retry and never readmits a removed member', async () => {
   await join(peer1); await join(peer1)

@@ -1653,7 +1653,7 @@ function getManagerRumorAuthorPubkey(): string {
   throw new Error('Not logged in')
 }
 
-function buildManagerRumorOptions(recipientPubkey: string, tags: string[][] = []) {
+export function buildManagerRumorOptions(recipientPubkey: string, tags: string[][] = []) {
   return {
     pubkey: getManagerRumorAuthorPubkey(),
     tags: ensureRecipientTag(tags, recipientPubkey),

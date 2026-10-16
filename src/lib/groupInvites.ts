@@ -3,7 +3,7 @@ import { addGroupMember as addMember, type Rumor, type OnEventMeta } from 'nostr
 import { getPubkey } from './identity'
 import { isPrivatelyBlocked } from './privateStateStore'
 import { getNdrRuntime, waitForSendReadyRuntime } from './privateChats'
-import { createInvite, personalInviteRecord, inviteFromRecord, markGroupInviteConnection } from './chat'
+import { createInvite, personalInviteRecord, inviteFromRecord, markGroupInviteConnection, buildManagerRumorOptions } from './chat'
 import { groups, publishAdmittedGroup, canSendToGroup, isAdmin, type Group } from './groups'
 import { db } from './storage'
 import { publishInviteRecord } from './inviteRecordStore'
@@ -71,11 +71,14 @@ export async function requestGroupJoin(record: InviteRecord): Promise<string> {
   return record.groupId
 }
 async function sendJoinRequest(record: InviteRecord): Promise<void> {
+  const owner = getPubkey(); if (!owner) throw new Error('Not logged in')
   const runtime = await waitForSendReadyRuntime()
+  if (getPubkey() !== owner) throw new Error('Account changed')
   groupJoinStatus.update(value => ({ ...value, [record.groupId!]: 'Waiting for the group admin to connect…' }))
   await runtime.sendEvent(record.invite.owner, {
-    kind: GROUP_JOIN_REQUEST_KIND, content: JSON.stringify({ v: 1, groupId: record.groupId, token: record.token }), tags: [],
-  }, undefined, { includeLocalSiblings: false })
+    kind: GROUP_JOIN_REQUEST_KIND, content: JSON.stringify({ v: 1, groupId: record.groupId, token: record.token }),
+    ...buildManagerRumorOptions(record.invite.owner),
+  }, owner, { includeLocalSiblings: false })
 }
 export async function retryGroupJoin(groupId: string): Promise<void> {
   const owner = getPubkey(); if (!owner) return
@@ -127,8 +130,9 @@ export async function receiveGroupInviteControl(rumor: Rumor, meta?: OnEventMeta
     if (!status || getPubkey() !== owner) return
     await markGroupInviteConnection(peer)
     if (nextGroup) await publishAdmittedGroup(nextGroup)
+    if (getPubkey() !== owner) return
     await getNdrRuntime().sendEvent(peer, { kind: GROUP_JOIN_RESULT_KIND,
-      content: JSON.stringify({ ...payload, status }), tags: [] }, undefined, { includeLocalSiblings: false })
+      content: JSON.stringify({ ...payload, status }), ...buildManagerRumorOptions(peer) }, owner, { includeLocalSiblings: false })
   })
   admissionQueues.set(queueKey, pending)
   try { await pending }

@@ -1431,18 +1431,21 @@ test('browser joins a native private group after admin restart and enforces its 
     }
     const restartAdminUntil = async (ready: () => Promise<boolean>) => {
       const deadline = Date.now() + 60_000
+      const initialAttempts: unknown[] = []
       const attempts: unknown[] = []
       while (Date.now() < deadline) {
         // Debug with a wait uses the same foreground/readiness path as sync,
         // but preserves protocol and pending-delivery evidence before exit.
-        attempts.push(await runNdr(['debug', '--wait-ms', '2500'], dir))
+        const attempt = await runNdr(['debug', '--wait-ms', '2500'], dir)
+        if (initialAttempts.length < 2) initialAttempts.push(attempt)
+        attempts.push(attempt)
         if (attempts.length > 4) attempts.shift()
         if (await ready()) return
       }
       await info.attach('native-group-admission', {
         contentType: 'application/json',
         body: Buffer.from(JSON.stringify({
-          attempts,
+          initialAttempts, attempts,
           group: await runNdr(['group', 'show', groupId], dir),
           relayEvents: testRelay.publishedEvents.map(({ id, kind, pubkey, tags }) => ({
             id, kind, pubkey, tags: tags.filter(tag => ['p', 'type', 'd'].includes(tag[0])),
