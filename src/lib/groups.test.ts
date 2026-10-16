@@ -611,6 +611,21 @@ describe('groups', () => {
   })
 
   describe('group_roster fact ingest', () => {
+    it('persists encrypted roster facts only from their authenticated author', async () => {
+      const { receivePrivateGroupRosterFact, groups } = await import('./groups')
+      const storage = await import('./storage')
+      const groupId = 'private-native-admission'
+      const rumor = makeRosterFactEvent({ groupId, name: 'Native group', members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN] })
+      await receivePrivateGroupRosterFact(rumor)
+      await receivePrivateGroupRosterFact(rumor, { senderOwnerPubkey: MEMBER_B, senderDevicePubkey: OTHER_DEVICE } as never)
+      expect(get(groups).has(groupId)).toBe(false)
+      await receivePrivateGroupRosterFact(rumor, { senderOwnerPubkey: ROSTER_ADMIN, senderDevicePubkey: OTHER_DEVICE } as never)
+      expect(get(groups).get(groupId)?.members).toEqual([ROSTER_ADMIN, MY_PUBKEY])
+      expect(storage.saveGroup).toHaveBeenLastCalledWith(expect.objectContaining({ id: groupId, accepted: false }))
+      vi.mocked(storage.saveGroup).mockRejectedValueOnce(new Error('quota'))
+      await expect(receivePrivateGroupRosterFact(rumor, { senderOwnerPubkey: ROSTER_ADMIN } as never)).rejects.toThrow('quota')
+      await expect(receivePrivateGroupRosterFact(rumor, { senderOwnerPubkey: ROSTER_ADMIN } as never)).resolves.toBeUndefined()
+    })
     it.each(['sender_key_v1', 'pairwise_fanout_v1'] as const)('retains signed %s group metadata through storage and a local rename', async (protocol: 'sender_key_v1' | 'pairwise_fanout_v1') => {
       const { handleGroupRosterFactEvent, groups, clearGroupData, loadGroupsFromStorage, updateGroupInfo, acceptGroupInvitation } = await import('./groups')
       const storage = await import('./storage')

@@ -74,7 +74,7 @@ import {
   type StoredInvite
 } from './storage'
 import { updateDMSubscription } from './notifications'
-import { handleGroupEvent, handleGroupRosterFactRumor, groups } from './groups'
+import { handleGroupEvent, handleGroupRosterFactRumor, receivePrivateGroupRosterFact, groups } from './groups'
 import { parseReceipt, shouldAdvanceStatus, type ReceiptPayload, type MessageStatus } from './receipts'
 import { receiptSettings } from './receiptSettings'
 import { typingSettings } from './typingSettings'
@@ -397,16 +397,21 @@ function subscribeToNdrRuntimeEvents(): void {
     if (!account || getPubkey() !== account) throw new Error('Account is not ready')
     await (await import('./groupInvites')).receiveGroupInviteControl(rumor, meta)
   })
+  const stopGroupRosters = runtime.onDurableSessionEvent([37368], async (rumor, _from, meta) => {
+    if (!account || getPubkey() !== account) throw new Error('Account is not ready')
+    await receivePrivateGroupRosterFact(rumor, meta)
+    if (getPubkey() !== account) throw new Error('Account changed')
+  })
   const stopDurable = registerPrivateControlEvents(runtime, {
     account, getAccount: getPubkey, getState: () => get(devices), receive: handleManagerEvent,
   })
   const stopEvents = runtime.onSessionEvent((rumor, from, meta) => {
-    if (durableKinds.includes(rumor.kind) || [10461, 10462, MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND].includes(rumor.kind)) return
+    if (durableKinds.includes(rumor.kind) || [10461, 10462, 37368, MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND].includes(rumor.kind)) return
     handleManagerEvent(rumor, from, meta).catch((e) =>
       console.error('[chat] Failed to handle NdrRuntime event:', e)
     )
   })
-  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents(); stopGroupInvites() }
+  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents(); stopGroupInvites(); stopGroupRosters() }
 }
 
 function startNdrRuntimePoller(): void {

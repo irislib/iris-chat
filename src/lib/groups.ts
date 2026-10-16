@@ -35,7 +35,7 @@ import {
   removeGroupAdmin as libRemoveAdmin,
   getExpirationTimestampSeconds,
 } from 'nostr-double-ratchet'
-import type { Rumor } from 'nostr-double-ratchet'
+import type { Rumor, OnEventMeta } from 'nostr-double-ratchet'
 import { AppEvent } from './nostrClient'
 import { getPubkey, identity, nostrClient } from './identity'
 import { devices } from './devices'
@@ -395,6 +395,21 @@ export function handleGroupRosterFactRumor(rumor: Rumor): boolean {
   } catch {
     return false
   }
+}
+
+export async function receivePrivateGroupRosterFact(rumor: Rumor, meta?: OnEventMeta): Promise<void> {
+  const owner = getPubkey(), sender = meta?.senderOwnerPubkey
+  // An encrypted rumor has no standalone signature. Its claimed roster author
+  // must be the account authenticated by the pairwise session.
+  if (!owner || !sender || rumor.pubkey !== sender || !isGroupRosterFactEvent(rumor)) return
+  let fact: GroupRosterFact
+  try { fact = parseGroupRosterFactRumor(rumor as GroupRosterFactRumor) } catch { return }
+  if (!await privateHistoryAllowed(owner, sender, rumor.created_at) || getPubkey() !== owner) return
+  applyGroupRosterFact(fact)
+  const current = get(groups).get(fact.groupId)
+  // Retry persistence even if an earlier delivery already applied this fact in
+  // memory. The durable session event is acknowledged only after storage works.
+  if (current) await saveGroupState(current)
 }
 
 async function backfillGroupRosterFacts(): Promise<void> {
