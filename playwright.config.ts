@@ -23,7 +23,8 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      // Exercise the full browser's headless mode; the separate shell crashes on context teardown.
+      use: { ...devices['Desktop Chrome'], channel: 'chromium' },
     },
     {
       name: 'webkit-notifications',
