@@ -6,8 +6,8 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools'
 
 vi.mock('./identity', () => ({ getPubkey: vi.fn(), getPrivkeyBytes: vi.fn(), isNip07Login: () => false }))
 import { getPubkey, getPrivkeyBytes } from './identity'
-import { uploadFile } from './hashtree'
-afterEach(() => vi.unstubAllGlobals())
+import { uploadFile, getAttachmentCache, setAttachmentAccount } from './hashtree'
+afterEach(() => { setAttachmentAccount(null); vi.unstubAllGlobals() })
 
 it('encrypts every uploaded attachment chunk and cannot read it with the hash alone', async () => {
   const secret = generateSecretKey()
@@ -33,6 +33,7 @@ it('encrypts every uploaded attachment chunk and cannot read it with the hash al
     blobs = new Map()
     const result = await uploadFile(new File([bytes], name))
     const cid = nhashDecode(result.nhash)
+    await vi.waitFor(async () => expect((await getAttachmentCache().receipts(getPubkey()!, [result.nhash]))[0]?.uploadedUrls).toHaveLength(1), { timeout: 5000 })
     expect(cid.key, name).toHaveLength(32)
     const store = new MemoryStore()
     const pending = [cid], visited = new Set<string>()

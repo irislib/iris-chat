@@ -11,16 +11,43 @@
 import { test as base, type BrowserContext, type Page } from '@playwright/test'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
+import { verifyEvent } from 'nostr-tools'
 import { SilentTestRelay, TestRelay } from './test-relay'
 
 const inviteBlobs = new Map<string, Map<string, Buffer>>()
 
 /** Serve the same encrypted leaves to the native CLI in interoperability tests. */
 export async function serveInviteBlobs(relayUrl: string): Promise<{ url: string; close: () => Promise<void> }> {
-  const server = createServer((request, response) => {
-    const data = inviteBlobs.get(relayUrl)?.get((request.url || '').slice(1))
+  let blobs = inviteBlobs.get(relayUrl)
+  if (!blobs) { blobs = new Map(); inviteBlobs.set(relayUrl, blobs) }
+  const sharedBlobs = blobs
+  const server = createServer(async (request, response) => {
+    const name = (request.url || '').slice(1).replace(/\.bin$/, '')
+    if (request.method === 'PUT' && name === 'upload') {
+      try {
+        const chunks: Buffer[] = []; let size = 0
+        for await (const chunk of request) {
+          size += chunk.length
+          if (size > 4 * 1024 * 1024) { response.writeHead(413); response.end(); return }
+          chunks.push(chunk)
+        }
+        const data = Buffer.concat(chunks), hash = createHash('sha256').update(data).digest('hex')
+        const auth = request.headers.authorization
+        if (!auth?.startsWith('Nostr ')) throw new Error('Missing authorization')
+        const event = JSON.parse(Buffer.from(auth.slice(6), 'base64').toString())
+        if (!verifyEvent(event) || event.kind !== 24242 ||
+          !event.tags.some((tag: string[]) => tag[0] === 't' && tag[1] === 'upload') ||
+          !event.tags.some((tag: string[]) => tag[0] === 'x' && tag[1] === hash) ||
+          !event.tags.some((tag: string[]) => tag[0] === 'expiration' && Number(tag[1]) > Date.now() / 1000)) throw new Error('Invalid upload authorization')
+        sharedBlobs.set(hash, data)
+        response.writeHead(201, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ sha256: hash, size: data.length }))
+      } catch { response.writeHead(401); response.end() }
+      return
+    }
+    const data = sharedBlobs.get(name)
     response.writeHead(data ? 200 : 404, { 'content-type': 'application/octet-stream' })
-    response.end(data)
+    response.end(request.method === 'HEAD' ? undefined : data)
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address() as { port: number }
@@ -62,8 +89,8 @@ export async function useTestRelay(context: BrowserContext, relayUrlOrUrls: stri
       }
     })
   }
-  await context.route(/^https:\/\/(?:upload|cdn)\.iris\.to\/(?:upload|[a-f0-9]{64})$/, async route => {
-    const request = route.request(), path = new URL(request.url()).pathname.slice(1)
+  await context.route(/^https:\/\/(?:upload|cdn)\.iris\.to\/(?:upload|[a-f0-9]{64}(?:\.bin)?)$/, async route => {
+    const request = route.request(), path = new URL(request.url()).pathname.slice(1).replace(/\.bin$/, '')
     if (request.method() === 'PUT' && path === 'upload') {
       const data = request.postDataBuffer()!
       const hash = createHash('sha256').update(data).digest('hex')

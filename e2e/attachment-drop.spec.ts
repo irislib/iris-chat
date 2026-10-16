@@ -26,18 +26,30 @@ async function messages(page: Page) {
 }
 
 async function uploads(page: Page) {
-  let release!: () => void
-  const held = new Promise<void>(resolve => { release = resolve })
-  let count = 0
-  await page.route(/https:\/\/(cdn|upload|hashtree)\.iris\.to\//, async route => {
-    if (route.request().method() !== 'PUT' || !route.request().url().endsWith('/upload')) {
-      await route.fulfill({ status: 404 }); return
+  // Local encryption/storage now owns composer readiness; HTTP replication is background.
+  // Hold the actual File stream so these tests still exercise an unfinished attachment.
+  await page.evaluate(() => {
+    const original = File.prototype.stream
+    let release!: () => void, count = 0
+    const held = new Promise<void>(resolve => { release = resolve })
+    Object.assign(window, { attachmentTest: { release, count: () => count } })
+    File.prototype.stream = function () {
+      const reader = original.call(this).getReader(); count++
+      return new ReadableStream({
+        async pull(controller) {
+          await held
+          const { done, value } = await reader.read()
+          if (done) controller.close(); else controller.enqueue(value)
+        },
+        cancel: reason => reader.cancel(reason),
+      })
     }
-    count++
-    await held
-    await route.fulfill({ status: 201, json: { sha256: route.request().headers()['x-sha-256'] } })
   })
-  return { release, count: () => count }
+  type Harness = { attachmentTest: { release: () => void; count: () => number } }
+  return {
+    release: () => page.evaluate(() => (window as unknown as Harness).attachmentTest.release()),
+    count: () => page.evaluate(() => (window as unknown as Harness).attachmentTest.count()),
+  }
 }
 
 async function drop(page: Page, names: string[], hover = false) {
@@ -79,7 +91,7 @@ for (const group of [false, true]) test(`whole ${group ? 'group' : 'direct'} cha
   expect(await messages(page)).toEqual([])
   await expect(input).toHaveValue('Photos and notes for Saturday')
   await expect.poll(upload.count).toBeGreaterThan(0)
-  upload.release()
+  await upload.release()
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
   expect(await messages(page)).toEqual([])
   await page.screenshot({ path: testInfo.outputPath('staged-files-desktop.png'), fullPage: true })
@@ -102,8 +114,8 @@ test('late upload cannot reappear after removal or a chat switch', async ({ page
   await page.getByRole('button', { name: 'New Chat', exact: true }).click()
   await page.getByPlaceholder('Paste invite link').fill(nip19.npubEncode('d'.repeat(64)))
   await page.getByPlaceholder('Type a message...').fill('Keep this new draft')
-  upload.release()
-  // Wait for both real upload requests to finish before checking the new draft.
+  await upload.release()
+  // Wait for both actual file streams to finish before checking the new draft.
   await expect.poll(upload.count).toBe(2)
   await page.waitForLoadState('networkidle')
   await expect(page.getByTestId('attachment-preview')).toHaveCount(0)
@@ -134,6 +146,6 @@ test('folder and URL drops do not upload or replace the caption', async ({ page 
   await expect(page.getByTestId('file-drop-highlight')).toHaveCount(0)
   await expect(page.getByTestId('attachment-preview')).toHaveCount(0)
   await expect(page.getByPlaceholder('Type a message...')).toHaveValue('Keep my caption')
-  expect(upload.count()).toBe(0)
-  upload.release()
+  expect(await upload.count()).toBe(0)
+  await upload.release()
 })

@@ -484,7 +484,7 @@ function createNdrDataDir(relayUrls: string[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ndr-interop-'))
   if (nativeInviteBlobs) {
     fs.mkdirSync(path.join(dir, 'hashtree'))
-    fs.writeFileSync(path.join(dir, 'hashtree', 'config.toml'), `[blossom]\nread_servers = ["${nativeInviteBlobs.url}"]\nwrite_servers = []\n`)
+    fs.writeFileSync(path.join(dir, 'hashtree', 'config.toml'), `[blossom]\nread_servers = ["${nativeInviteBlobs.url}"]\nwrite_servers = ["${nativeInviteBlobs.url}"]\n`)
   }
   fs.writeFileSync(
     path.join(dir, 'config.json'),
@@ -783,7 +783,7 @@ test('iris-chat <-> ndr interop', async ({ page, silentRelay, testRelay, testRel
     const created = await runNdr(['invite', 'create'], dataDir)
     expect(created.status).toBe('ok')
     const inviteUrl: string | undefined = created.data?.url
-    expect(inviteUrl).toBeTruthy()
+    expect(inviteUrl).toMatch(/#\/nhash1/)
 
     await useTestRelay(page.context(), testRelayUrls)
     await page.goto('/')
@@ -1366,7 +1366,7 @@ test('native joins private hashtree personal and group invitations from the brow
   try {
     for (const dir of dirs) {
       fs.mkdirSync(path.join(dir, 'hashtree'), { recursive: true })
-      fs.writeFileSync(path.join(dir, 'hashtree', 'config.toml'), `[blossom]\nread_servers = ["${blobs.url}"]\nwrite_servers = []\n`)
+      fs.writeFileSync(path.join(dir, 'hashtree', 'config.toml'), `[blossom]\nread_servers = ["${blobs.url}"]\nwrite_servers = ["${blobs.url}"]\n`)
       await runNdr(['account', 'create'], dir)
     }
     await disablePublicCallServers(page.context())
@@ -1404,5 +1404,61 @@ test('native joins private hashtree personal and group invitations from the brow
   } finally {
     await blobs.close()
     for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('browser joins a native private group after admin restart and enforces its use limit and revocation', async ({ browser, testRelay, testRelayUrl, baseURL }) => {
+  skipIfNdrWorkspaceMissing()
+  test.setTimeout(240_000)
+  testRelay.deliveryFilter = event => !event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
+  const dir = createNdrDataDir([testRelayUrl])
+  const contexts = await Promise.all(Array.from({ length: 3 }, () => browser.newContext()))
+  try {
+    for (const context of contexts) { await useTestRelay(context, testRelayUrl); await disablePublicCallServers(context) }
+    const [bob, cara, dana] = await Promise.all(contexts.map(context => context.newPage()))
+    await runNdr(['account', 'create'], dir)
+    const created = await runNdr(['group', 'create', 'Native private picnic'], dir)
+    const groupId = (created.data?.current_chat?.group_id ?? created.data?.current_chat?.chat_id?.replace(/^group:/, '')) as string
+    expect(groupId).toBeTruthy()
+    const issued = await runNdr(['invite', 'group', groupId, '--max-uses', '1'], dir)
+    const grant = issued.data.invites[0] as { id: string; url: string }
+    expect(grant.url).toMatch(/#\/nhash1/)
+    const join = async (page: Page, url: string) => {
+      await page.goto(url.replace('https://chat.iris.to', baseURL!))
+      await expect(page.getByRole('main').getByText('Join Native private picnic', { exact: true })).toBeVisible()
+      await page.getByRole('button', { name: 'Join Group', exact: true }).click()
+      await expect(page.getByText('Waiting for the group admin to connect…', { exact: true })).toBeVisible()
+    }
+    const restartAdminUntil = async (ready: () => Promise<boolean>) => {
+      const deadline = Date.now() + 60_000
+      while (Date.now() < deadline) {
+        await runNdr(['sync', '--wait-ms', '2500'], dir)
+        if (await ready()) return
+      }
+      throw new Error('Native admin did not finish the persisted invite request')
+    }
+    // CLI has exited: no administrator process is available when the browser asks to join.
+    await join(bob, grant.url)
+    await restartAdminUntil(() => bob.getByRole('button', { name: 'Accept', exact: true }).isVisible())
+    await bob.getByRole('button', { name: 'Accept', exact: true }).click()
+    await bob.getByPlaceholder('Type a message...').fill('Browser brought strawberries')
+    await bob.getByRole('button', { name: 'Send', exact: true }).click()
+    await waitForNativeMessage(dir, `group:${groupId}`, 'Browser brought strawberries', 30_000)
+    await runNdrRetry(['group', 'send', groupId, 'Native says welcome'], dir, 30_000, 500)
+    await expectChatBubbleVisible(bob, 'Native says welcome')
+    await join(cara, grant.url)
+    await restartAdminUntil(() => cara.getByText('This invite has reached its use limit.', { exact: true }).isVisible())
+    await expect(cara.getByPlaceholder('Type a message...')).toHaveCount(0)
+    const fresh = await runNdr(['invite', 'group', groupId, '--max-uses', '1'], dir)
+    const revoked = (fresh.data.invites as { id: string; url: string }[]).find(item => item.id !== grant.id)!
+    expect(revoked).toBeTruthy()
+    expect((await runNdr(['invite', 'revoke', groupId, revoked.id], dir)).data.revoked).toBe(true)
+    await join(dana, revoked.url)
+    await restartAdminUntil(() => dana.getByText('This invite is no longer available.', { exact: true }).isVisible())
+    await expect(dana.getByPlaceholder('Type a message...')).toHaveCount(0)
+  } finally {
+    testRelay.deliveryFilter = undefined
+    await Promise.all(contexts.map(context => context.close()))
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })

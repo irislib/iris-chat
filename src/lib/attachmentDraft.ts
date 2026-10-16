@@ -8,9 +8,11 @@ export interface PendingAttachment {
   uploading: boolean
   progress: number
   error: string | null
+  retain?: () => Promise<void>
+  discard?: () => void
 }
 
-type Upload = (file: File, progress: (loaded: number, total: number) => void) => Promise<{ nhash: string }>
+type Upload = (file: File, progress: (loaded: number, total: number) => void) => Promise<{ nhash: string; discard?: () => void; retain?: () => Promise<void> }>
 
 /** One draft owns its previews and upload callbacks; a completed upload never sends. */
 export function createAttachmentDraft(options: {
@@ -27,14 +29,18 @@ export function createAttachmentDraft(options: {
 
   function remove(id: number) {
     const item = items.find(item => item.id === id)
+    item?.discard?.()
     if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl)
     items = items.filter(item => item.id !== id)
     publish()
   }
 
-  function clear() {
+  function clear(retain = false) {
     generation++
-    for (const item of items) if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+    for (const item of items) {
+      if (!retain) item.discard?.()
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+    }
     items = []
     publish()
   }
@@ -68,18 +74,29 @@ export function createAttachmentDraft(options: {
         const result = await options.upload(item.file, (loaded, total) => {
           update(item.id, { progress: total > 0 ? Math.min(100, Math.round(loaded / total * 100)) : 0 })
         })
-        if (!current(item.id)) continue
-        update(item.id, { nhash: result.nhash, uploading: false, progress: 100 })
+        if (!current(item.id)) { result.discard?.(); continue }
+        update(item.id, { nhash: result.nhash, uploading: false, progress: 100, discard: result.discard, retain: result.retain })
         completed.push(item.id)
-      } catch {
-        update(item.id, { uploading: false, error: 'Upload failed' })
+      } catch (error) {
+        const reason = error instanceof Error && /storage is full|storage capacity|too many chunks|too many pending/i.test(error.message) ? error.message : 'Could not save attachment'
+        update(item.id, { uploading: false, error: reason })
       }
     }
     return revision === generation && options.context() === startedIn
       ? completed.filter(id => items.some(item => item.id === id)) : []
   }
 
-  return { subscribe: store.subscribe, add, remove, clear, setContext }
+  async function retain() {
+    const selected = items, revision = generation
+    await Promise.all(selected.map(item => item.retain?.()))
+    if (revision !== generation || options.context() !== context) {
+      for (const item of selected) item.discard?.()
+      return false
+    }
+    return true
+  }
+
+  return { retain, subscribe: store.subscribe, add, remove, clear, setContext }
 }
 
 export function hasFileData(data: DataTransfer | null): boolean {

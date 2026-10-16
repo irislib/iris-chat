@@ -131,7 +131,7 @@
     try {
       const { nhash } = await uploadFile(file, (bytesUploaded, totalBytes) => {
         uploadProgress = Math.round((bytesUploaded / totalBytes) * 100)
-      })
+      }, { requireRemote: true })
       // Verify the image is retrievable before setting it
       await getMediaUrl(nhash, file.type || 'image/*')
       const filename = encodeURIComponent(file.name)

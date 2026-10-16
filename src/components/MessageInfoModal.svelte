@@ -2,6 +2,7 @@
   import type { ChatMessage } from '../lib/chat'
   import { copyToClipboard } from '../lib/utils'
   import { deriveMessageReceiptInfo, partitionReceiptStages } from '../lib/messageInfo'
+  import { attachmentUploadInfo, attachmentUploadsVersion } from '../lib/hashtree'
   import Avatar from './Avatar.svelte'
   import Name from './Name.svelte'
 
@@ -17,6 +18,18 @@
 
   let showRawData = $state(false)
   let copiedMessageId = $state(false)
+  let copiedUploadUrl = $state('')
+  let fileUploads = $state<Array<{ filename: string; uploadedUrls: string[] }>>([])
+  $effect(() => {
+    $attachmentUploadsVersion
+    const content = message.content
+    let canceled = false
+    void attachmentUploadInfo(content).then(rows => { if (!canceled) fileUploads = rows }).catch(() => { if (!canceled) fileUploads = [] })
+    return () => { canceled = true }
+  })
+  async function copyUploadUrl(url: string) {
+    if (await copyToClipboard(url)) copiedUploadUrl = url
+  }
 
   let receiptInfo = $derived(
     deriveMessageReceiptInfo(message, {
@@ -174,6 +187,26 @@
               {/each}
             </div>
           {/if}
+        </div>
+      {/if}
+
+      {#if fileUploads.length > 0}
+        <div class="space-y-2">
+          <p class="text-sm text-gray-400">Encrypted uploads</p>
+          {#each fileUploads as file}
+            <div class="rounded-lg bg-surface-light px-3 py-2 space-y-2">
+              <p class="text-sm break-words">{file.filename}</p>
+              {#if file.uploadedUrls.length === 0}
+                <p class="text-xs text-gray-500">No confirmed uploads on this device.</p>
+              {/if}
+              {#each file.uploadedUrls as url}
+                <div class="flex items-start gap-2">
+                  <a href={url} target="_blank" rel="noopener noreferrer" class="min-w-0 flex-1 text-sm text-primary underline break-all cursor-pointer" title="Open encrypted file">{url}</a>
+                  <button class="btn-ghost px-2 py-1 text-xs shrink-0" aria-label="Copy encrypted file URL" onclick={() => copyUploadUrl(url)}>{copiedUploadUrl === url ? 'Copied' : 'Copy'}</button>
+                </div>
+              {/each}
+            </div>
+          {/each}
         </div>
       {/if}
 

@@ -51,7 +51,7 @@
   const attachmentContext = () => `${$identity?.pubkey || ''}:group:${group.id}`
   const attachmentDraft = createAttachmentDraft({
     context: attachmentContext,
-    upload: uploadFile,
+    upload: (file, progress) => uploadFile(file, progress, { staged: true }),
     canPreview: file => file.size < 10 * 1024 * 1024 && (isImageFile(file.name) || isVideoFile(file.name)),
   })
   let isFileDrag = $state(false)
@@ -132,7 +132,8 @@
     onleave()
   }
 
-  function handleSend() {
+  let preparingAttachments = $state(false)
+  async function handleSend() {
     if (!canSend) return
     let text = messageText.trim()
 
@@ -143,11 +144,17 @@
     }
 
     if (!text) return
+    const context = attachmentContext()
+    preparingAttachments = true
+    try {
+      if (!await attachmentDraft.retain() || context !== attachmentContext()) return
+    } catch { attachmentError = 'Could not save this attachment. Try adding it again.'; return }
+    finally { preparingAttachments = false }
 
     const replyToId = replyingTo?.id
     messageText = ''
     clearDraft(`group:${group.id}`)
-    clearAttachment()
+    clearAttachment(true)
     replyingTo = null
     sendThrottledTyping.reset()
 
@@ -191,8 +198,8 @@
     await deleteMessageFromDb(messageId)
   }
 
-  function clearAttachment() {
-    attachmentDraft.clear()
+  function clearAttachment(retain = false) {
+    attachmentDraft.clear(retain)
     attachmentError = null
   }
 
@@ -338,6 +345,7 @@
   let myPubkey = $derived(getPubkey())
 
   let canSend = $derived(
+    !preparingAttachments &&
     attachmentAllowed &&
     ($attachmentDraft.length === 0 || attachmentAllowed) &&
     !!(messageText.trim() || $attachmentDraft.length) &&

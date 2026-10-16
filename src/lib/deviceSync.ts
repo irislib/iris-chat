@@ -1,3 +1,5 @@
+import { groupAttachmentOwner } from './attachmentPeerPolicy'
+import { getMessageRequestPolicyContext } from './messageRequestPolicy'
 import { loadMentionNotificationSettings } from './mentionNotificationSettings'
 import { loadMessageRequestDecisions, mergeRequestDecision } from './messageRequests'
 import { applyHistoryChatDeletion, db, getMessagesForSession } from './storage'
@@ -48,7 +50,7 @@ import {
 } from './groups'
 import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
-import { activateAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
+import { prepareAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
 import { DeviceSyncTcp, normalizeDeviceSyncPeer } from './deviceSyncTcp'
 import { DeviceHistorySync } from './deviceHistorySync'
 import { closeRevokedDeviceHistoryPairs, deviceHistoryPair, deviceHistoryProgress, loadDeviceHistoryPairs, saveDeviceHistoryPair } from './deviceHistoryPolicy'
@@ -169,6 +171,19 @@ export function isAuthorizedDeviceSyncSource(
       (device) => device.identityPubkey.trim().toLowerCase() === xOnly,
     )
   )
+}
+
+function groupFileDevices(): string[] {
+  const policy = getMessageRequestPolicyContext()
+  try {
+    return getNdrRuntime().getKnownAppKeysSnapshots()
+      .filter(snapshot => groupAttachmentOwner(snapshot.ownerPubkey, policy.myPubkey, get(groups).values(), policy.rejectedChats))
+      .flatMap(snapshot => snapshot.appKeys.getAllDevices().slice(0, 16).map(device => `02${device.identityPubkey.toLowerCase()}`)).slice(0, 128)
+  } catch { return [] }
+}
+function allowedFilePeer(peer: string): boolean {
+  return isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer) ||
+    (/^(02|03)[0-9a-f]{64}$/.test(peer) && groupFileDevices().some(device => device.slice(2) === peer.slice(2)))
 }
 
 function emptySnapshot(rosterAt: number): DeviceSyncSnapshot {
@@ -859,7 +874,7 @@ async function updateRuntime(
       .filter(device => device.identityPubkey !== state.identityPubkey)
       .flatMap(device => [`02${device.identityPubkey}`, `03${device.identityPubkey}`]),
     discoveryApp: DEVICE_SYNC_SCOPE,
-    allowIncomingPeer: peer => isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer),
+    allowIncomingPeer: allowedFilePeer,
     maxConnections: Math.max(16, state.registeredDevices.length + 1),
     maxAutoConnections: 16,
     ordered: false,
@@ -868,7 +883,7 @@ async function updateRuntime(
   // Match Drive's admission on both sides of the shared WebRTC transport.
   const connect = transport.connect.bind(transport)
   transport.connect = async address => {
-    if (!isAuthorizedDeviceSyncSource(address.addr, get(devices)) && !callOwnerForPeer(address.addr)) {
+    if (!allowedFilePeer(address.addr)) {
       throw new Error('This device is not an accepted contact')
     }
     await connect(address)
@@ -958,15 +973,24 @@ async function updateRuntime(
       rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
       () => run === generation && getPubkey() === ownerPubkey)
   })
+  const fileTransport = prepareAttachmentPeers(node, () => [...new Set([
+    ...callPeers,
+    ...groupFileDevices(),
+    ...get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
+    ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
+  ])].filter(peer => peer !== toHex(identity.publicKey) &&
+    allowedFilePeer(peer)), peer => run === generation && getPubkey() === ownerPubkey && allowedFilePeer(peer))
   try {
     await node.start()
   } catch (error) {
+    await fileTransport.dispose()
     if (run === generation) detachCalls()
     await tcp.dispose().catch(() => undefined)
     await node.stop().catch(() => undefined)
     throw error
   }
   if (run !== generation) {
+    await fileTransport.dispose()
     await tcp.dispose()
     await node.stop()
     return
@@ -989,15 +1013,11 @@ async function updateRuntime(
     const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
     if (peer) await node.connect(peer.remoteAddr)
   })
+  if (run !== generation) { await fileTransport.dispose(); return }
   // Message synchronization remains restricted to this account's registered devices.
   await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers), get(nostrClient).runtime)
-  activateAttachmentPeers(node, () => [...new Set([
-    ...callPeers,
-    ...get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
-    ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
-  ])].filter(peer => peer !== toHex(identity.publicKey) &&
-    (isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer))),
-    peer => isAuthorizedDeviceSyncSource(peer, get(devices)) || !!callOwnerForPeer(peer))
+  if (run !== generation) { await fileTransport.dispose(); return }
+  fileTransport.activate()
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {

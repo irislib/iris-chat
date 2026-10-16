@@ -12,11 +12,14 @@ import {
   nhashDecode,
   isNHash,
   type BlossomSigner,
-  type Store,
 } from '@hashtree/core'
-import { DexieStore } from '@hashtree/dexie'
+import { writable } from 'svelte/store'
+import { AttachmentStore } from './attachmentStore'
+import { AttachmentReplication } from './attachmentReplication'
 import { TcpBlobTransport } from '@hashtree/fips-transport'
 import type { FipsDatagramEndpoint } from '@fips/tcp'
+import { normalizeDeviceSyncPeer } from './deviceSyncTcp'
+import { attachmentEndpoint } from './attachmentEndpoint'
 import { getPubkey, getPrivkeyBytes, isNip07Login, isLinkedDeviceLogin } from './identity'
 import { finalizeEvent } from 'nostr-tools'
 
@@ -26,22 +29,78 @@ const DEFAULT_BLOSSOM_SERVERS = [
   { url: 'https://cdn.iris.to', write: false, read: true },
 ]
 
-// Singleton instances
-let blossomStore: BlossomStore | null = null
-let hashTree: HashTree | null = null
-// Only encrypted attachment blocks enter this cache, never the private event index.
-let attachmentCache: Store | undefined
+// Only encrypted attachment blocks enter this bounded store, never private event indexes.
+let attachmentCache: AttachmentStore | undefined
 let attachmentPeers: TcpBlobTransport | undefined
+let attachmentPeerCleanup: (() => Promise<void>) | undefined
 let peerIds: () => readonly string[] = () => []
-export const getAttachmentCache = (): Store => attachmentCache ??= new DexieStore('iris-chat-attachments')
-export function activateAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean) {
+let activeAccount: { owner: string; replication: AttachmentReplication } | undefined
+const activeWrites = new Set<string>()
+const stagedWrites = new Set<string>()
+let draftHeartbeat: ReturnType<typeof setInterval> | undefined
+function stopStaging(id: string) {
+  stagedWrites.delete(id)
+  if (!stagedWrites.size) { clearInterval(draftHeartbeat); draftHeartbeat = undefined }
+}
+function trackStaging(id: string) {
+  stagedWrites.add(id)
+  draftHeartbeat ??= setInterval(() => {
+    for (const pending of stagedWrites) void getAttachmentCache().renewDraft(pending).catch(() => {})
+  }, 20_000)
+}
+let pendingStarts = 0
+export const attachmentUploadsVersion = writable(0)
+const uploadsChanged = () => attachmentUploadsVersion.update(value => value + 1)
+export const getAttachmentCache = (): AttachmentStore => attachmentCache ??= new AttachmentStore()
+export function setAttachmentAccount(owner: string | null) {
+  if (activeAccount?.owner === owner) return
+  activeAccount?.replication.stop(); activeAccount = undefined
+  for (const id of activeWrites) void getAttachmentCache().abort(id).catch(() => {})
+  activeWrites.clear()
+  for (const id of stagedWrites) void getAttachmentCache().abort(id, true).catch(() => {})
+  stagedWrites.clear(); clearInterval(draftHeartbeat); draftHeartbeat = undefined
   void deactivateAttachmentPeers()
-  peerIds = peers
-  attachmentPeers = new TcpBlobTransport({ endpoint: node, localStore: getAttachmentCache(), allowIncomingPeer: allow })
+  if (owner) {
+    const account = { owner, replication: undefined as unknown as AttachmentReplication }
+    const current = () => activeAccount === account && getPubkey() === owner
+    account.replication = new AttachmentReplication(getAttachmentCache(), owner, async event => {
+      if (!current()) throw new Error('Account changed')
+      const signed = await createSigner()(event)
+      if (!current()) throw new Error('Account changed')
+      return signed
+    }, current, uploadsChanged)
+    activeAccount = account; account.replication.wake()
+  }
+  uploadsChanged()
+}
+/** Register inbound service before discovery; publish the client only after startup succeeds. */
+export function prepareAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean) {
+  const transport = attachmentEndpoint(node)
+  const tcp = new TcpBlobTransport({ endpoint: transport.endpoint, localStore: getAttachmentCache(), allowIncomingPeer: allow })
+  let closed = false
+  const dispose = async () => {
+    if (closed) return
+    closed = true; transport.close()
+    if (attachmentPeers === tcp) { attachmentPeers = undefined; peerIds = () => []; attachmentPeerCleanup = undefined }
+    await tcp.close()
+  }
+  return {
+    activate() {
+      if (closed) throw new Error('Attachment transport closed')
+      void deactivateAttachmentPeers()
+      peerIds = () => peers().map(normalizeDeviceSyncPeer)
+      attachmentPeers = tcp; attachmentPeerCleanup = dispose
+    },
+    dispose,
+  }
+}
+export function activateAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean) {
+  prepareAttachmentPeers(node, peers, allow).activate()
 }
 export async function deactivateAttachmentPeers() {
-  const previous = attachmentPeers; attachmentPeers = undefined; peerIds = () => []
-  await previous?.close()
+  const cleanup = attachmentPeerCleanup
+  attachmentPeers = undefined; peerIds = () => []; attachmentPeerCleanup = undefined
+  await cleanup?.()
 }
 
 /**
@@ -79,45 +138,30 @@ export function createSigner(): BlossomSigner {
   }
 }
 
-/**
- * Get or create the HashTree instance
- */
-function getHashTree(): HashTree {
-  if (!hashTree) {
-    const pubkey = getPubkey()
-    if (!pubkey) {
-      throw new Error('Not logged in')
-    }
-
-    blossomStore = new BlossomStore({
-      servers: DEFAULT_BLOSSOM_SERVERS,
-      signer: createSigner(),
-    })
-
-    const blossom = blossomStore, cache = getAttachmentCache()
-    hashTree = new HashTree({ store: {
-      async get(hash) {
-        const cached = await cache.get(hash)
-        if (cached) return cached
-        const peers = peerIds()
-        const data = (peers.length ? await attachmentPeers?.get(hash, peers).catch(() => null) : null)
-          ?? await blossom.get(hash)
-        if (data) await cache.put(hash, data)
-        return data
-      },
-      async put(hash, data) {
-        await cache.put(hash, data)
-        // Offline attachments remain available locally and over authenticated peers.
-        try { await blossom.put(hash, data) }
-        catch (error) { console.warn('[files] Stored locally; upload unavailable:', error) }
-        return true
-      },
-      has: hash => cache.has(hash),
-      delete: hash => cache.delete(hash),
-    } })
-  }
-
-  return hashTree
+function currentAccount() {
+  const owner = getPubkey()
+  if (!owner) throw new Error('Not logged in')
+  setAttachmentAccount(owner)
+  return activeAccount!
+}
+function getHashTree(readId: string): HashTree {
+  const account = currentAccount(), cache = getAttachmentCache()
+  const blossom = new BlossomStore({ servers: DEFAULT_BLOSSOM_SERVERS, getTimeoutMs: 15_000 })
+  return new HashTree({ store: {
+    async get(hash) {
+      if (activeAccount !== account) throw new Error('Account changed')
+      const cached = await cache.get(hash)
+      if (cached) { await cache.writer(readId).put(hash, cached); return cached }
+      const peers = peerIds()
+      const data = (peers.length ? await attachmentPeers?.get(hash, peers).catch(() => null) : null) ?? await blossom.get(hash)
+      if (activeAccount !== account) throw new Error('Account changed')
+      // Read-through caching is best effort. A full protected cache must not break a download.
+      if (data) await cache.writer(readId).put(hash, data).catch(() => {})
+      return data
+    },
+    put: (hash, data) => cache.put(hash, data),
+    has: hash => cache.has(hash), delete: hash => cache.delete(hash),
+  } })
 }
 
 /**
@@ -131,50 +175,89 @@ export type UploadProgressCallback = (bytesUploaded: number, totalBytes: number)
  */
 export async function uploadFile(
   file: File,
-  onProgress?: UploadProgressCallback
-): Promise<{ nhash: string; filename: string }> {
-  const tree = getHashTree()
-  const totalBytes = file.size
-
-  // Use streaming upload for progress tracking
-  const stream = tree.createStream({ unencrypted: false })
+  onProgress?: UploadProgressCallback,
+  options: { requireRemote?: boolean; staged?: boolean } = {},
+): Promise<{ nhash: string; filename: string; discard: () => void; retain: () => Promise<void> }> {
+  const account = currentAccount(), cache = getAttachmentCache()
+  if (activeWrites.size + pendingStarts >= 2) throw new Error('Wait for the other attachments to finish')
+  if (file.size > cache.limit) throw new Error('This file exceeds attachment storage capacity')
+  pendingStarts++
+  let id: string
+  try { id = await cache.begin(account.owner, DEFAULT_BLOSSOM_SERVERS.filter(server => server.write).map(server => server.url)) }
+  finally { pendingStarts-- }
+  activeWrites.add(id)
   const reader = file.stream().getReader()
-  let bytesRead = 0
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    await stream.append(value)
-    bytesRead += value.length
-    onProgress?.(bytesRead, totalBytes)
+  try {
+    const stream = new HashTree({ store: cache.writer(id) }).createStream({ unencrypted: false })
+    let bytesRead = 0
+    while (true) {
+      if (activeAccount !== account || getPubkey() !== account.owner) throw new Error('Account changed')
+      const { done, value } = await reader.read()
+      if (done) break
+      await stream.append(value); bytesRead += value.length; onProgress?.(bytesRead, file.size)
+    }
+    const result = await stream.finalize()
+    if (!result.key) throw new Error('Attachment encryption failed')
+    if (activeAccount !== account || getPubkey() !== account.owner) throw new Error('Account changed')
+    const nhash = nhashEncode({ hash: result.hash, key: result.key })
+    await cache.finish(id, nhash, result.hash, options.staged)
+    if (activeAccount !== account || getPubkey() !== account.owner) throw new Error('Account changed')
+    if (options.staged) trackStaging(id)
+    account.replication.wake(); uploadsChanged()
+    if (options.requireRemote) {
+      const deadline = Date.now() + 30_000
+      let confirmed = false
+      while (Date.now() < deadline) {
+        if (activeAccount !== account) throw new Error('Account changed')
+        const receipts = await cache.receipts(account.owner, [nhash])
+        if (receipts.some(row => row.uploadedUrls.length)) { confirmed = true; break }
+        if (Date.now() + 100 >= deadline) throw new Error('Could not upload this image. Try again.')
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+      if (!confirmed) throw new Error('Could not upload this image. Try again.')
+    }
+    if (activeAccount !== account || getPubkey() !== account.owner) throw new Error('Account changed')
+    return { nhash, filename: file.name,
+      discard: () => { stopStaging(id); void cache.abort(id, true).then(uploadsChanged).catch(() => {}) },
+      retain: async () => {
+        if (activeAccount !== account) throw new Error('Account changed')
+        await cache.retain(id)
+        if (activeAccount !== account) throw new Error('Account changed')
+        stopStaging(id)
+      },
+    }
+  } catch (error) {
+    stopStaging(id)
+    await cache.abort(id, true).catch(() => {})
+    throw error
+  } finally {
+    activeWrites.delete(id); await reader.cancel().catch(() => {})
   }
+}
 
-  const result = await stream.finalize()
-
-  // Construct CID from result
-  if (!result.key) throw new Error('Attachment encryption failed')
-  const cid = { hash: result.hash, key: result.key }
-
-  const nhash = nhashEncode(cid)
-
-  return {
-    nhash,
-    filename: file.name,
-  }
+export async function attachmentUploadInfo(content: string) {
+  const owner = getPubkey()
+  if (!owner) return []
+  const files = [...content.matchAll(new RegExp(FILE_LINK_REGEX.source, 'gi'))].flatMap(match => {
+    try { nhashDecode(match[1]!); return [{ nhash: match[1]!, filename: decodeURIComponent(match[2]!) }] } catch { return [] }
+  }).slice(0, 64)
+  const receipts = await getAttachmentCache().receipts(owner, files.map(file => file.nhash))
+  if (getPubkey() !== owner) return []
+  return files.map(file => ({ filename: file.filename, uploadedUrls: [...new Set(receipts.filter(row => row.nhash === file.nhash).flatMap(row => row.uploadedUrls))] }))
 }
 
 /**
  * Download and decrypt a file from nhash
  */
 export async function downloadFile(nhash: string): Promise<Uint8Array> {
-  const tree = getHashTree()
-  const cid = nhashDecode(nhash)
-  const data = await tree.readFile(cid)
-  if (!data) {
-    throw new Error('File not found')
-  }
-  return data
+  const account = currentAccount(), cache = getAttachmentCache()
+  const id = await cache.begin(account.owner, DEFAULT_BLOSSOM_SERVERS.filter(server => server.write).map(server => server.url), true)
+  try {
+    const data = await getHashTree(id).readFile(nhashDecode(nhash))
+    if (!data) throw new Error('File not found')
+    if (activeAccount !== account) throw new Error('Account changed')
+    return data
+  } finally { await cache.abort(id) }
 }
 
 /**

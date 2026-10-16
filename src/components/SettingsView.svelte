@@ -619,7 +619,7 @@
       const { nhash, filename } = await uploadFile(file, (bytesUploaded, totalBytes) => {
         if (totalBytes <= 0) return
         profileUploadProgress = Math.round((bytesUploaded / totalBytes) * 100)
-      })
+      }, { requireRemote: true })
       const picture = formatHtreePicture(nhash, filename)
       await updateOwnProfile({ picture, baseProfile: profile })
       statusMessage = { type: 'success', text: 'Profile picture updated' }

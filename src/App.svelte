@@ -29,6 +29,7 @@
   import { loadGroupsFromStorage, clearGroupData, groups, groupMessages, currentGroupId, type Group } from './lib/groups'
   import { get } from 'svelte/store'
   import { getDelegateManager, initMultiDevice, resetManagers } from './lib/privateChats'
+  import { setAttachmentAccount } from './lib/hashtree'
   import { startDeviceSync, stopDeviceSync } from './lib/deviceSync'
   import { deviceHistoryProgress } from './lib/deviceHistoryPolicy'
   import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
@@ -603,6 +604,7 @@
 
   $effect(() => { void loadChatMutes($identity?.pubkey ?? null); void loadChatPins($identity?.pubkey ?? null) })
   $effect(() => { restoreContactNamesForNotifications($identity?.pubkey ?? null) })
+  $effect(() => { setAttachmentAccount($identity?.pubkey ?? null) })
 
   async function handleLogout() {
     cancelPendingJoin()

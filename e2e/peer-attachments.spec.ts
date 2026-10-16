@@ -91,6 +91,9 @@ test('three browsers share cached encrypted files on the existing FIPS node with
     await b.reload()
     await b.getByTestId('sidebar-chat-list').getByRole('button').first().click()
     expect(await imageBytes(b)).toEqual(bytes)
+    // Cached pixels render before device initialization rejoins the network.
+    // Forward only once the restored provider and third browser are connected.
+    await expect.poll(() => seed.connectedPeers().length).toBe(2)
     await b.getByRole('button', { name: 'Back', exact: true }).click()
     sharingFiles = false
     await connect(b, c, 'Cached peer')

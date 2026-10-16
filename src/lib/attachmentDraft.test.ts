@@ -86,7 +86,7 @@ describe('attachment draft uploads', () => {
     const upload = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ nhash: 'good-hash' })
     const draft = createAttachmentDraft({ context: () => 'account:chat', upload, canPreview: () => false })
     expect(await draft.add([file('Failed.txt'), file('Ready.txt')])).toEqual([1])
-    expect(get(draft)[0]).toMatchObject({ error: 'Upload failed', uploading: false })
+    expect(get(draft)[0]).toMatchObject({ error: 'Could not save attachment', uploading: false })
     draft.remove(0)
     expect(get(draft)).toMatchObject([{ nhash: 'good-hash', error: null }])
   })
@@ -128,4 +128,30 @@ describe('file transfer selection', () => {
     } as unknown as DataTransfer
     expect(filesFromTransfer(data)).toBeNull()
   })
+})
+
+it('discards completed local files when removed or abandoned, and retains files transferred to a sent message', async () => {
+  const discard = vi.fn()
+  const draft = createAttachmentDraft({ context: () => 'chat', canPreview: () => false,
+    upload: async () => ({ nhash: 'nhash1test', discard }) })
+  const first = await draft.add([new File(['one'], 'one.txt')])
+  draft.remove(first[0]!); expect(discard).toHaveBeenCalledTimes(1)
+  await draft.add([new File(['sent'], 'sent.txt')])
+  draft.clear(true); expect(discard).toHaveBeenCalledTimes(1)
+  let finish!: (result: { nhash: string; discard: () => void }) => void
+  const pending = createAttachmentDraft({ context: () => 'chat', canPreview: () => false,
+    upload: () => new Promise(resolve => { finish = resolve }) })
+  const added = pending.add([new File(['pending'], 'pending.txt')]); pending.clear()
+  finish({ nhash: 'nhash1pending', discard }); await added
+  expect(discard).toHaveBeenCalledTimes(2)
+})
+
+it('waits for durable retention before clearing, and discards if the draft changed while committing', async () => {
+  const commit = deferred<void>(), discard = vi.fn()
+  const draft = createAttachmentDraft({ context: () => 'chat', canPreview: () => false,
+    upload: async () => ({ nhash: 'file', retain: () => commit.promise, discard }) })
+  await draft.add([file('pending.txt')])
+  const retained = draft.retain(); draft.clear(); commit.resolve()
+  expect(await retained).toBe(false)
+  expect(discard).toHaveBeenCalled()
 })
