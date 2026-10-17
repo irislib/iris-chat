@@ -5,6 +5,7 @@ import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { startSilentStunServer } from './fixtures/silentStunServer'
 import { TestRelay } from './test-relay'
 import { observeCallMedia, writeCallMediaDiagnostics } from './fixtures/callMediaDiagnostics'
+import { measureCallRates } from './fixtures/callRateMeasurement'
 
 test('voice and video continue directly over FIPS with STUN unavailable and servers stopped', async ({ baseURL }, testInfo) => {
   test.setTimeout(240000)
@@ -326,16 +327,10 @@ test('voice and video continue directly over FIPS with STUN unavailable and serv
     await expect.poll(async () => { const sample = await senderStats(); bandwidth.push({ phase: 'limited', ...sample }); return sample.target }, { timeout: 40000 }).toBeLessThan(450000)
     // A falling target alone can pass while the codec overshoots and video freezes.
     await b.waitForTimeout(6000)
-    const windowStart = await senderStats()
-    const videoStart = Number(await b.getByTestId('call-screen').getAttribute('data-video-frames'))
-    const audioStart = Number(await b.getByTestId('call-screen').getAttribute('data-audio-frames'))
-    await b.waitForTimeout(6000)
-    const windowEnd = await senderStats()
-    const seconds = (windowEnd.at - windowStart.at) / 1000
-    const decodedFps = (Number(await b.getByTestId('call-screen').getAttribute('data-video-frames')) - videoStart) / seconds
-    const audioFps = (Number(await b.getByTestId('call-screen').getAttribute('data-audio-frames')) - audioStart) / seconds
-    const payloadBps = (windowEnd.bytes - windowStart.bytes) * 8 / seconds
-    bandwidth.push({ phase: 'sustained-limited', decodedFps, audioFps, payloadBps })
+    const [sender, receiver] = await Promise.all([measureCallRates(a), measureCallRates(b)])
+    const { decodedFps, audioFps } = receiver
+    const { payloadBps } = sender
+    bandwidth.push({ phase: 'sustained-limited', decodedFps, audioFps, payloadBps, sender, receiver })
     expect(decodedFps).toBeGreaterThanOrEqual(8)
     expect(audioFps).toBeGreaterThanOrEqual(30)
     expect(payloadBps).toBeLessThan(400000)
