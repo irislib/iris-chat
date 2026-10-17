@@ -47,9 +47,9 @@ sender keys follow the existing authenticated group protocol.
 The default is unlimited uses with a 30-day expiry; the UI also offers 1, 10 or
 100 uses and revocation. Requests queue while the issuing device is offline.
 Links and counters are device-local; other admins can issue independent links.
-Clearing that device's data retires its links. The native core accepts both
-private personal and group links, while its existing legacy personal-link
-creation remains compatible. The shared wire fixture is checked by both apps;
+Clearing that device's data retires its links. Native apps also create private
+personal and group links; existing legacy personal links remain supported.
+The shared wire fixture is checked by both apps;
 `e2e/invite-roleplay.spec.ts` and the private-invite case in
 `e2e/ndr-interop.spec.ts` exercise admission and real messaging.
 
@@ -192,9 +192,11 @@ Both apps store nicknames, notes, favorites and notification mutes as unsigned
 private contact facts from `nostr-social-graph`. Field clocks, explicit clears
 and pending edits survive migration. Facts reconcile only between authenticated
 own devices; encrypted V2 controls keep older devices compatible. Public
-publication rejects these facts and private controls. Signed private name
-approvals, block intervals and exact message-read markers use the same native
+publication rejects these facts and private controls. Name approvals, block
+intervals and private settings also use unsigned private events admitted only
+from authenticated own devices. Exact message-read markers use the same native
 schemas and capability negotiation, with private state applied before history.
+Device and group authorization proofs retain their original signatures.
 
 To verify messaging as well as device-sync against the native core used by iOS
 and the other native apps, run:
