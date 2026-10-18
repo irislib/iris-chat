@@ -1,8 +1,8 @@
-vi.mock('./requestActivity', async importOriginal => ({ ...await importOriginal<typeof import('./requestActivity')>(), restoreOwnReactionAcceptance: async () => {} }))
+vi.mock('./requestActivity', async (importOriginal: <T>() => Promise<T>) => ({ ...await importOriginal<typeof import('./requestActivity')>(), restoreOwnReactionAcceptance: async () => {} }))
 vi.mock('./authorizationSync', () => ({ saveAuthorizationEvent: async () => true }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
 vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: async () => {} }))
-vi.mock('./deviceSyncRecordApply', async importOriginal => ({
+vi.mock('./deviceSyncRecordApply', async (importOriginal: <T>() => Promise<T>) => ({
   ...await importOriginal<typeof import('./deviceSyncRecordApply')>(),
   restoreGroupSettings: async () => {},
   persistMessageWithReactions: async (_owner: string, message: import('./storage').StoredMessage) => { await (await import('./storage')).saveMessage(message); return message },
@@ -307,7 +307,7 @@ vi.mock('nostr-double-ratchet', async () => {
   }
 })
 
-vi.mock('nostr-tools', async (importOriginal) => {
+vi.mock('nostr-tools', async (importOriginal: <T>() => Promise<T>) => {
   const actual = await importOriginal<typeof import('nostr-tools')>()
   return {
     ...actual,

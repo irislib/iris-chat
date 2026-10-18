@@ -1,4 +1,4 @@
-vi.mock('./authorizationSync', async importOriginal => ({ ...await importOriginal<typeof import('./authorizationSync')>(), authorizationEvents: async function* () {}, saveAuthorizationEvent: async () => true }))
+vi.mock('./authorizationSync', async (importOriginal: <T>() => Promise<T>) => ({ ...await importOriginal<typeof import('./authorizationSync')>(), authorizationEvents: async function* () {}, saveAuthorizationEvent: async () => true }))
 vi.mock('./privateStateView', () => ({ refreshPrivateStateView: async () => {} }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateStateRecords: async function* () {}, privateHistoryAllowed: async () => true }))
 import { get, writable } from 'svelte/store'
@@ -65,14 +65,14 @@ vi.mock('@fips/core', () => ({
   identityFromSecretKey: vi.fn(async () => ({ xOnlyPubkey: new Uint8Array(32), publicKey: new Uint8Array(33) })),
   toHex: vi.fn((bytes: Uint8Array) => `${bytes.length === 33 ? '02' : ''}${'a'.repeat(64)}`),
 }))
-vi.mock('@fips/transport-webrtc', async importOriginal => ({
+vi.mock('@fips/transport-webrtc', async (importOriginal: <T>() => Promise<T>) => ({
   ...await importOriginal<typeof import('@fips/transport-webrtc')>(),
   WebRtcTransport: class {
     constructor(config: Record<string, unknown>) { fips.transports.push(config) }
     connect = vi.fn(async () => undefined)
   },
 }))
-vi.mock('./deviceSyncTcp', async importOriginal => ({
+vi.mock('./deviceSyncTcp', async (importOriginal: <T>() => Promise<T>) => ({
   normalizeDeviceSyncPeer: (await importOriginal<typeof import('./deviceSyncTcp')>()).normalizeDeviceSyncPeer,
   DeviceSyncTcp: class {
     port: number
@@ -138,7 +138,7 @@ vi.mock('./relayStore', () => ({
   relayStore: { getState: () => ({ relays: new Set(['wss://relay.example']) }) },
 }))
 vi.mock('./deviceSyncRecordApply', () => ({ admitRecordMessage: async (_owner: string, value: unknown) => value }))
-vi.mock('./messageMutations', async importOriginal => ({ ...await importOriginal<typeof import('./messageMutations')>(), messageMutationRecords: async function* () {} }))
+vi.mock('./messageMutations', async (importOriginal: <T>() => Promise<T>) => ({ ...await importOriginal<typeof import('./messageMutations')>(), messageMutationRecords: async function* () {} }))
 vi.mock('./deviceSyncRecordStore', () => ({ deviceRecordVersion: writable(0), messageWithReactionHeads: async (_owner: string, value: unknown) => value, hasReactionHead: async () => false, groupSettingsHead: async () => undefined, reactionHeads: async function* () {}, reactionHeadPages: async function* () {}, groupSettingsHeads: async function* () {} }))
 vi.mock('./storage', () => ({
   chatDeletionStates: async () => [],

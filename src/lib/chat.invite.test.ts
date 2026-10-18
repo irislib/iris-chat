@@ -1,7 +1,7 @@
 vi.mock('./inviteRecordStore', () => ({ publishInviteRecord: async () => 'nhash-test-reference' }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
 vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: async () => {} }))
-vi.mock('./deviceSyncRecordApply', async importOriginal => ({
+vi.mock('./deviceSyncRecordApply', async (importOriginal: <T>() => Promise<T>) => ({
   ...await importOriginal<typeof import('./deviceSyncRecordApply')>(),
   persistMessageWithReactions: async (_owner: string, message: import('./storage').StoredMessage) => { await (await import('./storage')).saveMessage(message); return message },
 }))

@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   restoreAuthorization: vi.fn(async () => {}),
   state: {} as Record<string, unknown>,
 }))
-vi.mock('nostr-double-ratchet', async (original) => {
+vi.mock('nostr-double-ratchet', async (original: <T>() => Promise<T>) => {
   const actual = await original<typeof import('nostr-double-ratchet')>()
   return { ...actual,
     AppKeys: class extends actual.AppKeys { static waitFor = mocks.waitFor },
