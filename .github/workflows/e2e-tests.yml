@@ -129,6 +129,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Type check
+        if: matrix.shard == 1
         run: pnpm run check
 
       - name: Unit tests
