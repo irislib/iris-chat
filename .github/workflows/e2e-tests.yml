@@ -15,7 +15,7 @@ on:
         description: Run only changed-component coverage when other results remain valid
         type: choice
         default: all
-        options: [all, interop, browser]
+        options: [all, interop, browser, build]
       browser_shard:
         description: Focus a changed shard after retaining unchanged passing coverage
         type: choice
@@ -24,7 +24,7 @@ on:
 
 jobs:
   native-interop:
-    if: ${{ inputs.scope != 'browser' }}
+    if: ${{ inputs.scope != 'browser' && inputs.scope != 'build' }}
     name: Web and native interop
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -135,7 +135,7 @@ jobs:
           retention-days: 14
 
   e2e:
-    if: ${{ inputs.scope != 'interop' }}
+    if: ${{ inputs.scope != 'interop' && inputs.scope != 'build' }}
     name: Browser tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -186,4 +186,53 @@ jobs:
             work/calls-routed/
             work/web-screen-sharing/
             work/web-mentions*.png
+          retention-days: 30
+
+  production-build:
+    if: ${{ inputs.scope == 'build' }}
+    name: Retained production web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked dependencies and build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Record exact source and every output
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          root = pathlib.Path('.')
+          files = []
+          for path in sorted((root / 'dist').rglob('*')):
+              if path.is_file():
+                  files.append({'path': path.relative_to(root / 'dist').as_posix(),
+                                'size': path.stat().st_size,
+                                'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+          assert files and (root / 'dist/index.html').is_file()
+          record = {'source': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'version': json.loads((root / 'package.json').read_text())['version'],
+                    'lockSHA256': hashlib.sha256((root / 'pnpm-lock.yaml').read_bytes()).hexdigest(),
+                    'node': subprocess.check_output(['node', '--version'], text=True).strip(),
+                    'pnpm': subprocess.check_output(['pnpm', '--version'], text=True).strip(),
+                    'files': files}
+          (root / 'production-build.json').write_text(json.dumps(record, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-web-build
+          path: |
+            dist/
+            production-build.json
+          if-no-files-found: error
           retention-days: 30
