@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures'
-import { nip19 } from 'nostr-tools'
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { nhashEncode } from '@hashtree/core'
 
 for (const group of [false,true]) test(`${group ? 'group' : 'direct'} composer mentions, emoji, links and attachment previews`,async({page})=>{
@@ -70,7 +70,7 @@ for (const group of [false,true]) test(`${group ? 'group' : 'direct'} composer m
 })
 
 test.describe('narrow touch composer',()=>{
-  test.use({viewport:{width:390,height:844},hasTouch:true,isMobile:true})
+  test.use({viewport:{width:390,height:844},hasTouch:true,isMobile:true,userAgent:"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"})
   test('filters mentions, selects by touch, and keeps IME Enter from sending',async({page})=>{
     await page.goto('/')
     await page.getByRole('button',{name:'Go',exact:true}).click()
@@ -78,7 +78,9 @@ test.describe('narrow touch composer',()=>{
     await page.getByPlaceholder('Paste invite link').fill(nip19.npubEncode('c'.repeat(64)))
     const input=page.getByPlaceholder('Type a message...')
     await expect(input).toBeVisible()
+    const frame = await input.boundingBox()
     await input.fill('@')
+    await expect.poll(() => input.boundingBox()).toEqual(frame)
     const menu=page.getByRole('listbox',{name:'Mention someone'})
     const label=(await menu.getByRole('option').first().innerText()).trim()
     await input.fill(label.slice(0,4))
@@ -93,8 +95,45 @@ test.describe('narrow touch composer',()=>{
     await expect(page.getByRole('listbox')).toHaveCount(0)
     await expect(page.locator('.message-content')).toHaveCount(0)
     await input.dispatchEvent('compositionend')
-    await expect(page.getByRole('listbox',{name:'Emoji suggestions'})).toBeVisible()
-    await page.getByRole('listbox').getByRole('option').first().tap()
-    await expect(input).not.toHaveValue(/:sm/)
+    await expect(page.getByRole('listbox',{name:'Emoji suggestions'})).toHaveCount(0)
+    await expect(input).toHaveValue(':sm')
+    await input.fill(':smile:')
+    await expect(input).toHaveValue(':smile:')
+    await expect(page.getByRole('listbox')).toHaveCount(0)
+  })
+
+  test('large group suggestions scroll without moving the composer',async({page})=>{
+    await page.goto('/')
+    await page.getByRole('button',{name:'Go',exact:true}).click()
+    for (let i=0;i<9;i++) {
+      await page.getByRole('button',{name:'New Chat',exact:true}).click()
+      await page.getByPlaceholder('Paste invite link').fill(nip19.npubEncode(getPublicKey(generateSecretKey())))
+      await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
+      await page.getByRole('button',{name:'Back',exact:true}).click()
+    }
+    await page.getByRole('button',{name:'New Chat',exact:true}).click()
+    await page.getByRole('button',{name:'Create Group',exact:true}).click()
+    const create=page.getByTestId('create-group-view')
+    await expect(create.getByTestId('create-group-member')).toHaveCount(9)
+    for (const member of await create.getByTestId('create-group-member').all()) await member.click()
+    await create.getByTestId('create-group-next').click()
+    await page.getByPlaceholder('Enter group name...').fill('Weekend plans')
+    await create.getByTestId('create-group-submit').click()
+    const input=page.getByPlaceholder('Type a message...')
+    await expect(input).toBeVisible()
+    const frame=await input.boundingBox()
+    await input.fill('@')
+    const menu=page.getByRole('listbox',{name:'Mention someone'})
+    await expect(menu.getByRole('option')).toHaveCount(10)
+    for(let i=0;i<9;i++) await input.press('ArrowDown')
+    await expect.poll(()=>menu.evaluate(el=>el.scrollTop)).toBeGreaterThan(0)
+    await expect(menu.getByRole('option').last()).toBeInViewport()
+    await expect.poll(()=>input.boundingBox()).toEqual(frame)
+    const label=(await menu.getByRole('option').first().innerText()).trim()
+    await input.fill(label)
+    await expect.poll(()=>menu.evaluate(el=>el.scrollTop)).toBe(0)
+    await menu.getByRole('option').first().tap()
+    await expect(input).toHaveValue(label+' ')
+    await expect(input).toBeFocused()
   })
 })

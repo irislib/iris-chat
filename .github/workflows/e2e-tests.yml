@@ -5,13 +5,26 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      native_ref:
+        description: Native source revision to pair with this web revision
+        type: string
+        default: main
+      scope:
+        description: Run only changed-component coverage when other results remain valid
+        type: choice
+        default: all
+        options: [all, interop, browser]
 
 jobs:
   native-interop:
+    if: ${{ inputs.scope != 'browser' }}
     name: Web and native interop
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      CARGO_BUILD_JOBS: '2'
       IRIS_CHAT_RS_CORE_DIR: ${{ github.workspace }}/iris-chat-rs/core
       IRIS_DIRECT_FILES_TARGET_DIR: ${{ github.workspace }}/iris-chat-rs/core/target
       IRIS_PRIVATE_CONTROL_FIXTURE_INPUT: ${{ github.workspace }}/iris-chat/test-results/private-controls/native-private-controls.json
@@ -28,7 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: irislib/iris-chat-rs
-          ref: main
+          ref: ${{ inputs.native_ref || 'main' }}
           path: iris-chat-rs
           persist-credentials: false
 
@@ -53,6 +66,17 @@ jobs:
         run: |
           git log -1 --format='web %H'
           git -C "$IRIS_CHAT_RS_CORE_DIR" log -1 --format='native %H'
+
+      - name: Cache locked native compiler inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            iris-chat-rs/core/target
+          key: native-interop-${{ runner.os }}-${{ hashFiles('iris-chat-rs/core/Cargo.lock', 'iris-chat/test-fixtures/direct-files-rust/Cargo.lock') }}
+          restore-keys: |
+            native-interop-${{ runner.os }}-
 
       - name: Install web dependencies and browser
         run: |
@@ -106,6 +130,7 @@ jobs:
           retention-days: 14
 
   e2e:
+    if: ${{ inputs.scope != 'interop' }}
     name: Browser tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 30

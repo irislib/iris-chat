@@ -27,6 +27,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], channel: 'chromium' },
     },
     {
+      name: 'webkit-composer',
+      testMatch: 'composer-completions.spec.ts',
+      grep: /narrow touch composer/,
+      use: { ...devices['iPhone 13'], defaultBrowserType: 'webkit' },
+    },
+    {
       name: 'webkit-notifications',
       testMatch: ['notification-permission.spec.ts', 'notification-navigation.spec.ts'],
       use: { ...devices['iPhone 13'], defaultBrowserType: 'webkit' },

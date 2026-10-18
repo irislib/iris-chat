@@ -23,6 +23,8 @@ it('requires canonical identity; ignores quoted and forwarded notifications', ()
 })
 it('opens bare mentions, bounds and filters emoji, preserves ordinary punctuation and selections', () => {
   expect(completionAt('Hi @',4)).toMatchObject({ kind:'mention', query:'', start:3 })
+  expect(completionAt('Hi @Carol S',11)).toMatchObject({ kind:'mention', query:'Carol S', start:3 })
+  expect(completionAt('@'+'a'.repeat(65),66)).toBeUndefined()
   expect(completionAt(':sm',3)).toMatchObject({ kind:'emoji', query:'sm' })
   for (const text of ['email@bob', 'https:', '12:30', '::', ':smile::', '::smile:', ':'+'x'.repeat(65)]) expect(completionAt(text,text.length)).toBeUndefined()
   expect(completionAt('hello :sm',9,10)).toBeUndefined()

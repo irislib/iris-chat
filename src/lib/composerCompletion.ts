@@ -66,6 +66,12 @@ export function insertCompletion(draft: ComposerDraft, start: number, end: numbe
 export type Completion = { kind: 'mention' | 'emoji'; start: number; end: number; query: string; closed: boolean }
 export function completionAt(text: string, start: number, end = start): Completion | undefined {
   if (start !== end) return
+  const at = text.lastIndexOf('@', start - 1)
+  if (at >= 0 && (at === 0 || /\s/u.test(text[at - 1]))) {
+    const query = text.slice(at + 1, start)
+    if (query.length <= 64 && /^[\p{L}\p{N} _-]*$/u.test(query))
+      return { kind: 'mention', start: at, end: start, query, closed: false }
+  }
   const prefix = text.slice(Math.max(0, start - 65), start)
   const match = /(?:^|\s)([@:])([^\s@:]{0,63})(:?)$/u.exec(prefix)
   if (!match) return

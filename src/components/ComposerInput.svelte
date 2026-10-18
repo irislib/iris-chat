@@ -1,16 +1,31 @@
 <script lang="ts">
   import { nip19 } from 'nostr-tools'
+  import Avatar from './Avatar.svelte'
   import { mentionNames } from '../lib/mentionNames'
   import { decodeDraft, editDraft, encodeDraft, insertCompletion, completionAt, emojiSuggestions, exactEmoji, ComposerHistory, composerSnapshot, type ComposerSnapshot, type DraftEditRange, type Completion, type ComposerDraft } from '../lib/composerCompletion'
 
   let { value = $bindable(''), inputRef = $bindable<HTMLTextAreaElement | null>(null), members = [], disabled = false, onkeydown, onpaste, oninput }:
     { value?: string; inputRef?: HTMLTextAreaElement | null; members?: string[]; disabled?: boolean; onkeydown?: (event: KeyboardEvent) => void; onpaste?: (event: ClipboardEvent) => void; oninput?: () => void } = $props()
   const menuId = $props.id()
+  // Mobile users have the system emoji keyboard. Keep ':' literal there,
+  // including on iPad browsers which advertise a desktop user agent.
+  const mobileInput = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   let names = $derived(mentionNames(members))
   let draft = $state<ComposerDraft>({ text: '', mentions: [] })
   let ownWire = $state('')
   let completion = $state<Completion | undefined>()
   let selected = $state(0)
+  let menuElement = $state<HTMLDivElement | null>(null)
+  $effect(() => {
+    const menu = menuElement
+    const index = Math.min(selected, rows.length - 1)
+    const row = menu?.children[index] as HTMLElement | undefined
+    if (!menu || !row) return
+    if (row.offsetTop < menu.scrollTop) menu.scrollTop = row.offsetTop
+    else if (row.offsetTop + row.offsetHeight > menu.scrollTop + menu.clientHeight)
+      menu.scrollTop = row.offsetTop + row.offsetHeight - menu.clientHeight
+  })
   let composing = false
   let applying = false
   const history = new ComposerHistory()
@@ -24,7 +39,7 @@
     if (context !== memberContext) { memberContext = context; resetHistory() }
   })
   let rows = $derived(completion?.kind === 'mention'
-    ? Object.entries($names).filter(([, name]) => name.toLocaleLowerCase().includes(completion!.query.toLocaleLowerCase())).slice(0, 6).map(([pubkey,name]) => {
+    ? Object.entries($names).filter(([, name]) => name.toLocaleLowerCase().includes(completion!.query.toLocaleLowerCase())).map(([pubkey,name]) => {
       const duplicate = Object.values($names).filter(value => value.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase()).length > 1
       const npub = duplicate ? nip19.npubEncode(pubkey) : ''
       return { label: '@' + name, detail: duplicate ? npub.slice(0,12) + '…' + npub.slice(-6) : '', pubkey }
@@ -40,6 +55,7 @@
     const input = inputRef
     if (!input || composing || disabled) { dismiss(); return }
     completion = completionAt(draft.text, input.selectionStart, input.selectionEnd)
+    if (mobileInput && completion?.kind === 'emoji') completion = undefined
     if (completion && draft.mentions.some(m => completion!.start >= m.start && completion!.start < m.end)) completion = undefined
     selected = 0
   }
@@ -120,11 +136,12 @@
 
 <div class="relative flex-1 min-w-0">
   {#if completion && rows.length && !disabled}
-    <div id={menuId} role="listbox" aria-label={completion.kind === 'mention' ? 'Mention someone' : 'Emoji suggestions'} class="absolute bottom-full mb-2 left-0 right-0 z-30 bg-surface rounded-xl shadow-xl p-1 max-h-64 overflow-y-auto">
+    <div bind:this={menuElement} id={menuId} role="listbox" aria-label={completion.kind === 'mention' ? 'Mention someone' : 'Emoji suggestions'} class="absolute bottom-full mb-2 left-0 right-0 z-30 bg-surface rounded-xl shadow-xl p-1 max-h-[236px] overflow-y-auto overscroll-contain">
       {#each rows as row, i}
         <button id={`${menuId}-${i}`} type="button" role="option" aria-selected={i === selected} aria-label={row.detail ? `${row.label}, ${row.detail}` : row.label}
           class="w-full text-left px-3 py-2 rounded-lg flex items-center gap-3" class:bg-surface-light={i === selected}
-          onpointerdown={event => event.preventDefault()} onclick={() => replace(row.label,row.pubkey)}>
+          onmousedown={event => event.preventDefault()} onclick={() => replace(row.label,row.pubkey)}>
+          {#if row.pubkey}<span aria-hidden="true"><Avatar pubkey={row.pubkey} size={32} loadProfile={false} showBadge={false} /></span>{/if}
           <span class:text-xl={completion.kind === 'emoji'} class="truncate">{row.label}</span>
           {#if row.detail}<span class="text-gray-400 truncate text-sm">{row.detail}</span>{/if}
         </button>
