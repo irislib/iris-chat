@@ -16,6 +16,11 @@ on:
         type: choice
         default: all
         options: [all, interop, browser]
+      browser_shard:
+        description: Focus a changed shard after retaining unchanged passing coverage
+        type: choice
+        default: all
+        options: [all, '1', '2', '3', '4']
 
 jobs:
   native-interop:
@@ -137,7 +142,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(inputs.browser_shard != '' && inputs.browser_shard != 'all' && format('[{0}]', inputs.browser_shard) || '[1,2,3,4]') }}
 
     steps:
       - uses: actions/checkout@v4

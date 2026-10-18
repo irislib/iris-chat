@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { WebSocket } from 'ws'
 import { AppKeys } from 'nostr-double-ratchet'
 import { createNostrRuntime } from 'nostr-pubsub'
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event, type EventTemplate, type VerifiedEvent } from 'nostr-tools'
@@ -8,6 +9,9 @@ import { RemoteSigner, type SignerRuntime } from './remoteSigner'
 import { authorizeSignerDevice, prepareSignerAuthorization, selectSignerRoster } from './signerAuthorization'
 import { parseDeviceConnectLink, prepareDeviceLinkRoster, serveDeviceLink, validateDeviceAddition } from './deviceLinkSigner'
 
+// Exercise real sockets with the Node transport used by our relay fixtures.
+// Node 22's built-in client dispatches another error synchronously when a failed
+// connection is closed; browsers and ws deliver the close asynchronously.
 const cleanup: Array<() => unknown> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
 function roster() {
@@ -37,7 +41,7 @@ describe('private device-link approval', () => {
 
   it.each([[false, false], [true, false], [true, true]])('exchanges encrypted approval with duplicate heads=%s and unavailable server=%s', async (duplicate: boolean, outage: boolean) => {
     const relay = new TestRelay(); await relay.start(); cleanup.push(() => relay.stop())
-    const runtime = createNostrRuntime({ relays: [relay.url] }); cleanup.push(() => runtime.close())
+    const runtime = createNostrRuntime({ relays: [relay.url], websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket }); cleanup.push(() => runtime.close())
     const { secret, owner, approver, event } = roster()
     const relays = outage ? [relay.url, 'ws://127.0.0.1:1'] : [relay.url]
     await runtime.publish(event, { requireAck: true })
@@ -111,7 +115,7 @@ describe('private device-link approval', () => {
 
   it.each([false, true])('rejects an older remote roster when local state advances during signing=%s', async (duringSigning: boolean) => {
     const relay = new TestRelay(); await relay.start(); cleanup.push(() => relay.stop())
-    const runtime = createNostrRuntime({ relays: [relay.url] }); cleanup.push(() => runtime.close())
+    const runtime = createNostrRuntime({ relays: [relay.url], websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket }); cleanup.push(() => runtime.close())
     const { secret, owner, approver, event } = roster()
     await runtime.publish(event, { requireAck: true })
     let knownAt = event.created_at + (duringSigning ? 0 : 1)
