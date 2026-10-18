@@ -185,4 +185,5 @@ jobs:
             work/calls/
             work/calls-routed/
             work/web-screen-sharing/
+            work/web-mentions*.png
           retention-days: 30
