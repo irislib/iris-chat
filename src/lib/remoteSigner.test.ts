@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { WebSocket } from 'ws'
 import { beforeEach, afterEach, describe, expect, it } from 'vitest'
 import { TestRelay } from '../../e2e/test-relay'
 import { TestRemoteSigner } from '../../e2e/nip46-signer'
@@ -10,7 +11,7 @@ import { AppKeys } from 'nostr-double-ratchet'
 
 import { createNostrRuntime } from 'nostr-pubsub'
 let runtime: ReturnType<typeof createNostrRuntime>
-beforeEach(() => { runtime = createNostrRuntime({ relays: [], historyTimeoutMs: 10_000 }) })
+beforeEach(() => { runtime = createNostrRuntime({ websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket, relays: [], historyTimeoutMs: 10_000 }) })
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); await runtime.close() })

@@ -1,3 +1,4 @@
+import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FipsServiceContext } from '@fips/tcp'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
@@ -13,7 +14,7 @@ afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runt
 
 // Exercise Chat's adapter through the real common runtime rather than a second app-owned bus.
 class NostrPubsubRuntime extends SharedMesh {
-  readonly events = createNostrRuntime({ relays: [], batchWindowMs: 1, historyTimeoutMs: 100, publishTimeoutMs: 100 })
+  readonly events = createNostrRuntime({ websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket, relays: [], batchWindowMs: 1, historyTimeoutMs: 100, publishTimeoutMs: 100 })
   constructor() { super(); runtimes.push(this.events) }
   activate(node: FipsPubsubClientNode, peer: string, peers: () => readonly string[]) {
     return super.activate(node, peer, peers, this.events)
