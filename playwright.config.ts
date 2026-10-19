@@ -27,6 +27,11 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], channel: 'chromium' },
     },
     {
+      name: 'webkit-chat-rows',
+      testMatch: 'chat-row-layout.spec.ts',
+      use: { ...devices['Desktop Safari'], defaultBrowserType: 'webkit' },
+    },
+    {
       name: 'webkit-composer',
       testMatch: 'composer-completions.spec.ts',
       grep: /narrow touch composer/,

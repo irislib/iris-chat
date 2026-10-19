@@ -39,7 +39,7 @@
   }
 </script>
 
-<div class="w-full p-3 hover:bg-surface-light flex items-center gap-3 transition-colors">
+<div data-testid="chat-list-row" class="w-full p-3 hover:bg-surface-light flex items-center gap-3 transition-colors">
   <button
     class="flex items-center gap-3 flex-1 min-w-0 text-left bg-transparent border-none p-0 cursor-pointer"
     onclick={onopen}
@@ -50,7 +50,7 @@
       <div class="flex items-center justify-between gap-2">
         <span class="font-medium text-sm truncate">{#if chat.recipientPubkey === $identity?.pubkey}Note to self{:else}<Name pubkey={chat.recipientPubkey} />{/if}</span>
         {#if $pinnedChatIds.has(chat.id)}<span class="i-carbon-pin-filled text-gray-500 flex-shrink-0" role="img" aria-label="Pinned chat"></span>{/if}
-        <div class="flex flex-col items-end flex-shrink-0 gap-0.5">
+        <div class="flex items-center flex-shrink-0 gap-1.5">
           {#if lastMessage}
             <div class="flex items-center gap-1.5">
               {#if unseenCount > 0}
@@ -70,7 +70,7 @@
         </div>
       </div>
       {#if $isTyping.get(chat.id)}
-        <div class="text-sm text-primary">typing...</div>
+        <div class="text-sm text-primary truncate">typing...</div>
       {:else if lastMessage}
         <div class="text-sm text-gray-400 truncate">
           {#if lastMessage.call}
@@ -81,7 +81,7 @@
           {/if}
         </div>
       {:else}
-        <div class="text-sm text-gray-500 italic">No messages yet</div>
+        <div class="text-sm text-gray-500 italic truncate">No messages yet</div>
       {/if}
     </div>
   </button>

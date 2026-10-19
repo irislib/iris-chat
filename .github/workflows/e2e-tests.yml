@@ -15,7 +15,7 @@ on:
         description: Run only changed-component coverage when other results remain valid
         type: choice
         default: all
-        options: [all, interop, browser, build]
+        options: [all, interop, browser, build, layout]
       browser_shard:
         description: Focus a changed shard after retaining unchanged passing coverage
         type: choice
@@ -24,7 +24,7 @@ on:
 
 jobs:
   native-interop:
-    if: ${{ inputs.scope != 'browser' && inputs.scope != 'build' }}
+    if: ${{ inputs.scope != 'browser' && inputs.scope != 'build' && inputs.scope != 'layout' }}
     name: Web and native interop
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -142,7 +142,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.browser_shard != '' && inputs.browser_shard != 'all' && format('[{0}]', inputs.browser_shard) || '[1,2,3,4]') }}
+        shard: ${{ fromJSON(inputs.scope == 'layout' && '[1]' || inputs.browser_shard != '' && inputs.browser_shard != 'all' && format('[{0}]', inputs.browser_shard) || '[1,2,3,4]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -163,14 +163,22 @@ jobs:
         run: pnpm run check
 
       - name: Unit tests
-        if: matrix.shard == 1
+        if: matrix.shard == 1 && inputs.scope != 'layout'
         run: pnpm test
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Run E2E tests
+        if: inputs.scope != 'layout'
         run: pnpm run test:e2e --shard=${{ matrix.shard }}/4 --workers=1 --retries=0 --trace=retain-on-failure --reporter=list,json
+        env:
+          CI: true
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/report.json
+
+      - name: Verify changed chat row layout in Chromium and WebKit
+        if: inputs.scope == 'layout'
+        run: pnpm run test:e2e e2e/chat-row-layout.spec.ts --project=chromium --project=webkit-chat-rows --workers=1 --retries=0 --trace=retain-on-failure --reporter=list,json
         env:
           CI: true
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/report.json

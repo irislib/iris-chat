@@ -35,6 +35,7 @@
 </script>
 
 <button
+  data-testid="chat-list-row"
   class="w-full p-3 hover:bg-surface-light flex items-center gap-3 transition-colors text-left"
   onclick={onopen}
 >
@@ -62,7 +63,7 @@
       </div>
     </div>
     {#if $isTyping.get(`group:${group.id}`)}
-      <div class="text-sm text-primary">typing...</div>
+      <div class="text-sm text-primary truncate">typing...</div>
     {:else if lastMessage}
       <div class="text-sm text-gray-400 truncate">
         {#if lastMessage.isMine}
@@ -73,7 +74,7 @@
         <span class="truncate">{lastMessage.deletedAt !== undefined ? 'Message deleted' : messagePreview(lastMessage.content,$names)}</span>
       </div>
     {:else}
-      <div class="text-sm text-gray-500 italic">No messages yet</div>
+      <div class="text-sm text-gray-500 italic truncate">No messages yet</div>
     {/if}
   </div>
 </button>
