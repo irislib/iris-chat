@@ -59,6 +59,7 @@
   let uploadingAttachments = $derived($attachmentDraft.some(item => item.uploading))
   $effect(() => { attachmentDraft.setContext(attachmentContext()) })
   let isRecordingVoice = $state(false)
+  let preparingAttachments = $state(false)
   let recordingContext: string | null = null
   // svelte-ignore state_referenced_locally
   let activeGroupId = $state(group.id)
@@ -66,7 +67,7 @@
   let showDisappearingModal = $state(false)
   let removed = $derived(!!$identity && !group.members.includes($identity.pubkey))
   let attachmentAllowed = $derived(canSendToGroup($groups.get(group.id), $identity?.pubkey))
-  let canAttach = $derived(attachmentAllowed && !isRecordingVoice)
+  let canAttach = $derived(attachmentAllowed && !isRecordingVoice && !preparingAttachments)
   $effect(() => {
     if (!attachmentAllowed) {
       attachmentDraft.clear()
@@ -132,7 +133,6 @@
     onleave()
   }
 
-  let preparingAttachments = $state(false)
   async function handleSend() {
     if (!canSend) return
     let text = messageText.trim()
@@ -146,19 +146,24 @@
     if (!text) return
     const context = attachmentContext()
     preparingAttachments = true
+    attachmentError = null
     try {
-      if (!await attachmentDraft.retain() || context !== attachmentContext()) return
-    } catch { attachmentError = 'Could not save this attachment. Try adding it again.'; return }
-    finally { preparingAttachments = false }
-
-    const replyToId = replyingTo?.id
-    messageText = ''
-    clearDraft(`group:${group.id}`)
-    clearAttachment(true)
-    replyingTo = null
-    sendThrottledTyping.reset()
-
-    sendGroupMessage(group.id, text, replyToId)
+      const retained = await attachmentDraft.retain().catch(() => {
+        attachmentError = 'Could not save this attachment. Try adding it again.'
+        return false
+      })
+      if (!retained || context !== attachmentContext()) return
+      const replyToId = replyingTo?.id
+      if (!await sendGroupMessage(group.id, text, replyToId) || context !== attachmentContext()) return
+      messageText = ''
+      clearDraft(`group:${group.id}`)
+      clearAttachment(true)
+      replyingTo = null
+      sendThrottledTyping.reset()
+    } catch {
+      if (context === attachmentContext()) attachmentError = 'Could not save this message. Try again.'
+      return
+    } finally { preparingAttachments = false }
 
     requestAnimationFrame(() => inputRef?.focus())
   }
@@ -618,6 +623,7 @@
           <button
             class="absolute -top-2 -right-2 w-6 h-6 bg-surface border border-surface-lighter rounded-full flex items-center justify-center text-gray-400 hover:text-white hover:bg-red-600 hover:border-red-600 transition-colors"
             onclick={() => attachmentDraft.remove(pendingAttachment.id)}
+            disabled={preparingAttachments}
             aria-label="Remove attachment"
           >
             <span class="i-carbon-close text-sm"></span>
@@ -662,7 +668,7 @@
               class="w-11 h-11 p-0 flex items-center justify-center flex-shrink-0 text-gray-400 hover:text-white hover:bg-surface-light rounded-full transition-colors"
               onclick={() => showEmojiPicker = !showEmojiPicker}
               aria-label="Emoji picker"
-              disabled={!attachmentAllowed}
+              disabled={!attachmentAllowed || preparingAttachments}
             >
               <span class="i-carbon-face-add text-xl"></span>
             </button>
@@ -685,7 +691,7 @@
         </button>
 
         <ComposerInput bind:inputRef bind:value={messageText} members={group.members}
-          onkeydown={handleKeydown} onpaste={handlePaste} oninput={handleTypingInput} disabled={!attachmentAllowed} />
+          onkeydown={handleKeydown} onpaste={handlePaste} oninput={handleTypingInput} disabled={!attachmentAllowed || preparingAttachments} />
 
         {#if messageText.trim() || $attachmentDraft.length}
           <button

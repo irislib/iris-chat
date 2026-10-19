@@ -829,9 +829,9 @@ export function removeGroupAdmin(groupId: string, pubkey: string): void {
   mutateGroup(groupId, (group, myPubkey) => libRemoveAdmin(group, pubkey, myPubkey))
 }
 
-export function sendGroupMessage(groupId: string, text: string, replyTo?: string): void {
+export async function sendGroupMessage(groupId: string, text: string, replyTo?: string): Promise<boolean> {
   const myPubkey = getPubkey()
-  if (!myPubkey || !currentGroupForSend(groupId)) return
+  if (!myPubkey || !currentGroupForSend(groupId)) return false
 
   const tags: string[][] = []
   if (replyTo) {
@@ -865,13 +865,15 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
     ...(expiresAt !== undefined && { expiresAt }),
   }
 
+  // A visible outgoing message must already survive an immediate reload.
+  await saveGroupMessageToStorage(groupId, message, true)
+  if (getPubkey() !== myPubkey || !currentGroupForSend(groupId)) return false
+
   groupMessages.update(gm => {
     const msgs = gm.get(groupId) || []
     gm.set(groupId, [...msgs, message])
     return gm
   })
-
-  saveGroupMessageToStorage(groupId, message)
 
   void sendNativeGroupEvent(
     groupId,
@@ -890,6 +892,7 @@ export function sendGroupMessage(groupId: string, text: string, replyTo?: string
     .catch((error) => {
       console.error('[groups] Failed to send group message:', error)
     })
+  return true
 }
 
 export async function editGroupMessage(groupId: string, messageId: string, content: string): Promise<void> {
@@ -1224,7 +1227,7 @@ function sendGroupReceipt(groupId: string, type: MessageStatus, messageIds: stri
   })
 }
 
-async function saveGroupMessageToStorage(groupId: string, message: GroupMessage): Promise<void> {
+async function saveGroupMessageToStorage(groupId: string, message: GroupMessage, throwOnError = false): Promise<void> {
   try {
     const reactions = message.reactions
       ? JSON.parse(JSON.stringify(message.reactions))
@@ -1253,6 +1256,7 @@ async function saveGroupMessageToStorage(groupId: string, message: GroupMessage)
     else await saveMessageToDb(storedMessage)
   } catch (e) {
     console.error('[groups] Failed to save message:', e)
+    if (throwOnError) throw e
   }
 }
 

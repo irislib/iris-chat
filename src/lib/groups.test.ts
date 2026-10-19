@@ -795,7 +795,7 @@ describe('groups', () => {
       expect(get(currentGroupId)).toBe(groupId)
       expect(storage.deleteGroupFromDb).not.toHaveBeenCalled()
       expect(storage.deleteMessagesForSession).not.toHaveBeenCalled()
-      sendGroupMessage(groupId, 'Blocked after removal')
+      await sendGroupMessage(groupId, 'Blocked after removal')
       sendGroupReaction(groupId, 'before-removal', '👍')
       expect(get(groupMessages).get(groupId)).toEqual(history)
       await vi.waitFor(() => expect(storage.saveGroup).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -841,7 +841,7 @@ describe('groups', () => {
         members: [ROSTER_ADMIN, MY_PUBKEY], admins: [ROSTER_ADMIN], revision: 1,
       }))
       acceptGroupInvitation(groupId)
-      sendGroupMessage(groupId, 'Waiting for a connection')
+      await sendGroupMessage(groupId, 'Waiting for a connection')
       await vi.waitFor(() => expect(ready).toBeTypeOf('function'))
       handleGroupRosterFactEvent(makeRosterFactEvent({ groupId, name: 'Waiting',
         members: [ROSTER_ADMIN], admins: [ROSTER_ADMIN], revision: 2,
@@ -877,11 +877,41 @@ describe('groups', () => {
   })
 
   describe('sendGroupMessage', () => {
+    it('commits a group message before displaying or publishing it', async () => {
+      const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
+      const { saveMessage } = await import('./storage')
+      const group = await createGroup('Durable send', [MEMBER_B])
+      await new Promise(resolve => setTimeout(resolve, 0))
+      sendEventCalls.length = 0
+      let commit!: () => void
+      vi.mocked(saveMessage).mockImplementationOnce(() => new Promise<void>(resolve => { commit = resolve }))
+      const pending = sendGroupMessage(group.id, 'Keep me after reload')
+      await vi.waitFor(() => expect(commit).toBeTypeOf('function'))
+      expect(get(groupMessages).get(group.id) ?? []).toEqual([])
+      expect(sendEventCalls).toEqual([])
+      commit()
+      await pending
+      expect(get(groupMessages).get(group.id)?.[0].content).toBe('Keep me after reload')
+      await waitForRecipients(MY_PUBKEY, MEMBER_B)
+    })
+
+    it('does not display or publish a group message when saving fails', async () => {
+      const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
+      const { saveMessage } = await import('./storage')
+      const group = await createGroup('Failed save', [MEMBER_B])
+      await new Promise(resolve => setTimeout(resolve, 0))
+      sendEventCalls.length = 0
+      vi.mocked(saveMessage).mockRejectedValueOnce(new Error('Storage unavailable'))
+      await expect(sendGroupMessage(group.id, 'Keep my draft')).rejects.toThrow('Storage unavailable')
+      expect(get(groupMessages).get(group.id) ?? []).toEqual([])
+      expect(sendEventCalls).toEqual([])
+    })
+
     it('adds message to group messages store', async () => {
       const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
       const group = await createGroup('Msg Test', [MEMBER_B])
 
-      sendGroupMessage(group.id, 'Hello group!')
+      await sendGroupMessage(group.id, 'Hello group!')
 
       const msgs = get(groupMessages).get(group.id)!
       expect(msgs.length).toBe(1)
@@ -895,7 +925,7 @@ describe('groups', () => {
       const group = await createGroup('Fan Msg Test', [MEMBER_B, MEMBER_C])
       sendEventCalls.length = 0
 
-      sendGroupMessage(group.id, 'Hello all!')
+      await sendGroupMessage(group.id, 'Hello all!')
 
       await waitForRecipients(MY_PUBKEY, MEMBER_B, MEMBER_C)
     })
@@ -904,7 +934,7 @@ describe('groups', () => {
       const { createGroup, sendGroupMessage, groupMessages } = await import('./groups')
       const group = await createGroup('Runtime ID Test', [MEMBER_B])
 
-      sendGroupMessage(group.id, 'Runtime id hello')
+      await sendGroupMessage(group.id, 'Runtime id hello')
       const initialMessage = get(groupMessages).get(group.id)![0]
       expect(initialMessage.id).toMatch(/^[0-9a-f]{64}$/)
 
@@ -918,7 +948,7 @@ describe('groups', () => {
       const { notifyMessageRelayPublish } = await import('./messageRelayStatus')
       const group = await createGroup('Relay Ack Test', [MEMBER_B])
 
-      sendGroupMessage(group.id, 'Relay ack hello')
+      await sendGroupMessage(group.id, 'Relay ack hello')
       await vi.waitFor(() => {
         expect(get(groupMessages).get(group.id)![0].id).toMatch(/^[0-9a-f]{64}$/)
       })
@@ -942,7 +972,7 @@ describe('groups', () => {
       sendEventCalls.length = 0
 
       const before = Math.floor(Date.now() / 1000)
-      sendGroupMessage(group.id, 'TTL hello')
+      await sendGroupMessage(group.id, 'TTL hello')
       const after = Math.floor(Date.now() / 1000)
 
       const msgs = get(groupMessages).get(group.id)!
@@ -952,7 +982,7 @@ describe('groups', () => {
       expect(msgs[0].expiresAt).toBeLessThanOrEqual(after + 60)
 
       await vi.waitFor(() => {
-        expect(sendEventCalls.length).toBeGreaterThan(0)
+        expect(sendEventCalls.some(call => parseSentRuntimeRumor(call.event as { content?: string; tags?: string[][] })?.content === 'TTL hello')).toBe(true)
       })
       const sentMessages = sendEventCalls
         .map((call) => call.event as { content?: string; tags?: string[][] })
@@ -1072,7 +1102,7 @@ describe('groups', () => {
       const { createGroup, sendGroupMessage, handleGroupEvent, groupMessages } = await import('./groups')
       const group = await createGroup('Receipt Test', [MEMBER_B, MEMBER_C])
 
-      sendGroupMessage(group.id, 'Needs receipt')
+      await sendGroupMessage(group.id, 'Needs receipt')
       await vi.waitFor(() => {
         expect(get(groupMessages).get(group.id)![0].id).toMatch(/^[0-9a-f]{64}$/)
       })

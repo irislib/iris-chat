@@ -71,6 +71,45 @@ for (const group of [false,true]) test(`${group ? 'group' : 'direct'} composer m
 
 test.describe('narrow touch composer',()=>{
   test.use({viewport:{width:390,height:844},hasTouch:true,isMobile:true,userAgent:"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"})
+  for (const failSave of [false, true]) test(`group send survives reload${failSave ? ' and preserves the draft on storage failure' : ''}`, async({page})=>{
+    await page.goto('/')
+    await page.getByRole('button',{name:'Go',exact:true}).click()
+    await page.getByRole('button',{name:'New Chat',exact:true}).click()
+    await page.getByPlaceholder('Paste invite link').fill(nip19.npubEncode('c'.repeat(64)))
+    await expect(page.getByPlaceholder('Type a message...')).toBeVisible()
+    await page.getByRole('button',{name:'Back',exact:true}).click()
+    await page.getByRole('button',{name:'New Chat',exact:true}).click()
+    await page.getByRole('button',{name:'Create Group',exact:true}).click()
+    await page.getByTestId('create-group-member').first().click()
+    await page.getByTestId('create-group-next').click()
+    await page.getByPlaceholder('Enter group name...').fill('Durable group')
+    await page.getByTestId('create-group-submit').click()
+    const input=page.getByPlaceholder('Type a message...')
+    const text=failSave ? 'Keep this draft when storage fails' : 'Keep this message after reload'
+    await input.fill(text)
+    if (failSave) await page.evaluate(()=>{
+      const original=IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put=function(...args: Parameters<typeof original>){
+        if(this.name==='messages'){
+          IDBObjectStore.prototype.put=original
+          throw new DOMException('Storage unavailable','QuotaExceededError')
+        }
+        return original.apply(this,args)
+      }
+    })
+    await page.getByRole('button',{name:'Send',exact:true}).click()
+    if (failSave) {
+      await expect(page.getByRole('status')).toHaveText('Could not save this message. Try again.')
+      await expect(input).toHaveValue(text)
+      await expect(page.getByTestId('message-bubble-body')).toHaveCount(0)
+      await page.getByRole('button',{name:'Send',exact:true}).click()
+    }
+    const message=page.getByTestId('message-bubble-body').filter({hasText:text})
+    await expect(message).toHaveCount(1)
+    await page.reload()
+    await expect(message).toHaveCount(1)
+  })
+
   test('filters mentions, selects by touch, and keeps IME Enter from sending',async({page})=>{
     await page.goto('/')
     await page.getByRole('button',{name:'Go',exact:true}).click()
