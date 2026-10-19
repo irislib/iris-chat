@@ -72,6 +72,8 @@ function isAssociationFile(pathname) {
 function isPolicyDocumentPath(pathname) {
   return pathname === '/privacy' ||
     pathname === '/privacy/' ||
+    pathname === '/privacy.html' ||
+    pathname === '/privacy/index.html' ||
     pathname === '/terms' ||
     pathname === '/terms/' ||
     pathname === '/csae' ||
@@ -83,6 +85,7 @@ function isPolicyDocumentPath(pathname) {
  * @returns {'privacy' | 'terms' | 'csae' | null}
  */
 function policyDocumentSlug(pathname) {
+  if (pathname === '/privacy.html' || pathname === '/privacy/index.html') return 'privacy'
   const slug = pathname.replace(/^\/+|\/+$/g, '')
   return slug === 'privacy' || slug === 'terms' || slug === 'csae' ? slug : null
 }

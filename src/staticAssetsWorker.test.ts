@@ -98,6 +98,22 @@ describe('static assets worker', () => {
     expect(await response.text()).toContain('Privacy Policy')
   })
 
+  it('serves the current privacy policy at every public document URL', async () => {
+    const assetFetch = vi.fn(async () => new Response('outdated policy'))
+    const expected = await readFile(new URL('../public/privacy.html', import.meta.url), 'utf8')
+    const expectedBody = expected.match(/<body>([\s\S]*?)<\/body>/)?.[1]?.trim()
+
+    for (const pathname of ['/privacy', '/privacy/', '/privacy.html', '/privacy/index.html']) {
+      const response = await worker.fetch(new Request(`https://chat.iris.to${pathname}`), {
+        ASSETS: { fetch: assetFetch },
+      })
+      expect(response.status).toBe(200)
+      const html = await response.text()
+      expect(html.match(/<body>([\s\S]*?)<\/body>/)?.[1]?.trim()).toBe(expectedBody)
+    }
+    expect(assetFetch).not.toHaveBeenCalled()
+  })
+
   it('ships legal policy pages as static documents', async () => {
     const pages = [
       ['privacy', 'Privacy Policy'],
