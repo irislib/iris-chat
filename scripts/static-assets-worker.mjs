@@ -92,21 +92,34 @@ const policyStyles = 'body{max-width:40rem;margin:3rem auto;padding:0 1.5rem;fon
 const policyBodies = {
   privacy: `
   <h1>Privacy Policy</h1>
-  <p>Last updated: 15 May 2026</p>
-  <h2>What we collect</h2>
-  <p>Iris Chat does not ask for your name, email, or phone number. Your identity is a keypair generated on your device. We do not maintain user accounts.</p>
-  <h2>What stays on your device</h2>
-  <p>Your secret key, contacts, group memberships, and message history are stored locally on the devices you use Iris Chat on. They are not uploaded to a central Iris Chat server.</p>
-  <h2>What goes to the Nostr network</h2>
-  <p>To deliver messages, Iris Chat publishes encrypted events to message servers you choose. Direct messages are wrapped with rotating keys that change per message, so server operators do not see message contents. They may still see encrypted payloads, connection details, and timing metadata. If you publish a public profile such as a display name or picture, that profile is visible under your public key.</p>
-  <h2>Push notifications</h2>
-  <p>If you enable notifications, your device's push notification token is sent to a notification service so messages addressed to you can wake the app. The service sees only encrypted payloads, never message contents.</p>
-  <h2>No tracking, no analytics</h2>
-  <p>Iris Chat does not include third-party analytics, advertising SDKs, or behavioural tracking.</p>
-  <h2>Your data, your control</h2>
-  <p>You can erase local data in the app or by uninstalling it. Where supported, Delete profile clears your public profile before removing local data. Independent message servers may keep previously delivered events according to their own policies.</p>
+  <p>Last updated: 20 October 2026</p>
+
+  <h2>Your identity and devices</h2>
+  <p>Iris Chat does not require a phone number or email address. Your identity starts with a secret key generated on your device and a public user ID. Your secret key and readable message history stay on your devices. Linked devices receive the information needed to use your identity and sync conversations through encrypted connections.</p>
+
+  <h2>Private messages and files</h2>
+  <p>Direct and group messages are end-to-end encrypted. Message servers carry and may retain encrypted messages, but do not receive the keys needed to read them. Photos, videos, and files shared in private chats are encrypted before upload; their download links and decryption keys are shared inside the encrypted conversation. File servers may retain the encrypted files.</p>
+  <p>Your recipients and linked devices can read and copy the content you share with them. Anyone you give a file's decryption link to can read that file. If you chat with an agent, any service the agent forwards your messages to has its own privacy practices.</p>
+
+  <h2>Public profiles and follows</h2>
+  <p>Your public user ID and the public IDs of linked devices are published to message servers. If you add a profile name, picture, or bio, it is published with your user ID. Profile pictures are publicly readable through the link in your profile; they are not private chat attachments.</p>
+  <p>If you use public follows, the people you follow are published with your user ID. This public list is separate from your private chats. Public profiles and follow lists can be read, copied, and retained by other people and services.</p>
+
+  <h2>Notifications and connection information</h2>
+  <p>When you enable mobile notifications, the notification service receives your device's push token and filters identifying the message or call events your device needs. Registration is authenticated with your user ID, so the service can associate that ID with the token and filters. It forwards encrypted message events and call notifications without receiving your private message decryption keys.</p>
+  <p>Apple or Google also processes push delivery through its notification service. Message servers, file servers, notification services, and directly connected peers can observe connection information such as IP addresses, request times, and traffic size. Encryption does not hide all connection or delivery metadata. These services have their own retention policies.</p>
+
+  <h2>No advertising or tracking</h2>
+  <p>Iris Chat does not include third-party analytics, advertising SDKs, or behavioural tracking. Public profile information and notification identifiers support app functionality; they are not used for advertising or tracking across other companies' apps and websites.</p>
+
+  <h2>Support and reports</h2>
+  <p>If you contact us or send a report, we receive your contact details and the information you choose to include. The iOS report action opens an email draft with the reported user's name and user ID and your app version; it does not automatically attach your chat history. Review what you send and never include your secret key.</p>
+
+  <h2>Your choices and deletion</h2>
+  <p>You can choose your message servers, manage notification permissions, remove linked devices, and erase local data. Deleting local data does not erase copies held by recipients, other devices, or network services. Where supported, Delete profile publishes a request to clear your public profile before removing local data; it cannot guarantee removal of previously copied information. Contact the operator of a service about information it retains.</p>
+
   <h2>Contact</h2>
-  <p>Questions: <a href="mailto:irismessenger@pm.me">irismessenger@pm.me</a></p>`,
+  <p>Iris Chat is provided by Sirius Business Oy. Privacy questions: <a href="mailto:irismessenger@pm.me">irismessenger@pm.me</a></p>`,
   terms: `
   <h1>Terms of Use</h1>
   <p>Last updated: 15 May 2026</p>
