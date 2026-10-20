@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { messageNotificationAllowed } from './lib/messageNotificationPolicy'
 import { decryptGroupPush } from './lib/groupPush'
+import { GROUP_WAKE_KIND, parseGroupWake } from './lib/groupWake'
 import { showUnreadNotification } from './lib/readNotifications'
 import { applyAuthenticatedOwnRead } from './lib/ownReadState'
 import { AppKeys } from 'nostr-double-ratchet'
@@ -386,15 +387,17 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
       }
 
       // Slow path: try to decrypt using Session class
-      const eventForSession: NostrEvent = {
-        ...eventData as unknown as NostrEvent,
-        tags: eventData.tags.filter(([key]) => key === 'header'),
-      }
-
+      // Preserve the complete signed envelope, including its privacy version.
+      const eventForSession = eventData as unknown as NostrEvent
       const session = new Session(state)
       const innerEvent = session.receiveEvent(eventForSession) || null
 
       if (innerEvent) {
+        if (innerEvent.kind === GROUP_WAKE_KIND) {
+          const groupEvent = parseGroupWake(innerEvent)
+          if (!ownerPubkey || !entry.chatId || !groupEvent) return {success:false}
+          return await decryptGroupPush(ownerPubkey, groupEvent, entry.chatId) ?? {success:false}
+        }
         const innerId = innerEvent.id
         const ownSession = !!ownerPubkey && entry.chatId === ownerPubkey
         const isSelfMessage = ownSession || ownerPubkey != null && innerEvent.pubkey === ownerPubkey

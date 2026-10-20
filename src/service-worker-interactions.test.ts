@@ -2,9 +2,10 @@
 import 'fake-indexeddb/auto'
 import { beforeAll,beforeEach,expect,it,vi } from 'vitest'
 import { AppKeys,Group,InMemoryStorageAdapter,Session,serializeSessionState } from 'nostr-double-ratchet'
-import { getPublicKey,type Event } from 'nostr-tools'
+import { getEventHash,getPublicKey,type Event } from 'nostr-tools'
 import { nhashEncode } from '@hashtree/core'
 import { groupPushChannels } from './lib/groupPush'
+import { groupWakeRumor } from './lib/groupWake'
 import { db } from './lib/storage'
 import { formatMention } from './lib/mentions'
 import { chatMutesKey } from './lib/chatMutePolicy'
@@ -36,12 +37,12 @@ it('decrypts real group ciphertext over a disposable snapshot, mentions only, op
   const plain=await sender.sendMessage('ordinary',{sendPairwise,publishOuter:async()=>{}})
   for(const k of await storage.list()) await db.sessionManager.put({key:k,value:await storage.get(k)})
   await db.sessionManager.put({key:chatMutesKey(owner),value:{'group:friends':0}})
-  // Our own sender channel must not cause visible-only pushes on linked devices.
+  // Both sender channels remain available for local decryption.
   await receiver.sendMessage('own',{sendPairwise:async()=>{},publishOuter:async()=>{}})
   for(const k of await storage.list()) await db.sessionManager.put({key:k,value:await storage.get(k)})
   const [channel]=await groupPushChannels(owner)
-  expect(channel.authors.length).toBeGreaterThan(channel.subscriptionAuthors.length)
-  expect(channel.subscriptionAuthors).toContain(plain.outer.pubkey)
+  expect(channel.authors).toHaveLength(2)
+  expect(channel.authors).toContain(plain.outer.pubkey)
   const before=await db.sessionManager.toArray()
   await push(plain.outer);expect(showNotification).not.toHaveBeenCalled()
   const hash=nhashEncode({hash:key(1)})
@@ -91,4 +92,43 @@ it('uses the authenticated pairwise owner rather than an inner author claim for 
   await db.groups.put({id:'private',name:'Private',members:[owner,device],admins:[owner],createdAt:100})
   await push(sender.sendEvent({kind:14,pubkey:device,content:'spoof',tags:[['l','private']]}).event)
   expect(showNotification).not.toHaveBeenCalled()
+})
+
+it('cold group wakes authenticate the session sender and preserve the canonical message ID without shared filters',async()=>{
+  const data={id:'private-wake',name:'Friends',members:[owner,peer],admins:[owner],createdAt:100}
+  await db.groups.put(data)
+  const storage=new InMemoryStorageAdapter()
+  const receiverGroup=new Group({data,ourOwnerPubkey:owner,ourDevicePubkey:owner,storage})
+  const senderGroup=new Group({data,ourOwnerPubkey:peer,ourDevicePubkey:device})
+  const canonical={id:'',kind:14,pubkey:peer,content:'a private group wake',created_at:Math.floor(Date.now()/1000),tags:[['l',data.id]]}
+  canonical.id=getEventHash(canonical)
+  const groupEvent=await senderGroup.sendEvent({kind:14,content:JSON.stringify(canonical),tags:canonical.tags},{
+    sendPairwise:async(to,rumor)=>{if(to===owner) await receiverGroup.handleIncomingSessionEvent(rumor,peer,device)},
+    publishOuter:async()=>{},
+  })
+  const sender=Session.init(getPublicKey(key(5)),key(4),true,key(6))
+  const receiver=Session.init(getPublicKey(key(4)),key(5),false,key(6))
+  const record={publicKey:peer,devices:[{deviceId:device,activeSession:{name:'wake',state:serializeSessionState(receiver.state)},inactiveSessions:[],createdAt:100}]}
+  await db.sessionManager.put({key:`v1/user/${peer}`,value:record})
+  const wake=sender.sendEvent({...groupWakeRumor(groupEvent.outer),pubkey:peer}).event
+  // The wake can precede its sender-key distribution. Preserve it without a bogus alert.
+  await push(wake);expect(showNotification).not.toHaveBeenCalled()
+  for(const k of await storage.list()) await db.sessionManager.put({key:k,value:await storage.get(k)})
+  const before=await db.sessionManager.toArray()
+  await push(wake)
+  expect(showNotification).toHaveBeenCalledOnce()
+  expect(showNotification.mock.calls[0][1]).toMatchObject({body:canonical.content,data:{ownerPubkey:owner,chatId:`group:${data.id}`,messageId:canonical.id}})
+  expect(await db.sessionManager.toArray()).toEqual(before)
+  await push(groupEvent.outer)
+  expect(showNotification).toHaveBeenCalledOnce()
+
+  // A different session owner cannot forward someone else's group channel as its own.
+  showNotification.mockClear()
+  await db.sessionManager.delete(`v1/user/${peer}`)
+  await db.sessionManager.put({key:`v1/user/${device}`,value:{...record,publicKey:device}})
+  await push(wake);expect(showNotification).not.toHaveBeenCalled()
+  await db.sessionManager.delete(`v1/user/${device}`)
+  await db.sessionManager.put({key:`v1/user/${peer}`,value:record})
+  await db.groups.update(data.id,{members:[peer]})
+  await push(wake);expect(showNotification).not.toHaveBeenCalled()
 })

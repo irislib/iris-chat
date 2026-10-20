@@ -3,14 +3,16 @@ import 'fake-indexeddb/auto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HashtreeRuntimeEventStore } from '@hashtree/nostr-pubsub'
 import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools'
+import { Invite, Session } from 'nostr-double-ratchet'
 import { TestRelay } from '../../e2e/test-relay'
 import { createEventStore } from './eventStore'
 import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
+import { callWakeEvent } from './callPush'
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
 
-it('restarts the real worker queue without replaying old static call alerts or losing safe pending events', async () => {
+it('restarts the real worker queue without replaying identity-bearing call alerts or losing safe pending events', async () => {
   const relay = new TestRelay()
   await relay.start()
   cleanup.push(() => relay.stop())
@@ -20,14 +22,21 @@ it('restarts the real worker queue without replaying old static call alerts or l
   const legacy = finalizeEvent({ kind: 21111, created_at: now, tags: [['p', recipient]],
     content: nip44.v2.encrypt(JSON.stringify({ v: 3, type: 'offer', call_id: 'old-call', video: true }),
       nip44.v2.utils.getConversationKey(key, recipient)) }, key)
-  // The generic worker treats existing ratchet envelopes as opaque signed bytes.
-  const sealed = finalizeEvent({ kind: 1060, created_at: now, tags: [['p', recipient]],
+  const oldMessage = finalizeEvent({ kind: 1060, created_at: now, tags: [['p', recipient]],
     content: 'opaque-existing-session-envelope' }, generateSecretKey())
-  const wake = finalizeEvent({ kind: 21111, created_at: now, tags: [['p', recipient]],
+  const oldBootstrap = finalizeEvent({ kind: 1059, created_at: now, tags: [['p', recipient]],
+    content: 'opaque-old-invite-response' }, generateSecretKey())
+  // Use a separate invite address so normal replacement does not retire it first.
+  const oldInvite = finalizeEvent({ kind: 30078, created_at: now, tags: [['d', 'double-ratchet/invites/old-device']], content: '' }, key)
+  const invite = finalizeEvent(Invite.createNew(owner, owner).getEvent(), key)
+  const session = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
+  const sealed = session.sendEvent({ kind: 14, content: 'new encrypted message' }, [['p', recipient]]).event
+  const identityWake = finalizeEvent({ kind: 21111, created_at: now, tags: [['p', recipient]],
     content: JSON.stringify({ type: 'call-wake', v: 2, events: [sealed] }) }, key)
+  const wake = callWakeEvent(recipient, sealed)
   const publicPost = finalizeEvent({ kind: 1, created_at: now, tags: [], content: 'public queued post' }, key)
   const beforeRestart = createEventStore(owner)
-  for (const event of [legacy, wake, publicPost, sealed]) {
+  for (const event of [legacy, identityWake, oldMessage, oldBootstrap, oldInvite, invite, wake, publicPost, sealed]) {
     await beforeRestart.putPending({ event, attempts: 1, updatedAt: Date.now(), relays: [relay.url], sources: [] })
   }
   await beforeRestart.close()
@@ -39,14 +48,22 @@ it('restarts the real worker queue without replaying old static call alerts or l
   runtime.setRelays([relay.url])
   await vi.waitFor(() => {
     const sent = new Set(relay.publishedEvents.map(event => event.id))
-    expect(sent).toEqual(new Set([wake.id, publicPost.id, sealed.id]))
+    expect(sent).toEqual(new Set([wake.id, publicPost.id, sealed.id, invite.id]))
   }, { timeout: 5000 })
   await vi.waitFor(async () => expect(await runtime.store.listPending()).toEqual([]), { timeout: 5000 })
   // No guessed ciphertext or signed authorization is erased by this gate.
   const retained = await HashtreeRuntimeEventStore.prototype.listPending.call(runtime.store)
-  expect(retained.map(entry => entry.event.id)).toEqual([legacy.id])
+  expect(new Set(retained.map(entry => entry.event.id))).toEqual(new Set([legacy.id, identityWake.id, oldMessage.id, oldBootstrap.id, oldInvite.id]))
 
   await expect(runtime.publish(legacy, { relays: [relay.url], requireAck: true, queue: false }))
     .rejects.toThrow('Old call alerts cannot be resent')
+  await expect(runtime.publish(identityWake, { relays: [relay.url], requireAck: true, queue: false }))
+    .rejects.toThrow('Invalid encrypted call alert')
+  for (const event of [oldMessage, oldBootstrap, oldInvite]) {
+    await expect(runtime.publish(event, { relays: [relay.url], requireAck: true, queue: false }))
+      .rejects.toThrow('Old encrypted messages cannot be resent')
+    expect(relay.publishedEvents.some(published => published.id === event.id)).toBe(false)
+  }
   expect(relay.publishedEvents.some(event => event.id === legacy.id)).toBe(false)
+  expect(relay.publishedEvents.some(event => event.id === identityWake.id)).toBe(false)
 })

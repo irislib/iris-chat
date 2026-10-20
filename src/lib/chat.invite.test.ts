@@ -138,7 +138,7 @@ vi.mock('./receipts', () => ({
   parseReceipt: vi.fn(() => null),
 }))
 
-import { acceptInvite, createAndSaveInvite, getInviteUrl, parseInviteFromUrl, chats, type ChatSession } from './chat'
+import { acceptInvite, createAndSaveInvite, getInviteUrl, parseInviteFromUrl, deserializeInvite, personalInviteRecord, inviteFromRecord, chats, type ChatSession } from './chat'
 import { saveInvite } from './storage'
 
 beforeEach(() => {
@@ -172,6 +172,21 @@ function defer<T>() {
 }
 
 describe('Invite Parsing / Acceptance', () => {
+  it('preserves the handshake version in a private invite record', async () => {
+    const invite = Invite.createNew(MY_PUBKEY, MY_PUBKEY)
+    const record = await personalInviteRecord(invite)
+    expect(record.invite.version).toBe(2)
+    expect(inviteFromRecord(record).metadataPrivacyVersion).toBe(2)
+    expect(inviteFromRecord(record).inviterEphemeralPublicKey).toBe(invite.inviterEphemeralPublicKey)
+  })
+
+  it('does not restore a saved reference to an old handshake', () => {
+    const serialized = JSON.parse(Invite.createNew(MY_PUBKEY, MY_PUBKEY).serialize())
+    delete serialized.metadataPrivacyVersion
+    expect(() => deserializeInvite(JSON.stringify(serialized))).toThrow('Create a new invite')
+    expect(() => deserializeInvite(JSON.stringify({ type: 'legacy', data: JSON.stringify(serialized), reference: 'old-private-reference' }))).toThrow('Create a new invite')
+  })
+
   it('createAndSaveInvite stores the delegate invite without waiting for relay registration', async () => {
     const registration = defer<void>()
     mocks.ensureDeviceRegistered.mockReturnValue(registration.promise)

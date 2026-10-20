@@ -1,4 +1,3 @@
-import { groupPushChannels } from './groupPush'
 import { loadMentionNotificationSettings, mentionNotificationSettings } from './mentionNotificationSettings'
 import { subscriptionMutes } from './mentionNotificationPolicy'
 // Notification utilities for iris-chat
@@ -11,6 +10,7 @@ import { getNotificationSupportError, requestNotificationPermission } from './no
 import { getInviteEphemeralPubkeys } from './chat'
 import { AppEvent } from './nostrClient'
 import { getNdrRuntime } from './privateChats'
+import { db } from './storage'
 
 // NIP-98 HTTP Authentication event (KIND 27235)
 const KIND_HTTP_AUTH = 27235
@@ -244,7 +244,17 @@ async function getSessionAuthorsByChat(supportsSilentPush = false): Promise<Map<
     byChat.set(userPubkey, runtime.getSessionMessagePushAuthorPubkeys(userPubkey))
   }
 
-  for (const group of await groupPushChannels(currentIdentity.pubkey)) byChat.set(group.chatId,supportsSilentPush ? group.authors : group.subscriptionAuthors)
+  // Shared group authors would link the identities in authenticated member
+  // subscriptions. Group notifications arrive through individual ratchet sessions.
+  // Keep a member's session active when their direct chat is muted but a group
+  // still needs deliveries; the worker applies the actual decrypted chat's mute.
+  for (const group of await db.groups.toArray()) {
+    if (group.accepted === false || !group.members.includes(currentIdentity.pubkey)) continue
+    const authors = group.members
+      .filter(member => member !== currentIdentity.pubkey)
+      .flatMap(member => runtime.getSessionMessagePushAuthorPubkeys(member))
+    if (authors.length) byChat.set(`group:${group.id}`, [...new Set(authors)])
+  }
   return byChat
 }
 

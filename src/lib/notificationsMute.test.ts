@@ -1,11 +1,11 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { writable } from 'svelte/store'
-const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map(), pushAuthors: new Map<string, string[]>(), groups: [] as Array<{chatId:string;authors:string[];subscriptionAuthors:string[]}> }))
+const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map(), pushAuthors: new Map<string, string[]>(), invites: [] as string[], groups: [] as Array<{chatId:string;authors:string[];subscriptionAuthors:string[]}> }))
 vi.mock('./identity', () => ({ identity: writable(null), nostrClient: writable({ signer: {} }) }))
 vi.mock('./chatMuteControl', () => ({ sendChatMuteControl: vi.fn(async () => {}) }))
 vi.mock('./groupPush',()=>({groupPushChannels:async()=>fixture.groups}))
-vi.mock('./chat', () => ({ getInviteEphemeralPubkeys: () => [] }))
+vi.mock('./chat', () => ({ getInviteEphemeralPubkeys: () => fixture.invites }))
 vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getSessionUserRecords: () => fixture.authors, getSessionMessagePushAuthorPubkeys: (owner: string) => fixture.pushAuthors.get(owner) ?? [] }) }))
 vi.mock('./notificationPermission', () => ({ getNotificationSupportError: () => null, requestNotificationPermission: async () => ({ permission: 'granted' }) }))
 vi.mock('./nostrClient', () => ({ AppEvent: class { async sign() {} async toNostrEvent() { return {} } } }))
@@ -13,11 +13,12 @@ import { identity } from './identity'
 import { notificationSettings } from './notificationStore'
 import { subscribeToDMNotifications } from './notifications'
 import { setChatMute, clearChatMutes } from './chatMuteStore'
-import { clearAllData } from './storage'
+import { clearAllData, db } from './storage'
 
 beforeEach(() => {
   fixture.requests = []
   fixture.groups = []
+  fixture.invites = []
   fixture.supported = true
   fixture.pushAuthors = new Map(['alice', 'bob'].map(owner => [owner === 'alice' ? 'a'.repeat(64) : 'b'.repeat(64), [`${owner}-current`, `${owner}-next`]]))
   fixture.authors = new Map(['alice', 'bob'].map(owner => [owner === 'alice' ? 'a'.repeat(64) : 'b'.repeat(64), { devices: new Map([['device', {
@@ -63,13 +64,15 @@ it('muting every chat replaces the old subscription with an empty author list, n
   expect(fixture.requests.at(-1)?.filters).toEqual([{ kinds: [1060], authors: [] }])
 })
 
-it('keeps unmuted group authors but excludes muted groups and own controls on visible-only browser push',async()=>{
+it('keeps pairwise and invite routing without revealing any shared group author',async()=>{
   fixture.groups=[{chatId:'group:open',authors:['group-open','group-own'],subscriptionAuthors:['group-open']},{chatId:'group:quiet',authors:['group-quiet'],subscriptionAuthors:['group-quiet']}]
+  fixture.invites=['own-invite-key']
   fixture.authors.set('profile',{devices:new Map([['own',{activeSession:{state:{theirCurrentNostrPublicKey:'own-control'}},inactiveSessions:[]}]])})
   await setChatMute('group:quiet',0)
   expect((await subscribeToDMNotifications()).success).toBe(true)
-  const all=(fixture.requests.at(-1)?.filters as Array<{authors:string[];subscriptionAuthors:string[]}>).flatMap(filter=>filter.authors)
-  expect(all).toContain('group-open');expect(all).not.toContain('group-quiet');expect(all).not.toContain('own-control');expect(all).not.toContain('group-own')
+  const wire=JSON.stringify(fixture.requests)
+  for(const shared of ['group-open','group-quiet','group-own','own-control']) expect(wire).not.toContain(shared)
+  for(const routed of ['alice-current','bob-current','own-invite-key']) expect(wire).toContain(routed)
 })
 
 
@@ -81,4 +84,15 @@ it('uses the ratchet privacy projection instead of exposing restored invite-link
   expect(body?.filters).toEqual([{ kinds: [1060], authors: ['bob-current', 'bob-next'] }])
   expect(JSON.stringify(body)).not.toContain('public-invite-key')
   expect(body).not.toHaveProperty('subscriber')
+})
+
+it('retains individual sessions for an unmuted group when its member direct chats are muted', async () => {
+  await db.groups.put({id:'friends',name:'Friends',members:['profile','a'.repeat(64),'b'.repeat(64)],admins:['profile'],createdAt:100})
+  await setChatMute('a'.repeat(64),0)
+  await setChatMute('b'.repeat(64),0)
+  expect((await subscribeToDMNotifications()).success).toBe(true)
+  expect(fixture.requests.at(-1)?.filters).toEqual([{kinds:[1060],authors:['alice-current','alice-next','bob-current','bob-next']}])
+  await setChatMute('group:friends',0)
+  expect((await subscribeToDMNotifications()).success).toBe(true)
+  expect(fixture.requests.at(-1)?.filters).toEqual([{kinds:[1060],authors:[]}])
 })

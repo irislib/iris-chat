@@ -966,7 +966,7 @@ async function updateRuntime(
   }, async call => {
     const { preparePeerNdrRuntime } = await import('./privateChats')
     const runtime = await preparePeerNdrRuntime(call.owner)
-    await sendCallWakeups(secretKey, ownerPubkey, call.peers, call.id, call.video,
+    await sendCallWakeups(ownerPubkey, call.peers, call.id, call.video,
       get(notificationSettings).serverUrl, event => new AppEvent(get(nostrClient), event).publish(),
       rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
       () => run === generation && getPubkey() === ownerPubkey)

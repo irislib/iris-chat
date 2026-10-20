@@ -8,6 +8,8 @@ import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, controlClock, persistMessageWithReactions } from './deviceSyncRecordApply'
 import { registerPrivateControlEvents } from './privateControlEvents'
+import { GROUP_WAKE_KIND, parseGroupWake, parseSerializedGroupRuntimeRumor } from './groupWake'
+import { decryptGroupPush, groupWakeSenderMatches } from './groupPush'
 import { DEVICE_LABEL_CONTROL_KIND, receivePrivateDeviceLabel } from './privateDeviceLabels'
 import { CHAT_PIN_KIND } from './chatPinSync'
 import { PRIVATE_CONTACT_CONTROL_KIND, receivePrivateContactControl } from './privateContactControl'
@@ -22,6 +24,7 @@ import {
   Invite,
   type OnEventMeta,
   type Rumor,
+  type GroupDecryptedEvent,
   resolveSessionPubkeyToOwner as resolveSessionPubkeyToOwnerFromRecords,
   type SessionUserRecordsLike,
   REACTION_KIND,
@@ -69,6 +72,7 @@ import {
   saveProcessedEvent,
   getPendingPushEvents,
   deletePendingPushEvent,
+  db,
   type StoredSession,
   type StoredMessage,
   type StoredInvite
@@ -402,16 +406,35 @@ function subscribeToNdrRuntimeEvents(): void {
     await receivePrivateGroupRosterFact(rumor, meta)
     if (getPubkey() !== account) throw new Error('Account changed')
   })
+  const stopGroupWakes = runtime.onDurableSessionEvent([GROUP_WAKE_KIND], async (rumor, from, meta) => {
+    if (!account || getPubkey() !== account) throw new Error('Account is not ready')
+    const event = parseGroupWake(rumor)
+    const sender = meta?.senderOwnerPubkey
+    if (!event || !sender || sender !== from) return
+    const matches = await groupWakeSenderMatches(account, event, sender)
+    if (matches === undefined) throw new Error('Waiting for the encrypted group sender key')
+    if (!matches) return
+    if (await db.processedEvents.get(event.id)) return
+    // Check a disposable snapshot first: GroupManager remembers outer IDs even
+    // when their key distribution has not arrived yet.
+    const preview = await decryptGroupPush(account, event, sender)
+    if (!preview?.success) throw new Error('Waiting for the encrypted group message key')
+    await handleRuntimeGroupEvent(preview.decrypted)
+    const manager = await runtime.waitForGroupManager(account)
+    if (getPubkey() !== account) throw new Error('Account changed')
+    await manager.handleOuterEvent(event)
+    if (getPubkey() !== account) throw new Error('Account changed')
+  })
   const stopDurable = registerPrivateControlEvents(runtime, {
     account, getAccount: getPubkey, getState: () => get(devices), receive: handleManagerEvent,
   })
   const stopEvents = runtime.onSessionEvent((rumor, from, meta) => {
-    if (durableKinds.includes(rumor.kind) || [10461, 10462, 37368, MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND].includes(rumor.kind)) return
+    if (durableKinds.includes(rumor.kind) || [10461, 10462, 37368, GROUP_WAKE_KIND, MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND].includes(rumor.kind)) return
     handleManagerEvent(rumor, from, meta).catch((e) =>
       console.error('[chat] Failed to handle NdrRuntime event:', e)
     )
   })
-  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents(); stopGroupInvites(); stopGroupRosters() }
+  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents(); stopGroupInvites(); stopGroupRosters(); stopGroupWakes() }
 }
 
 function startNdrRuntimePoller(): void {
@@ -421,22 +444,28 @@ function startNdrRuntimePoller(): void {
   }
 }
 
+async function handleRuntimeGroupEvent(event: GroupDecryptedEvent): Promise<void> {
+  const owner = getPubkey()
+  if (handleGroupRosterFactRumor(event.inner)) return
+  const sender = event.senderOwnerPubkey || event.senderDevicePubkey || event.inner.pubkey
+  await handleGroupEvent(event.inner, sender, {id:event.outerEventId}, event.senderDevicePubkey)
+  if (!owner || getPubkey() !== owner) throw new Error('Account changed')
+  if (event.outerEventId) {
+    const inner = parseSerializedGroupRuntimeRumor(event.inner.content) ?? event.inner
+    const groupId = inner.tags.find(tag => tag[0] === 'l')?.[1]
+    if (groupId) await saveProcessedEvent({
+      id:event.outerEventId,chatId:`group:${groupId}`,kind:inner.kind,content:inner.content,
+      messageId:inner.id,author:sender,createdAtSecs:inner.created_at,isSelfMessage:sender === owner,timestamp:Date.now(),
+    })
+  }
+}
+
 export function initNdrRuntimeEvents(): Promise<void> {
   if (!groupRuntimeSubscribed) {
     const runtime = getNdrRuntime()
     groupRuntimeSubscribed = true
     groupRuntimeCleanup = runtime.onGroupEvent((event) => {
-      if (handleGroupRosterFactRumor(event.inner)) {
-        return
-      }
-      const senderPubkey =
-        event.senderOwnerPubkey || event.senderDevicePubkey || event.inner.pubkey
-      handleGroupEvent(
-        event.inner,
-        senderPubkey,
-        { id: event.outerEventId },
-        event.senderDevicePubkey,
-      )
+      void handleRuntimeGroupEvent(event).catch(error => console.error('[chat] Could not save group event:', error))
     })
   }
 
@@ -565,11 +594,12 @@ export async function createInvite(): Promise<ChatInvite> {
 }
 
 export async function personalInviteRecord(invite: Invite): Promise<InviteRecord> {
+  if (invite.metadataPrivacyVersion !== 2) throw new Error('Create a new invite to share.')
   const { getLocalProfile, getProfileName } = await import('./profile')
   return {
     v: 1, type: 'personal', name: (getProfileName(getLocalProfile() ?? undefined) || '').slice(0, 100),
     nonce: Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join(''),
-    invite: { inviter: invite.inviter, ephemeralKey: invite.inviterEphemeralPublicKey,
+    invite: { version: 2, inviter: invite.inviter, ephemeralKey: invite.inviterEphemeralPublicKey,
       sharedSecret: invite.sharedSecret, owner: invite.ownerPubkey || invite.inviter,
       ...(invite.deviceId && { deviceId: invite.deviceId }), purpose: 'chat' },
   }
@@ -763,7 +793,7 @@ export function isLinkInvite(invite: ChatInvite | null | undefined): boolean {
 
 // Serialize invite for storage
 export function serializeInvite(invite: ChatInvite): string {
-  if (invite.type === 'private') return JSON.stringify(invite)
+  if (invite.type === 'private') return JSON.stringify({ ...invite, metadataPrivacyVersion: 2 })
   if (invite.type === 'pubkey') {
     return JSON.stringify({ type: 'pubkey', pubkey: invite.pubkey })
   }
@@ -772,19 +802,17 @@ export function serializeInvite(invite: ChatInvite): string {
 
 // Deserialize invite from storage
 export function deserializeInvite(data: string): ChatInvite {
-  try {
-    const parsed = JSON.parse(data)
-    if (parsed?.type === 'private') { decodeInviteReference(parsed.reference); return parsed }
-    if (parsed?.type === 'pubkey' && typeof parsed.pubkey === 'string') {
-      return { type: 'pubkey', pubkey: parsed.pubkey }
-    }
-    if (parsed?.type === 'legacy' && typeof parsed.data === 'string') {
-      return { type: 'legacy', invite: Invite.deserialize(parsed.data), reference: parsed.reference }
-    }
-  } catch {
-    // fall back to legacy invite
+  const parsed = JSON.parse(data)
+  if (parsed?.type === 'private') {
+    if (parsed.metadataPrivacyVersion !== 2) throw new Error('Create a new invite to share.')
+    decodeInviteReference(parsed.reference)
+    return { type: 'private', reference: parsed.reference }
   }
-  return { type: 'legacy', invite: Invite.deserialize(data) }
+  if (parsed?.type === 'pubkey' && typeof parsed.pubkey === 'string') return { type: 'pubkey', pubkey: parsed.pubkey }
+  const serialized = parsed?.type === 'legacy' && typeof parsed.data === 'string' ? parsed.data : data
+  // Retain older issued links in storage, but do not reshare a reference to an old handshake.
+  if (JSON.parse(serialized).metadataPrivacyVersion !== 2) throw new Error('Create a new invite to share.')
+  return { type: 'legacy', invite: Invite.deserialize(serialized), ...(parsed.reference && { reference: parsed.reference }) }
 }
 
 // Callback for when an invite is accepted

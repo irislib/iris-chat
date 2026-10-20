@@ -177,7 +177,7 @@ test('shared chat downloads stay private and offer Open Iris only after download
 
 test('Mac shared invite downloads a disk image without exposing the invite', async ({ page, context, browserName }) => {
   await platform(page, 'Macintosh Safari', 0)
-  const payload = { inviter: 'b'.repeat(64), ephemeralKey: 'c'.repeat(64), sharedSecret: 'd'.repeat(64), purpose: 'chat' }
+  const payload = { version: 2, inviter: 'b'.repeat(64), ephemeralKey: 'c'.repeat(64), sharedSecret: 'd'.repeat(64), purpose: 'chat' }
   const hash = `#/invite/${encodeURIComponent(JSON.stringify(payload))}`
   const assetURL = releaseAsset('macos-arm64.dmg')
   const filename = 'iris-chat-v2026.9.29-macos-arm64.dmg'
@@ -306,7 +306,7 @@ test('a download already opened does not interrupt plain welcome', async ({ page
 test('encoded chat invites keep their exact handoff but device linking never prompts', async ({ page }) => {
   await platform(page)
   await page.addInitScript(key => localStorage.setItem(key, 'opened'), preferenceKey)
-  const payload = { inviter: 'b'.repeat(64), ephemeralKey: 'c'.repeat(64), sharedSecret: 'd'.repeat(64), purpose: 'chat' }
+  const payload = { version: 2, inviter: 'b'.repeat(64), ephemeralKey: 'c'.repeat(64), sharedSecret: 'd'.repeat(64), purpose: 'chat' }
   const hash = `#/invite/${encodeURIComponent(JSON.stringify(payload))}`
   await page.goto(`/${hash}`)
   await expect(suggestion(page).getByRole('link', { name: 'Open Iris', exact: true })).toHaveAttribute('href', `irischat://chat.iris.to/${hash}`)

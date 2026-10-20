@@ -1,3 +1,4 @@
+import { sendGroupWakes, parseSerializedGroupRuntimeRumor } from './groupWake'
 import { acceptChat, groupRequestAccepted, loadMessageRequestDecisions, messageRequests } from './messageRequests'
 import { restoreStoredRequestAcceptance, restoreOwnReactionAcceptance } from './requestActivity'
 import { saveAuthorizationEvent } from './authorizationSync'
@@ -584,50 +585,6 @@ function buildScopedGroupRumor(
   return rumor
 }
 
-function parseSerializedGroupRuntimeRumor(content: string): Rumor | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(content)
-  } catch {
-    return null
-  }
-
-  if (!parsed || typeof parsed !== 'object') return null
-  const value = parsed as Record<string, unknown>
-  if (
-    typeof value.pubkey !== 'string' ||
-    typeof value.kind !== 'number' ||
-    typeof value.content !== 'string' ||
-    typeof value.created_at !== 'number' ||
-    !Array.isArray(value.tags)
-  ) {
-    return null
-  }
-
-  const tags = value.tags
-    .filter((tag): tag is string[] =>
-      Array.isArray(tag) && tag.every((part) => typeof part === 'string')
-    )
-    .map((tag) => [...tag])
-  if (!tags.some((tag) => tag[0] === 'l' && typeof tag[1] === 'string')) {
-    return null
-  }
-
-  const rumor: Rumor = {
-    id: '',
-    pubkey: value.pubkey,
-    kind: value.kind,
-    content: value.content,
-    created_at: value.created_at,
-    tags,
-  }
-  const computedId = getEventHash(rumor)
-  if (typeof value.id === 'string' && value.id && value.id !== computedId) {
-    return null
-  }
-  rumor.id = typeof value.id === 'string' && value.id ? value.id : computedId
-  return rumor
-}
 
 function fanOutToMembers(
   groupId: string,
@@ -707,6 +664,16 @@ async function sendNativeGroupEvent(
 
       if (options?.includeSelfPairwiseCopy) {
         await fanOutToOwnDevices(groupId, options?.rumor ? { ...partialEvent, kind: CHAT_MESSAGE_KIND, content: JSON.stringify(runtimeRumor) } : partialEvent)
+      }
+      const owner = getPubkey()
+      if (owner && result.outer && currentGroupForSend(groupId, groupData)) {
+        // The existing own-device copy already delivers the same canonical ID.
+        const recipients = groupData.members.filter(member => !options?.includeSelfPairwiseCopy || member !== owner)
+        // Once the shared outer is queued, never resend it via a different fallback
+        // because one private delivery failed. The runtime owns each queued retry.
+        await sendGroupWakes(runtime, owner, recipients, result.outer).catch(error => {
+          console.error('[groups] Failed to queue private group notifications:', error)
+        })
       }
       return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
     } catch (error) {

@@ -1,5 +1,6 @@
 import { validateEvent, verifyEvent, type VerifiedEvent } from 'nostr-tools'
 import type { NostrEvent } from 'nostr-pubsub'
+import { hasMetadataPrivacyVersion } from 'nostr-double-ratchet'
 import { assertPrivatePublicationPolicy } from './privatePublishPolicy'
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -10,13 +11,18 @@ function signedEnvelope(value: unknown): VerifiedEvent | null {
   return verifyEvent(event) ? event : null
 }
 
-/** Legacy call alerts contain static device-key ciphertext, unlike v2 ratchet envelopes. */
+/** Old call alerts disclose caller identities, including v2 wrappers around ratchet ciphertext. */
 export function assertWorkerPublicationPolicy(event: NostrEvent): void {
   assertPrivatePublicationPolicy(event)
+  const publicInvite = event.kind === 30078 && event.tags.some(tag =>
+    tag[0] === 'd' && tag[1]?.startsWith('double-ratchet/invites/'))
+  if (([1059, 1060].includes(event.kind) || publicInvite) && !hasMetadataPrivacyVersion(event)) {
+    throw new Error('Old encrypted messages cannot be resent')
+  }
   if (event.kind !== 21111) return
   let value: unknown
   try { value = JSON.parse(event.content) } catch { throw new Error('Old call alerts cannot be resent') }
-  if (!record(value) || value.type !== 'call-wake' || value.v !== 2 || !Array.isArray(value.events) ||
+  if (!record(value) || value.type !== 'call-wake' || value.v !== 3 || !Array.isArray(value.events) ||
     value.events.length < 1 || value.events.length > 2 ||
     (value.bootstrapEventId !== undefined && (typeof value.bootstrapEventId !== 'string' ||
       !/^[a-f0-9]{64}$/.test(value.bootstrapEventId) || value.events.length !== 1))) {
@@ -25,7 +31,8 @@ export function assertWorkerPublicationPolicy(event: NostrEvent): void {
   const envelopes = value.events.map(signedEnvelope)
   const message = envelopes.at(-1)
   const target = event.tags.filter(tag => tag[0] === 'p')
-  if (!message || message.kind !== 1060 || (envelopes.length === 2 && envelopes[0]?.kind !== 1059) ||
+  if (!message || message.kind !== 1060 || envelopes.some(envelope => !envelope || !hasMetadataPrivacyVersion(envelope)) ||
+    (envelopes.length === 2 && envelopes[0]?.kind !== 1059) ||
     target.length !== 1 || message.tags.filter(tag => tag[0] === 'p').length !== 1 ||
     !message.tags.some(tag => tag[0] === 'p' && tag[1] === target[0]?.[1])) {
     throw new Error('Invalid encrypted call alert')

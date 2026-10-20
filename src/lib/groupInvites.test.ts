@@ -19,11 +19,11 @@ vi.mock('./groups', async () => {
     isAdmin: (group: {admins:string[]}, owner:string) => group.admins.includes(owner) }
 })
 import { db } from './storage'
-import { admissionDecision, requestGroupJoin, receiveGroupInviteControl, type GroupInviteGrant } from './groupInvites'
+import { admissionDecision, groupInviteLinks, requestGroupJoin, receiveGroupInviteControl, type GroupInviteGrant } from './groupInvites'
 import { groups, type Group } from './groups'
 const group: Group = { id: 'picnic', name: 'Picnic', members: [owner], admins: [owner], accepted: true, createdAt: 1, secret: 'f'.repeat(64), protocol: 'sender_key_v1' }
 const grant: GroupInviteGrant = { reference: 'private-reference', revoked: false, usedBy: [], record: { v: 1, type: 'group', name: 'Picnic', nonce: token, groupId: group.id, token, maxUses: 1,
-  invite: { owner, inviter: issuer, ephemeralKey: token, sharedSecret: token } } }
+  invite: { version: 2, owner, inviter: issuer, ephemeralKey: token, sharedSecret: token } } }
 const key = `group-invite-v1:${owner}:${token}`
 async function join(peer: string) {
   await receiveGroupInviteControl({ kind: 10461, id: peer, pubkey: peer2, content: JSON.stringify({ v:1, groupId: group.id, token }), created_at: 1, tags: [] }, { senderOwnerPubkey: peer, senderDevicePubkey: peer, isSelf: false } as never)
@@ -33,6 +33,14 @@ beforeEach(async () => {
   await db.groups.clear(); await db.sessionManager.clear()
   await db.groups.put(group); await db.sessionManager.put({key, value: structuredClone(grant)})
   groups.set(new Map([[group.id, group]]))
+})
+it('preserves old issued links locally while excluding them from sharing and admission', async () => {
+  const old = structuredClone(grant)
+  delete (old.record.invite as { version?: number }).version
+  await db.sessionManager.put({ key, value: old })
+  expect(await groupInviteLinks(group.id)).toEqual([])
+  expect(admissionDecision(old, group, owner, peer1, 1)).toBe('unavailable')
+  expect(await db.sessionManager.get(key)).toBeDefined()
 })
 it('atomically enforces a use limit for simultaneous authenticated requests', async () => {
   await Promise.all([join(peer1), join(peer2)])

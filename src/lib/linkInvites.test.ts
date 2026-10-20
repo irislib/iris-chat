@@ -7,8 +7,14 @@ const EPHEMERAL = 'c'.repeat(64)
 const SECRET = 'd'.repeat(64)
 
 describe('parseLinkInviteInput', () => {
+  it('does not upgrade an unversioned link through normalization', () => {
+    const payload = { inviter: INVITER, inviterEphemeralPublicKey: EPHEMERAL, sharedSecret: SECRET, purpose: 'link' }
+    expect(parseLinkInviteInput(JSON.stringify(payload), OWNER)).toBeNull()
+    expect(parseLinkInviteInput(`https://chat.iris.to/#/invite/${encodeURIComponent(JSON.stringify(payload))}`, OWNER)).toBeNull()
+  })
   it('parses a full link URL', () => {
     const payload = {
+      version: 2,
       inviter: INVITER,
       ephemeralKey: EPHEMERAL,
       sharedSecret: SECRET,
@@ -24,6 +30,7 @@ describe('parseLinkInviteInput', () => {
 
   it('parses a hash-route link URL', () => {
     const payload = {
+      version: 2,
       inviter: INVITER,
       ephemeralKey: EPHEMERAL,
       sharedSecret: SECRET,
@@ -40,6 +47,7 @@ describe('parseLinkInviteInput', () => {
 
   it('parses raw JSON with inviterEphemeralPublicKey', () => {
     const payload = {
+      version: 2,
       inviter: INVITER,
       inviterEphemeralPublicKey: EPHEMERAL,
       sharedSecret: SECRET,
@@ -54,6 +62,7 @@ describe('parseLinkInviteInput', () => {
 
   it('parses link URL with inviterEphemeralPublicKey', () => {
     const payload = {
+      version: 2,
       inviter: INVITER,
       inviterEphemeralPublicKey: EPHEMERAL,
       sharedSecret: SECRET,
@@ -68,6 +77,7 @@ describe('parseLinkInviteInput', () => {
 
   it('parses link URL without purpose field', () => {
     const payload = {
+      version: 2,
       inviter: INVITER,
       ephemeralKey: EPHEMERAL,
       sharedSecret: SECRET,
@@ -81,6 +91,7 @@ describe('parseLinkInviteInput', () => {
 
   it('rejects non-link invites', () => {
     const payload = {
+      version: 2,
       inviter: INVITER,
       ephemeralKey: EPHEMERAL,
       sharedSecret: SECRET,
@@ -94,6 +105,7 @@ describe('parseLinkInviteInput', () => {
 
   it('rejects mismatched owner', () => {
     const payload = {
+      version: 2,
       inviter: INVITER,
       ephemeralKey: EPHEMERAL,
       sharedSecret: SECRET,

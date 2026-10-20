@@ -47,6 +47,34 @@ test('a third member reaches both existing members without creating empty direct
     await send(bob, 'I can make it')
     await expect(alice.getByText('I can make it', { exact: true }).last()).toBeVisible()
 
+    // A notification service receives only individual session authors. Suppress
+    // the shared channels entirely and require authenticated private group wakes.
+    const sharedAuthors = new Set(await alice.evaluate(async () => {
+      const database = await new Promise<IDBDatabase>((resolve,reject) => {
+        const request = indexedDB.open('iris-chat')
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      try {
+        const rows = await new Promise<Array<{key:string;value:unknown}>>((resolve,reject) => {
+          const request = database.transaction('sessionManager').objectStore('sessionManager').getAll()
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+        return rows.filter(row => row.key.startsWith('v1/broadcast-channel/group/') && row.key.endsWith('/sender-event-pubkey'))
+          .map(row => String(row.value))
+      } finally { database.close() }
+    }))
+    expect(sharedAuthors.size).toBe(2)
+    testRelay.deliveryFilter = event => !sharedAuthors.has(event.pubkey) &&
+      !event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
+    await send(alice, 'Delivered through our private session')
+    await expect(bob.getByText('Delivered through our private session', {exact:true}).last()).toBeVisible()
+    await bob.reload()
+    await expect(bob.getByText('Delivered through our private session', {exact:true}).last()).toBeVisible()
+    await send(bob, 'Private group reply after restart')
+    await expect(alice.getByText('Private group reply after restart', {exact:true}).last()).toBeVisible()
+
     await alice.getByRole('button', { name: 'Picnic 2 members', exact: true }).click()
     await alice.getByRole('button', { name: 'Add', exact: true }).click()
     await alice.getByRole('button', { name: 'Cara Bobcat Cara Bobcat', exact: true }).click()

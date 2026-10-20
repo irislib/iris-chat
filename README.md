@@ -28,8 +28,9 @@ existing authenticated double-ratchet invitation fields. Public, unkeyed invite
 records are rejected. Fragments keep the reference out of HTTP requests to the
 landing page. Anyone holding a private link can read its record and use it.
 
-Personal invitations remain reusable. Existing JSON invitation links still work,
-and the sharing view offers a link for older apps. Public contact links use
+Personal invitations remain reusable. New JSON invitation links include the
+current handshake version. Older issued links remain stored locally but must be
+replaced before sharing. Public contact links use
 `/#/npub1…` and the existing public device-invite discovery flow.
 
 Group records additionally contain a group ID and random admission token, with
@@ -48,7 +49,7 @@ The default is unlimited uses with a 30-day expiry; the UI also offers 1, 10 or
 100 uses and revocation. Requests queue while the issuing device is offline.
 Links and counters are device-local; other admins can issue independent links.
 Clearing that device's data retires its links. Native apps also create private
-personal and group links; existing legacy personal links remain supported.
+personal and group links using the same required handshake version.
 The shared wire fixture is checked by both apps;
 `e2e/invite-roleplay.spec.ts` and the private-invite case in
 `e2e/ndr-interop.spec.ts` exercise admission and real messaging.
@@ -130,6 +131,22 @@ transport and measures sustained video/audio delivery during a bandwidth cap.
 These local synthetic tests do not measure physical camera/display or Wi-Fi latency.
 
 ## Tests
+
+Private communication must preserve metadata privacy as well as forward secrecy.
+Relay events and notification requests must never expose both participants'
+identities through signers, tags, filters, authentication, or correlations between
+them. Prefer session and invite keys. A recipient device tag is allowed only when
+needed for delivery and the sender uses an unlinkable session key; invite responses
+target the invite's ephemeral key. Authenticate callers and apply contact rules
+locally after ratchet decryption. FIPS remains available for live traffic.
+
+Call wake envelopes use a fresh disposable signing key and carry only existing
+double-ratchet ciphertext and invite responses. Never use an account or device
+key to sign them. Old identity-bearing wakes and messages from pre-privacy-version
+sessions remain blocked on queue restart; their local records are preserved.
+`callPush.test.ts` and `nostrWorkerRuntime.test.ts` inspect the actual wire data
+and retry path and are required by the site release gate. Encryption/decryption
+tests alone cannot establish metadata privacy.
 
 ```bash
 pnpm test

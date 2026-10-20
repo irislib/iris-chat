@@ -1,6 +1,24 @@
 import { Group, InMemoryStorageAdapter, getExpirationTimestampSeconds } from 'nostr-double-ratchet'
 import { verifyEvent, type Event } from 'nostr-tools'
 import { db } from './storage'
+import { parseSerializedGroupRuntimeRumor } from './groupWake'
+
+/** A wake may only carry its authenticated session sender's group channel. */
+export async function groupWakeSenderMatches(owner: string, event: Event, sender: string): Promise<boolean | undefined> {
+  for (const group of await db.groups.toArray()) {
+    const prefix = `v1/broadcast-channel/group/${group.id}/sender/`
+    const rows = await db.sessionManager.where('key').between(prefix, prefix + '\uffff').toArray()
+    for (const row of rows) {
+      if (!row.key.endsWith('/sender-event-pubkey') || row.value !== event.pubkey) continue
+      const senderPrefix = row.key.slice(0, -'sender-event-pubkey'.length)
+      const senderOwner = rows.find(item => item.key === senderPrefix + 'sender-owner-pubkey')?.value
+      return group.accepted !== false && group.members.includes(owner) &&
+        group.members.includes(sender) && senderOwner === sender
+    }
+  }
+  // The encrypted sender-key distribution can arrive after the wake.
+  return undefined
+}
 
 /** Use the library's authenticated group channel over a disposable snapshot.
  * Worker decryption must never advance the foreground runtime's ratchets. */
@@ -12,20 +30,24 @@ export async function groupPushChannels(owner: string) {
     const rows = await db.sessionManager.where('key').between(prefix,prefix + '\uffff').toArray()
     for (const row of rows) await storage.put(row.key,structuredClone(row.value))
     const channel = new Group({data,ourOwnerPubkey:owner,ourDevicePubkey:owner,storage})
-    const foreignSenderPrefixes = rows.filter(row => row.key.endsWith('/sender-owner-pubkey') && typeof row.value === 'string' && row.value !== owner && data.members.includes(row.value)).map(row => row.key.slice(0,-'sender-owner-pubkey'.length))
-    const foreignAuthors = new Set(rows.filter(row => foreignSenderPrefixes.some(prefix => row.key === prefix + 'sender-event-pubkey')).map(row => row.value))
     const authors = await channel.listSenderEventPubkeys()
-    return { subscriptionAuthors:authors.filter(author => foreignAuthors.has(author)), chatId:`group:${data.id}`, channel, authors }
+    // These keys are only for local decryption, never notification-server filters.
+    return { chatId:`group:${data.id}`, channel, authors }
   }))
 }
-export async function decryptGroupPush(owner: string, event: Event) {
+export async function decryptGroupPush(owner: string, event: Event, sender?: string) {
   if (!verifyEvent(event)) return
+  if (sender && await groupWakeSenderMatches(owner, event, sender) !== true) return
   for (const {chatId,channel,authors} of await groupPushChannels(owner)) {
     if (!authors.includes(event.pubkey)) continue
     const result = await channel.handleOuterEvent(event)
     if (!result) return { success:false as const,chatId }
-    return { success:true as const,chatId,kind:result.inner.kind,content:result.inner.content,
-      isSelfMessage:result.senderOwnerPubkey === owner,messageId:result.inner.id,
-      expiresAt:getExpirationTimestampSeconds(result.inner),author:result.senderOwnerPubkey,createdAtSecs:result.inner.created_at }
+    const inner = parseSerializedGroupRuntimeRumor(result.inner.content) ?? result.inner
+    if (inner !== result.inner && (inner.pubkey !== result.senderOwnerPubkey && inner.pubkey !== result.senderDevicePubkey ||
+      inner.tags.find(tag => tag[0] === 'l')?.[1] !== chatId.slice(6))) return {success:false as const,chatId}
+    return { success:true as const,chatId,kind:inner.kind,content:inner.content,
+      isSelfMessage:result.senderOwnerPubkey === owner,messageId:inner.id,
+      expiresAt:getExpirationTimestampSeconds(inner),author:result.senderOwnerPubkey,createdAtSecs:inner.created_at,
+      decrypted:result }
   }
 }

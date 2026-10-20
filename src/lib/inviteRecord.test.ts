@@ -5,7 +5,7 @@ import { encodeInviteReference, decodeInviteReference, encodeInviteRecord, decod
 import fixture from './test-fixtures/private-invite-v1.json'
 
 const record: InviteRecord = { v: 1, type: 'personal', name: 'Alice', nonce: 'a'.repeat(64), invite: {
-  inviter: 'b'.repeat(64), ephemeralKey: 'c'.repeat(64), sharedSecret: 'd'.repeat(64), owner: 'e'.repeat(64), purpose: 'chat',
+  version: 2, inviter: 'b'.repeat(64), ephemeralKey: 'c'.repeat(64), sharedSecret: 'd'.repeat(64), owner: 'e'.repeat(64), purpose: 'chat',
 } }
 
 describe('private invite records', () => {
@@ -33,6 +33,7 @@ describe('private invite records', () => {
   })
   it('rejects public, unsupported, oversized and malformed records', async () => {
     for (const invalid of [{ ...record, v: 2 }, { ...record, invite: { ...record.invite, sharedSecret: '' } },
+      { ...record, invite: { ...record.invite, version: undefined } }, { ...record, invite: { ...record.invite, version: 1 } },
       { ...record, nonce: '' }, { ...record, name: 'a'.repeat(101) }, { ...record, type: 'group' },
       { ...record, expiresAt: -1 }, { ...record, maxUses: 0 }]) {
       const { key, ciphertext } = await encryptChk(new TextEncoder().encode(JSON.stringify(invalid)))

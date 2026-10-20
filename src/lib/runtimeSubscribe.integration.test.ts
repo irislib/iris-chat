@@ -1,7 +1,8 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto'
 import { expect, it } from 'vitest'
-import { finalizeEvent, generateSecretKey } from 'nostr-tools'
+import { generateSecretKey, getPublicKey } from 'nostr-tools'
+import { Session } from 'nostr-double-ratchet'
 import { TestRelay } from '../../e2e/test-relay'
 import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
 import NostrClient from './nostrClient'
@@ -24,8 +25,8 @@ it('keeps live message interests on the configured relays after connection chang
     stop = createRuntimeSubscribe(client)({ kinds: [1060] }, event => received.push(event.id))
     receiver.setRelays([second.url])
     sender.setRelays([second.url])
-    const message = finalizeEvent({ kind: 1060, created_at: Math.floor(Date.now() / 1000),
-      tags: [], content: 'encrypted-live-reply' }, generateSecretKey())
+    const session = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
+    const message = session.sendEvent({ kind: 14, content: 'encrypted-live-reply' }).event
     await sender.publish(message, { requireAck: true })
     await expect.poll(() => received, { timeout: 1500 }).toContain(message.id)
   } finally {

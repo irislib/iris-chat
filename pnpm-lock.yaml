@@ -70,8 +70,8 @@ importers:
         specifier: ^4.2.1
         version: 4.2.1
       nostr-double-ratchet:
-        specifier: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz
-        version: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz(typescript@5.9.3)
+        specifier: https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.180.tgz
+        version: 0.0.180(typescript@5.9.3)
       nostr-pubsub:
         specifier: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.15/nostr-pubsub-0.5.15.tgz
         version: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.15/nostr-pubsub-0.5.15.tgz(nostr-tools@2.25.2(typescript@5.9.3))
@@ -2270,9 +2270,8 @@ packages:
   nostics@1.3.0:
     resolution: {integrity: sha512-wzRsrJwNlFbqIRQt8aCeL2WE8USip/uuvGSOZV1D02CxX8ABTMbw8IywKjH7yWHETMXbWJI4OBpihg9rmz2Vyg==}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz:
-    resolution: {integrity: sha512-Yi3BaxzY/iNzKXK4kwso4nnrP9ychGd4JSCS3hlNLj1f1hTvc0hl0QkHj9KAOSyyygN9HZ2bbjnXSvZTnDBrTw==, tarball: https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz}
-    version: 0.0.177
+  nostr-double-ratchet@0.0.180:
+    resolution: {integrity: sha512-ugkC64TVBup4PMp4rcA2yu939Csw6gA2XkXKGreBaV5dppM1K3UgCwogXf4cZ+QC1hgii+IAuenZxpNDVkmi0Q==}
 
   nostr-pubsub-reconcile@https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz:
     resolution: {integrity: sha512-F1UToi75yYrZpt5KFocPUlQH4MeU/J9A/aJBndWUuDvzx1WdQtF99tNxD3KnH2x81R4oaT721hf5OcTdSv8hRg==, tarball: https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.0/nostr-pubsub-reconcile-0.1.0.tgz}
@@ -5322,7 +5321,7 @@ snapshots:
 
   nostics@1.3.0: {}
 
-  nostr-double-ratchet@https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz(typescript@5.9.3):
+  nostr-double-ratchet@0.0.180(typescript@5.9.3):
     dependencies:
       '@noble/curves': 2.4.0
       nostr-tools: 2.25.2(typescript@5.9.3)

@@ -35,8 +35,8 @@ const releases = {
     "integrity": "sha512-59CecbZTYxPjY0zBBvZwhbQsC9bwTkTYBKUG2v+tePw90KfUmzEolQus/CzwYns4MJNeQHq4oVYXfw7cVvDMbA=="
   },
   "nostr-double-ratchet": {
-    "url": "https://github.com/irislib/nostr-double-ratchet/releases/download/nostr-double-ratchet-ts-v0.0.177/nostr-double-ratchet-0.0.177.tgz",
-    "integrity": "sha512-Yi3BaxzY/iNzKXK4kwso4nnrP9ychGd4JSCS3hlNLj1f1hTvc0hl0QkHj9KAOSyyygN9HZ2bbjnXSvZTnDBrTw=="
+    "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.180.tgz",
+    "integrity": "sha512-ugkC64TVBup4PMp4rcA2yu939Csw6gA2XkXKGreBaV5dppM1K3UgCwogXf4cZ+QC1hgii+IAuenZxpNDVkmi0Q=="
   },
   "nostr-social-graph": {
     "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz",
@@ -77,16 +77,20 @@ for (const [name, release] of Object.entries(releases)) {
   if (manifest.dependencies?.[name] !== release.url) {
     throw new Error(`${name} must use immutable release ${release.url}`)
   }
-  const quotedKey = `  '${name}@${release.url}':`
-  const plainKey = `  ${name}@${release.url}:`
+  const version = new URL(release.url).pathname.match(/-(\d+\.\d+\.\d+(?:-[\w.-]+)?)\.tgz$/)?.[1]
+  // pnpm canonicalizes npm registry tarballs to a version key while retaining
+  // the exact tarball digest and the original URL in the importer.
+  const registryRelease = new URL(release.url).hostname === 'registry.npmjs.org'
+  const packageRef = registryRelease ? version : release.url
+  const quotedKey = `  '${name}@${packageRef}':`
+  const plainKey = `  ${name}@${packageRef}:`
   const start = Math.max(packages.indexOf(quotedKey), packages.indexOf(plainKey))
   const end = packages.indexOf('\n\n', start)
   const entry = start >= 0 ? packages.slice(start, end < 0 ? undefined : end) : ''
-  if (!entry.includes(`tarball: ${release.url}`) || !entry.includes(`integrity: ${release.integrity}`)) {
+  if ((!registryRelease && !entry.includes(`tarball: ${release.url}`)) || !entry.includes(`integrity: ${release.integrity}`)) {
     throw new Error(`${name} lock entry is missing its verified release integrity`)
   }
-  const version = new URL(release.url).pathname.match(/-(\d+\.\d+\.\d+(?:-[\w.-]+)?)\.tgz$/)?.[1]
-  if (!version || entry.match(/^    version: (.+)$/m)?.[1] !== version) {
+  if (!version || (!registryRelease && entry.match(/^    version: (.+)$/m)?.[1] !== version)) {
     throw new Error(`${name} lock metadata must match release version ${version}`)
   }
 }

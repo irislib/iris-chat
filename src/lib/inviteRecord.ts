@@ -7,7 +7,7 @@ export interface InviteRecord {
   type: 'personal' | 'group'
   name: string
   nonce: string
-  invite: { inviter: string; ephemeralKey: string; sharedSecret: string; owner: string; deviceId?: string; purpose?: string }
+  invite: { version: 2; inviter: string; ephemeralKey: string; sharedSecret: string; owner: string; deviceId?: string; purpose?: string }
   groupId?: string
   token?: string
   expiresAt?: number
@@ -19,9 +19,9 @@ export function validateInviteRecord(value: unknown): InviteRecord {
   const r = value as InviteRecord
   if (!r || r.v !== 1 || !['personal', 'group'].includes(r.type) ||
     typeof r.name !== 'string' || r.name.length > 100 || !hexKey(r.nonce) ||
-    !r.invite || ![r.invite.inviter, r.invite.ephemeralKey, r.invite.sharedSecret, r.invite.owner].every(hexKey) ||
+    !r.invite || r.invite.version !== 2 || ![r.invite.inviter, r.invite.ephemeralKey, r.invite.sharedSecret, r.invite.owner].every(hexKey) ||
     (r.invite.purpose !== undefined && !['chat', 'private'].includes(r.invite.purpose)) ||
-    Object.keys(r.invite).some(k => !['inviter', 'ephemeralKey', 'sharedSecret', 'owner', 'deviceId', 'purpose'].includes(k)) ||
+    Object.keys(r.invite).some(k => !['version', 'inviter', 'ephemeralKey', 'sharedSecret', 'owner', 'deviceId', 'purpose'].includes(k)) ||
     Object.keys(r).some(k => !['v', 'type', 'name', 'nonce', 'invite', 'groupId', 'token', 'expiresAt', 'maxUses'].includes(k)) ||
     (r.expiresAt !== undefined && (!Number.isSafeInteger(r.expiresAt) || r.expiresAt <= 0)) ||
     (r.maxUses !== undefined && (!Number.isSafeInteger(r.maxUses) || r.maxUses < 1 || r.maxUses > 10000)) ||

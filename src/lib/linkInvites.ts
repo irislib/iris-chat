@@ -3,6 +3,7 @@ import { Invite } from 'nostr-double-ratchet'
 const DEFAULT_LINK_INVITE_ROOTS = ['https://chat.iris.to', 'https://iris.to']
 
 type LinkInvitePayload = {
+  version?: number
   inviter?: string
   ephemeralKey?: string
   inviterEphemeralPublicKey?: string
@@ -60,9 +61,10 @@ function normalizeInvitePayload(raw: string): string | null {
         ? data.inviterEphemeralPublicKey
         : undefined
 
-  if (!inviter || !sharedSecret || !ephemeralKey) return null
+  if (data.version !== 2 || !inviter || !sharedSecret || !ephemeralKey) return null
 
-  const payload: Record<string, string> = {
+  const payload: Record<string, string | number> = {
+    version: data.version,
     inviter,
     ephemeralKey,
     sharedSecret,

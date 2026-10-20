@@ -19,7 +19,7 @@ export interface GroupInviteGrant {
 }
 export type Admission = 'added' | 'already-member' | 'used' | 'unavailable' | 'expired' | 'full'
 export function admissionDecision(grant: GroupInviteGrant, group: Group | undefined, owner: string, peer: string, now: number): Admission {
-  if (grant.revoked || !group || !canSendToGroup(group, owner) || !isAdmin(group, owner) ||
+  if (grant.record.invite.version !== 2 || grant.revoked || !group || !canSendToGroup(group, owner) || !isAdmin(group, owner) ||
     grant.record.invite.owner !== owner || group.id !== grant.record.groupId) return 'unavailable'
   // A removed member cannot use the same invitation again, even on another device.
   if (grant.usedBy.includes(peer)) return group.members.includes(peer) ? 'already-member' : 'used'
@@ -34,7 +34,7 @@ const key = (owner: string, token: string) => prefix(owner) + token
 export async function groupInviteLinks(groupId: string): Promise<GroupInviteGrant[]> {
   const owner = getPubkey(); if (!owner) return []
   return (await db.sessionManager.where('key').startsWith(prefix(owner)).toArray())
-    .map(row => row.value as GroupInviteGrant).filter(grant => grant.record.groupId === groupId && !grant.revoked)
+    .map(row => row.value as GroupInviteGrant).filter(grant => grant.record.invite.version === 2 && grant.record.groupId === groupId && !grant.revoked)
 }
 export async function createGroupInvite(groupId: string, maxUses?: number, expiresAt?: number): Promise<GroupInviteGrant> {
   const owner = getPubkey(), group = get(groups).get(groupId)
@@ -71,6 +71,7 @@ export async function requestGroupJoin(record: InviteRecord): Promise<string> {
   return record.groupId
 }
 async function sendJoinRequest(record: InviteRecord): Promise<void> {
+  if (record.invite.version !== 2) throw new Error('Ask for a new invite link.')
   const owner = getPubkey(); if (!owner) throw new Error('Not logged in')
   const runtime = await waitForSendReadyRuntime()
   if (getPubkey() !== owner) throw new Error('Account changed')
@@ -97,7 +98,7 @@ export async function receiveGroupInviteControl(rumor: Rumor, meta?: OnEventMeta
     !/^[0-9a-f]{64}$/.test(payload.token)) return
   if (rumor.kind === GROUP_JOIN_RESULT_KIND) {
     const pending = (await db.sessionManager.get(pendingKey(owner, payload.groupId)))?.value as InviteRecord | undefined
-    if (!pending || pending.invite.owner !== peer || pending.token !== payload.token || pending.invite.inviter !== meta?.senderDevicePubkey) return
+    if (!pending || pending.invite.version !== 2 || pending.invite.owner !== peer || pending.token !== payload.token || pending.invite.inviter !== meta?.senderDevicePubkey) return
     const labels: Record<string, string> = { added: 'Joining group…', 'already-member': 'Joining group…',
       unavailable: 'This invite is no longer available.', expired: 'This invite has expired.', full: 'This invite has reached its use limit.', used: 'This invite has already been used.' }
     if (typeof payload.status === 'string' && Object.hasOwn(labels, payload.status)) groupJoinStatus.update(s => ({ ...s, [payload.groupId]: labels[payload.status!] }))
