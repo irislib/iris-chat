@@ -33,7 +33,8 @@ test('an invite can send files as its first content and streams to the chosen sa
     const invite = (await copy.getAttribute('title'))!.replace('https://chat.iris.to', new URL(a.url()).origin)
     await b.goto(invite)
     await b.getByRole('button', { name: 'Join Chat', exact: true }).click()
-    await expect(b.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 2000 })
+    // Registration rechecks the latest signed device list before accepting.
+    await expect(b.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 5000 })
     await expect(a.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 2000 })
     await expect(a.getByRole('dialog')).toHaveCount(0)
     await a.getByRole('button', { name: 'Attach file', exact: true }).click()

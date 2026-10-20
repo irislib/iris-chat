@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { expect, it, vi } from 'vitest'
-import { Group, Session, serializeSessionState, deserializeSessionState, type NdrRuntime } from 'nostr-double-ratchet'
+import { Group, Session, InMemoryStorageAdapter, serializeSessionState, deserializeSessionState, type NdrRuntime } from 'nostr-double-ratchet'
 import { finalizeEvent, getPublicKey, type Event } from 'nostr-tools'
-import { GROUP_WAKE_KIND, groupWakeRumor, parseGroupWake, sendGroupWakes } from './groupWake'
+import { GROUP_WAKE_KIND, groupWakeRumor, parseGroupWake } from './groupWake'
+import { createGroupWakeQueue } from './groupWakeQueue'
 
 const key = (n: number) => new Uint8Array(32).fill(n)
 
@@ -22,7 +23,7 @@ it('delivers the same signed group event through distinct private sessions, incl
   const sendEvent = vi.fn(async (...[recipient,rumor,_owner,options]: Parameters<NdrRuntime['sendEvent']>) => {
     expect(options).toEqual({includeLocalSiblings:false})
     const pair = sessions.get(recipient)!
-    const wire = pair.send.sendEvent({...rumor,pubkey:owner,tags:[['p',recipient]]}).event
+    const wire = pair.send.sendEvent(rumor).event
     wires.push(wire)
     // Persisted state, rather than the original object, handles the first delivery.
     const restored = new Session(deserializeSessionState(serializeSessionState(pair.receive.state)))
@@ -30,7 +31,14 @@ it('delivers the same signed group event through distinct private sessions, incl
     expect(JSON.stringify(parseGroupWake(received))).toBe(JSON.stringify(sent.outer))
     return received
   })
-  await sendGroupWakes({sendEvent} as Pick<NdrRuntime,'sendEvent'>,owner,[...data.members,other],sent.outer)
+  const queue=createGroupWakeQueue({
+    owner,storage:new InMemoryStorageAdapter(),runtime:()=>({sendEvent}),
+    active:()=>true,group:async()=>({...data,members:[...data.members,other]}),
+    localSender:async()=>sent.outer.pubkey,onError:error=>{throw error},
+  })
+  await queue.enqueue(sent.outer,{groupId:data.id})
+  await queue.retry()
+  queue.close()
   expect(sendEvent).toHaveBeenCalledTimes(3)
   expect(new Set(wires.map(event=>event.pubkey)).size).toBe(3)
   for (const wire of wires) {

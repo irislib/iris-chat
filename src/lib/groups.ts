@@ -1,4 +1,4 @@
-import { sendGroupWakes, parseSerializedGroupRuntimeRumor } from './groupWake'
+import { parseSerializedGroupRuntimeRumor } from './groupWake'
 import { acceptChat, groupRequestAccepted, loadMessageRequestDecisions, messageRequests } from './messageRequests'
 import { restoreStoredRequestAcceptance, restoreOwnReactionAcceptance } from './requestActivity'
 import { saveAuthorizationEvent } from './authorizationSync'
@@ -662,19 +662,8 @@ async function sendNativeGroupEvent(
         tags: runtimeRumor.tags,
       })
 
-      if (options?.includeSelfPairwiseCopy) {
-        await fanOutToOwnDevices(groupId, options?.rumor ? { ...partialEvent, kind: CHAT_MESSAGE_KIND, content: JSON.stringify(runtimeRumor) } : partialEvent)
-      }
-      const owner = getPubkey()
-      if (owner && result.outer && currentGroupForSend(groupId, groupData)) {
-        // The existing own-device copy already delivers the same canonical ID.
-        const recipients = groupData.members.filter(member => !options?.includeSelfPairwiseCopy || member !== owner)
-        // Once the shared outer is queued, never resend it via a different fallback
-        // because one private delivery failed. The runtime owns each queued retry.
-        await sendGroupWakes(runtime, owner, recipients, result.outer).catch(error => {
-          console.error('[groups] Failed to queue private group notifications:', error)
-        })
-      }
+      // The runtime publication hook durably queues private deliveries for every
+      // member, including linked devices, before the shared event is published.
       return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
     } catch (error) {
       if (options?.requireQueued) throw error

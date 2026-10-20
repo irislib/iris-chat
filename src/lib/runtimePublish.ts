@@ -3,23 +3,26 @@ import type { NostrPublishContext, StorageAdapter } from 'nostr-double-ratchet'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import type { VerifiedEvent } from 'nostr-tools'
 
+/** Private group deliveries require both group and recipient policy checks. */
+export type RuntimePublishContext = NostrPublishContext | { groupId: string; recipientOwnerPubkey: string; createdAt: number }
+
 interface PendingPublication {
   event: VerifiedEvent
   innerEventId?: string
-  context?: NostrPublishContext
+  context?: RuntimePublishContext
 }
 
 interface RuntimePublishOptions {
   /** Public identity key whose outgoing envelopes this queue may publish. */
   owner: string
-  publish: (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => Promise<RuntimePublishResult>
+  publish: (event: VerifiedEvent, signal: AbortSignal, context?: RuntimePublishContext) => Promise<RuntimePublishResult>
   onAcceptedEvent?: (event: VerifiedEvent) => void | Promise<void>
   onAcceptedRelays?: (
     innerEventId: string | undefined,
     relayUrls: string[]
   ) => void | Promise<void>
-  canPublish?: (context: NostrPublishContext) => boolean | 'hold' | Promise<boolean | 'hold'>
-  resolveContext?: (innerEventId: string) => Promise<NostrPublishContext | undefined>
+  canPublish?: (context: RuntimePublishContext) => boolean | 'hold' | Promise<boolean | 'hold'>
+  resolveContext?: (innerEventId: string) => Promise<RuntimePublishContext | undefined>
   onError: (error: unknown) => void
   storage?: StorageAdapter
   onlineTarget?: EventTarget
@@ -34,7 +37,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
   const controller = new AbortController()
   const { signal } = controller
   const enqueuing = new Map<string, Promise<void>>()
-  const policyAttempts = new Map<AbortController, NostrPublishContext>()
+  const policyAttempts = new Map<AbortController, RuntimePublishContext>()
   const inFlight = new Map<string, Promise<VerifiedEvent | undefined>>()
   const onlineTarget =
     options.onlineTarget ?? (typeof window !== 'undefined' ? window : undefined)
@@ -47,7 +50,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
   const enqueue = async (
     event: VerifiedEvent,
     innerEventId?: string,
-    context?: NostrPublishContext,
+    context?: RuntimePublishContext,
   ): Promise<void> => {
     signal.throwIfAborted()
     if (!event.id || !event.sig) throw new Error('Cannot queue an unsigned event')
@@ -155,7 +158,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
 
   return {
     enqueue,
-    async publish(event: VerifiedEvent, innerEventId?: string, context?: NostrPublishContext): Promise<VerifiedEvent> {
+    async publish(event: VerifiedEvent, innerEventId?: string, context?: RuntimePublishContext): Promise<VerifiedEvent> {
       await enqueue(event, innerEventId, context)
       return (await attempt(prefix + event.id)) ?? event
     },

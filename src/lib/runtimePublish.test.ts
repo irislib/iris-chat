@@ -322,7 +322,7 @@ describe('durable runtime publication', () => {
 it('retires blocked direct retries and holds newer envelopes across restart without touching other recipients', async () => {
   const target = '1'.repeat(64), other = '2'.repeat(64)
   let blocked = true
-  const canPublish = (context: import('nostr-double-ratchet').NostrPublishContext) => {
+  const canPublish = (context: import('./runtimePublish').RuntimePublishContext) => {
     if (context.recipientOwnerPubkey !== target) return true
     if (context.createdAt! <= 100) return false
     return blocked ? 'hold' as const : true

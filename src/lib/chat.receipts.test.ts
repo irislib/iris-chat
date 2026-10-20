@@ -1,3 +1,4 @@
+vi.mock('./inviteProvenance', () => ({ sessionFromLocalInvite: async (session: {name?:string}, keys: Set<string>) => session.name === 'authenticated-response-id' && keys.has('c'.repeat(64)) }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateHistoryAllowed: async () => true, isPrivatelyBlocked: async () => false, projectMessageRead: async (_owner: string, message: unknown) => message }))
 vi.mock('./privateStateControl', () => ({ receivePrivateStateControl: async () => {}, applyOwnReadTag: async () => {}, sendOwnReadState: mocks.sendOwnReadState }))
 vi.mock('./deviceSyncRecordApply', async (importOriginal: <T>() => Promise<T>) => ({
@@ -216,7 +217,7 @@ describe('manager receipts', () => {
       type: 'legacy', invite: { inviterEphemeralPublicKey: ephemeral },
     }, createdAt: Date.now(), usedBy: [], unsubscribe: () => {} } as never]]))
     mocks.setUserRecords(new Map([[THEIR_PUBKEY, { devices: new Map([['peer-device', {
-      activeSession: { state: { ourCurrentNostrKey: { publicKey: ephemeral } } }, inactiveSessions: [],
+      activeSession: { name: 'authenticated-response-id', state: { ourCurrentNostrKey: { publicKey: 'private-session-key' } } }, inactiveSessions: [],
     }]]) }]]))
     messageRequests.set({ acceptedChats: {}, rejectedChats: rejected ? { [THEIR_PUBKEY]: true } : {} })
     messageRequestSettings.set({ receiveMessageRequests: false })
@@ -417,8 +418,9 @@ describe('manager receipts', () => {
               'peer-device',
               {
                 activeSession: {
+                  name: 'authenticated-response-id',
                   state: {
-                    ourCurrentNostrKey: { publicKey: inviteEphemeralPubkey },
+                    ourCurrentNostrKey: { publicKey: 'private-session-key' },
                   },
                 },
                 inactiveSessions: [],

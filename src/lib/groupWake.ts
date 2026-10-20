@@ -1,5 +1,5 @@
 import { getEventHash, verifyEvent, type Event, type VerifiedEvent } from 'nostr-tools'
-import { hasMetadataPrivacyVersion, type NdrRuntime, type Rumor } from 'nostr-double-ratchet'
+import { hasMetadataPrivacyVersion, type Rumor } from 'nostr-double-ratchet'
 
 export const GROUP_WAKE_KIND = 21113
 
@@ -19,19 +19,6 @@ export function parseGroupWake(rumor: Pick<Rumor, 'kind' | 'content'>): Verified
       event.kind !== 1060 || !hasMetadataPrivacyVersion(event) || !verifyEvent(event)) return
     return event as VerifiedEvent
   } catch { return }
-}
-
-export async function sendGroupWakes(
-  runtime: Pick<NdrRuntime, 'sendEvent'>,
-  owner: string,
-  members: readonly string[],
-  event: Event,
-): Promise<void> {
-  const rumor = groupWakeRumor(event)
-  const results = await Promise.allSettled([...new Set(members)].map(member =>
-    runtime.sendEvent(member, rumor, owner, { includeLocalSiblings: false })))
-  const failed = results.filter(result => result.status === 'rejected')
-  if (failed.length) throw new AggregateError(failed.map(result => result.reason), `Could not queue ${failed.length} group deliveries`)
 }
 
 /** Web groups carry the canonical message inside the library's kind-14 rumor. */

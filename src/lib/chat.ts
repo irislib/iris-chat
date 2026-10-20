@@ -8,6 +8,7 @@ import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, controlClock, persistMessageWithReactions } from './deviceSyncRecordApply'
 import { registerPrivateControlEvents } from './privateControlEvents'
+import { sessionFromLocalInvite } from './inviteProvenance'
 import { GROUP_WAKE_KIND, parseGroupWake, parseSerializedGroupRuntimeRumor } from './groupWake'
 import { decryptGroupPush, groupWakeSenderMatches } from './groupPush'
 import { DEVICE_LABEL_CONTROL_KIND, receivePrivateDeviceLabel } from './privateDeviceLabels'
@@ -419,6 +420,7 @@ function subscribeToNdrRuntimeEvents(): void {
     // when their key distribution has not arrived yet.
     const preview = await decryptGroupPush(account, event, sender)
     if (!preview?.success) throw new Error('Waiting for the encrypted group message key')
+    if (getPubkey() !== account) throw new Error('Account changed')
     await handleRuntimeGroupEvent(preview.decrypted)
     const manager = await runtime.waitForGroupManager(account)
     if (getPubkey() !== account) throw new Error('Account changed')
@@ -975,43 +977,7 @@ export function getInviteEphemeralPubkeys(): string[] {
   return pubkeys
 }
 
-type InviteSessionStateLike = {
-  ourCurrentNostrKey?: {
-    publicKey?: unknown
-  } | null
-}
-
-function getSessionInvitePublicKey(session: unknown): string | null {
-  const rawState =
-    (session as { state?: unknown } | null | undefined)?.state ??
-    (session as { sessionState?: unknown } | null | undefined)?.sessionState
-
-  if (!rawState) return null
-
-  let state: InviteSessionStateLike
-  if (typeof rawState === 'string') {
-    try {
-      state = JSON.parse(rawState) as InviteSessionStateLike
-    } catch {
-      return null
-    }
-  } else {
-    state = rawState as InviteSessionStateLike
-  }
-
-  const publicKey = state.ourCurrentNostrKey?.publicKey
-  return typeof publicKey === 'string' ? publicKey : null
-}
-
-function isSessionFromLocalInvite(
-  session: unknown,
-  inviteEphemeralPubkeys: Set<string>
-): boolean {
-  const publicKey = getSessionInvitePublicKey(session)
-  return !!publicKey && inviteEphemeralPubkeys.has(publicKey)
-}
-
-function isChatFromLocalInvite(chatId: string): boolean {
+async function isChatFromLocalInvite(chatId: string): Promise<boolean> {
   const inviteEphemeralPubkeys = new Set(getInviteEphemeralPubkeys())
   if (inviteEphemeralPubkeys.size === 0) return false
 
@@ -1035,8 +1001,8 @@ function isChatFromLocalInvite(chatId: string): boolean {
         ...(device.inactiveSessions ?? []),
       ].filter(Boolean)
 
-      if (sessions.some((session) => isSessionFromLocalInvite(session, inviteEphemeralPubkeys))) {
-        return true
+      for (const session of sessions) {
+        if (await sessionFromLocalInvite(session, inviteEphemeralPubkeys)) return true
       }
     }
   }
@@ -1297,7 +1263,7 @@ export async function handleManagerEvent(
   const existing = get(chats).get(chatId)
   const groupConnection = !existing && Array.from(get(groups).values()).some(group => group.members.includes(chatId))
   const acceptedLocalInvite = !isFromSelf && !policyCtx.rejectedChats?.[chatId] &&
-    (!(groupConnection || groupInviteConnections.has(chatId)) || (rumor.kind === CHAT_MESSAGE_KIND && !!rumor.content.trim())) && isChatFromLocalInvite(chatId)
+    (!(groupConnection || groupInviteConnections.has(chatId)) || (rumor.kind === CHAT_MESSAGE_KIND && !!rumor.content.trim())) && await isChatFromLocalInvite(chatId)
   if (!existing && !acceptedLocalInvite && (rumor.kind !== CHAT_MESSAGE_KIND || !rumor.content.trim())) {
     if (isTyping(rumor) && !isFromSelf) {
       const expiresAt = getExpirationTimestampSeconds(rumor)
@@ -1334,7 +1300,7 @@ export async function handleManagerEvent(
     isEmptyChat
 
   if (isFirstInboundMessage) {
-    if (!isChatAccepted(chatSession, policyCtx) && isChatFromLocalInvite(chatId)) {
+    if (!isChatAccepted(chatSession, policyCtx) && await isChatFromLocalInvite(chatId)) {
       acceptChat(chatSession.recipientPubkey)
       triggerAutoOpen(chatSession)
     } else if (isChatAccepted(chatSession, policyCtx)) {

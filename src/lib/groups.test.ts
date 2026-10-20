@@ -220,7 +220,6 @@ vi.mock('./privateChats', () => {
       const group = runtimeGroups.get(groupId)
       if (group) {
         for (const recipient of group.members) {
-          if (recipient === MY_PUBKEY) continue
           sendEventCalls.push({
             recipient,
             event: {

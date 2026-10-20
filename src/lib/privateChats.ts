@@ -25,7 +25,6 @@ import {
   type NdrRuntimeState,
   type NostrFetch,
   type NostrSubscribe,
-  type NostrPublishContext,
 } from 'nostr-double-ratchet'
 import {
   nostrClient,
@@ -43,7 +42,9 @@ import {
   getLinkedDeviceRegistrationLabels,
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
-import { createRuntimePublish } from './runtimePublish'
+import { createRuntimePublish, type RuntimePublishContext } from './runtimePublish'
+import { createGroupWakeQueue } from './groupWakeQueue'
+import { rememberInviteResponse } from './inviteProvenance'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 import { restoreSignerAuthorization } from './signerAuthorizationStorage'
@@ -52,6 +53,7 @@ import { initializeAuthorizedRuntime } from './privateRuntimeInitialization'
 let runtime: NdrRuntime | null = null
 let runtimeStorage: DexieStorageAdapter | null = null
 let runtimePublication: ReturnType<typeof createRuntimePublish> | null = null
+let runtimeGroupWakes: ReturnType<typeof createGroupWakeQueue> | null = null
 let runtimeOwnerPubkey: string | null = null
 let runtimeCleanup: (() => void) | null = null
 let previousRuntimeState: NdrRuntimeState | null = null
@@ -203,7 +205,9 @@ const createSubscribe = (
     observeCallWakeInvite(event)
     const owner = get(identity)?.pubkey
     if (owner) void import('./authorizationSync').then(({ saveAuthorizationEvent }) => saveAuthorizationEvent(owner, event, () => get(identity)?.pubkey === owner)).catch(error => console.warn('Could not save authorization', error))
-    onEvent(event)
+    if (event.kind===INVITE_RESPONSE_KIND) {
+      void rememberInviteResponse(event).then(()=>onEvent(event)).catch(error=>console.warn('Could not save invite routing evidence',error))
+    } else onEvent(event)
   })
 }
 
@@ -241,7 +245,7 @@ const createSign = (client: ReturnType<typeof getNostrClient>) => {
 }
 
 const createRelayPublish = (client: ReturnType<typeof getNostrClient>) => {
-  return async (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => {
+  return async (event: VerifiedEvent, signal: AbortSignal, context?: RuntimePublishContext) => {
     signal.throwIfAborted()
     let relayUrls = [...relayStore.getState().relays].map(url => new URL(url).toString())
     if (context) {
@@ -361,6 +365,8 @@ const getRuntime = (): NdrRuntime => {
   runtimeStorage = null
   runtimePublication?.close()
   runtimePublication = null
+  runtimeGroupWakes?.close()
+  runtimeGroupWakes = null
   runtimeCleanup?.()
   runtimeCleanup = null
   runtime?.close()
@@ -394,35 +400,58 @@ const getRuntime = (): NdrRuntime => {
     canPublish: async context => {
       if (context.recipientOwnerPubkey) {
         const { privateDirectPublicationPolicy } = await import('./privateStateStore')
-        return privateDirectPublicationPolicy(ownerPubkey, context.recipientOwnerPubkey, context.createdAt)
+        const direct=await privateDirectPublicationPolicy(ownerPubkey, context.recipientOwnerPubkey, context.createdAt)
+        if (direct !== true || !context.groupId) return direct
       }
       const { groupId } = context
       if (!groupId) return false
       const { groups, canSendToGroup } = await import('./groups')
       const { db } = await import('./storage')
       const stored = get(groups).get(groupId) ?? await db.groups.get(groupId)
-      return canSendToGroup(get(groups).get(groupId) ?? stored, ownerPubkey)
+      if (context.recipientOwnerPubkey && !stored?.members.includes(context.recipientOwnerPubkey)) return false
+      return canSendToGroup(stored, ownerPubkey)
     },
     onError: reportPublicationError,
   })
   runtimePublication = publication
   runtimeOwnerPubkey = ownerPubkey
+  const groupWakes=createGroupWakeQueue({
+    owner:ownerPubkey,storage,
+    runtime:()=>runtime!,
+    active:()=>get(identity)?.pubkey===ownerPubkey && runtimeOwnerPubkey===ownerPubkey &&
+      runtime?.getState().sessionManagerReady===true,
+    group:async id=>(await import('./storage')).db.groups.get(id),
+    canSend:async (member,createdAt)=>member===ownerPubkey ? true :
+      (await import('./privateStateStore')).privateDirectPublicationPolicy(ownerPubkey,member,createdAt),
+    localSender:async id=>{
+      const device=runtime?.getState().currentDevicePubkey
+      return device ? storage.get<string>(`v1/broadcast-channel/group/${id}/sender/${device}/sender-event-pubkey`) : undefined
+    },
+    onError:reportPublicationError,
+  })
+  runtimeGroupWakes=groupWakes
   runtime = new NdrRuntime({
     nostrSubscribe: createSubscribe(client),
     nostrSign: sign,
     nostrEnqueue: async (event, innerEventId, context) => {
+      const scope=await groupWakes.publicationContext(innerEventId,context)
       const { saveAuthorizationEvent } = await import('./authorizationSync')
       await saveAuthorizationEvent(ownerPubkey, event, () => get(identity)?.pubkey === ownerPubkey)
-      await publication.enqueue(event, innerEventId, context)
+      await groupWakes.enqueue(event,scope)
+      await publication.enqueue(event, innerEventId, scope)
+      void groupWakes.retry().catch(reportPublicationError)
       if (get(identity)?.pubkey === ownerPubkey) {
         void queuedCallWakeEnvelope(event, innerEventId).catch(error => console.warn('Call wake could not be sent', error))
       }
     },
     nostrPublish: async (event, innerEventId, context) => {
+      const scope=await groupWakes.publicationContext(innerEventId,context)
       const signed = 'sig' in event && event.sig
         ? event as VerifiedEvent
         : await sign(event)
-      const published = await publication.publish(signed, innerEventId, context)
+      await groupWakes.enqueue(signed,scope)
+      void groupWakes.retry().catch(reportPublicationError)
+      const published = await publication.publish(signed, innerEventId, scope)
       const { saveAuthorizationEvent } = await import('./authorizationSync')
       await saveAuthorizationEvent(ownerPubkey, signed, () => get(identity)?.pubkey === ownerPubkey)
       return published
@@ -454,6 +483,7 @@ const getRuntime = (): NdrRuntime => {
     previousRuntimeState = state
   })
   publication.start()
+  groupWakes.start()
   return runtime
 }
 
@@ -712,7 +742,8 @@ export const buildLinkInviteUrl = (
   root: string,
   ownerPubkey?: string
 ): string => {
-  const data: Record<string, string> = {
+  const data: Record<string, string | number> = {
+    version: 2,
     inviter: invite.inviter,
     ephemeralKey: invite.inviterEphemeralPublicKey,
     sharedSecret: invite.sharedSecret,
@@ -897,6 +928,8 @@ export const resetManagers = (): void => {
   }
   runtimePublication?.close()
   runtimePublication = null
+  runtimeGroupWakes?.close()
+  runtimeGroupWakes = null
   runtimeCleanup?.()
   runtimeCleanup = null
   runtime?.close()

@@ -223,6 +223,8 @@ export function createReleasePlan(options) {
         'src/lib/signerAuthorizationStorage.test.ts',
         'src/lib/callPush.test.ts',
         'src/lib/groupWake.test.ts',
+        'src/lib/groupWakeQueue.test.ts',
+        'src/lib/inviteProvenance.test.ts',
         'src/lib/nostrWorkerRuntime.test.ts',
         'src/lib/notificationsMute.test.ts',
         'src/lib/inviteRecord.test.ts',

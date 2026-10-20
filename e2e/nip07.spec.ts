@@ -107,7 +107,9 @@ test.describe('NIP-07 Login', () => {
     await expect(page2.locator('text=Not logged in')).not.toBeVisible({ timeout: 2000 })
 
     // Should successfully join and show chat input
-    await expect(page2.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 10000 })
+    // Existing extension identities require both the absent-roster discovery
+    // window and a fresh authorization check before the invite handshake.
+    await expect(page2.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 15000 })
 
     await context1.close()
     await context2.close()
@@ -143,6 +145,7 @@ test.describe('NIP-07 Login', () => {
 
     // Create a legacy invite link to trigger NIP-44 encryption error
     const legacyInvitePayload = {
+      version: 2,
       inviter: publicKey,
       ephemeralKey: 'a'.repeat(64),
       sharedSecret: 'b'.repeat(64),

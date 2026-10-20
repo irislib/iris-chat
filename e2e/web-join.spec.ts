@@ -55,7 +55,7 @@ test('unchecking Open chat when someone joins keeps the invite QR open when some
       .replace('https://chat.iris.to', new URL(a.url()).origin)
     await b.goto(invite)
     await b.getByRole('button', { name: 'Join Chat', exact: true }).click()
-    await expect(composer(b)).toBeVisible({ timeout: 2000 })
+    await expect(composer(b)).toBeVisible({ timeout: 5000 })
     await send(b, 'Keep this QR open')
     await expect(a.getByTestId('sidebar-chat-list').getByText('Keep this QR open', { exact: true })).toBeVisible()
     await expect(a.getByRole('dialog')).toBeVisible()
