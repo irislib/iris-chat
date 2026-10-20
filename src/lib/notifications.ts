@@ -81,7 +81,7 @@ export class NotificationService {
 
   async updateNotificationSubscription(
     id: string,
-    subscription: Omit<NotificationSubscription, 'id'>
+    subscription: Omit<NotificationSubscription, 'id' | 'subscriber'>
   ): Promise<{ status: string }> {
     return this.getJsonAuthd(`subscriptions/${id}`, 'POST', subscription)
   }
@@ -235,30 +235,13 @@ async function getSessionAuthorsByChat(supportsSilentPush = false): Promise<Map<
 
   const byChat = new Map<string, string[]>()
 
-  const userRecords = getNdrRuntime().getSessionUserRecords()
-  for (const [userPubkey, record] of userRecords.entries()) {
+  const runtime = getNdrRuntime()
+  for (const userPubkey of runtime.getSessionUserRecords().keys()) {
     // A standard userVisibleOnly subscription cannot safely wake for read controls.
     if (userPubkey === currentIdentity.pubkey && !supportsSilentPush) continue
-    const authors: string[] = []
-    for (const device of record.devices?.values() ?? []) {
-      const sessions = [
-        ...(device.activeSession ? [device.activeSession] : []),
-        ...(device.inactiveSessions ?? []),
-      ]
-      for (const session of sessions) {
-        const state = session?.state
-        if (!state) continue
-        if ('skippedKeys' in state && state.skippedKeys && typeof state.skippedKeys === 'object')
-          authors.push(...Object.keys(state.skippedKeys))
-        if (state.theirCurrentNostrPublicKey) {
-          authors.push(state.theirCurrentNostrPublicKey)
-        }
-        if (state.theirNextNostrPublicKey) {
-          authors.push(state.theirNextNostrPublicKey)
-        }
-      }
-    }
-    byChat.set(userPubkey, [...new Set(authors)].sort())
+    // The ratchet library owns this projection, including privacy-version checks
+    // for restored sessions. Raw current/next/skipped keys are not a safe API.
+    byChat.set(userPubkey, runtime.getSessionMessagePushAuthorPubkeys(userPubkey))
   }
 
   for (const group of await groupPushChannels(currentIdentity.pubkey)) byChat.set(group.chatId,supportsSilentPush ? group.authors : group.subscriptionAuthors)
@@ -334,7 +317,7 @@ async function syncDMNotifications(): Promise<SubscriptionResult> {
       const [id, sub] = existingMessageSub
       if (!sameMessageFilters([sub.filter], [filters[0]]) || !sameMessageFilters(sub.filters ?? [sub.filter], filters)) {
         await api.updateNotificationSubscription(id, {
-          filter: filters[0], filters, web_push_subscriptions: [webPushData], webhooks: [], subscriber: sub.subscriber,
+          filter: filters[0], filters, web_push_subscriptions: [webPushData], webhooks: [],
         })
       }
     } else if (filters.some(filter => filter.authors.length)) {
@@ -368,8 +351,7 @@ async function syncDMNotifications(): Promise<SubscriptionResult> {
           await api.updateNotificationSubscription(id, {
             filter: inviteFilter,
             web_push_subscriptions: [webPushData],
-            webhooks: [],
-            subscriber: sub.subscriber
+            webhooks: []
           })
         }
       } else {

@@ -1,12 +1,12 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { writable } from 'svelte/store'
-const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map(), groups: [] as Array<{chatId:string;authors:string[];subscriptionAuthors:string[]}> }))
+const fixture = vi.hoisted(() => ({ supported: true, requests: [] as Record<string, unknown>[], authors: new Map(), pushAuthors: new Map<string, string[]>(), groups: [] as Array<{chatId:string;authors:string[];subscriptionAuthors:string[]}> }))
 vi.mock('./identity', () => ({ identity: writable(null), nostrClient: writable({ signer: {} }) }))
 vi.mock('./chatMuteControl', () => ({ sendChatMuteControl: vi.fn(async () => {}) }))
 vi.mock('./groupPush',()=>({groupPushChannels:async()=>fixture.groups}))
 vi.mock('./chat', () => ({ getInviteEphemeralPubkeys: () => [] }))
-vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getSessionUserRecords: () => fixture.authors }) }))
+vi.mock('./privateChats', () => ({ getNdrRuntime: () => ({ getSessionUserRecords: () => fixture.authors, getSessionMessagePushAuthorPubkeys: (owner: string) => fixture.pushAuthors.get(owner) ?? [] }) }))
 vi.mock('./notificationPermission', () => ({ getNotificationSupportError: () => null, requestNotificationPermission: async () => ({ permission: 'granted' }) }))
 vi.mock('./nostrClient', () => ({ AppEvent: class { async sign() {} async toNostrEvent() { return {} } } }))
 import { identity } from './identity'
@@ -19,6 +19,7 @@ beforeEach(() => {
   fixture.requests = []
   fixture.groups = []
   fixture.supported = true
+  fixture.pushAuthors = new Map(['alice', 'bob'].map(owner => [owner === 'alice' ? 'a'.repeat(64) : 'b'.repeat(64), [`${owner}-current`, `${owner}-next`]]))
   fixture.authors = new Map(['alice', 'bob'].map(owner => [owner === 'alice' ? 'a'.repeat(64) : 'b'.repeat(64), { devices: new Map([['device', {
     activeSession: { state: { theirCurrentNostrPublicKey: `${owner}-current`, theirNextNostrPublicKey: `${owner}-next` } }, inactiveSessions: [],
   }]]) }]))
@@ -69,4 +70,15 @@ it('keeps unmuted group authors but excludes muted groups and own controls on vi
   expect((await subscribeToDMNotifications()).success).toBe(true)
   const all=(fixture.requests.at(-1)?.filters as Array<{authors:string[];subscriptionAuthors:string[]}>).flatMap(filter=>filter.authors)
   expect(all).toContain('group-open');expect(all).not.toContain('group-quiet');expect(all).not.toContain('own-control');expect(all).not.toContain('group-own')
+})
+
+
+it('uses the ratchet privacy projection instead of exposing restored invite-linked sender keys', async () => {
+  fixture.authors.get('a'.repeat(64)).devices.get('device').activeSession.state.theirCurrentNostrPublicKey = 'public-invite-key'
+  fixture.pushAuthors.set('a'.repeat(64), []) // Restored unsafe session quarantined by the library.
+  expect((await subscribeToDMNotifications()).success).toBe(true)
+  const body = fixture.requests.at(-1)
+  expect(body?.filters).toEqual([{ kinds: [1060], authors: ['bob-current', 'bob-next'] }])
+  expect(JSON.stringify(body)).not.toContain('public-invite-key')
+  expect(body).not.toHaveProperty('subscriber')
 })
