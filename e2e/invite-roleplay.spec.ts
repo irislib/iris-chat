@@ -9,13 +9,15 @@ async function send(page: Page, content: string) {
 
 test('a third member reaches both existing members without creating empty direct chats', async ({ browser, testRelayUrl, testRelay }, testInfo) => {
   test.setTimeout(120_000)
+  const requests:Array<{authors?:string[];kinds?:number[];[key:string]:unknown}>=[]
+  testRelay.observeRequest=filters=>requests.push(...structuredClone(filters))
   // Membership changes must reach members even if a relay suppresses public replaceable facts.
   testRelay.deliveryFilter = event => !event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
   const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()])
   try {
     await Promise.all(contexts.map(context => useTestRelay(context, testRelayUrl)))
     const [alice, bob, cara] = await Promise.all(contexts.map(context => context.newPage()))
-    for (const [index, page] of [alice, bob, cara].entries()) page.on('console', message => { if (/group|roster/i.test(message.text()) && ['warning', 'error'].includes(message.type())) console.log(`roleplay ${index}: ${message.text()}`) })
+    for (const [index, page] of [alice, bob, cara].entries()) page.on('console', message => { if ((process.env.TEST_RELAY_DEBUG==='1' || /group|roster/i.test(message.text())) && ['warning', 'error'].includes(message.type())) console.log(`roleplay ${index}: ${message.text()}`) })
     for (const page of [alice, bob, cara]) {
       await page.context().addInitScript(() => localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [], stunServers: [] })))
     }
@@ -90,6 +92,10 @@ test('a third member reaches both existing members without creating empty direct
     for (const page of [bob, cara]) {
       await expect(page.getByTestId('sidebar-chat-list').getByText('No messages yet', { exact: true })).toHaveCount(0)
     }
+    expect(testRelay.publishedEvents.some(event=>event.kind===37368 && event.tags.some(tag=>tag[0]==='type' && tag[1]==='group_roster'))).toBe(false)
+    expect(testRelay.publishedEvents.filter(event=>event.kind===1060).every(event=>event.tags.filter(tag=>tag[0]==='p').length===1)).toBe(true)
+    expect(requests.some(filter=>filter.authors?.some(author=>sharedAuthors.has(author)))).toBe(false)
+    expect(requests.some(filter=>Array.isArray(filter['#type']) && filter['#type'].includes('group_roster'))).toBe(false)
   } finally {
     if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach('group-roster-events', {body: JSON.stringify(testRelay.publishedEvents.filter(event => event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster'))), contentType:'application/json'})
     await Promise.all(contexts.map(context => context.close()))

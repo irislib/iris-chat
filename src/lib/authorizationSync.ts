@@ -4,7 +4,7 @@ import { db } from './storage'
 import { deviceRecordVersion } from './deviceSyncRecordStore'
 
 const prefix = (owner: string) => `authorization-event-v1:${owner}:`
-/** These are public authorization proofs, unlike unsigned private bookkeeping. */
+/** Signed authorization proofs; group membership proofs are kept private. */
 export function authorizationEvent(value: unknown): VerifiedEvent | undefined {
   try {
     const event = structuredClone(value) as VerifiedEvent

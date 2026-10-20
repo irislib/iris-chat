@@ -1,13 +1,19 @@
+// @vitest-environment node
+import 'fake-indexeddb/auto'
 import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { FipsServiceContext } from '@fips/tcp'
+import { Segment, type FipsServiceContext } from '@fips/tcp'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
+import { Invite, Session } from 'nostr-double-ratchet'
 import type {
   FipsPubsubClientNode,
 } from 'nostr-pubsub'
 
 import { NostrPubsubRuntime as SharedMesh } from './nostrPubsubRuntime'
-import { createNostrRuntime, type NostrFilter, type NostrEvent } from 'nostr-pubsub'
+import { createNostrRuntime, FipsPubsubWireCodec, type NostrFilter, type NostrEvent } from 'nostr-pubsub'
+import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
+import { RecordReader } from './deviceSyncTcp'
+import { TestRelay } from '../../e2e/test-relay'
 
 const runtimes: ReturnType<typeof createNostrRuntime>[] = []
 afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runtime.close())) })
@@ -33,6 +39,7 @@ type FipsPubsubServiceHandler = (context: FipsServiceContext) => Promise<void> |
 
 class MemoryFipsNetwork {
   private readonly nodes = new Map<string, MemoryFipsNode>()
+  readonly packets: Array<{ from: string; to: string; payload: Uint8Array }> = []
 
   node(peerId: string): MemoryFipsNode {
     const node = new MemoryFipsNode(peerId, this)
@@ -41,7 +48,25 @@ class MemoryFipsNetwork {
   }
 
   get(peerId: string): MemoryFipsNode | undefined {
-    return this.nodes.get(peerId)
+    return this.nodes.get(peerId) ?? [...this.nodes.values()].find(node => node.id.slice(2) === peerId.slice(2))
+  }
+
+  messages() {
+    const streams = new Map<string, { from: string; to: string; segments: Map<number, Uint8Array> }>()
+    for (const packet of this.packets) {
+      const segment = Segment.decode(packet.payload)
+      if (!segment.payload.length) continue
+      const key = `${packet.from}:${packet.to}:${segment.srcPort}:${segment.dstPort}`
+      const stream = streams.get(key) ?? { from: packet.from, to: packet.to, segments: new Map() }
+      streams.set(key, stream)
+      stream.segments.set(segment.seq, segment.payload)
+    }
+    const codec = new FipsPubsubWireCodec()
+    return [...streams.values()].flatMap(stream => {
+      const reader = new RecordReader(65_525)
+      return [...stream.segments].sort(([left], [right]) => left - right).flatMap(([, bytes]) =>
+        reader.push(bytes).map(frame => ({ from: stream.from, to: stream.to, message: codec.decodeFrame(frame) })))
+    })
   }
 }
 
@@ -76,6 +101,7 @@ class MemoryFipsNode implements FipsPubsubClientNode {
   }): Promise<void> {
     const target = this.network.get(args.dst)
     if (!target) throw new Error(`unroutable FIPS peer ${args.dst}`)
+    this.network.packets.push({ from: this.id, to: args.dst, payload: args.payload.slice() })
     queueMicrotask(() => void target.receive({
       src: this.id,
       srcPort: args.srcPort ?? 0,
@@ -110,6 +136,63 @@ function chatEvent(createdAt: number, content: string) {
 }
 
 describe('NostrPubsubRuntime', () => {
+  it('keeps provider interests and private publication on trusted sibling streams only', async () => {
+    const network = new MemoryFipsNetwork()
+    const secret = generateSecretKey(), owner = getPublicKey(secret)
+    const peerOwner = getPublicKey(generateSecretKey()), peerDevice = getPublicKey(generateSecretKey())
+    const worker = createNostrWorkerRuntime(owner, async (_relay, event) => finalizeEvent(event, secret))
+    const local = new SharedMesh(), sibling = new NostrPubsubRuntime(), contact = new NostrPubsubRuntime()
+    const relay = new TestRelay()
+    relay.authRequired = true
+    await relay.start()
+    worker.setRelays([relay.url])
+    const stops: Array<() => void> = []
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await local.activate(network.node(PEER_A), PEER_A, () => [PEER_B], worker)
+      await sibling.activate(network.node(PEER_B), PEER_B, () => [PEER_A])
+      // An accepted contact may share the live endpoint, but cannot read its message service.
+      await contact.activate(network.node(PEER_C), PEER_C, () => [PEER_A])
+      stops.push(contact.subscribe({ kinds: [1060] }, () => {}))
+      const ownInvite = Invite.createNew(owner, owner)
+      const receiving = worker.subscribe([{ kinds: [1059], '#p': [ownInvite.inviterEphemeralPublicKey] }], { onEvent() {} })
+      stops.push(() => receiving.close())
+      const received = vi.fn()
+      stops.push(sibling.subscribe({ kinds: [1060], '#p': [peerDevice] }, received))
+      const pump = async () => {
+        await Promise.all([local.idle(), sibling.idle(), contact.idle()])
+        await new Promise(resolve => setTimeout(resolve, 0))
+      }
+      for (let turn = 0; turn < 8; turn++) await pump()
+      await worker.query([{ kinds: [0, 37368], authors: [owner, peerOwner] }], {
+        cache: 'network-only', deadline: Date.now() + 2000,
+      })
+      const sealed = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true,
+        generateSecretKey()).sendEvent({ kind: 14, content: 'private fixture' }, [['p', peerDevice]]).event
+      const publication = await worker.publish(sealed, { relays: [], sources: ['fips'], queue: false })
+      expect(publication.sources).toContainEqual({ id: 'fips', accepted: false, queued: true })
+      for (let turn = 0; turn < 20 && !received.mock.calls.length; turn++) await pump()
+      expect(received).toHaveBeenCalledTimes(1)
+      expect(network.packets.some(packet => packet.from === PEER_C && packet.to === PEER_A)).toBe(true)
+      expect(network.packets.some(packet => packet.from === PEER_A && packet.to === PEER_C)).toBe(false)
+      const sent = network.messages().filter(frame => frame.from === PEER_A)
+      expect(sent.length).toBeGreaterThan(0)
+      expect(sent.every(frame => frame.to === `02${PEER_B.slice(2)}`)).toBe(true)
+      expect(network.packets.some(packet => packet.from === PEER_B)).toBe(true)
+      const requests = sent.flatMap(frame => frame.message.type === 'req' ? frame.message.filters : [])
+      expect(requests).toContainEqual(expect.objectContaining({ kinds: [1059], '#p': [ownInvite.inviterEphemeralPublicKey] }))
+      expect(requests.every(filter => !filter.kinds?.some(kind => [0, 30078, 37368].includes(kind)))).toBe(true)
+      expect(JSON.stringify(requests)).not.toContain(peerOwner)
+      expect(sent.some(frame => frame.message.type === 'event' && frame.message.event.id === sealed.id)).toBe(true)
+    } finally {
+      stops.forEach(stop => stop())
+      await Promise.all([local.deactivate(), sibling.deactivate(), contact.deactivate()])
+      await worker.close()
+      await relay.stop()
+      warning.mockRestore()
+    }
+  })
+
   it.each(['before', 'after'])('carries 180 device interests added %s activation without mixing recipients', async (when: string) => {
     const network = new MemoryFipsNetwork()
     const alice = new NostrPubsubRuntime()

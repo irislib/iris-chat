@@ -1,25 +1,6 @@
-import { getEventHash, verifyEvent, type Event, type VerifiedEvent } from 'nostr-tools'
-import { hasMetadataPrivacyVersion, type Rumor } from 'nostr-double-ratchet'
-
-export const GROUP_WAKE_KIND = 21113
-
-/** The shared group event is visible only inside each recipient's ratchet. */
-export function groupWakeRumor(event: Event): Pick<Rumor, 'kind' | 'content' | 'tags'> {
-  const rumor = { kind: GROUP_WAKE_KIND, content: JSON.stringify({ v: 1, type: 'group-wake', event }), tags: [] }
-  if (!parseGroupWake(rumor)) throw new Error('Invalid group wake event')
-  return rumor
-}
-
-export function parseGroupWake(rumor: Pick<Rumor, 'kind' | 'content'>): VerifiedEvent | undefined {
-  if (rumor.kind !== GROUP_WAKE_KIND) return
-  try {
-    const value = JSON.parse(rumor.content)
-    const event = value?.event as Event | undefined
-    if (value?.v !== 1 || value.type !== 'group-wake' || !event ||
-      event.kind !== 1060 || !hasMetadataPrivacyVersion(event) || !verifyEvent(event)) return
-    return event as VerifiedEvent
-  } catch { return }
-}
+import { getEventHash } from 'nostr-tools'
+import type { Rumor } from 'nostr-double-ratchet'
+export { PRIVATE_GROUP_DELIVERY_KIND as GROUP_WAKE_KIND, parsePrivateGroupDelivery as parseGroupWake } from 'nostr-double-ratchet'
 
 /** Web groups carry the canonical message inside the library's kind-14 rumor. */
 export function parseSerializedGroupRuntimeRumor(content: string): Rumor | null {

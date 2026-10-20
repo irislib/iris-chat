@@ -23,7 +23,7 @@ const ROSTER_ADMIN_SECRET = new Uint8Array(32).fill(7)
 const ROSTER_ADMIN = getPublicKey(ROSTER_ADMIN_SECRET)
 const ROSTER_MEMBER_SECRET = new Uint8Array(32).fill(8)
 const ROSTER_MEMBER = getPublicKey(ROSTER_MEMBER_SECRET)
-const publishedGroupRosterFacts: Array<{ kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number }> = []
+const signedGroupRosterFacts: Array<{ kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number }> = []
 
 vi.mock('./nostrClient', () => ({
   AppEvent: class {
@@ -41,8 +41,9 @@ vi.mock('./nostrClient', () => ({
 
     async sign(signer: { pubkey?: string }): Promise<string> {
       this.event.pubkey = signer.pubkey || this.event.pubkey
-      this.event.id = `fact-${publishedGroupRosterFacts.length + 1}`
+      this.event.id = `fact-${signedGroupRosterFacts.length + 1}`
       this.event.sig = 'sig'
+      signedGroupRosterFacts.push({...this.event} as typeof signedGroupRosterFacts[number])
       return this.event.sig
     }
 
@@ -51,8 +52,7 @@ vi.mock('./nostrClient', () => ({
     }
 
     async publish(): Promise<Set<{ url: string }>> {
-      publishedGroupRosterFacts.push(this.event as { kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number })
-      return new Set([{ url: 'wss://relay.test' }])
+      throw new Error('Group membership must never be published publicly')
     }
   },
 }))
@@ -356,7 +356,7 @@ describe('groups', () => {
     clearMessageRequestDecisions()
     localStorage.removeItem(`iris-chat-message-request-decisions:${MY_PUBKEY}`)
     sendEventCalls.length = 0
-    publishedGroupRosterFacts.length = 0
+    signedGroupRosterFacts.length = 0
     sessionManagerValues.clear()
     runtimeGroups.clear()
     // Reset group stores between tests
@@ -395,14 +395,14 @@ describe('groups', () => {
       expect(myCount).toBe(1)
     })
 
-    it('publishes a group_roster fact snapshot without the group secret', async () => {
+    it('signs a private group roster and distributes it through sessions without a public publish', async () => {
       const { createGroup, GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE } = await import('./groups')
       const group = await createGroup('Roster Fact Test', [MEMBER_B])
 
       await vi.waitFor(() => {
-        expect(publishedGroupRosterFacts.length).toBeGreaterThan(0)
+        expect(signedGroupRosterFacts.length).toBeGreaterThan(0)
       })
-      const fact = publishedGroupRosterFacts.at(-1)!
+      const fact = signedGroupRosterFacts.at(-1)!
       expect(fact.kind).toBe(GROUP_ROSTER_FACT_KIND)
       expect(fact.content).toBe('')
       expect(fact.tags).toContainEqual(['type', GROUP_ROSTER_FACT_TYPE])
@@ -498,27 +498,27 @@ describe('groups', () => {
     it('reserves distinct revisions before concurrent roster signing', async () => {
       const { createGroup, addGroupMember, updateGroupInfo } = await import('./groups')
       const group = await createGroup('Concurrent changes', [MEMBER_B])
-      await vi.waitFor(() => expect(publishedGroupRosterFacts).toHaveLength(1))
+      await vi.waitFor(() => expect(signedGroupRosterFacts).toHaveLength(1))
       addGroupMember(group.id, MEMBER_C)
       updateGroupInfo(group.id, {name:'Updated name'})
-      await vi.waitFor(() => expect(publishedGroupRosterFacts).toHaveLength(3))
-      expect(publishedGroupRosterFacts.map(fact => Number(fact.tags.find(tag => tag[0] === 'revision')?.[1]))).toEqual([1, 2, 3])
+      await vi.waitFor(() => expect(signedGroupRosterFacts).toHaveLength(3))
+      expect(signedGroupRosterFacts.map(fact => Number(fact.tags.find(tag => tag[0] === 'revision')?.[1]))).toEqual([1, 2, 3])
     })
 
-    it('publishes an updated group_roster fact when membership changes', async () => {
+    it('privately distributes an updated group roster when membership changes', async () => {
       const { createGroup, addGroupMember } = await import('./groups')
       const group = await createGroup('Roster Member Test', [MEMBER_B])
       await vi.waitFor(() => {
-        expect(publishedGroupRosterFacts.length).toBeGreaterThan(0)
+        expect(signedGroupRosterFacts.length).toBeGreaterThan(0)
       })
-      publishedGroupRosterFacts.length = 0
+      signedGroupRosterFacts.length = 0
 
       addGroupMember(group.id, MEMBER_C)
 
       await vi.waitFor(() => {
-        expect(publishedGroupRosterFacts.length).toBeGreaterThan(0)
+        expect(signedGroupRosterFacts.length).toBeGreaterThan(0)
       })
-      const fact = publishedGroupRosterFacts.at(-1)!
+      const fact = signedGroupRosterFacts.at(-1)!
       expect(fact.tags).toContainEqual(['d', group.id])
       expect(fact.tags).toContainEqual(['i', group.id, 'subject'])
       expect(fact.tags).toContainEqual(['member', MEMBER_B])
@@ -651,8 +651,8 @@ describe('groups', () => {
       await loadGroupsFromStorage()
       expect(get(groups).get(groupId)).toMatchObject({ protocol })
       updateGroupInfo(groupId, { name: 'Renamed group' })
-      await vi.waitFor(() => expect(publishedGroupRosterFacts.at(-1)?.tags).toContainEqual(['name', 'Renamed group']))
-      expect(publishedGroupRosterFacts.at(-1)?.tags).toContainEqual(['protocol', protocol])
+      await vi.waitFor(() => expect(signedGroupRosterFacts.at(-1)?.tags).toContainEqual(['name', 'Renamed group']))
+      expect(signedGroupRosterFacts.at(-1)?.tags).toContainEqual(['protocol', protocol])
     })
 
     it('creates a pending local group from a valid roster fact', async () => {

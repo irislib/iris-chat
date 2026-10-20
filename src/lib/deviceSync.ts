@@ -1013,7 +1013,8 @@ async function updateRuntime(
   })
   if (run !== generation) { await fileTransport.dispose(); return }
   // Message synchronization remains restricted to this account's registered devices.
-  await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers), get(nostrClient).runtime)
+  await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers).filter(peer =>
+    run === generation && getPubkey() === ownerPubkey && isAuthorizedDeviceSyncSource(peer, get(devices))), get(nostrClient).runtime)
   if (run !== generation) { await fileTransport.dispose(); return }
   fileTransport.activate()
 }

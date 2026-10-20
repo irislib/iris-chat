@@ -9,8 +9,7 @@ import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, controlClock, persistMessageWithReactions } from './deviceSyncRecordApply'
 import { registerPrivateControlEvents } from './privateControlEvents'
 import { sessionFromLocalInvite } from './inviteProvenance'
-import { GROUP_WAKE_KIND, parseGroupWake, parseSerializedGroupRuntimeRumor } from './groupWake'
-import { decryptGroupPush, groupWakeSenderMatches } from './groupPush'
+import { GROUP_WAKE_KIND, parseSerializedGroupRuntimeRumor } from './groupWake'
 import { DEVICE_LABEL_CONTROL_KIND, receivePrivateDeviceLabel } from './privateDeviceLabels'
 import { CHAT_PIN_KIND } from './chatPinSync'
 import { PRIVATE_CONTACT_CONTROL_KIND, receivePrivateContactControl } from './privateContactControl'
@@ -407,26 +406,6 @@ function subscribeToNdrRuntimeEvents(): void {
     await receivePrivateGroupRosterFact(rumor, meta)
     if (getPubkey() !== account) throw new Error('Account changed')
   })
-  const stopGroupWakes = runtime.onDurableSessionEvent([GROUP_WAKE_KIND], async (rumor, from, meta) => {
-    if (!account || getPubkey() !== account) throw new Error('Account is not ready')
-    const event = parseGroupWake(rumor)
-    const sender = meta?.senderOwnerPubkey
-    if (!event || !sender || sender !== from) return
-    const matches = await groupWakeSenderMatches(account, event, sender)
-    if (matches === undefined) throw new Error('Waiting for the encrypted group sender key')
-    if (!matches) return
-    if (await db.processedEvents.get(event.id)) return
-    // Check a disposable snapshot first: GroupManager remembers outer IDs even
-    // when their key distribution has not arrived yet.
-    const preview = await decryptGroupPush(account, event, sender)
-    if (!preview?.success) throw new Error('Waiting for the encrypted group message key')
-    if (getPubkey() !== account) throw new Error('Account changed')
-    await handleRuntimeGroupEvent(preview.decrypted)
-    const manager = await runtime.waitForGroupManager(account)
-    if (getPubkey() !== account) throw new Error('Account changed')
-    await manager.handleOuterEvent(event)
-    if (getPubkey() !== account) throw new Error('Account changed')
-  })
   const stopDurable = registerPrivateControlEvents(runtime, {
     account, getAccount: getPubkey, getState: () => get(devices), receive: handleManagerEvent,
   })
@@ -436,7 +415,7 @@ function subscribeToNdrRuntimeEvents(): void {
       console.error('[chat] Failed to handle NdrRuntime event:', e)
     )
   })
-  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents(); stopGroupInvites(); stopGroupRosters(); stopGroupWakes() }
+  runtimeSessionEventCleanup = () => { stopMutations(); stopDurable(); stopEvents(); stopGroupInvites(); stopGroupRosters() }
 }
 
 function startNdrRuntimePoller(): void {
@@ -449,6 +428,9 @@ function startNdrRuntimePoller(): void {
 async function handleRuntimeGroupEvent(event: GroupDecryptedEvent): Promise<void> {
   const owner = getPubkey()
   if (handleGroupRosterFactRumor(event.inner)) return
+  const canonical=parseSerializedGroupRuntimeRumor(event.inner.content) ?? event.inner
+  const groupId=canonical.tags.find(tag=>tag[0]==='l')?.[1]
+  if (groupId && !get(groups).has(groupId)) throw new Error('Waiting for group membership')
   const sender = event.senderOwnerPubkey || event.senderDevicePubkey || event.inner.pubkey
   await handleGroupEvent(event.inner, sender, {id:event.outerEventId}, event.senderDevicePubkey)
   if (!owner || getPubkey() !== owner) throw new Error('Account changed')
@@ -465,9 +447,12 @@ async function handleRuntimeGroupEvent(event: GroupDecryptedEvent): Promise<void
 export function initNdrRuntimeEvents(): Promise<void> {
   if (!groupRuntimeSubscribed) {
     const runtime = getNdrRuntime()
+    const account=getPubkey()
     groupRuntimeSubscribed = true
-    groupRuntimeCleanup = runtime.onGroupEvent((event) => {
-      void handleRuntimeGroupEvent(event).catch(error => console.error('[chat] Could not save group event:', error))
+    groupRuntimeCleanup = runtime.onGroupEvent(async (event) => {
+      if (!account || getPubkey()!==account) throw new Error('Account changed')
+      await handleRuntimeGroupEvent(event)
+      if (getPubkey()!==account) throw new Error('Account changed')
     })
   }
 

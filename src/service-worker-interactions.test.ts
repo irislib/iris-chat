@@ -1,11 +1,10 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto'
 import { beforeAll,beforeEach,expect,it,vi } from 'vitest'
-import { AppKeys,Group,InMemoryStorageAdapter,Session,serializeSessionState } from 'nostr-double-ratchet'
+import { AppKeys,Group,InMemoryStorageAdapter,Session,serializeSessionState,privateGroupDeliveryRumor } from 'nostr-double-ratchet'
 import { getEventHash,getPublicKey,type Event } from 'nostr-tools'
 import { nhashEncode } from '@hashtree/core'
 import { groupPushChannels } from './lib/groupPush'
-import { groupWakeRumor } from './lib/groupWake'
 import { db } from './lib/storage'
 import { formatMention } from './lib/mentions'
 import { chatMutesKey } from './lib/chatMutePolicy'
@@ -110,7 +109,7 @@ it('cold group wakes authenticate the session sender and preserve the canonical 
   const receiver=Session.init(getPublicKey(key(4)),key(5),false,key(6))
   const record={publicKey:peer,devices:[{deviceId:device,activeSession:{name:'wake',state:serializeSessionState(receiver.state)},inactiveSessions:[],createdAt:100}]}
   await db.sessionManager.put({key:`v1/user/${peer}`,value:record})
-  const wake=sender.sendEvent({...groupWakeRumor(groupEvent.outer),pubkey:peer}).event
+  const wake=sender.sendEvent(privateGroupDeliveryRumor(groupEvent.outer,data.id,device,owner)).event
   // The wake can precede its sender-key distribution. Preserve it without a bogus alert.
   await push(wake);expect(showNotification).not.toHaveBeenCalled()
   for(const k of await storage.list()) await db.sessionManager.put({key:k,value:await storage.get(k)})

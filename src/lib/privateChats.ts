@@ -25,6 +25,8 @@ import {
   type NdrRuntimeState,
   type NostrFetch,
   type NostrSubscribe,
+  type NostrPublishContext,
+  PAIRWISE_GROUP_DELIVERY_VERSION,
 } from 'nostr-double-ratchet'
 import {
   nostrClient,
@@ -42,9 +44,9 @@ import {
   getLinkedDeviceRegistrationLabels,
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
-import { createRuntimePublish, type RuntimePublishContext } from './runtimePublish'
-import { createGroupWakeQueue } from './groupWakeQueue'
+import { createRuntimePublish } from './runtimePublish'
 import { rememberInviteResponse } from './inviteProvenance'
+import { privateGroupRelayFetch, privateGroupRelaySubscribe } from './groupRelayPolicy'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
 import { deleteSessionManagerValue, putSessionManagerValue } from './storage'
 import { restoreSignerAuthorization } from './signerAuthorizationStorage'
@@ -53,7 +55,6 @@ import { initializeAuthorizedRuntime } from './privateRuntimeInitialization'
 let runtime: NdrRuntime | null = null
 let runtimeStorage: DexieStorageAdapter | null = null
 let runtimePublication: ReturnType<typeof createRuntimePublish> | null = null
-let runtimeGroupWakes: ReturnType<typeof createGroupWakeQueue> | null = null
 let runtimeOwnerPubkey: string | null = null
 let runtimeCleanup: (() => void) | null = null
 let previousRuntimeState: NdrRuntimeState | null = null
@@ -200,7 +201,7 @@ const createSubscribe = (
   client: ReturnType<typeof getNostrClient>,
   cacheUsage: CacheMode = CacheMode.PARALLEL
 ): NostrSubscribe => {
-  const subscribe = createRuntimeSubscribe(client, cacheUsage)
+  const subscribe = privateGroupRelaySubscribe(createRuntimeSubscribe(client, cacheUsage))
   return (filter, onEvent) => subscribe(filter, event => {
     observeCallWakeInvite(event)
     const owner = get(identity)?.pubkey
@@ -245,7 +246,7 @@ const createSign = (client: ReturnType<typeof getNostrClient>) => {
 }
 
 const createRelayPublish = (client: ReturnType<typeof getNostrClient>) => {
-  return async (event: VerifiedEvent, signal: AbortSignal, context?: RuntimePublishContext) => {
+  return async (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => {
     signal.throwIfAborted()
     let relayUrls = [...relayStore.getState().relays].map(url => new URL(url).toString())
     if (context) {
@@ -277,7 +278,7 @@ identity.subscribe((currentIdentity) => {
 const createFetch = (
   client: ReturnType<typeof getNostrClient>,
 ): NostrFetch => {
-  return (async (filter: Parameters<NostrFetch>[0]) => {
+  return privateGroupRelayFetch(async (filter: Parameters<NostrFetch>[0]) => {
     const events = await client.fetchEvents(filter, {
       cacheUsage: CacheMode.PARALLEL,
     })
@@ -285,7 +286,7 @@ const createFetch = (
       .map((event) => event.rawEvent() as VerifiedEvent | undefined)
       .filter((event): event is VerifiedEvent => !!event)
       .map(event => { observeCallWakeInvite(event); return event })
-  }) as unknown as NostrFetch
+  })
 }
 
 function getNostrClient() {
@@ -365,8 +366,6 @@ const getRuntime = (): NdrRuntime => {
   runtimeStorage = null
   runtimePublication?.close()
   runtimePublication = null
-  runtimeGroupWakes?.close()
-  runtimeGroupWakes = null
   runtimeCleanup?.()
   runtimeCleanup = null
   runtime?.close()
@@ -415,43 +414,23 @@ const getRuntime = (): NdrRuntime => {
   })
   runtimePublication = publication
   runtimeOwnerPubkey = ownerPubkey
-  const groupWakes=createGroupWakeQueue({
-    owner:ownerPubkey,storage,
-    runtime:()=>runtime!,
-    active:()=>get(identity)?.pubkey===ownerPubkey && runtimeOwnerPubkey===ownerPubkey &&
-      runtime?.getState().sessionManagerReady===true,
-    group:async id=>(await import('./storage')).db.groups.get(id),
-    canSend:async (member,createdAt)=>member===ownerPubkey ? true :
-      (await import('./privateStateStore')).privateDirectPublicationPolicy(ownerPubkey,member,createdAt),
-    localSender:async id=>{
-      const device=runtime?.getState().currentDevicePubkey
-      return device ? storage.get<string>(`v1/broadcast-channel/group/${id}/sender/${device}/sender-event-pubkey`) : undefined
-    },
-    onError:reportPublicationError,
-  })
-  runtimeGroupWakes=groupWakes
+  if (PAIRWISE_GROUP_DELIVERY_VERSION !== 1) throw new Error('Private group delivery is required')
   runtime = new NdrRuntime({
     nostrSubscribe: createSubscribe(client),
     nostrSign: sign,
     nostrEnqueue: async (event, innerEventId, context) => {
-      const scope=await groupWakes.publicationContext(innerEventId,context)
       const { saveAuthorizationEvent } = await import('./authorizationSync')
       await saveAuthorizationEvent(ownerPubkey, event, () => get(identity)?.pubkey === ownerPubkey)
-      await groupWakes.enqueue(event,scope)
-      await publication.enqueue(event, innerEventId, scope)
-      void groupWakes.retry().catch(reportPublicationError)
+      await publication.enqueue(event, innerEventId, context)
       if (get(identity)?.pubkey === ownerPubkey) {
         void queuedCallWakeEnvelope(event, innerEventId).catch(error => console.warn('Call wake could not be sent', error))
       }
     },
     nostrPublish: async (event, innerEventId, context) => {
-      const scope=await groupWakes.publicationContext(innerEventId,context)
       const signed = 'sig' in event && event.sig
         ? event as VerifiedEvent
         : await sign(event)
-      await groupWakes.enqueue(signed,scope)
-      void groupWakes.retry().catch(reportPublicationError)
-      const published = await publication.publish(signed, innerEventId, scope)
+      const published = await publication.publish(signed, innerEventId, context)
       const { saveAuthorizationEvent } = await import('./authorizationSync')
       await saveAuthorizationEvent(ownerPubkey, signed, () => get(identity)?.pubkey === ownerPubkey)
       return published
@@ -483,7 +462,6 @@ const getRuntime = (): NdrRuntime => {
     previousRuntimeState = state
   })
   publication.start()
-  groupWakes.start()
   return runtime
 }
 
@@ -928,8 +906,6 @@ export const resetManagers = (): void => {
   }
   runtimePublication?.close()
   runtimePublication = null
-  runtimeGroupWakes?.close()
-  runtimeGroupWakes = null
   runtimeCleanup?.()
   runtimeCleanup = null
   runtime?.close()

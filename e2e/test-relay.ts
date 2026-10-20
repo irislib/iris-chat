@@ -7,6 +7,7 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import type { AddressInfo, Socket } from 'net'
 import * as http from 'http'
+import { verifyEvent } from 'nostr-tools'
 
 interface NostrEvent {
   id: string
@@ -63,10 +64,16 @@ export class TestRelay {
   public acceptFilter?: (event: NostrEvent) => boolean
   public acknowledgeFilter?: (event: NostrEvent) => boolean
   public observeRequest?: (filters: Filter[], browser: boolean) => void
+  public observeWire?: (message: unknown[], connection: number) => void
+  public authRequired = false
   public deliveredEvents = 0
   public replayedEvents = 0
   public liveEvents = 0
   private browsers = new WeakSet<WebSocket>()
+  private connectionIds = new WeakMap<WebSocket, number>()
+  private challenges = new WeakMap<WebSocket, string>()
+  private authenticated = new WeakSet<WebSocket>()
+  private nextConnection = 0
 
   constructor() {
     this.server = http.createServer()
@@ -74,8 +81,15 @@ export class TestRelay {
     this.wss = new WebSocketServer({ server: this.server })
 
     this.wss.on('connection', (ws, request) => {
+      const connection = ++this.nextConnection
+      this.connectionIds.set(ws, connection)
       if (request.headers['user-agent']?.includes('Mozilla/')) this.browsers.add(ws)
       this.subscriptions.set(ws, new Map())
+      if (this.authRequired) {
+        const challenge = `test-relay-${connection}`
+        this.challenges.set(ws, challenge)
+        ws.send(JSON.stringify(['AUTH', challenge]))
+      }
 
       ws.on('message', (data) => {
         try {
@@ -101,7 +115,23 @@ export class TestRelay {
   }
 
   private handleMessage(ws: WebSocket, msg: unknown[]) {
+    this.observeWire?.(msg, this.connectionIds.get(ws)!)
     const type = msg[0]
+
+    if (type === 'AUTH') {
+      const event = msg[1] as NostrEvent
+      const valid = event.kind === 22242 && verifyEvent(event) &&
+        event.tags.some(tag => tag[0] === 'challenge' && tag[1] === this.challenges.get(ws)) &&
+        event.tags.some(tag => tag[0] === 'relay' && tag[1] === new URL(this.url).toString())
+      if (valid) this.authenticated.add(ws)
+      ws.send(JSON.stringify(['OK', event.id, valid, valid ? '' : 'auth-required: invalid authentication']))
+      return
+    }
+    if (this.authRequired && !this.authenticated.has(ws)) {
+      if (type === 'EVENT') ws.send(JSON.stringify(['OK', (msg[1] as NostrEvent).id, false, 'auth-required: authenticate first']))
+      if (type === 'REQ') ws.send(JSON.stringify(['CLOSED', msg[1], 'auth-required: authenticate first']))
+      return
+    }
 
     if (type === 'EVENT') {
       const event = msg[1] as NostrEvent

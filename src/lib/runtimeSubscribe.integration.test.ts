@@ -26,7 +26,7 @@ it('keeps live message interests on the configured relays after connection chang
     receiver.setRelays([second.url])
     sender.setRelays([second.url])
     const session = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
-    const message = session.sendEvent({ kind: 14, content: 'encrypted-live-reply' }).event
+    const message = session.sendEvent({ kind: 14, content: 'encrypted-live-reply' },[['p',getPublicKey(generateSecretKey())]]).event
     await sender.publish(message, { requireAck: true })
     await expect.poll(() => received, { timeout: 1500 }).toContain(message.id)
   } finally {

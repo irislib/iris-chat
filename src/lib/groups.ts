@@ -12,7 +12,6 @@ import { captureReaction, controlClock, applyGroupSettingsRecord, persistMessage
 import { writable, get } from 'svelte/store'
 import {
   buildGroupRosterFactEvent,
-  buildGroupRosterFactFilter,
   CHAT_MESSAGE_KIND, CHAT_SETTINGS_KIND, REACTION_KIND, RECEIPT_KIND, TYPING_KIND,
   GROUP_ROSTER_FACT_KIND,
   GROUP_ROSTER_FACT_TYPE,
@@ -43,7 +42,6 @@ import { devices } from './devices'
 import { chats, type ChatMessage } from './chat'
 import {
   cancelGroupPublications,
-  ensureDeviceRegistered,
   getNdrRuntime,
   waitForSendReadyRuntime,
   waitForNdrRuntime,
@@ -120,8 +118,6 @@ const nativeGroupSendQueue = new Map<string, Promise<void>>()
 const groupRosterFactCursors = new Map<string, GroupRosterFactCursor>()
 const reservedRosterRevisions = new Map<string, number>()
 const seenGroupRosterFactIds = new Set<string>()
-let groupRosterFactSyncCleanup: (() => void) | null = null
-let groupRosterFactSyncOwner: string | null = null
 
 function enqueueNativeGroupSend<T>(groupId: string, action: () => Promise<T>): Promise<T> {
   const previous = nativeGroupSendQueue.get(groupId) ?? Promise.resolve()
@@ -295,16 +291,12 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
   })
   const current = get(groups).get(group.id)
   if (current) saveGroupState(current)
-  void event.publish({ requireAck: true }).catch((error) => {
-    console.warn('[groups] Failed to publish group roster fact:', error)
-  })
-  // Deliver membership changes through each member's durable encrypted queue.
-  // Public replaceable facts alone can lose same-second updates or be missed
-  // while a newly invited member is still starting its subscriptions.
+  // Signed membership proofs stay local and travel only through authenticated
+  // private sessions, including the sender's other linked devices.
   const runtime = await waitForNdrRuntime()
-  await Promise.all(group.members.filter(member => member !== signerPubkey).map(member =>
+  await Promise.all(group.members.map(member =>
     runtime.sendEvent(member, { kind: signed.kind, content: signed.content, tags: signed.tags,
-      pubkey: signed.pubkey, created_at: signed.created_at },
+      pubkey: signed.pubkey, created_at: signed.created_at, id: signed.id },
       undefined, { includeLocalSiblings: false })))
 }
 
@@ -415,47 +407,11 @@ export async function receivePrivateGroupRosterFact(rumor: Rumor, meta?: OnEvent
   if (current) await saveGroupState(current)
 }
 
-async function backfillGroupRosterFacts(): Promise<void> {
-  const client = get(nostrClient)
-  if (typeof client.fetchEvents !== 'function') return
-  const events = await client.fetchEvents(buildGroupRosterFactFilter({ limit: 200 }))
-  for (const event of events) {
-    const raw = typeof event.rawEvent === 'function' ? event.rawEvent() : event
-    handleGroupRosterFactEvent(raw as VerifiedEvent)
-  }
-}
-
 export function initGroupRosterFactSync(): () => void {
   startRequestProjection()
-  const ownerPubkey = getPubkey()
-  const client = get(nostrClient)
-  if (!ownerPubkey || typeof client.subscribe !== 'function') {
-    return () => {}
-  }
-  if (groupRosterFactSyncCleanup && groupRosterFactSyncOwner === ownerPubkey) {
-    return groupRosterFactSyncCleanup
-  }
-
-  groupRosterFactSyncCleanup?.()
-  const subscription = client.subscribe(buildGroupRosterFactFilter(), { closeOnEose: false })
-  subscription.on('event', (event: AppEvent) => {
-    handleGroupRosterFactEvent(event.rawEvent() as VerifiedEvent)
-  })
-  subscription.start()
-  groupRosterFactSyncOwner = ownerPubkey
-  groupRosterFactSyncCleanup = () => {
-    subscription.stop()
-    if (groupRosterFactSyncOwner === ownerPubkey) {
-      groupRosterFactSyncCleanup = null
-      groupRosterFactSyncOwner = null
-    }
-  }
-
-  void backfillGroupRosterFacts().catch((error) => {
-    console.warn('[groups] Failed to backfill group roster facts:', error)
-  })
-
-  return groupRosterFactSyncCleanup
+  // Membership arrives through the durable private-session handler and linked
+  // device history. Public roster subscriptions disclose group membership.
+  return () => {}
 }
 
 function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): void {
@@ -586,63 +542,10 @@ function buildScopedGroupRumor(
 }
 
 
-function fanOutToMembers(
-  groupId: string,
-  partialEvent: { content: string, kind: number, tags: string[][] },
-  recipientOverride?: string[],
-  options?: { includeSelf?: boolean },
-): void {
-  const group = currentGroupForSend(groupId)
-  if (!group) return
-
-  const myPubkey = getPubkey()
-  if (!myPubkey) return
-
-  const tags = [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]]
-  const recipients = recipientOverride || group.members
-  const includeSelf = options?.includeSelf === true
-
-  for (const memberPubkey of recipients) {
-    if (!includeSelf && memberPubkey === myPubkey) continue
-
-    try {
-      const rumor = buildScopedGroupRumor(['p', memberPubkey], { ...partialEvent, tags }, true)
-      void ensureDeviceRegistered()
-        .then(() => currentGroupForSend(groupId, group) && getNdrRuntime().sendEvent(memberPubkey, rumor))
-        .catch((error) => {
-          console.warn(
-            '[groups] Failed to send to member:',
-            memberPubkey.slice(0, 8),
-            error,
-          )
-        })
-    } catch (e) {
-      console.error('[groups] Failed to send to member:', memberPubkey.slice(0, 8), e)
-    }
-  }
-}
-
-async function fanOutToOwnDevices(
-  groupId: string,
-  partialEvent: { content: string, kind: number, tags: string[][] },
-): Promise<void> {
-  const myPubkey = getPubkey()
-  const group = currentGroupForSend(groupId)
-  if (!myPubkey || !group) return
-
-  await ensureDeviceRegistered()
-  if (!currentGroupForSend(groupId, group)) return
-  const rumor = buildScopedGroupRumor(['p', myPubkey], {
-    ...partialEvent,
-    tags: [...partialEvent.tags, ['l', groupId], ['ms', Date.now().toString()]],
-  }, true)
-  await getNdrRuntime().sendEvent(myPubkey, rumor)
-}
-
 async function sendNativeGroupEvent(
   groupId: string,
   partialEvent: { content: string, kind: number, tags: string[][] },
-  options?: { includeSelfPairwiseCopy?: boolean; rumor?: Rumor; requireQueued?: boolean },
+  options?: { rumor?: Rumor },
 ): Promise<NativeGroupSendResult | null> {
   return enqueueNativeGroupSend(groupId, async () => {
     const runtime = getNdrRuntime()
@@ -653,30 +556,14 @@ async function sendNativeGroupEvent(
     if (!currentGroupForSend(groupId, groupData)) return null
     await runtime.upsertGroup(groupData)
     if (!currentGroupForSend(groupId, groupData)) return null
-    try {
-      const runtimeRumor = options?.rumor ?? buildScopedGroupRumor(['l', groupId], partialEvent)
-      const result = await runtime.sendGroupEvent(groupId, {
-        // Native group transport carries the canonical event inside a kind-14 envelope.
-        kind: CHAT_MESSAGE_KIND,
-        content: JSON.stringify(runtimeRumor),
-        tags: runtimeRumor.tags,
-      })
-
-      // The runtime publication hook durably queues private deliveries for every
-      // member, including linked devices, before the shared event is published.
-      return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
-    } catch (error) {
-      if (options?.requireQueued) throw error
-      if (!currentGroupForSend(groupId, groupData)) return null
-      console.warn('[groups] Native group send failed, falling back to pairwise fanout:', error)
-      fanOutToMembers(
-        groupId,
-        options?.rumor ? { ...partialEvent, kind: CHAT_MESSAGE_KIND, content: JSON.stringify(options.rumor) } : partialEvent,
-        undefined,
-        options?.includeSelfPairwiseCopy ? { includeSelf: true } : undefined,
-      )
-      return null
-    }
+    const runtimeRumor = options?.rumor ?? buildScopedGroupRumor(['l', groupId], partialEvent)
+    const result = await runtime.sendGroupEvent(groupId, {
+      // Carry the canonical event inside the private group delivery envelope.
+      kind: CHAT_MESSAGE_KIND,
+      content: JSON.stringify(runtimeRumor),
+      tags: runtimeRumor.tags,
+    })
+    return { outer: result.outer as unknown as VerifiedEvent, inner: runtimeRumor }
   })
 }
 
@@ -838,7 +725,7 @@ export async function sendGroupMessage(groupId: string, text: string, replyTo?: 
       kind: CHAT_MESSAGE_KIND,
       tags,
     },
-    { includeSelfPairwiseCopy: true, rumor },
+    { rumor },
   )
     .then((result) => {
       if (result?.inner.id) {
@@ -862,7 +749,7 @@ async function mutateGroupMessage(groupId: string, messageId: string, operation:
   if (!owner || !currentGroupForSend(groupId) || !message?.isMine || message.call || message.deletedAt !== undefined || operation === 'edit' && !editableMessage(message)) throw new Error('This message cannot be changed.')
   const rumor = buildMessageMutation(owner, messageId, operation, content, ['l', groupId], Math.max(Date.now(), (message.editedAt ?? 0) + 1), message.expiresAt)
   await sendMessageMutation(owner, `group:${groupId}`, rumor, async () => {
-    const queued = await sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor, requireQueued: true })
+    const queued = await sendNativeGroupEvent(groupId, rumor, { rumor })
     if (!queued) throw new Error('Could not send this message update. Try again.')
   }, () => getPubkey() === owner && !!currentGroupForSend(groupId))
 }
@@ -879,7 +766,7 @@ export function sendGroupReaction(groupId: string, messageId: string, emoji: str
     await captureReaction(owner, `group:${groupId}`, rumor, owner, messageId, nextEmoji)
     if (getPubkey() === owner) acceptChat(`group:${groupId}`)
     return rumor
-  }).then(rumor => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
+  }).then(rumor => sendNativeGroupEvent(groupId, rumor, { rumor }))
     .catch(error => console.error('[groups] Failed to send group reaction:', error))
 }
 
@@ -905,7 +792,7 @@ export function sendGroupSettingsEvent(groupId: string, messageTtlSeconds: numbe
     }, false, nowMs)
     await applyGroupSettingsRecord(owner, { ...controlClock(rumor), groupId, author: owner, messageTtlSeconds })
     return rumor
-  }).then(rumor => sendNativeGroupEvent(groupId, rumor, { includeSelfPairwiseCopy: true, rumor }))
+  }).then(rumor => sendNativeGroupEvent(groupId, rumor, { rumor }))
     .catch(error => console.error('[groups] Failed to send group settings event:', error))
 }
 
@@ -986,8 +873,7 @@ async function processGroupEvent(
     const settings = parseChatSettingsContent(rumor.content)
     if (settings) {
       const owner = getPubkey()
-      if (owner) void applyGroupSettingsRecord(owner, { ...controlClock(rumor), groupId, author: senderPubkey, messageTtlSeconds: settings.messageTtlSeconds })
-        .catch(error => console.warn('[groups] Failed to save settings:', error))
+      if (owner) await applyGroupSettingsRecord(owner, { ...controlClock(rumor), groupId, author: senderPubkey, messageTtlSeconds: settings.messageTtlSeconds })
     }
     return
   }
@@ -1004,14 +890,14 @@ async function processGroupEvent(
   }
 
   if (rumor.kind === REACTION_KIND) {
-    handleGroupReaction(groupId, rumor, senderPubkey)
+    await handleGroupReaction(groupId, rumor, senderPubkey)
     return
   }
 
   if (rumor.kind === RECEIPT_KIND) {
     const receipt = parseReceipt(rumor)
     if (receipt) {
-      handleGroupReceipt(groupId, receipt, senderPubkey)
+      await handleGroupReceipt(groupId, receipt, senderPubkey)
     }
     return
   }
@@ -1090,16 +976,15 @@ async function handleGroupMessage(
   }
 }
 
-function handleGroupReaction(groupId: string, rumor: Rumor, fromPubkey: string): void {
+async function handleGroupReaction(groupId: string, rumor: Rumor, fromPubkey: string): Promise<void> {
   const parsed = reactionControl(rumor)
   const owner = getPubkey()
   if (!parsed || !owner) return
   const { emoji, messageId } = parsed
-  void captureReaction(owner, `group:${groupId}`, rumor, fromPubkey, messageId, emoji)
-    .catch(error => console.warn('[groups] Failed to save reaction:', error))
+  await captureReaction(owner, `group:${groupId}`, rumor, fromPubkey, messageId, emoji)
 }
 
-function handleGroupReceipt(groupId: string, receipt: ReceiptPayload, fromPubkey: string): void {
+async function handleGroupReceipt(groupId: string, receipt: ReceiptPayload, fromPubkey: string): Promise<void> {
   const myPubkey = getPubkey()
   const changedStatuses: Array<{ messageId: string; status: MessageStatus }> = []
   const changedRecipientStatuses: Array<{
@@ -1127,18 +1012,21 @@ function handleGroupReceipt(groupId: string, receipt: ReceiptPayload, fromPubkey
         !message.isMine && fromPubkey === myPubkey && shouldAdvanceStatus(message.status, receipt.type)
           ? receipt.type
           : message.status
+      // Repeat the committed projection on retries: a previous storage failure
+      // may have happened after the in-memory status already advanced.
+      if (!message.isMine && fromPubkey===myPubkey && nextStatus) {
+        changedStatuses.push({messageId,status:nextStatus})
+      }
+      const recipientStatuses=nextRecipientStatuses ?? message.recipientStatuses
+      if (message.isMine && fromPubkey!==myPubkey && recipientStatuses) {
+        changedRecipientStatuses.push({messageId,recipientStatuses})
+      }
       if (!nextRecipientStatuses && nextStatus === message.status) continue
 
       updated[index] = {
         ...message,
         status: nextStatus,
         ...(nextRecipientStatuses && { recipientStatuses: nextRecipientStatuses }),
-      }
-      if (nextStatus && nextStatus !== message.status) {
-        changedStatuses.push({ messageId, status: nextStatus })
-      }
-      if (nextRecipientStatuses) {
-        changedRecipientStatuses.push({ messageId, recipientStatuses: nextRecipientStatuses })
       }
       changed = true
     }
@@ -1149,10 +1037,10 @@ function handleGroupReceipt(groupId: string, receipt: ReceiptPayload, fromPubkey
   })
 
   for (const { messageId, status } of changedStatuses) {
-    updateMessageStatusInDb(messageId, status)
+    await updateMessageStatusInDb(messageId, status)
   }
   for (const { messageId, recipientStatuses } of changedRecipientStatuses) {
-    updateMessageRecipientStatusesInDb(messageId, recipientStatuses)
+    await updateMessageRecipientStatusesInDb(messageId, recipientStatuses)
   }
 }
 
@@ -1354,9 +1242,6 @@ export function clearGroupData(): void {
 
   // Logout tears down the runtime separately. Do not recreate it after the
   // identity has been cleared or publish an empty group list to other devices.
-  groupRosterFactSyncCleanup?.()
-  groupRosterFactSyncCleanup = null
-  groupRosterFactSyncOwner = null
   groupRosterFactCursors.clear()
   reservedRosterRevisions.clear()
   seenGroupRosterFactIds.clear()

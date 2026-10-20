@@ -19,6 +19,12 @@ export function assertWorkerPublicationPolicy(event: NostrEvent): void {
   if (([1059, 1060].includes(event.kind) || publicInvite) && !hasMetadataPrivacyVersion(event)) {
     throw new Error('Old encrypted messages cannot be resent')
   }
+  if (event.kind === 1060) {
+    const recipients=event.tags.filter(tag=>tag[0]==='p')
+    if (recipients.length!==1 || !/^[a-f0-9]{64}$/.test(recipients[0][1] ?? '')) {
+      throw new Error('Group messages must use private sessions')
+    }
+  }
   if (event.kind !== 21111) return
   let value: unknown
   try { value = JSON.parse(event.content) } catch { throw new Error('Old call alerts cannot be resent') }

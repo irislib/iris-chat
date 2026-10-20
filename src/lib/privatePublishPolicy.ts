@@ -8,8 +8,8 @@ export function hasLegacyPrivateRoster(event: PublicationFacts): boolean {
 /** Signing a public roster is allowed; persisting ordinary private data with a static key is not. */
 export function assertPrivatePublicationPolicy(event: PublicationFacts): void {
   if (hasLegacyPrivateRoster(event)) throw new Error('Device list update needs confirmation; old private names remain local')
-  if ([10449, 10450, 10451, 10452, 10453, 10454, 10455, 10456, 10461, 10462, 21112].includes(event.kind) ||
-    ([7368,37368].includes(event.kind) && event.tags.some(tag => tag[0] === 'type' && ['private_contact', 'private_setting'].includes(tag[1]))) ||
+  if ([10445, 10446, 10447, 10449, 10450, 10451, 10452, 10453, 10454, 10455, 10456, 10461, 10462, 21112, 21113].includes(event.kind) ||
+    ([7368,37368].includes(event.kind) && event.tags.some(tag => tag[0] === 'type' && ['private_contact', 'private_setting', 'group_roster'].includes(tag[1]))) ||
     (event.kind === 30078 && event.tags.some(tag => tag[0] === 't' && tag[1] === 'nostr-social-memory/v1'))) {
     throw new Error('Private settings must use the encrypted device queue')
   }
