@@ -32,14 +32,15 @@ import { bytesToHex } from '@noble/hashes/utils.js'
 
 const appRoot = process.cwd()
 const fixture = path.join(appRoot, 'test-fixtures/device-sync-rust')
+const target = path.resolve(process.env.IRIS_DEVICE_SYNC_TARGET_DIR || path.join(fixture, 'target'))
 const nativeSource = process.env.IRIS_CHAT_RS_CORE_DIR
 const nativeCore = nativeSource && path.resolve(nativeSource)
 const nativeAvailable = !!nativeCore && existsSync(path.join(nativeCore, 'src/core/device_sync.rs')) &&
   existsSync(path.join(nativeCore, 'src/core/device_sync_tcp.rs'))
 const required = process.env.REQUIRE_DEVICE_SYNC_RUST_INTEROP === '1'
 const binary = path.join(
-  fixture,
-  'target/debug',
+  target,
+  'debug',
   process.platform === 'win32' ? 'iris-chat-device-sync-fixture.exe' : 'iris-chat-device-sync-fixture',
 )
 const owner = 'a'.repeat(64)
@@ -113,7 +114,7 @@ interop('iris-chat-rs device-sync interop', () => {
     const build = spawnSync(
       'cargo',
       ['build', '--quiet', '--locked', '--manifest-path', path.join(fixture, 'Cargo.toml'),
-        '--target-dir', path.join(fixture, 'target')],
+        '--target-dir', target],
       { cwd: appRoot, env: nativeEnv(), encoding: 'utf8', timeout: 120_000 },
     )
     if (build.status !== 0) throw new Error(build.error?.message || build.stderr || build.stdout || 'Rust fixture build failed')

@@ -32,6 +32,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       IRIS_CHAT_RS_CORE_DIR: ${{ github.workspace }}/iris-chat-rs/core
       IRIS_DIRECT_FILES_TARGET_DIR: ${{ github.workspace }}/iris-chat-rs/core/target
+      IRIS_DEVICE_SYNC_TARGET_DIR: ${{ github.workspace }}/iris-chat-rs/core/target
       IRIS_PRIVATE_CONTROL_FIXTURE_INPUT: ${{ github.workspace }}/iris-chat/test-results/private-controls/native-private-controls.json
       IRIS_PRIVATE_STATE_FIXTURE_INPUT: ${{ github.workspace }}/iris-chat/test-results/private-controls/native-private-state.json
     defaults:
@@ -79,7 +80,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             iris-chat-rs/core/target
-          key: native-interop-${{ runner.os }}-${{ hashFiles('iris-chat-rs/core/Cargo.lock', 'iris-chat/test-fixtures/direct-files-rust/Cargo.lock') }}
+          key: native-interop-${{ runner.os }}-${{ hashFiles('iris-chat-rs/core/Cargo.lock', 'iris-chat/test-fixtures/direct-files-rust/Cargo.lock', 'iris-chat/test-fixtures/device-sync-rust/Cargo.lock') }}
           restore-keys: |
             native-interop-${{ runner.os }}-
 
