@@ -23,7 +23,6 @@ const pending = new Map<string, {
   targets: Set<string>
   envelopes: Map<string, VerifiedEvent>
   until: number
-  serverUrl: string
   publish: (event: VerifiedEvent) => Promise<unknown>
   active: () => boolean
 }>()
@@ -76,13 +75,9 @@ export async function queuedCallWakeEnvelope(envelope: VerifiedEvent, innerEvent
   const event = callWakeEvent(recipient, envelope, recentBootstrap)
   item.targets.delete(recipient)
   if (!item.targets.size) pending.delete(innerEventId)
-  await Promise.allSettled([
-    item.publish(event),
-    fetch(`${item.serverUrl.replace(/\/$/, '')}/events`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(event), signal: AbortSignal.timeout(5000),
-    }),
-  ])
+  // Browser HTTP could reuse the notification subscription's authenticated
+  // connection. The worker owns the separate anonymous relay publication.
+  await item.publish(event)
 }
 
 /** A reference wake cannot be delivered before the full authenticated bootstrap exists. */
@@ -99,7 +94,7 @@ export async function acceptedCallWakeBootstrap(event: VerifiedEvent): Promise<v
 
 // FIPS carries the live call; the queued ratchet offer lets a sleeping peer recognize it.
 export async function sendCallWakeups(owner: string, peers: string[], callId: string, video: boolean,
-  serverUrl: string, publish: (event: VerifiedEvent) => Promise<unknown>,
+  publish: (event: VerifiedEvent) => Promise<unknown>,
   queue: (rumor: Rumor) => Promise<unknown>, active: () => boolean): Promise<void> {
   if (!validCallId(callId) || !/^[0-9a-f]{64}$/.test(owner) || !active()) return
   const targets = new Set(peers.map(peer => peer.slice(2)).filter(peer => /^[0-9a-f]{64}$/.test(peer)))
@@ -109,7 +104,7 @@ export async function sendCallWakeups(owner: string, peers: string[], callId: st
     tags: [['expiration', String(now + 40)]],
     content: JSON.stringify({ v: 3, type: 'offer', call_id: callId, video, muted: false, codec: CALL_CODEC }) }
   const rumor = { ...inner, id: getEventHash(inner) }
-  pending.set(rumor.id, { targets, envelopes: new Map(), until: Date.now() + WAKE_LIFETIME_MS, serverUrl, publish, active })
+  pending.set(rumor.id, { targets, envelopes: new Map(), until: Date.now() + WAKE_LIFETIME_MS, publish, active })
   const timer = setTimeout(() => pending.delete(rumor.id), WAKE_LIFETIME_MS)
   try { await queue(rumor) }
   catch (error) { pending.delete(rumor.id); clearTimeout(timer); throw error }

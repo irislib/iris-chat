@@ -36,7 +36,6 @@ import { chats, currentChat, type ChatMessage, type ChatSession } from './chat'
 import { devices, type DeviceState } from './devices'
 import { getPubkey, nostrClient } from './identity'
 import { AppEvent } from './nostrClient'
-import { notificationSettings } from './notificationStore'
 import { sendCallWakeups } from './callPush'
 import { getNdrRuntime, cancelGroupPublications } from './privateChats'
 import {
@@ -967,7 +966,7 @@ async function updateRuntime(
     const { preparePeerNdrRuntime } = await import('./privateChats')
     const runtime = await preparePeerNdrRuntime(call.owner)
     await sendCallWakeups(ownerPubkey, call.peers, call.id, call.video,
-      get(notificationSettings).serverUrl, event => new AppEvent(get(nostrClient), event).publish(),
+      event => new AppEvent(get(nostrClient), event).publish(),
       rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
       () => run === generation && getPubkey() === ownerPubkey)
   })

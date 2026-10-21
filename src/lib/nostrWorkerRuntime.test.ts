@@ -2,12 +2,12 @@
 import 'fake-indexeddb/auto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HashtreeRuntimeEventStore } from '@hashtree/nostr-pubsub'
-import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey, nip44, type VerifiedEvent } from 'nostr-tools'
 import { AppKeys, Invite, Session } from 'nostr-double-ratchet'
 import { TestRelay } from '../../e2e/test-relay'
 import { createEventStore } from './eventStore'
 import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
-import { callWakeEvent } from './callPush'
+import { callWakeEvent, sendCallWakeups, queuedCallWakeEnvelope } from './callPush'
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -100,7 +100,7 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
     if (event.id === sealed.id && rejectQueued) { rejectQueued = false; return false }
     return true
   }
-  const wake = callWakeEvent(peer, sealed)
+  let wake!: VerifiedEvent
   const invite = finalizeEvent(ownInvite.getEvent(), key)
   const pending = createEventStore(owner)
   await pending.putPending({ event: sealed, attempts: 1, updatedAt: Date.now(), relays: [relay.url], sources: [] })
@@ -121,9 +121,20 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
   const retried = await runtime.publish(sealed, { relays: [relay.url], queue: true })
   if (!retried.accepted) expect((await runtime.publish(sealed, { relays: [relay.url], queue: true })).accepted).toBe(true)
   await runtime.publish(invite, { relays: [relay.url], requireAck: true, queue: false })
-  for (const event of [bootstrap.event, wake, ownCopy, groupCopy]) {
+  for (const event of [bootstrap.event, ownCopy, groupCopy]) {
     await runtime.publish(event, { relays: [relay.url], requireAck: true, queue: false })
   }
+  const forbiddenHttp = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Identified HTTP publication forbidden'))
+  cleanup.push(() => forbiddenHttp.mockRestore())
+  await sendCallWakeups(owner, [`02${peer}`], 'ab'.repeat(16), false, async event => {
+    wake = event
+    return runtime.publish(event, { relays: [relay.url], requireAck: true, queue: false })
+  }, async rumor => {
+    const envelope = bootstrap.session.sendEvent(rumor, [['p', peer]]).event
+    await queuedCallWakeEnvelope(envelope, rumor.id)
+    return rumor
+  }, () => true)
+  expect(forbiddenHttp).not.toHaveBeenCalled()
   await vi.waitFor(() => {
     expect(relay.publishedEvents.map(event => event.id)).toEqual(expect.arrayContaining([
       sealed.id, invite.id, bootstrap.event.id, wake.id, ownCopy.id, groupCopy.id,

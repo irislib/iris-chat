@@ -55,7 +55,7 @@ it('sends once per target only after the exact ciphertext reaches the durable ou
   const publish = vi.fn(async (_event: VerifiedEvent) => {})
   const device = generateSecretKey(), owner = getPublicKey(device), target = getPublicKey(generateSecretKey())
   const queue = vi.fn(async (rumor: Rumor) => rumor)
-  await sendCallWakeups(owner, [`02${target}`, `03${target}`], '34'.repeat(16), false, 'https://push.example/', publish, queue, () => true)
+  await sendCallWakeups(owner, [`02${target}`, `03${target}`], '34'.repeat(16), false, publish, queue, () => true)
   expect(fetch).not.toHaveBeenCalled()
   const rumor = queue.mock.calls[0][0]
   const [sender, receiver] = sessions()
@@ -64,7 +64,7 @@ it('sends once per target only after the exact ciphertext reaches the durable ou
   await queuedCallWakeEnvelope(event, rumor.id)
   expect(publish).toHaveBeenCalledTimes(1)
   expect(JSON.stringify(publish.mock.calls[0][0])).not.toContain(owner)
-  expect(fetch).toHaveBeenCalledExactlyOnceWith('https://push.example/events', expect.objectContaining({ body: JSON.stringify(publish.mock.calls[0][0]) }))
+  expect(fetch).not.toHaveBeenCalled()
   expect(receiver.receiveEvent(event)).toMatchObject(rumor)
 })
 it('references a large authenticated first-call bootstrap only after its exact server ACK', async () => {
@@ -77,7 +77,7 @@ it('references a large authenticated first-call bootstrap only after its exact s
   await queuedCallWakeEnvelope(accepted.event)
   const publish = vi.fn(async (_event: VerifiedEvent) => {})
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')))
-  await sendCallWakeups(owner, [`02${target}`], '56'.repeat(16), false, 'https://push.example', publish, async rumor => {
+  await sendCallWakeups(owner, [`02${target}`], '56'.repeat(16), false, publish, async rumor => {
     const { event } = accepted.session.sendEvent(rumor, [['p', target]])
     await queuedCallWakeEnvelope(event, rumor.id)
     return rumor
@@ -98,13 +98,13 @@ it('does not send a delayed wake after account change or expiry', async () => {
   const sender = generateSecretKey(), target = getPublicKey(generateSecretKey()), publish = vi.fn(async () => {})
   let active = true
   const queue = vi.fn(async (rumor: Rumor) => rumor)
-  await sendCallWakeups(getPublicKey(sender), [`02${target}`], '78'.repeat(16), false, 'https://push.example', publish, queue, () => active)
+  await sendCallWakeups(getPublicKey(sender), [`02${target}`], '78'.repeat(16), false, publish, queue, () => active)
   active = false
   const { event } = sessions()[0].sendEvent(queue.mock.calls[0][0], [['p', target]])
   await queuedCallWakeEnvelope(event, queue.mock.calls[0][0].id)
   expect(publish).not.toHaveBeenCalled()
   active = true
-  await sendCallWakeups(getPublicKey(sender), [`02${target}`], '90'.repeat(16), false, 'https://push.example', publish, queue, () => active)
+  await sendCallWakeups(getPublicKey(sender), [`02${target}`], '90'.repeat(16), false, publish, queue, () => active)
   await vi.advanceTimersByTimeAsync(40_001)
   const rumor = queue.mock.calls[1][0]
   await queuedCallWakeEnvelope(sessions()[0].sendEvent(rumor, [['p', target]]).event, rumor.id)
