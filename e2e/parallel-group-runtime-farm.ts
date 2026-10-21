@@ -9,6 +9,7 @@ export type FarmDiagnostics = {
   discoveryQueued: number
   deviceQueued: number
   reads: number
+  durableQueued: number
 }
 
 export type FarmDeviceSnapshot = {
@@ -20,6 +21,7 @@ export type FarmDeviceSnapshot = {
   messages: Array<[string, string]>
   receivedKeyHandoffs: Array<[string, string]>
   failures: string[]
+  groupAuthors: string[]
 }
 
 export type FarmOperation = 'sendContact' | 'send' | 'start' | 'stop' | 'diagnostics' | 'directHandoffDiagnostics' | 'close'
@@ -114,6 +116,7 @@ export class GroupFarmProxy {
   readonly messages = new Map<string, string>()
   readonly receivedKeyHandoffs = new Map<string, string>()
   readonly failures: string[] = []
+  readonly groupAuthors = new Set<string>()
   readonly storage = { reads: 0 }
   private state: NdrRuntimeState
   private readonly id: number
@@ -132,6 +135,7 @@ export class GroupFarmProxy {
     for (const [id, body] of snapshot.messages) this.messages.set(id, body)
     for (const [id, sender] of snapshot.receivedKeyHandoffs) this.receivedKeyHandoffs.set(id, sender)
     this.failures.push(...snapshot.failures)
+    for (const author of snapshot.groupAuthors) this.groupAuthors.add(author)
   }
 
   getState(): NdrRuntimeState { return structuredClone(this.state) }

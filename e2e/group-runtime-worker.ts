@@ -26,7 +26,7 @@ function snapshot(device: GroupFarmDevice, id: number): FarmDeviceSnapshot {
   const failures = device.failures.slice(old.failures)
   old.failures = device.failures.length
   previous.set(id, old)
-  return { id, owner: device.owner, state: device.getState(), reads: device.storage.reads, groups, messages, receivedKeyHandoffs, failures }
+  return { id, owner: device.owner, state: device.getState(), reads: device.storage.reads, groups, messages, receivedKeyHandoffs, failures, groupAuthors: [...device.groupAuthors] }
 }
 
 function flush(): void {

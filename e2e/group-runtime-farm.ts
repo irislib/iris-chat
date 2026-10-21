@@ -1,6 +1,6 @@
-import { WebSocket } from 'ws'
 import { setImmediate as yieldToIo } from 'node:timers/promises'
-import { finalizeEvent, generateSecretKey, getPublicKey, getEventHash, verifyEvent, type Filter, type UnsignedEvent, type VerifiedEvent } from 'nostr-tools'
+import { createNostrRuntime, createPrivateRelayPublisher, createAnonymousRelayDiscovery, splitRelayDiscoveryFilters, isPrivateRelayEvent, MemoryEventStore } from 'nostr-pubsub/private-relays'
+import { finalizeEvent, generateSecretKey, getPublicKey, getEventHash, type Filter, type UnsignedEvent, type VerifiedEvent } from 'nostr-tools'
 import {
   AppKeys, CHAT_MESSAGE_KIND, GROUP_SENDER_KEY_DISTRIBUTION_KIND, InMemoryStorageAdapter, NdrRuntime,
   isGroupRosterFactEvent, parseGroupRosterFactRumor, validateMetadataCreation,
@@ -33,104 +33,72 @@ class SnapshotStorage implements StorageAdapter {
 
 /** Real NIP-01 sockets: the farm never shares decrypted messages or ratchet state. */
 class RelayClient {
-  private socket: WebSocket
-  private nextId = 0
-  private subscriptions = new Map<string, { event: (event: VerifiedEvent) => void; eose?: () => void }>()
-  private acknowledgements = new Map<string, Array<{ resolve: () => void; reject: (error: Error) => void }>>()
-  private verifiedEvents = new Map<string, { serialized: string; event: VerifiedEvent }>()
-  private pendingFetches = new Set<(error: Error) => void>()
+  private readonly receiver
+  private readonly privateSender
+  private readonly discovery
   readonly publishedDirectEvents = new Map<string, { author: string; recipients: string[] }>()
   readonly receivedDirectIds = new Set<string>()
-  readonly ready: Promise<void>
+  readonly ready = Promise.resolve()
 
   constructor(url: string) {
-    this.socket = new WebSocket(url)
-    this.ready = new Promise((resolve, reject) => {
-      this.socket.once('open', resolve)
-      this.socket.once('error', reject)
-    })
-    this.socket.on('message', (data) => {
-      const [type, id, payload, reason] = JSON.parse(data.toString())
-      if (type === 'EVENT') {
-        const subscription = this.subscriptions.get(id)
-        if (!subscription) return
-        // Model NostrClient's verification cache independently for every simulated
-        // device. Historical/live duplicates still reach the real runtime.
-        const serialized = JSON.stringify(payload)
-        let cached = this.verifiedEvents.get(payload.id)
-        if (cached?.serialized !== serialized) {
-          if (!verifyEvent(payload)) return
-          cached = { serialized, event: payload }
-          this.verifiedEvents.set(payload.id, cached)
-          if (this.verifiedEvents.size > 4096) this.verifiedEvents.delete(this.verifiedEvents.keys().next().value!)
-        }
-        if (payload.kind === 1060) {
-          this.receivedDirectIds.add(payload.id)
-          if (this.receivedDirectIds.size > 4096) this.receivedDirectIds.delete(this.receivedDirectIds.values().next().value!)
-        }
-        subscription.event(cached.event)
-      }
-      if (type === 'EOSE') this.subscriptions.get(id)?.eose?.()
-      if (type === 'OK') {
-        const pending = this.acknowledgements.get(id)
-        this.acknowledgements.delete(id)
-        for (const waiter of pending ?? []) {
-          if (payload) waiter.resolve()
-          else waiter.reject(new Error(reason))
-        }
-      }
-    })
-    this.socket.on('close', () => this.abort(new Error('Relay connection closed')))
-    this.socket.on('error', (error) => this.abort(error))
+    const authenticationKey = generateSecretKey()
+    const store = new MemoryEventStore()
+    this.receiver = createNostrRuntime({ relays: [url], store, websocketImplementation: globalThis.WebSocket,
+      historyTimeoutMs: 1000, signAuthEvent: async (_relay, template) => finalizeEvent(template, authenticationKey) })
+    this.privateSender = createPrivateRelayPublisher({ relays: [url], websocketImplementation: globalThis.WebSocket })
+    this.discovery = createAnonymousRelayDiscovery({ relays: [url], store, websocketImplementation: globalThis.WebSocket,
+      historyTimeoutMs: 1000 })
+  }
+
+  private routes(filter: Filter) {
+    const split = splitRelayDiscoveryFilters([filter])
+    return [
+      ...(split.receiver.length ? [{ runtime: this.receiver, filters: split.receiver }] : []),
+      ...split.discovery.map(filters => ({ runtime: this.discovery, filters })),
+    ]
   }
 
   subscribe = (filter: Filter, event: (event: VerifiedEvent) => void, eose?: () => void) => {
-    if (this.socket.readyState !== WebSocket.OPEN) throw new Error('Relay connection is not open')
-    const id = String(++this.nextId)
-    this.subscriptions.set(id, { event, eose })
-    this.socket.send(JSON.stringify(['REQ', id, filter]))
-    return () => {
-      this.subscriptions.delete(id)
-      if (this.socket.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(['CLOSE', id]))
-    }
+    const completed = new Set<number>()
+    const routes = this.routes(filter)
+    const subscriptions = routes.map(({ runtime, filters }, index) => runtime.subscribe(filters, {
+      onEvent: incoming => {
+        if (incoming.kind === 1060) {
+          this.receivedDirectIds.add(incoming.id)
+          if (this.receivedDirectIds.size > 4096) this.receivedDirectIds.delete(this.receivedDirectIds.values().next().value!)
+        }
+        // Match the production cross-bundle verification boundary.
+        event(structuredClone(incoming) as VerifiedEvent)
+      },
+      onEose: status => {
+        if (!status.complete) return
+        completed.add(index)
+        if (completed.size === routes.length) eose?.()
+      },
+    }))
+    return () => { for (const subscription of subscriptions) subscription.close() }
   }
 
-  fetch = (filter: Filter): Promise<VerifiedEvent[]> => new Promise((resolve, reject) => {
-    const events: VerifiedEvent[] = []
-    const failed = (error: Error) => { stop(); reject(error) }
-    const stop = this.subscribe(filter, (event) => events.push(event), () => {
-      this.pendingFetches.delete(failed)
-      stop()
-      resolve(events)
-    })
-    this.pendingFetches.add(failed)
-  })
+  fetch = async (filter: Filter): Promise<VerifiedEvent[]> => {
+    const reports = await Promise.all(this.routes(filter).map(({ runtime, filters }) => runtime.query(filters)))
+    if (reports.some(report => !report.complete)) throw new Error('Fixture discovery did not receive complete relay history')
+    return [...new Map(reports.flatMap(report => report.events).map(event => [event.id, structuredClone(event) as VerifiedEvent])).values()]
+  }
 
   publish = async (event: VerifiedEvent) => {
-    if (this.socket.readyState !== WebSocket.OPEN) throw new Error('Relay connection is not open')
+    if (event.kind === 37368 && event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
+      || [10445, 10446, 10447, 21113].includes(event.kind)) throw new Error('Private group intermediates cannot be public')
     if (event.kind === 1060) this.publishedDirectEvents.set(event.id, {
-      author: event.pubkey, recipients: event.tags.filter((tag) => tag[0] === 'p').map((tag) => tag[1]!),
+      author: event.pubkey, recipients: event.tags.filter(tag => tag[0] === 'p').map(tag => tag[1]!),
     })
-    await new Promise<void>((resolve, reject) => {
-      const pending = this.acknowledgements.get(event.id) ?? []
-      pending.push({ resolve, reject })
-      this.acknowledgements.set(event.id, pending)
-      this.socket.send(JSON.stringify(['EVENT', event]), (error) => { if (error) this.abort(error) })
-    })
+    const result = await (isPrivateRelayEvent(event) ? this.privateSender : this.receiver)
+      .publish(event, { requireAck: true, queue: false })
+    if (!result.remoteAccepted) throw new Error('Fixture publication was not acknowledged by its relay')
     return event
   }
 
-  close() {
-    this.abort(new Error('Relay client stopped'))
-    this.socket.close()
-  }
-
-  private abort(error: Error) {
-    this.subscriptions.clear()
-    for (const waiters of this.acknowledgements.values()) for (const waiter of waiters) waiter.reject(error)
-    this.acknowledgements.clear()
-    for (const failed of this.pendingFetches) failed(error)
-    this.pendingFetches.clear()
+  async close() {
+    await Promise.all([this.discovery.close(), this.privateSender.close(), this.receiver.close()])
   }
 }
 
@@ -142,6 +110,7 @@ export class GroupFarmDevice {
   readonly messages = new Map<string, string>()
   readonly receivedKeyHandoffs = new Map<string, string>()
   readonly failures: string[] = []
+  readonly groupAuthors = new Set<string>()
   runtime!: NdrRuntime
   private relay!: RelayClient
 
@@ -164,17 +133,18 @@ export class GroupFarmDevice {
       },
       appKeysFetchTimeoutMs: 50, appKeysFastTimeoutMs: 20,
     })
-    runtime.onGroupEvent((event) => {
+    runtime.onGroupEvent(async (event) => {
       if (isGroupRosterFactEvent(event.inner)) {
         const fact = parseGroupRosterFactRumor(event.inner)
         if (!validateMetadataCreation(fact.group, fact.signerPubkey, this.owner)) {
           this.failures.push('Unauthorized group metadata')
           return
         }
-        void runtime.upsertGroup(fact.group)
-          .then(() => { this.groups.set(fact.groupId, fact.group); this.onChange?.() })
-          .catch((error) => { this.failures.push(String(error)); this.onChange?.() })
+        await runtime.upsertGroup(fact.group)
+        this.groups.set(fact.groupId, fact.group)
+        this.onChange?.()
       } else if (event.inner.kind === CHAT_MESSAGE_KIND) {
+        if (event.outerEventId !== event.inner.id) this.groupAuthors.add(event.senderEventPubkey)
         // Iris keeps the owner-authored rumor inside the device-authored group
         // payload for native interop. Validate its hash before rendering it.
         let rumor = event.inner
@@ -218,6 +188,7 @@ export class GroupFarmDevice {
 
   async send(groupId: string, content: string) {
     const result = await this.runtime.sendGroupMessage(groupId, content)
+    this.groupAuthors.add(result.outer.pubkey)
     // The sending device renders its locally returned rumor, just like the app.
     this.messages.set(result.inner.id, result.inner.content)
     this.onChange?.()
@@ -235,7 +206,8 @@ export class GroupFarmDevice {
     const sessions = records.flatMap((record) => [...(record.devices?.values() ?? [])])
     return { closed, knownOwners: records.length, active: sessions.filter((session) => session.activeSession).length,
       discoveryQueued: queue.filter((entry) => entry.stage === 'discovery').length,
-      deviceQueued: queue.filter((entry) => entry.stage === 'device').length, reads: this.storage.reads }
+      deviceQueued: queue.filter((entry) => entry.stage === 'device').length, reads: this.storage.reads,
+      durableQueued: records.reduce((count, record) => count + record.pendingDurableEvents.size, 0) }
   }
 
   directHandoffDiagnostics(recipient: GroupFarmDevice) {
@@ -248,11 +220,11 @@ export class GroupFarmDevice {
     }))
   }
 
-  stop() {
+  async stop() {
     // Match the app's old-handle shutdown before opening a new persistent handle.
     this.storage.close()
     this.runtime.close()
-    this.relay.close()
+    await this.relay.close()
     this.onChange?.()
   }
 }

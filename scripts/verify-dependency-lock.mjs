@@ -35,8 +35,8 @@ const releases = {
     "integrity": "sha512-Usg0Ia7rsyRkH3LSN3g5k1oKoo1+PiBIA/hKiQp18GIzokmHY47WDw4Vf3YotOg2/WtzMqGzwqqSmaJcXVanmw=="
   },
   "nostr-double-ratchet": {
-    "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.181.tgz",
-    "integrity": "sha512-pnn7MxNzbFL8HkF5lt5+vSkyb+vuNRdhI8c4QROpDCPTpWFPAse392j2nb00r25Wjo4rRfe5YiKxIb3kr09j1A=="
+    "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.182.tgz",
+    "integrity": "sha512-HOlBZ0G+FcX2NkAnzXEiGb4FaFxIapsf9qRt7VPzme8p7NfJKHbQ1glJVFGzukhd6aWfIRumKXxdqNvypIGdAA=="
   },
   "nostr-social-graph": {
     "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v3.0.0/nostr-social-graph-3.0.0.tgz",

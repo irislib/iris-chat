@@ -5,6 +5,7 @@ import { createParallelGroupFarm } from './parallel-group-runtime-farm'
 import type { Page } from '@playwright/test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { Session as NodeProfiler } from 'node:inspector/promises'
+import { PrivateGroupWire } from './private-group-wire'
 
 type Message = { id: string; content: string }
 type DirectEnvelope = { id: string; author: string; recipients: string[]; deliveries: number }
@@ -136,6 +137,9 @@ test('incoming invitations preserve group creation, settings and the current con
 // for the complete 101-owner, mixed-device delivery matrix.
 test('browser admin creates a mixed-device group; all members exchange messages and recover offline', async ({ page, testRelay }) => {
   test.setTimeout(20 * 60_000)
+  const wire = new PrivateGroupWire()
+  testRelay.authRequired = true
+  testRelay.observeWire = wire.observe
   const memberCount = Number(process.env.IRIS_GROUP_MEMBERS || 4)
   const deliveryTimeout = Math.max(30_000, memberCount * 1_800)
   expect(memberCount).toBeGreaterThanOrEqual(2)
@@ -276,9 +280,17 @@ test('browser admin creates a mixed-device group; all members exchange messages 
           sentMessages.push(...burst)
           // Sending may return after durably queueing keys. Wait for delivery so
           // the next burst doesn't accidentally turn into 100 simultaneous writers.
-          await expect.poll(() => onlineDevices.every((device) =>
-            burst.every(({ id, content }) => device.messages.get(id) === content)
-          ), { timeout: deliveryTimeout }).toBe(true)
+          try {
+            await expect.poll(() => onlineDevices.every((device) =>
+              burst.every(({ id, content }) => device.messages.get(id) === content)
+            ), { timeout: deliveryTimeout }).toBe(true)
+          } catch (error) {
+            console.log('Failed group delivery matrix', JSON.stringify(await Promise.all(onlineDevices.map(async (device, index) => ({
+              device: index, missing: burst.filter(({ id, content }) => device.messages.get(id) !== content).map(({ content }) => content),
+              diagnostics: await device.diagnostics(),
+            })))))
+            throw error
+          }
         }
       })
       console.log('All member sends completed')
@@ -322,6 +334,8 @@ test('browser admin creates a mixed-device group; all members exchange messages 
       await page.screenshot({ path: `work/large-group-${memberCount}.png` })
       expect(devices.flatMap((device) => device.failures)).toEqual([])
       console.log(JSON.stringify({ ...timings, allDeviceDeliveries: expected.length * (devices.length + 1), peerStorageReads: devices.reduce((sum, device) => sum + device.storage.reads, 0), relayEvents: testRelay.publishedEvents.length }))
+      wire.assertPrivate([owner, ...devices.flatMap(device => [device.owner, device.getState().currentDevicePubkey!])],
+        devices.flatMap(device => [...device.groupAuthors]))
       completed = true
     } finally {
       clearInterval(progress)
@@ -356,5 +370,6 @@ test('browser admin creates a mixed-device group; all members exchange messages 
   } finally {
     await farm.close()
     testRelay.observeRequest = undefined
+    testRelay.observeWire = undefined
   }
 })
