@@ -21,6 +21,7 @@ import {
 import { chatMutesKey, normalizeChatMutes } from './lib/chatMutePolicy'
 import { renderRumor } from './lib/pushRumorRender'
 import {
+  asVerifiedPushNostrEvent,
   extractPushNostrEvent,
   PUSH_NOSTR_EVENT_MESSAGE,
 } from './lib/pushEvents'
@@ -321,11 +322,14 @@ interface DecryptResult {
 
 // Find session and decrypt message
 async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags: string[][]; [key: string]: unknown }): Promise<DecryptResult> {
-  // Check if main app already processed this event (outer id)
+  const eventForSession = asVerifiedPushNostrEvent(eventData)
+  if (!eventForSession) return { success: false }
+  // Direct previews were authenticated by the foreground session. Group cache
+  // keys can identify shared ciphertext, so they still require a private wake.
   if (eventData.id) {
     try {
       const processed = await db.processedEvents.get(eventData.id)
-      if (processed) {
+      if (processed && !processed.chatId.startsWith('group:')) {
         return {
           success: true,
           chatId: processed.chatId,
@@ -340,11 +344,6 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
   }
 
   const ownerPubkey = await getOwnerPubkeyFromSessionManager()
-
-  if (ownerPubkey) {
-    const group = await decryptGroupPush(ownerPubkey,eventData as unknown as NostrEvent)
-    if (group) return group
-  }
 
   const sessionEntries: SessionManagerStateEntry[] = []
   const sessions = await db.sessions.toArray()
@@ -388,7 +387,6 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
 
       // Slow path: try to decrypt using Session class
       // Preserve the complete signed envelope, including its privacy version.
-      const eventForSession = eventData as unknown as NostrEvent
       const session = new Session(state)
       const innerEvent = session.receiveEvent(eventForSession) || null
 
@@ -413,19 +411,10 @@ async function decryptPushMessage(eventData: { id?: string; pubkey: string; tags
           return {success:true,chatId:ownerPubkey,isSelfMessage:true}
         }
 
-        const processedInner = await db.processedEvents.get(innerId)
-        if (processedInner) {
-          return {
-            success: true,
-            chatId: processedInner.chatId,
-            kind: processedInner.kind,
-            content: processedInner.content ?? innerEvent.content,
-            isSelfMessage, messageId: innerId, author: entry.chatId ?? innerEvent.pubkey, createdAtSecs: innerEvent.created_at,
-          }
-        }
-
+        // The authenticated rumor supplies its own kind, channel and content.
+        // Its ID may also name a cached shared envelope; that is not a wake.
         const storedInnerMessage = await db.messages.get(innerId)
-        if (storedInnerMessage) {
+        if (storedInnerMessage && !storedInnerMessage.sessionId.startsWith('group:')) {
           return {
             success: true,
             chatId: entry.chatId || storedInnerMessage.sessionId,

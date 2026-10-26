@@ -35,11 +35,19 @@ export async function groupPushChannels(owner: string) {
     return { chatId:`group:${data.id}`, channel, authors }
   }))
 }
-export async function decryptGroupPush(owner: string, event: Event, sender?: string) {
-  if (!verifyEvent(event)) return
-  if (sender && await groupWakeSenderMatches(owner, event, sender) !== true) return
+export async function decryptGroupPush(owner: string, event: Event, sender: string) {
+  if (!sender || !verifyEvent(event)) return
+  if (await groupWakeSenderMatches(owner, event, sender) !== true) return
   for (const {chatId,channel,authors} of await groupPushChannels(owner)) {
     if (!authors.includes(event.pubkey)) continue
+    // The foreground runtime may already have consumed the group ratchet key.
+    // Reuse its preview only after the private wake authenticated this channel.
+    const processed = await db.processedEvents.get(event.id)
+    if (processed?.chatId === chatId && processed.author === sender) {
+      return { success:true as const,chatId,kind:processed.kind,content:processed.content,
+        isSelfMessage:sender === owner,messageId:processed.messageId,
+        author:sender,createdAtSecs:processed.createdAtSecs }
+    }
     const result = await channel.handleOuterEvent(event)
     if (!result) return { success:false as const,chatId }
     const inner = parseSerializedGroupRuntimeRumor(result.inner.content) ?? result.inner
