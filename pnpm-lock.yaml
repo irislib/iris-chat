@@ -865,7 +865,7 @@ packages:
     version: 0.0.52
 
   '@fips/file-transfer@file:vendor/fips-file-transfer-0.1.0.tgz':
-    resolution: {integrity: sha512-X/YFgQnVU4B8YJYvCVMZe+o8b0FZRWAwp9OXzzDvBHgxv1+XrmSLGWZy4gc3mPI5D6F2U217Z1yRLS64Elv01g==, tarball: file:vendor/fips-file-transfer-0.1.0.tgz}
+    resolution: {integrity: sha512-PzUhfXafodrecDbFzDghGd39vsEeBp02PsWiX4VdfMZSjdqpoAG1ZdUUtxbMYz2Lbb+MtVLaEc+AJ/tsjIW62Q==, tarball: file:vendor/fips-file-transfer-0.1.0.tgz}
     version: 0.1.0
     peerDependencies:
       '@fips/tcp': ^0.2.4

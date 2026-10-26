@@ -110,7 +110,8 @@ export class DirectFileStorage {
       },
       finish: async () => { await flush(); return undefined },
       suspend: flush,
-      commit: async () => {
+      commit: async signal => {
+        signal?.throwIfAborted()
         await flush()
         const result = await handle.getFile()
         if (await getSessionManagerValue<boolean>(this.key(`exported/${id}/${index}`))) return result
@@ -119,8 +120,10 @@ export class DirectFileStorage {
           const output = await destination.createWritable()
           try {
             for (let start = 0; start < result.size; start += 64 * 1024) {
+              signal?.throwIfAborted()
               await output.write(await result.slice(start, start + 64 * 1024).arrayBuffer())
             }
+            signal?.throwIfAborted()
             await output.close()
           } catch (error) { await output.abort().catch(() => undefined); throw error }
           await putSessionManagerValue(this.key(`exported/${id}/${index}`), true)
