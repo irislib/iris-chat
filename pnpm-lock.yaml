@@ -18,6 +18,9 @@ importers:
       '@fips/core':
         specifier: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.56/fips-core-0.0.52.tgz
         version: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.56/fips-core-0.0.52.tgz
+      '@fips/file-transfer':
+        specifier: file:vendor/fips-file-transfer-0.1.0.tgz
+        version: file:vendor/fips-file-transfer-0.1.0.tgz(@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz)
       '@fips/tcp':
         specifier: https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz
         version: https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz
@@ -860,6 +863,12 @@ packages:
   '@fips/core@https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.56/fips-core-0.0.52.tgz':
     resolution: {integrity: sha512-omsxRDNQ0iqEBipCD0sOhodDYm0p8cnjt/6BmcDBvtDgQx9F+wL0LXO8hN7MtqZ7KI40wc/gACAudP2+gscXew==, tarball: https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.56/fips-core-0.0.52.tgz}
     version: 0.0.52
+
+  '@fips/file-transfer@file:vendor/fips-file-transfer-0.1.0.tgz':
+    resolution: {integrity: sha512-X/YFgQnVU4B8YJYvCVMZe+o8b0FZRWAwp9OXzzDvBHgxv1+XrmSLGWZy4gc3mPI5D6F2U217Z1yRLS64Elv01g==, tarball: file:vendor/fips-file-transfer-0.1.0.tgz}
+    version: 0.1.0
+    peerDependencies:
+      '@fips/tcp': ^0.2.4
 
   '@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz':
     resolution: {integrity: sha512-iBPJLtnunUn+Y2vjZ5D8eTKJHjznDX3DZs7x5oXzx9kc5u9W71l6mHg/cQiQr5LKKU+FtjiPLGAPLW9iz1S41w==, tarball: https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz}
@@ -3867,6 +3876,11 @@ snapshots:
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
       '@scure/base': 2.4.0
+
+  '@fips/file-transfer@file:vendor/fips-file-transfer-0.1.0.tgz(@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz)':
+    dependencies:
+      '@fips/tcp': https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz
+      '@noble/hashes': 2.4.0
 
   '@fips/tcp@https://github.com/mmalmi/fips-tcp/releases/download/fips-tcp-v0.2.5/fips-tcp-0.2.4.tgz': {}
 

@@ -15,7 +15,7 @@ import { MAX_DIRECT_FILES, MAX_DIRECT_FILE_BYTES, parseDirectFileOffer, safeDire
   signDirectFileOffer, type DirectFileOffer } from './directFileProtocol'
 
 export type DirectFileStatus = 'offered' | 'connecting' | 'transferring' | 'completed' |
-  'declined' | 'cancelled' | 'failed' | 'unavailable'
+  'declined' | 'cancelled' | 'failed' | 'unavailable' | 'paused'
 export interface DirectFileTransfer {
   id: string
   files: { filename: string; sizeBytes: number; canDownload?: boolean }[]
@@ -24,6 +24,7 @@ export interface DirectFileTransfer {
   transferredBytes: number
   totalBytes: number
   error?: string
+  needsSource?: boolean
 }
 interface TransferRecord extends DirectFileTransfer {
   wire: string
@@ -50,7 +51,7 @@ let generation = 0
 let unsubscribe: (() => void) | undefined
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 let pendingWrites = Promise.resolve()
-const isActive = (status: DirectFileStatus) => ['offered', 'connecting', 'transferring'].includes(status)
+const isActive = (status: DirectFileStatus) => ['offered', 'connecting', 'transferring', 'paused'].includes(status)
 const now = () => Math.floor(Date.now() / 1000)
 const hex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
 const specs = (offer: DirectFileOffer): DirectFileSpec[] => offer.files.map(file => ({
@@ -64,7 +65,7 @@ function transferError(error: unknown): string {
   if (/quota|space|not saved completely/i.test(message)) return 'There isn’t enough space to save these files.'
   if (/authorization|not available to this device/i.test(message)) return 'The other device is no longer available.'
   if (/did not match|hash|checksum/i.test(message)) return 'These files could not be verified. Please send them again.'
-  if (message.startsWith('This browser cannot receive files directly.')) return message
+  if (message.startsWith('This browser cannot receive files directly.') || message.startsWith('File storage is unavailable.')) return message
   return 'Couldn’t transfer these files. Please send them again.'
 }
 
@@ -112,8 +113,23 @@ async function ingest(runtime: Runtime, chat: ChatSession, wire: string, isMine:
       ? 'unavailable' : 'offered'
     if (previous?.wire === wire) {
       status = isActive(previous.status)
-        ? previous.status === 'offered' && !isSender ? status : 'unavailable'
+        ? previous.status === 'offered' && !isSender ? status : offer.protocol_version === 2 ? 'paused' : 'unavailable'
         : previous.status
+    }
+    let blobs: Blob[] | undefined
+    let needsSource = false
+    if (isSender && offer.protocol_version === 2 && isActive(status) && offer.expires_at_secs > now()) {
+      blobs = await runtime.storage.loadSources(offer.id)
+      needsSource = !blobs || blobs.length !== offer.files.length || blobs.some((blob, index) => blob.size !== offer.files[index].size_bytes)
+      if (!needsSource && active === runtime) {
+        const allowed = knownDirectFileDevices(offer.recipient).filter(device => device !== runtime.device)
+        if (allowed.length && !isChatRejected(offer.recipient, getMessageRequestPolicyContext())) {
+          runtime.tcp.registerOffer(offer.id, offer.token, allowed,
+            specs(offer).map((file, index) => ({ ...file, blob: blobs![index] })),
+            { version: 2, expires: offer.expires_at_secs * 1000 })
+          status = previous?.status === 'offered' ? 'offered' : 'paused'
+        }
+      }
     }
     // The result belongs to chat history. Local file availability is independent
     // and may change after a reload, browser cleanup, or source-file removal.
@@ -122,12 +138,18 @@ async function ingest(runtime: Runtime, chat: ChatSession, wire: string, isMine:
         await runtime.storage.getFile(offer.id, index).then(blob => blob.size === file.sizeBytes, () => false),
     })))
     if (active !== runtime) return
-    publish({ id: offer.id, wire, chatId: chat.id, offer, files, isSender, status,
+    publish({ id: offer.id, wire, chatId: chat.id, offer, files, isSender, status, blobs, needsSource,
       transferredBytes: previous?.wire === wire ? previous.transferredBytes : 0,
       totalBytes: offer.files.reduce((sum, file) => sum + file.size_bytes, 0),
       ...(previous?.wire === wire && previous.error ? { error: previous.error } : {}),
     })
   } finally { if (active === runtime) loading.delete(offer.id) }
+}
+
+async function revoke(runtime: Runtime, id: string): Promise<void> {
+  await runtime.tcp.cancel(id)
+  await runtime.storage.discard(id)
+  await runtime.storage.forgetSources(id)
 }
 
 function refreshAuthorization(): void {
@@ -137,17 +159,17 @@ function refreshAuthorization(): void {
     if (!isActive(record.status)) continue
     if (!get(chats).has(record.chatId)) {
       publish({ ...record, status: 'cancelled', blobs: undefined })
-      runtime.tcp.cancel(record.id)
-    } else if (record.status === 'offered' && record.offer.expires_at_secs <= now()) {
+      void revoke(runtime, record.id).catch(() => undefined)
+    } else if (record.offer.expires_at_secs <= now()) {
       publish({ ...record, status: 'unavailable', blobs: undefined })
-      runtime.tcp.cancel(record.id)
+      void revoke(runtime, record.id).catch(() => undefined)
     } else if (record.isSender) {
       const allowed = isChatRejected(record.offer.recipient, getMessageRequestPolicyContext()) ? [] :
         knownDirectFileDevices(record.offer.recipient).filter(device => device !== runtime.device)
       runtime.tcp.restrictOffer(record.id, allowed)
     } else if (record.status !== 'offered' && !receiverAllowed(runtime, record.offer)) {
       publish({ ...record, status: 'cancelled', error: 'This device is no longer linked.' })
-      runtime.tcp.cancel(record.id)
+      void revoke(runtime, record.id).catch(() => undefined)
     }
   }
 }
@@ -161,11 +183,19 @@ export async function attachDirectFiles(endpoint: FipsDatagramEndpoint, owner: s
   const device = getPublicKey(secret)
   const storage = new DirectFileStorage(owner, device)
   const tcp = new DirectFileTcp({ endpoint, localPeer: device,
+    store: storage.claims,
+    authorizeOffer: offer => {
+      const record = records.get(offer.id), runtime = active
+      return !!runtime && !!record && !record.isSender && isActive(record.status) &&
+        record.offer.token === offer.token && record.offer.device === offer.peer &&
+        record.offer.expires_at_secs > now() && receiverAllowed(runtime, record.offer) &&
+        JSON.stringify(specs(record.offer)) === JSON.stringify(offer.files)
+    },
     createReceiveFile: (id, index) => storage.createFile(id, index),
     onEvent: event => {
       if (run !== generation) return
       const record = records.get(event.transferId)
-      if (!record || !isActive(record.status)) return
+      if (!record || !isActive(record.status) || (event.type === 'offered' && !record.isSender)) return
       const status: DirectFileStatus = event.type === 'accepted' ? 'connecting' :
         event.type === 'progress' ? 'transferring' : event.type
       publish({ ...record, status,
@@ -195,12 +225,13 @@ export async function detachDirectFiles(): Promise<void> {
   const previous = active
   active = undefined
   for (const record of records.values()) if (isActive(record.status)) {
-    publish({ ...record, status: 'unavailable', blobs: undefined }, true, previous)
+    publish({ ...record, status: record.offer.protocol_version === 2 ? (record.status === 'offered' ? 'offered' : 'paused') : 'unavailable', blobs: undefined }, true, previous)
   }
   records.clear(); loading.clear(); directFileTransfers.set(new Map())
   for (const url of objectUrls) URL.revokeObjectURL(url)
   objectUrls.clear()
   await previous?.tcp.dispose().catch(() => undefined)
+  previous?.storage.dispose()
   await Promise.allSettled([...pendingSends])
   await pendingWrites
   previous?.secret.fill(0)
@@ -239,6 +270,7 @@ export async function sendDirectFiles(chat: ChatSession, files: File[], caption 
   const offer: DirectFileOffer = { id: hex(crypto.getRandomValues(new Uint8Array(16))),
     token: hex(crypto.getRandomValues(new Uint8Array(32))), owner: runtime.owner,
     recipient: chat.recipientPubkey, device: runtime.device, caption, expires_at_secs: now() + 24 * 60 * 60,
+    protocol_version: 2,
     files: sources.map(file => ({ filename: file.filename, size_bytes: file.sizeBytes, sha256: file.sha256 })),
   }
   const wire = signDirectFileOffer(offer, runtime.secret)
@@ -246,7 +278,8 @@ export async function sendDirectFiles(chat: ChatSession, files: File[], caption 
     isSender: true, status: 'offered', transferredBytes: 0,
     totalBytes: files.reduce((sum, file) => sum + file.size, 0), blobs: files,
   }
-  runtime.tcp.registerOffer(offer.id, offer.token, allowed, sources)
+  await runtime.storage.saveSources(offer.id, files).catch(() => undefined)
+  runtime.tcp.registerOffer(offer.id, offer.token, allowed, sources, { version: 2, expires: offer.expires_at_secs * 1000 })
   publish(record)
   const sending = sendMessage(chat, wire, undefined, () => active === runtime)
   pendingSends.add(sending)
@@ -262,10 +295,48 @@ export async function sendDirectFiles(chat: ChatSession, files: File[], caption 
   } finally { pendingSends.delete(sending) }
 }
 
+export async function resumeDirectFileSend(id: string): Promise<void> {
+  const runtime = active, record = records.get(id)
+  if (!runtime || !record || !record.isSender || record.status !== 'paused' || record.needsSource) throw new Error('These files are unavailable.')
+  const claim = await runtime.storage.claims.load(`send/${id}`)
+  if (!claim || !knownDirectFileDevices(record.offer.recipient).includes(claim.peer)) throw new Error('The other device is no longer available.')
+  publish({ ...record, status: 'connecting', error: undefined })
+  try {
+    await runtime.connect(claim.peer)
+    await runtime.tcp.resumeOffer(id, claim.peer)
+  } catch (error) {
+    const current = records.get(id)
+    if (active === runtime && current && isActive(current.status)) publish({ ...current, status: 'paused', error: transferError(error) })
+    throw new Error(transferError(error))
+  }
+}
+
+export async function restoreDirectFileSource(id: string, files: File[]): Promise<void> {
+  const record = records.get(id), runtime = active
+  if (!record || !runtime || !record.isSender || !record.needsSource || !isActive(record.status)) throw new Error('These files are unavailable.')
+  if (record.offer.expires_at_secs <= now() || files.length !== record.files.length) throw new Error('Choose the original files in the same order.')
+  const sources: DirectFileSource[] = []
+  for (const [index, file] of files.entries()) {
+    const expected = record.offer.files[index]
+    if (file.name !== expected.filename || file.size !== expected.size_bytes) throw new Error('Choose the original files in the same order.')
+    const hash = sha256.create()
+    for (let offset = 0; offset < file.size; offset += 64 * 1024) hash.update(new Uint8Array(await file.slice(offset, offset + 64 * 1024).arrayBuffer()))
+    if (hex(hash.digest()) !== expected.sha256) throw new Error('These files do not match the original transfer.')
+    sources.push({ ...specs(record.offer)[index], blob: file })
+  }
+  if (active !== runtime || records.get(id) !== record) throw new Error('These files are unavailable.')
+  const allowed = knownDirectFileDevices(record.offer.recipient).filter(device => device !== runtime.device)
+  if (isChatRejected(record.offer.recipient, getMessageRequestPolicyContext())) throw new Error('This chat is unavailable.')
+  runtime.tcp.registerOffer(id, record.offer.token, allowed, sources, { version: 2, expires: record.offer.expires_at_secs * 1000 })
+  await runtime.storage.saveSources(id, files).catch(() => undefined)
+  publish({ ...record, status: 'offered', needsSource: false, blobs: files, error: undefined })
+  void Promise.allSettled(allowed.map(device => runtime.connect(device)))
+}
+
 async function incoming(id: string): Promise<{ runtime: Runtime; record: TransferRecord }> {
   const record = records.get(id)
   const chat = record && get(chats).get(record.chatId)
-  if (!record || !chat || record.status !== 'offered' || record.isSender) throw new Error('These files are unavailable.')
+  if (!record || !chat || !['offered', 'paused'].includes(record.status) || record.isSender) throw new Error('These files are unavailable.')
   const runtime = await ready(chat)
   if (records.get(id) !== record || record.offer.expires_at_secs <= now() || !receiverAllowed(runtime, record.offer)) {
     throw new Error('The sending device is no longer available.')
@@ -278,23 +349,24 @@ const choosingDestinations = new WeakSet<TransferRecord>()
 export async function acceptDirectFiles(id: string): Promise<void> {
   const offered = records.get(id)
   const storage = active?.storage
-  if (!offered || offered.isSender || offered.status !== 'offered' || !storage) throw new Error('These files are unavailable.')
+  if (!offered || offered.isSender || !['offered', 'paused'].includes(offered.status) || !storage) throw new Error('These files are unavailable.')
   if (choosingDestinations.has(offered)) throw new Error('A save location is already being chosen.')
   choosingDestinations.add(offered)
-  try { await storage.chooseDestination(id, offered.offer.files) }
+  try { if (offered.status === 'offered') await storage.chooseDestination(id, offered.offer.files) }
   catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     throw error
   } finally { choosingDestinations.delete(offered) }
   if (active?.storage !== storage || records.get(id) !== offered) throw new Error('This offer is no longer available.')
   const { runtime, record } = await incoming(id)
-  if (active !== runtime || records.get(id) !== record || record.status !== 'offered') throw new Error('This offer has already been handled.')
+  if (active !== runtime || records.get(id) !== record || !['offered', 'paused'].includes(record.status)) throw new Error('This offer has already been handled.')
   publish({ ...record, status: 'connecting', error: undefined })
   acceptChat(record.chatId)
   try {
     await runtime.connect(record.offer.device).catch(() => undefined)
     if (active !== runtime || records.get(id)?.status !== 'connecting') return
-    await runtime.tcp.receive(id, record.offer.token, record.offer.device, specs(record.offer))
+    await runtime.tcp.receive(id, record.offer.token, record.offer.device, specs(record.offer),
+      { version: record.offer.protocol_version ?? 1, expires: record.offer.expires_at_secs * 1000 })
   } catch (error) {
     const current = records.get(id)
     if (active === runtime && current && isActive(current.status)) publish({ ...current, status: 'failed',
@@ -318,7 +390,10 @@ export async function cancelDirectFiles(id: string): Promise<void> {
   const record = records.get(id)
   if (!record || !isActive(record.status)) return
   publish({ ...record, status: 'cancelled', blobs: undefined })
-  active?.tcp.cancel(id)
+  const runtime = active
+  await runtime?.tcp.cancel(id)
+  await runtime?.storage.discard(id)
+  await runtime?.storage.forgetSources(id)
 }
 
 export async function downloadDirectFile(id: string, index: number): Promise<void> {

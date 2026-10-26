@@ -15,6 +15,7 @@ export interface DirectFileOffer {
   device: string
   caption: string
   expires_at_secs: number
+  protocol_version?: 1 | 2
   files: { filename: string; size_bytes: number; sha256: string }[]
 }
 
@@ -39,6 +40,7 @@ export function parseDirectFileOffer(body: string): DirectFileOffer | undefined 
     const value = JSON.parse(event.content)
     if (!value || value.device !== event.pubkey || !hex(value.id, 32) || !hex(value.token, 64) ||
       !hex(value.owner, 64) || !hex(value.recipient, 64) || !hex(value.device, 64) ||
+      (value.protocol_version !== undefined && value.protocol_version !== 1 && value.protocol_version !== 2) ||
       typeof value.caption !== 'string' || encoder.encode(value.caption).length > 4096 ||
       !Number.isSafeInteger(value.expires_at_secs) || value.expires_at_secs <= event.created_at ||
       value.expires_at_secs > event.created_at + 24 * 60 * 60 ||

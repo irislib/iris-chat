@@ -46,12 +46,18 @@ vi.mock('./directFileTcp', () => ({ DirectFileTcp: class {
 vi.mock('./directFileStorage', () => ({ DirectFileStorage: class {
   getFile = state.readFile
   chooseDestination = state.chooseDestination
+  claims = { load: async () => undefined, save: async () => {} }
+  saveSources = async (id: string, files: Blob[]) => { state.saved.set(`sources/${id}`, files) }
+  loadSources = async (id: string) => state.saved.get(`sources/${id}`)
+  forgetSources = async (id: string) => { state.saved.delete(`sources/${id}`) }
+  discard = async () => {}
+  dispose = () => {}
 } }))
 
 import { chats, sendMessage, type ChatSession } from './chat'
 import { devices } from './devices'
 import { attachDirectFiles, detachDirectFiles, directFileTransfers, sendDirectFiles, acceptDirectFiles,
-  cancelDirectFiles, downloadDirectFile } from './directFiles'
+  cancelDirectFiles, downloadDirectFile, restoreDirectFileSource } from './directFiles'
 import { parseDirectFileOffer, signDirectFileOffer, type DirectFileOffer } from './directFileProtocol'
 
 const secret = new Uint8Array(32).fill(1)
@@ -134,7 +140,7 @@ describe('direct-file app consent and device roles', () => {
     expect(tcp.receive).not.toHaveBeenCalled()
     await acceptDirectFiles(id)
     expect(tcp.receive).toHaveBeenCalledWith(id, incomingOffer().token, sibling,
-      [expect.objectContaining({ filename: 'notes.txt', sizeBytes: 5 })])
+      [expect.objectContaining({ filename: 'notes.txt', sizeBytes: 5 })], { version: 1, expires: expect.any(Number) })
   })
 
   it('rejects an unrelated device and a revoked device before accepting', async () => {
@@ -261,4 +267,37 @@ describe('direct-file app consent and device roles', () => {
     expect(get(directFileTransfers).get(id)).toMatchObject({ isSender: false, transferredBytes: 5,
       files: [{ filename: 'notes.txt', sizeBytes: 5, canDownload: false }] })
   })
+  it('restores interrupted v2 reception and resumes without choosing a destination again', async () => {
+    const id = await receiveOffer({ ...incomingOffer(), protocol_version: 2 })
+    await acceptDirectFiles(id)
+    state.transports[0]!.options.onEvent({ type: 'progress', transferId: id, peer: sibling, transferredBytes: 3 })
+    await detachDirectFiles()
+    await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
+    await vi.waitFor(() => expect(get(directFileTransfers).get(id)?.status).toBe('paused'))
+    state.chooseDestination.mockClear()
+    await acceptDirectFiles(id)
+    expect(state.chooseDestination).not.toHaveBeenCalled()
+    expect(state.transports[1]!.receive).toHaveBeenCalledWith(id, incomingOffer().token, sibling,
+      [expect.objectContaining({ filename: 'notes.txt', sizeBytes: 5 })], { version: 2, expires: expect.any(Number) })
+  })
+
+  it('restores send sources and asks for matching originals if browser storage was cleared', async () => {
+    const selected = [new File(['hello'], 'notes.txt')] as unknown as globalThis.File[]
+    await sendDirectFiles(chat(), selected)
+    const id = parseDirectFileOffer(get(chats).get(state.owner)!.messages[0]!.content)!.id
+    state.transports[0]!.options.onEvent({ type: 'paused', transferId: id, peer: sibling })
+    await detachDirectFiles()
+    await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
+    await vi.waitFor(() => expect(state.transports[1]!.registerOffer).toHaveBeenCalledOnce())
+    expect(get(directFileTransfers).get(id)).toMatchObject({ status: 'paused', needsSource: false })
+    await detachDirectFiles(); state.saved.delete(`sources/${id}`)
+    await attachDirectFiles({} as FipsDatagramEndpoint, state.owner, secret, connect)
+    await vi.waitFor(() => expect(get(directFileTransfers).get(id)?.needsSource).toBe(true))
+    await expect(restoreDirectFileSource(id, [new File(['wrong'], 'notes.txt')] as unknown as globalThis.File[])).rejects.toThrow('do not match')
+    expect(state.transports[2]!.registerOffer).not.toHaveBeenCalled()
+    await restoreDirectFileSource(id, selected)
+    expect(state.transports[2]!.registerOffer).toHaveBeenCalledOnce()
+    expect(get(directFileTransfers).get(id)).toMatchObject({ status: 'offered', needsSource: false })
+  })
+
 })

@@ -27,6 +27,16 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], channel: 'chromium' },
     },
     {
+      name: 'webkit-files',
+      testMatch: 'direct-file-first.spec.ts',
+      use: { ...devices['iPhone 13'], defaultBrowserType: 'webkit' },
+    },
+    {
+      name: 'firefox-files',
+      testMatch: 'direct-file-first.spec.ts',
+      use: { ...devices['Desktop Firefox'], defaultBrowserType: 'firefox' },
+    },
+    {
       name: 'webkit-chat-rows',
       testMatch: 'chat-row-layout.spec.ts',
       use: { ...devices['Desktop Safari'], defaultBrowserType: 'webkit' },

@@ -1,24 +1,26 @@
 <script lang="ts">
   import {
-    acceptDirectFiles, declineDirectFiles, cancelDirectFiles, downloadDirectFile,
+    acceptDirectFiles, declineDirectFiles, cancelDirectFiles, downloadDirectFile, restoreDirectFileSource, resumeDirectFileSend,
     type DirectFileTransfer,
   } from '../lib/directFiles'
   import { formatDirectFileSize } from '../lib/directFileDraft'
   import { getErrorMessage } from '../lib/utils'
 
   let { transfer }: { transfer: DirectFileTransfer } = $props()
+  let sourceInput = $state<HTMLInputElement>()
   let busy = $state(false)
   let cancelling = $state(false)
   let actionError = $state('')
   let active = $derived(transfer.status === 'connecting' || transfer.status === 'transferring')
-  let canAccept = $derived(transfer.status === 'offered' && !transfer.isSender)
-  let canCancel = $derived(active || (transfer.status === 'offered' && transfer.isSender))
+  let canAccept = $derived((transfer.status === 'offered' || transfer.status === 'paused') && !transfer.isSender)
+  let canCancel = $derived(active || transfer.status === 'paused' || (transfer.status === 'offered' && transfer.isSender))
   let label = $derived.by(() => {
     switch (transfer.status) {
       case 'offered': return transfer.isSender ? 'Waiting for acceptance' : 'Ready to receive'
       case 'connecting': return 'Connecting…'
       case 'transferring': return transfer.isSender ? 'Sending…' : 'Receiving…'
       case 'completed': return transfer.isSender ? 'Sent' : 'Received'
+      case 'paused': return transfer.needsSource ? 'Choose the original files to resume' : 'Paused — keep both apps open'
       case 'declined': return 'Declined'
       case 'cancelled': return 'Cancelled'
       case 'failed': return 'Transfer failed'
@@ -66,15 +68,26 @@
     </div>
   {/each}
   <p class="text-xs opacity-80" role="status">{label}</p>
-  {#if active}
+  {#if active || transfer.status === 'paused'}
     <progress class="w-full h-1.5" value={transfer.transferredBytes} max={Math.max(1, transfer.totalBytes)} aria-label="File transfer progress"></progress>
     <p class="text-xs opacity-80">{formatDirectFileSize(transfer.transferredBytes)} of {formatDirectFileSize(transfer.totalBytes)}</p>
   {/if}
   {#if canAccept}
     <div class="flex gap-2">
-      <button class="px-3 py-1.5 rounded-lg bg-black/15 hover:bg-black/25 text-sm font-medium disabled:opacity-50" disabled={busy} onclick={() => act(() => acceptDirectFiles(transfer.id))}>Accept</button>
-      <button class="px-3 py-1.5 rounded-lg hover:bg-black/10 text-sm disabled:opacity-50" disabled={busy} onclick={() => act(() => declineDirectFiles(transfer.id))}>Decline</button>
+      <button class="px-3 py-1.5 rounded-lg bg-black/15 hover:bg-black/25 text-sm font-medium disabled:opacity-50" disabled={busy} onclick={() => act(() => acceptDirectFiles(transfer.id))}>{transfer.status === 'paused' ? 'Resume' : 'Accept'}</button>
+      {#if transfer.status === 'offered'}
+        <button class="px-3 py-1.5 rounded-lg hover:bg-black/10 text-sm disabled:opacity-50" disabled={busy} onclick={() => act(() => declineDirectFiles(transfer.id))}>Decline</button>
+      {:else}
+        <button class="px-3 py-1.5 rounded-lg text-sm" disabled={cancelling} onclick={cancel}>Cancel</button>
+      {/if}
     </div>
+  {:else if transfer.needsSource}
+    <input class="hidden" type="file" multiple bind:this={sourceInput} onchange={() => act(() => restoreDirectFileSource(transfer.id, Array.from(sourceInput?.files ?? [])))} />
+    <button class="px-3 py-1.5 rounded-lg bg-black/15 text-sm" disabled={busy} onclick={() => sourceInput?.click()}>Choose files</button>
+    <button class="px-3 py-1.5 rounded-lg text-sm" disabled={cancelling} onclick={cancel}>Cancel</button>
+  {:else if transfer.status === 'paused' && transfer.isSender}
+    <button class="px-3 py-1.5 rounded-lg bg-black/15 text-sm" disabled={busy} onclick={() => act(() => resumeDirectFileSend(transfer.id))}>Resume</button>
+    <button class="px-3 py-1.5 rounded-lg text-sm" disabled={cancelling} onclick={cancel}>Cancel</button>
   {:else if canCancel}
     <button class="px-3 py-1.5 rounded-lg hover:bg-black/10 text-sm disabled:opacity-50" disabled={cancelling} onclick={cancel}>Cancel</button>
   {/if}

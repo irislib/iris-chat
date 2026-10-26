@@ -1,17 +1,31 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { webkit, devices } from '@playwright/test'
 import { test, expect, useTestRelay } from './fixtures'
 import { useDirectFileDestination } from './fixtures/directFileDestination'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 
-test('an invite can send files as its first content and streams to the chosen save location', async ({ browser, testRelayUrl }, info) => {
-  test.setTimeout(90_000)
+for (const mode of ['chosen destination', 'downloads after restart']) test(`first files use ${mode}`,  async ({ browser, testRelayUrl, baseURL }, info) => {
+  test.skip(mode === 'chosen destination' && info.project.name !== 'chromium', 'Native file pickers are Chromium-only; other browsers use Downloads')
+  test.setTimeout(120_000)
   const seed = await startLocalFipsWebSocketSeed()
-  const contexts = await Promise.all([browser.newContext(), browser.newContext()])
+  const profiles: string[] = []
+  const newContext = () => {
+    if (info.project.name !== 'webkit-files') return browser.newContext()
+    // WebKit's ephemeral testing sessions disable OPFS; regular Safari profiles support it.
+    const profile = mkdtempSync(path.join(tmpdir(), 'iris-file-webkit-'))
+    profiles.push(profile)
+    return webkit.launchPersistentContext(profile, { ...devices['iPhone 13'], baseURL, acceptDownloads: true })
+  }
+  const contexts = await Promise.all([newContext(), newContext()])
   const logs: string[] = []
-  const bytes = Buffer.alloc(512 * 1024, 123)
+  const bytes = Buffer.alloc(mode === 'downloads after restart' ? 4 * 1024 * 1024 : 512 * 1024, 123)
   try {
     for (const context of contexts) {
       await useTestRelay(context, testRelayUrl)
-      await useDirectFileDestination(context)
+      if (mode === 'chosen destination') await useDirectFileDestination(context)
+      else await context.addInitScript(() => Object.assign(window, { showSaveFilePicker: undefined, showDirectoryPicker: undefined, __filePickerCalls: [] }))
       await context.addInitScript(seedUrl => {
         localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [seedUrl], stunServers: [] }))
         window.RTCPeerConnection = new Proxy(window.RTCPeerConnection, {
@@ -45,21 +59,28 @@ test('an invite can send files as its first content and streams to the chosen sa
     const card = b.locator('[data-testid^="direct-file-transfer-"]').first()
     await expect(card.getByRole('button', { name: 'Accept', exact: true })).toBeVisible({ timeout: 10_000 })
     expect(await b.evaluate(() => (window as unknown as { __filePickerCalls: string[] }).__filePickerCalls)).toEqual([])
+    if (mode === 'downloads after restart') seed.shape(800_000)
     await card.getByRole('button', { name: 'Accept', exact: true }).click()
+    if (mode === 'downloads after restart') {
+      await expect.poll(() => card.getByRole('progressbar').getAttribute('value').then(Number), { timeout: 40_000 }).toBeGreaterThan(1024 * 1024)
+      seed.shape(0)
+      await Promise.all([a.reload(), b.reload()])
+      await expect(card.getByRole('button', { name: 'Resume', exact: true })).toBeVisible()
+      seed.shape(Infinity)
+      await card.getByRole('button', { name: 'Resume', exact: true }).click()
+    }
     await expect(card.getByRole('status')).toHaveText('Received', { timeout: 45_000 })
-    expect(await b.evaluate(() => (window as unknown as { __filePickerCalls: string[] }).__filePickerCalls)).toEqual(['first-file.bin'])
-    const received = await b.evaluate(async () => {
-      const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('chosen-downloads')
-      const file = await (await directory.getFileHandle('first-file.bin')).getFile()
-      return { bytes: file.size, hash: Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()))) }
-    })
-    const { createHash } = await import('node:crypto')
-    expect(received).toEqual({ bytes: bytes.length, hash: [...createHash('sha256').update(bytes).digest()] })
+    expect(await b.evaluate(() => (window as unknown as { __filePickerCalls: string[] }).__filePickerCalls)).toEqual(mode === 'chosen destination' ? ['first-file.bin'] : [])
+    const download = b.waitForEvent('download')
+    await card.getByRole('button', { name: 'Download first-file.bin', exact: true }).click()
+    const { readFileSync } = await import('node:fs')
+    expect(readFileSync((await (await download).path())!).equals(bytes)).toBe(true)
     await expect(a.locator('[data-testid^="direct-file-transfer-"]').getByRole('status')).toHaveText('Sent')
-    await b.screenshot({ path: 'work/web-join/file-first-received.png' })
+    await b.screenshot({ path: info.outputPath('received.png') })
   } finally {
     await info.attach('browser-log', { body: logs.join('\n'), contentType: 'text/plain' })
     await Promise.all(contexts.map(context => context.close()))
     await seed.close()
+    for (const profile of profiles) rmSync(profile, { recursive: true, force: true })
   }
 })
