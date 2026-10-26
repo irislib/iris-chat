@@ -19,6 +19,8 @@
  */
 
 import { writeFileSync } from 'node:fs'
+import { Group, InMemoryStorageAdapter, Session, serializeSessionState, privateGroupDeliveryRumor } from 'nostr-double-ratchet'
+import { generateSecretKey, getPublicKey, getEventHash } from 'nostr-tools'
 import { test, expect, useTestRelay } from './fixtures'
 import type { Page, BrowserContext, Worker } from '@playwright/test'
 
@@ -134,6 +136,7 @@ type ObservedNotification = {
   body: string
   tag: string
   silent: boolean | null
+  data: unknown
 }
 
 // Read every active notification belonging to this SW registration. We rely
@@ -150,6 +153,7 @@ async function readAllNotifications(sw: Worker): Promise<ObservedNotification[]>
       // Some Chromium versions expose silent via the Notification instance;
       // others return null even when the option was set. We tolerate both.
       silent: typeof n.silent === 'boolean' ? n.silent : null,
+      data: n.data,
     }))
   })
 }
@@ -159,6 +163,29 @@ async function clearAllNotifications(sw: Worker) {
     const list = await self.registration.getNotifications()
     for (const n of list) n.close()
   })
+}
+
+async function replaceWorkerRows(sw: Worker, records: Record<string, unknown[]>) {
+  await sw.evaluate(async records => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('iris-chat')
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction(Object.keys(records), 'readwrite')
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error)
+        transaction.onabort = () => reject(transaction.error)
+        for (const [name, rows] of Object.entries(records)) {
+          const store = transaction.objectStore(name)
+          store.clear()
+          for (const row of rows) store.put(row)
+        }
+      })
+    } finally { database.close() }
+  }, records)
 }
 
 // Synthesize a `push` ExtendableEvent in the SW context with the provided
@@ -218,6 +245,82 @@ test.use({ channel: 'chromium' })
 
 test.describe('SW push handler', () => {
   test.setTimeout(180_000)
+
+  test('requires a private session wake before showing raw or cached group ciphertext', async ({ browser, testRelayUrl }) => {
+    const context = await browser.newContext()
+    await useTestRelay(context, testRelayUrl)
+    const page = await context.newPage()
+    try {
+      await loginAnonymously(page)
+      await context.grantPermissions(['notifications'], { origin: new URL(page.url()).origin })
+      await waitForServiceWorkerReady(page)
+      const worker = await getServiceWorker(context)
+      expect(await worker.evaluate(() => self.Notification?.permission)).toBe('granted')
+      // No foreground runtime may decrypt, cache, or suppress these notifications.
+      await page.goto('about:blank')
+      await expect.poll(() => worker.evaluate(async () =>
+        (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).length)).toBe(0)
+
+      const owner = getPublicKey(generateSecretKey()), peer = getPublicKey(generateSecretKey())
+      const device = getPublicKey(generateSecretKey())
+      const group = { id: 'private-worker-group', name: 'Private worker group', members: [owner, peer], admins: [owner], createdAt: 100 }
+      const storage = new InMemoryStorageAdapter()
+      const receiverGroup = new Group({ data: group, ourOwnerPubkey: owner, ourDevicePubkey: owner, storage })
+      const senderGroup = new Group({ data: group, ourOwnerPubkey: peer, ourDevicePubkey: device })
+      const message = { id: '', kind: 14, pubkey: peer, content: 'Only the private wake may show this preview',
+        created_at: Math.floor(Date.now() / 1000), tags: [['l', group.id]] }
+      message.id = getEventHash(message)
+      const encrypted = await senderGroup.sendEvent({ kind: 14, content: JSON.stringify(message), tags: message.tags }, {
+        sendPairwise: async (to, rumor) => { if (to === owner) await receiverGroup.handleIncomingSessionEvent(rumor, peer, device) },
+        publishOuter: async () => {},
+      })
+      const senderKey = generateSecretKey(), receiverKey = generateSecretKey(), shared = generateSecretKey()
+      const sender = Session.init(getPublicKey(receiverKey), senderKey, true, shared)
+      const receiver = Session.init(getPublicKey(senderKey), receiverKey, false, shared)
+      const rows: Array<{ key: string; value: unknown }> = [
+        { key: 'v1/device-manager/owner-pubkey', value: owner },
+        { key: `v1/user/${peer}`, value: { publicKey: peer, devices: [{ deviceId: device,
+          activeSession: { name: 'private-worker-wake', state: serializeSessionState(receiver.state) },
+          inactiveSessions: [], createdAt: 100 }] } },
+      ]
+      for (const key of await storage.list()) rows.push({ key, value: await storage.get(key) })
+      await replaceWorkerRows(worker, { groups: [group], sessionManager: rows, sessions: [], messages: [],
+        processedEvents: [], pendingPushEvents: [] })
+      await clearAllNotifications(worker)
+      const push = (event: unknown) => dispatchPush(worker, JSON.parse(JSON.stringify({ event })))
+
+      // Start with an empty notification list: deduplication cannot hide acceptance.
+      await push(encrypted.outer)
+      expect(await readAllNotifications(worker)).toEqual([])
+      await replaceWorkerRows(worker, { processedEvents: [{ id: encrypted.outer.id, chatId: `group:${group.id}`,
+        kind: 14, content: message.content, messageId: message.id, author: peer,
+        createdAtSecs: message.created_at, timestamp: Date.now() }] })
+      await push(encrypted.outer)
+      expect(await readAllNotifications(worker)).toEqual([])
+
+      // A private session alone cannot turn nested ciphertext into a group wake.
+      const { kind, pubkey, created_at, tags, content } = encrypted.outer
+      await push(sender.sendEvent({ kind, pubkey, created_at, tags, content }).event)
+      expect(await readAllNotifications(worker)).toEqual([])
+
+      // An invalid envelope cannot borrow a trusted cached direct-message ID.
+      const direct = sender.sendEvent({ kind: 14, pubkey: peer, content: 'A cached direct preview', tags: [] }).event
+      await replaceWorkerRows(worker, { processedEvents: [{ id: direct.id, chatId: peer, kind: 14,
+        content: 'A cached direct preview', timestamp: Date.now() }] })
+      await push({ ...direct, sig: '0'.repeat(128) })
+      expect(await readAllNotifications(worker)).toEqual([])
+
+      // Remove the preview cache so the legitimate control must decrypt both layers.
+      await replaceWorkerRows(worker, { processedEvents: [] })
+      const wake = sender.sendEvent(privateGroupDeliveryRumor(encrypted.outer, group.id, device, owner)).event
+      await push(wake)
+      await expect.poll(() => readAllNotifications(worker)).toEqual([expect.objectContaining({
+        body: message.content, tag: `dm-group:${group.id}`,
+        data: { ownerPubkey: owner, chatId: `group:${group.id}`, messageId: message.id, createdAtSecs: message.created_at },
+      })])
+      await clearAllNotifications(worker)
+    } finally { await context.close() }
+  })
 
   test('decrypts inner rumors and shows kind-specific notifications', async ({ browser, testRelay, testRelayUrl }, testInfo) => {
     const diagnostics: string[] = []
