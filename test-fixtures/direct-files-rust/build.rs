@@ -14,31 +14,9 @@ fn main() {
             .canonicalize()
             .expect("Native direct-file source");
         println!("cargo:rerun-if-changed={}", path.display());
-        if name == "direct_file_tcp" {
-            let source = fs::read_to_string(&path).unwrap();
-            let source = ["files", "wire"].iter().fold(source, |source, child| {
-                source.replace(
-                    &format!("mod {child};"),
-                    &format!(
-                        "#[path = {:?}] mod {child};",
-                        core.join(format!("src/core/direct_file_tcp/{child}.rs"))
-                    ),
-                )
-            });
-            let copied = out.join("direct_file_tcp.rs");
-            fs::write(&copied, source).unwrap();
-            modules.push_str(&format!("#[path = {:?}] mod {name};\n", copied));
-        } else {
-            modules.push_str(&format!("#[path = {:?}] mod {name};\n", path));
-        }
+        modules.push_str(&format!("#[path = {:?}] mod {name};\n", path));
     }
-    for file in [
-        "src/core/direct_file_tcp/files.rs",
-        "src/core/direct_file_tcp/wire.rs",
-        "src/direct_files.rs",
-    ] {
-        println!("cargo:rerun-if-changed={}", core.join(file).display());
-    }
+
     // Use the production validators and selected-destination implementation.
     // Only the foreign-language bindings are omitted from this standalone driver.
     for name in ["direct_files", "direct_file_destination"] {

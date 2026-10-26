@@ -6,9 +6,8 @@ publish = false
 
 [dependencies]
 base64 = "0.22.1"
-nvpn-fips-core = { version = "=0.4.89", features = ["webrtc-transport", "host-ble-transport"] }
-nvpn-fips-tcp = { version = "=0.2.4" }
-nvpn-fips-tcp-endpoint = { version = "=0.2.22" }
+nvpn-fips-core = { version = "=0.4.110", features = ["webrtc-transport", "host-ble-transport"] }
+nvpn-fips-file-transfer = { path = "../../../fips-tcp/rust/fips-file-transfer" }
 flume = "0.11"
 nostr = { version = "0.44.7", default-features = false, features = ["std", "nip44"] }
 rand = "0.8"
