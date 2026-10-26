@@ -51,6 +51,7 @@ vi.mock('./directFileStorage', () => ({ DirectFileStorage: class {
   loadSources = async (id: string) => state.saved.get(`sources/${id}`)
   forgetSources = async (id: string) => { state.saved.delete(`sources/${id}`) }
   discard = async () => {}
+  retainedBytes = async () => 0
   dispose = () => {}
 } }))
 

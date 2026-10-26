@@ -137,9 +137,12 @@ async function ingest(runtime: Runtime, chat: ChatSession, wire: string, isMine:
       canDownload: status === 'completed' && !isSender &&
         await runtime.storage.getFile(offer.id, index).then(blob => blob.size === file.sizeBytes, () => false),
     })))
+    const transferredBytes = status === 'paused' && !isSender && offer.protocol_version === 2
+      ? await runtime.storage.retainedBytes(offer.id, offer.files)
+      : previous?.wire === wire ? previous.transferredBytes : 0
     if (active !== runtime) return
     publish({ id: offer.id, wire, chatId: chat.id, offer, files, isSender, status, blobs, needsSource,
-      transferredBytes: previous?.wire === wire ? previous.transferredBytes : 0,
+      transferredBytes,
       totalBytes: offer.files.reduce((sum, file) => sum + file.size_bytes, 0),
       ...(previous?.wire === wire && previous.error ? { error: previous.error } : {}),
     })

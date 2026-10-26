@@ -61,6 +61,19 @@ export class DirectFileStorage {
     return directory
   }
 
+  async retainedBytes(id: string, files: { size_bytes: number }[]): Promise<number> {
+    const directory = await this.directory(id, false).catch(() => undefined)
+    if (!directory) return 0
+    let total = 0
+    for (const [index, expected] of files.entries()) {
+      const size = await directory.getFileHandle(String(index)).then(handle => handle.getFile()).then(file => file.size, () => 0)
+      if (size > expected.size_bytes) break
+      total += size
+      if (size < expected.size_bytes) break
+    }
+    return total
+  }
+
   async discard(id: string): Promise<void> {
     const directory = await this.directory(id, false).catch(() => undefined)
     if (!directory) return

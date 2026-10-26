@@ -66,6 +66,7 @@ for (const mode of ['chosen destination', 'downloads after restart']) test(`firs
       seed.shape(0)
       await Promise.all([a.reload(), b.reload()])
       await expect(card.getByRole('button', { name: 'Resume', exact: true })).toBeVisible()
+      await expect.poll(() => card.getByRole('progressbar').getAttribute('value').then(Number)).toBeGreaterThanOrEqual(1024 * 1024)
       await b.screenshot({ path: info.outputPath('paused.png') })
       seed.shape(Infinity)
       await card.getByRole('button', { name: 'Resume', exact: true }).click()

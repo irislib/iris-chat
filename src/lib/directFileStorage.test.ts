@@ -92,6 +92,7 @@ it('checkpoints privately and changes the chosen file only after verification', 
 it('restores the durable prefix after a new storage instance without a new picker', async () => {
   const sink = await storage().createFile(id, 0)
   await sink.write(new Uint8Array([1, 2, 3])); await sink.suspend!()
+  expect(await storage().retainedBytes(id, [{ size_bytes: 5 }])).toBe(3)
   const resumed = await storage().createFile(id, 0)
   expect(await bytes(resumed.retained!)).toEqual([1, 2, 3])
   await resumed.write(new Uint8Array([4, 5])); await resumed.finish()
