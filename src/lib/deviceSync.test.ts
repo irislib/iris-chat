@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto'
 vi.mock('./authorizationSync', async (importOriginal: <T>() => Promise<T>) => ({ ...await importOriginal<typeof import('./authorizationSync')>(), authorizationEvents: async function* () {}, saveAuthorizationEvent: async () => true }))
 vi.mock('./privateStateView', () => ({ refreshPrivateStateView: async () => {} }))
 vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => () => {} }, privateStateRecords: async function* () {}, privateHistoryAllowed: async () => true }))
@@ -274,7 +275,7 @@ describe('device sync', () => {
   it('uses shared STUN-assisted FIPS defaults with public message servers configured', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
+      await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       expect(fips.transports).toHaveLength(1)
       expect(fips.transports[0]).toMatchObject({
         relays: ['wss://relay.example'],
@@ -867,7 +868,7 @@ describe('device sync', () => {
   it('continues PageEnd and ResyncRequired control packets without applying a snapshot', async () => {
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick += 1) await Promise.resolve()
+      await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       const transport = tcp.instances.at(-1)!
       const source = `02${device}`
       transport.sendFirst.mockClear()
@@ -921,7 +922,7 @@ describe('device sync', () => {
     groups.set(new Map())
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
+      await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       const transport = tcp.instances.at(-1)!, source = `02${device}`
       await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, ...(type === 'pageEnd' ? { type, next: null } : { type }), rosterAt: 100,
         recordReconcile: 1, privateFacts: 2, privateEvents: 2, nameApprovals: 2, readStates: 2 }))
@@ -945,7 +946,7 @@ describe('device sync', () => {
     groups.set(new Map())
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
+      await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       const transport = tcp.instances.at(-1)!, source = `02${device}`, session = '1'.repeat(32)
       const request = encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 100, recordReconcile: 1 })
       await transport.onRecord(source, request)
@@ -970,7 +971,7 @@ describe('device sync', () => {
     groups.set(new Map())
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
+      await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       const transport = tcp.instances.at(-1)!, source = `02${device}`, linkId = '8'.repeat(64)
       await saveDeviceHistoryPair(owner, owner, { peer: device, linkId, linkAt: 100, since: 0, role: 'outbound', complete: false })
       await transport.onRecord(source, encodeDeviceSyncPacket({ v: 1, type: 'request', rosterAt: 0, recordReconcile: 1 }))
@@ -989,7 +990,7 @@ describe('device sync', () => {
     chats.set(new Map())
     startDeviceSync(owner, new Uint8Array(32))
     try {
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick++) await Promise.resolve()
+      await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       const transport = tcp.instances.at(-1)!, source = `02${device}`
       await saveDeviceHistoryPair(owner, owner, { peer: device, linkId: '7'.repeat(64), linkAt: 100, since: 0, role: 'outbound', complete: false })
       await transport.onRecord(source, encodeDeviceSyncPacket({ ...snapshot([]), rosterAt: 0, messages: [
@@ -1004,9 +1005,7 @@ describe('device sync', () => {
     vi.useFakeTimers()
     try {
       startDeviceSync(owner, new Uint8Array(32))
-      for (let tick = 0; tick < 60 && tcp.instances.length === 0; tick += 1) {
-        await Promise.resolve()
-      }
+      await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       const node = fips.nodes.at(-1)
       expect(node).toBeDefined()
       node?.emit('peer', {

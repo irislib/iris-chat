@@ -19,8 +19,8 @@ const releases = {
     "integrity": "sha512-iBPJLtnunUn+Y2vjZ5D8eTKJHjznDX3DZs7x5oXzx9kc5u9W71l6mHg/cQiQr5LKKU+FtjiPLGAPLW9iz1S41w=="
   },
   "@fips/transport-webrtc": {
-    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.56/fips-transport-webrtc-0.0.55.tgz",
-    "integrity": "sha512-Vgn4xsjfkhvvqKQVTYdBeAVHPb8SYMHlxYH7vP43FSIurnIW0vhpsgXwznodH5QdAiJG7BOI4PoM85Op9gVFBA=="
+    "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.57/fips-transport-webrtc-0.0.56.tgz",
+    "integrity": "sha512-rxRtF4TLPuRicue+GeuG/jsIJXFUmOYRLQDlgULJYMPFcf1JO1dD1B7RgrjT+bF6ssGrNoNP+NUd77lKnTli2Q=="
   },
   "@fips/transport-websocket": {
     "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.56/fips-transport-websocket-0.0.10.tgz",
@@ -31,8 +31,8 @@ const releases = {
     "integrity": "sha512-OLd2ARbYKt9s7wipMX58OhJwZQ6XwIdkuJ+Zfp+NNz3rjXDV8kYl67S9HlrXOj5eSsy5SbN/JuKS8QuwXzEiRQ=="
   },
   "nostr-pubsub": {
-    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.19/nostr-pubsub-0.5.19.tgz",
-    "integrity": "sha512-Usg0Ia7rsyRkH3LSN3g5k1oKoo1+PiBIA/hKiQp18GIzokmHY47WDw4Vf3YotOg2/WtzMqGzwqqSmaJcXVanmw=="
+    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.20/nostr-pubsub-0.5.20.tgz",
+    "integrity": "sha512-1Cwdk2LR4oCtxiOR1t5+KmdrzDUKrqZfbIZzpXrOR0g+Ex3DCZ33him/qPWU/iYTChPl9eUgi1ZdhL0KdQWZWQ=="
   },
   "nostr-double-ratchet": {
     "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.183.tgz",
@@ -47,8 +47,8 @@ const releases = {
     "integrity": "sha512-U9Og1k/Nf2z13mqi87SYLziBHLb+xMLSyGIAkoe80SOYmfwPue+DKURs2AjAXb9t15vSVnZ9BlBZwR2b+vfiEQ=="
   },
   "@hashtree/fips-transport": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-fips-transport-0.4.22.tgz",
-    "integrity": "sha512-tSqjcaxdpz8gBuay+JWpo4WvprnV7qlaGgKr0igwalarHVT9tDDF9kpHOgDiHFq0cqiFVwCZ+bDtQt7U8rfvnw=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.22/hashtree-fips-transport-0.4.23.tgz",
+    "integrity": "sha512-QoZ/HaIg3irXpAPR0K2p8IZc05ico0jrZxTYVth2yWPIj5ewCw4ZA8Xd2Cc0b5a5KJpxg5ktNsBfkdYt2Hho0Q=="
   },
   "@hashtree/nostr-pubsub": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.21/hashtree-nostr-pubsub-0.1.8.tgz",

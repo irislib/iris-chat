@@ -28,6 +28,7 @@ import {
   toHex,
   type PeerEvent,
 } from '@fips/core'
+import { openPeerAnnouncementStore } from './peerAnnouncementStore'
 import { WebRtcTransport } from '@fips/transport-webrtc'
 import { WebSocketTransport } from '@fips/transport-websocket'
 import { callConnectionSettings } from './callConnectionSettings'
@@ -122,6 +123,7 @@ export interface DeviceSyncMergeState {
   messageIds: Set<string>
 }
 
+let activeAnnouncements: Awaited<ReturnType<typeof openPeerAnnouncementStore>> | null = null
 let activeNode: FipsNode | null = null
 let activeTcp: DeviceSyncTcp | null = null
 let activeHistory: DeviceHistorySync | null = null
@@ -808,6 +810,8 @@ function runtimeKey(ownerPubkey: string, state: DeviceState): string {
 async function stopActiveNode(): Promise<void> {
   const node = activeNode
   const tcp = activeTcp
+  const announcements = activeAnnouncements
+  activeAnnouncements = null
   activeNode = null
   activeTcp = null
   activeHistory?.reset()
@@ -822,6 +826,7 @@ async function stopActiveNode(): Promise<void> {
   await deactivateAttachmentPeers()
   await tcp?.dispose().catch(() => undefined)
   await node?.stop().catch(() => undefined)
+  await announcements?.close()
 }
 
 function reconcileRuntime(ownerPubkey: string, secretKey: Uint8Array, state: DeviceState): Promise<void> {
@@ -860,162 +865,175 @@ async function updateRuntime(
   }
 
   const relays = Array.from(relayStore.getState().relays)
-  if (relays.length === 0 || run !== generation) return
-  const transport = new WebRtcTransport({
-    relays,
-    // STUN helps direct FIPS links cross NAT; local/routed paths remain available.
-    stunServers: get(callConnectionSettings).stunServers,
-    advertiseOnNostr: true,
-    autoConnect: true,
-    preferredAutoConnectPeers: state.registeredDevices
-      .filter(device => device.identityPubkey !== state.identityPubkey)
-      .flatMap(device => [`02${device.identityPubkey}`, `03${device.identityPubkey}`]),
-    discoveryApp: DEVICE_SYNC_SCOPE,
-    allowIncomingPeer: allowedFilePeer,
-    maxConnections: Math.max(16, state.registeredDevices.length + 1),
-    maxAutoConnections: 16,
-    ordered: false,
-    maxRetransmits: 0,
-  })
-  // Match Drive's admission on both sides of the shared WebRTC transport.
-  const connect = transport.connect.bind(transport)
-  transport.connect = async address => {
-    if (!allowedFilePeer(address.addr)) {
-      throw new Error('This device is not an accepted contact')
+  if (run !== generation) return
+  const announcements = await openPeerAnnouncementStore(ownerPubkey, state.identityPubkey,
+    DEVICE_SYNC_SCOPE, get(nostrClient).runtime)
+  if (run !== generation) { await announcements.close(); return }
+  let adoptedAnnouncements = false
+  try {
+    const transport = new WebRtcTransport({
+      relays,
+      discoveryProvider: announcements.discovery,
+      // STUN helps direct FIPS links cross NAT; local/routed paths remain available.
+      stunServers: get(callConnectionSettings).stunServers,
+      advertiseOnNostr: true,
+      autoConnect: true,
+      preferredAutoConnectPeers: state.registeredDevices
+        .filter(device => device.identityPubkey !== state.identityPubkey)
+        .flatMap(device => [`02${device.identityPubkey}`, `03${device.identityPubkey}`]),
+      discoveryApp: DEVICE_SYNC_SCOPE,
+      allowIncomingPeer: allowedFilePeer,
+      maxConnections: Math.max(16, state.registeredDevices.length + 1),
+      maxAutoConnections: 16,
+      ordered: false,
+      maxRetransmits: 0,
+    })
+    // Match Drive's admission on both sides of the shared WebRTC transport.
+    const connect = transport.connect.bind(transport)
+    transport.connect = async address => {
+      if (!allowedFilePeer(address.addr)) {
+        throw new Error('This device is not an accepted contact')
+      }
+      await connect(address)
     }
-    await connect(address)
-  }
-  const seeds = get(callConnectionSettings).servers
-  const transports = seeds.length ? [new WebSocketTransport({ seedUrls: seeds }), transport] : [transport]
-  await loadDeviceHistoryPairs(ownerPubkey, state.identityPubkey!)
-  await closeRevokedDeviceHistoryPairs(ownerPubkey, state.identityPubkey!, get(devices).registeredDevices.map(device => device.identityPubkey))
-  const node = new FipsNode({ identity, transports, routingMode: 'reply_learned' })
-  const peers = new Set<string>()
-  const callPeers = new Set<string>()
-  let tcp: DeviceSyncTcp
-  const allowsLegacy = (peer: string, since: number, until: number, linkId?: string) => {
-    const pair = currentHistoryPair(ownerPubkey, peer)
-    return !!pair && !pair.complete && pair.since === 0 && since === 0 && until === pair.linkAt - 1 && linkId === pair.linkId
-  }
-  const history = new DeviceHistorySync({
-    ...createDeviceSyncRecordAdapter({
-      owner: ownerPubkey,
-      snapshots: () => buildDeviceSyncSnapshots(snapshotSource(0, ownerPubkey), DEVICE_SYNC_MAX_PACKET_BYTES, false),
-      messages: (since, until) => inventoryMessages(ownerPubkey, since, until),
-      cachedAuthorization: async () => getNdrRuntime().getKnownAppKeysEvents?.() ?? [],
-      cachedProfiles: async contacts => (await get(nostrClient).runtime.query([{ kinds: [0], authors: contacts, limit: contacts.length }], { cache: 'cache-only' })).events,
-      allowsLegacy,
-      mutationTargetSince: peer => currentHistoryPair(ownerPubkey, peer)?.since === 0 ? 0 : regularHistorySince(peer),
-      applySnapshot: async (packet, since, authorized, legacy) => {
-        const count = await applyDeviceSyncSnapshot(packet, ownerPubkey, since, authorized, legacy)
-        for (const message of packet.messages) if (authorized() && !await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
-        return count
+    const seeds = get(callConnectionSettings).servers
+    const transports = seeds.length ? [new WebSocketTransport({ seedUrls: seeds }), transport] : [transport]
+    await loadDeviceHistoryPairs(ownerPubkey, state.identityPubkey!)
+    await closeRevokedDeviceHistoryPairs(ownerPubkey, state.identityPubkey!, get(devices).registeredDevices.map(device => device.identityPubkey))
+    const node = new FipsNode({ identity, transports, routingMode: 'reply_learned' })
+    const peers = new Set<string>()
+    const callPeers = new Set<string>()
+    let tcp: DeviceSyncTcp
+    const allowsLegacy = (peer: string, since: number, until: number, linkId?: string) => {
+      const pair = currentHistoryPair(ownerPubkey, peer)
+      return !!pair && !pair.complete && pair.since === 0 && since === 0 && until === pair.linkAt - 1 && linkId === pair.linkId
+    }
+    const history = new DeviceHistorySync({
+      ...createDeviceSyncRecordAdapter({
+        owner: ownerPubkey,
+        snapshots: () => buildDeviceSyncSnapshots(snapshotSource(0, ownerPubkey), DEVICE_SYNC_MAX_PACKET_BYTES, false),
+        messages: (since, until) => inventoryMessages(ownerPubkey, since, until),
+        cachedAuthorization: async () => getNdrRuntime().getKnownAppKeysEvents?.() ?? [],
+        cachedProfiles: async contacts => (await get(nostrClient).runtime.query([{ kinds: [0], authors: contacts, limit: contacts.length }], { cache: 'cache-only' })).events,
+        allowsLegacy,
+        mutationTargetSince: peer => currentHistoryPair(ownerPubkey, peer)?.since === 0 ? 0 : regularHistorySince(peer),
+        applySnapshot: async (packet, since, authorized, legacy) => {
+          const count = await applyDeviceSyncSnapshot(packet, ownerPubkey, since, authorized, legacy)
+          for (const message of packet.messages) if (authorized() && !await isHistoryMessageSettled(message)) throw new Error('History message was not saved')
+          return count
+        },
+      }),
+      authorized: peer => run === generation && isAuthorizedDeviceSyncSource(peer, get(devices)),
+      floor: peer => servingHistorySince(ownerPubkey, peer),
+      allowsWindow: (peer, since, until, linkId) => {
+        if (since >= regularHistorySince(peer)) return true
+        const pair = currentHistoryPair(ownerPubkey, peer)
+        return !!pair && pair.role === 'outbound' && !pair.complete && pair.since === 0 && since === 0 && until === pair.linkAt - 1 && linkId === pair.linkId
       },
-    }),
-    authorized: peer => run === generation && isAuthorizedDeviceSyncSource(peer, get(devices)),
-    floor: peer => servingHistorySince(ownerPubkey, peer),
-    allowsWindow: (peer, since, until, linkId) => {
-      if (since >= regularHistorySince(peer)) return true
-      const pair = currentHistoryPair(ownerPubkey, peer)
-      return !!pair && pair.role === 'outbound' && !pair.complete && pair.since === 0 && since === 0 && until === pair.linkAt - 1 && linkId === pair.linkId
-    },
-    progress: (peer, since, imported, total) => {
-      const pair = currentHistoryPair(ownerPubkey, peer)
-      if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.set({ phase: total === undefined && imported === 0 ? 'discovering' : 'transferring', imported, ...(total !== undefined && { total }) })
-    },
-    complete: async (peer, since, until, withheld) => {
-      const pair = currentHistoryPair(ownerPubkey, peer)
-      if (since !== 0 || !pair || pair.role !== 'inbound' || pair.complete || until !== pair.linkAt - 1) return
-      if (withheld) { void history.start(peer, 0, pair.linkAt - 1, pair.linkId); return }
-      await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, complete: true })
-      await tcp.send(peer, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
-      void history.start(peer, regularHistorySince(peer))
-    },
-    unavailable: (peer, since) => {
-      const pair = currentHistoryPair(ownerPubkey, peer)
-      if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.update(progress => ({ phase: 'waiting', imported: progress?.imported ?? 0 }))
-    },
-    send: (peer, packet) => tcp.send(peer, encodeDeviceSyncPacket(packet)),
-  })
-  tcp = new DeviceSyncTcp({
-    endpoint: node,
-    localPeer: state.identityPubkey,
-    port: DEVICE_SYNC_PORT,
-    maxRecordBytes: DEVICE_SYNC_MAX_PACKET_BYTES,
-    onRecord: (source, payload) => handlePacket(source, payload, ownerPubkey, tcp, history),
-    onConnected: (peer) => {
-      history.reset(peer)
-      const request = historyRequest(ownerPubkey)
-      void tcp.sendFirst(peer, encodeDeviceSyncPacket(request))
-        .catch((error) => console.warn('[deviceSync] Request failed:', error))
-    },
-    onError: (error) => console.warn('[deviceSync] TCP error:', error),
-  })
-  node.on('peer', (value) => {
-    const peer = value as PeerEvent
-    if (peer.state === 'disconnected') callPeers.delete(peer.remotePubkey)
-    else callPeers.add(peer.remotePubkey)
-  })
-  node.on('error', (error) => console.warn('[deviceSync] FIPS error:', error))
-  attachCalls(node, () => Array.from(callPeers), async owner => {
-    await Promise.allSettled(knownCallDevices(owner).map(async device => {
+      progress: (peer, since, imported, total) => {
+        const pair = currentHistoryPair(ownerPubkey, peer)
+        if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.set({ phase: total === undefined && imported === 0 ? 'discovering' : 'transferring', imported, ...(total !== undefined && { total }) })
+      },
+      complete: async (peer, since, until, withheld) => {
+        const pair = currentHistoryPair(ownerPubkey, peer)
+        if (since !== 0 || !pair || pair.role !== 'inbound' || pair.complete || until !== pair.linkAt - 1) return
+        if (withheld) { void history.start(peer, 0, pair.linkAt - 1, pair.linkId); return }
+        await saveDeviceHistoryPair(ownerPubkey, get(devices).identityPubkey!, { ...pair, complete: true })
+        await tcp.send(peer, encodeDeviceSyncPacket({ v: 1, type: 'historyComplete', linkAt: pair.linkAt, linkId: pair.linkId }))
+        void history.start(peer, regularHistorySince(peer))
+      },
+      unavailable: (peer, since) => {
+        const pair = currentHistoryPair(ownerPubkey, peer)
+        if (since === 0 && pair?.role === 'inbound' && !pair.complete) deviceHistoryProgress.update(progress => ({ phase: 'waiting', imported: progress?.imported ?? 0 }))
+      },
+      send: (peer, packet) => tcp.send(peer, encodeDeviceSyncPacket(packet)),
+    })
+    tcp = new DeviceSyncTcp({
+      endpoint: node,
+      localPeer: state.identityPubkey,
+      port: DEVICE_SYNC_PORT,
+      maxRecordBytes: DEVICE_SYNC_MAX_PACKET_BYTES,
+      onRecord: (source, payload) => handlePacket(source, payload, ownerPubkey, tcp, history),
+      onConnected: (peer) => {
+        history.reset(peer)
+        const request = historyRequest(ownerPubkey)
+        void tcp.sendFirst(peer, encodeDeviceSyncPacket(request))
+          .catch((error) => console.warn('[deviceSync] Request failed:', error))
+      },
+      onError: (error) => console.warn('[deviceSync] TCP error:', error),
+    })
+    node.on('peer', (value) => {
+      const peer = value as PeerEvent
+      if (peer.state === 'disconnected') callPeers.delete(peer.remotePubkey)
+      else callPeers.add(peer.remotePubkey)
+    })
+    node.on('error', (error) => console.warn('[deviceSync] FIPS error:', error))
+    attachCalls(node, () => Array.from(callPeers), async owner => {
+      await Promise.allSettled(knownCallDevices(owner).map(async device => {
+        const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
+        if (peer) await node.connect(peer.remoteAddr)
+      }))
+    }, async call => {
+      const { preparePeerNdrRuntime } = await import('./privateChats')
+      const runtime = await preparePeerNdrRuntime(call.owner)
+      await sendCallWakeups(ownerPubkey, call.peers, call.id, call.video,
+        event => new AppEvent(get(nostrClient), event).publish(),
+        rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
+        () => run === generation && getPubkey() === ownerPubkey)
+    })
+    const fileTransport = prepareAttachmentPeers(node, () => [...new Set([
+      ...callPeers,
+      ...groupFileDevices(),
+      ...get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
+      ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
+    ])].filter(peer => peer !== toHex(identity.publicKey) &&
+      allowedFilePeer(peer)), peer => run === generation && getPubkey() === ownerPubkey && allowedFilePeer(peer))
+    try {
+      await node.start()
+    } catch (error) {
+      await fileTransport.dispose()
+      if (run === generation) detachCalls()
+      await tcp.dispose().catch(() => undefined)
+      await node.stop().catch(() => undefined)
+      await announcements.close()
+      throw error
+    }
+    if (run !== generation) {
+      await fileTransport.dispose()
+      await tcp.dispose()
+      await node.stop()
+      await announcements.close()
+      return
+    }
+    // Authorize TCP by the signed device list, not physical adjacency. FIPS may
+    // route through a seed or keep a stream alive after changing its next hop.
+    for (const device of state.registeredDevices) {
+      if (device.identityPubkey === state.identityPubkey) continue
+      const peer = normalizeDeviceSyncPeer(`02${device.identityPubkey}`)
+      peers.add(peer)
+      tcp.setPeer(peer, true)
+    }
+    activeAnnouncements = announcements
+    adoptedAnnouncements = true
+    activeNode = node
+    activeTcp = tcp
+    activeHistory = history
+    activeKey = key
+    activeOwnerPubkey = ownerPubkey
+    activePeers = peers
+    await attachDirectFiles(node, ownerPubkey, secretKey, async device => {
       const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
       if (peer) await node.connect(peer.remoteAddr)
-    }))
-  }, async call => {
-    const { preparePeerNdrRuntime } = await import('./privateChats')
-    const runtime = await preparePeerNdrRuntime(call.owner)
-    await sendCallWakeups(ownerPubkey, call.peers, call.id, call.video,
-      event => new AppEvent(get(nostrClient), event).publish(),
-      rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
-      () => run === generation && getPubkey() === ownerPubkey)
-  })
-  const fileTransport = prepareAttachmentPeers(node, () => [...new Set([
-    ...callPeers,
-    ...groupFileDevices(),
-    ...get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
-    ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
-  ])].filter(peer => peer !== toHex(identity.publicKey) &&
-    allowedFilePeer(peer)), peer => run === generation && getPubkey() === ownerPubkey && allowedFilePeer(peer))
-  try {
-    await node.start()
-  } catch (error) {
-    await fileTransport.dispose()
-    if (run === generation) detachCalls()
-    await tcp.dispose().catch(() => undefined)
-    await node.stop().catch(() => undefined)
-    throw error
+    })
+    if (run !== generation) { await fileTransport.dispose(); return }
+    // Message synchronization remains restricted to this account's registered devices.
+    await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers).filter(peer =>
+      run === generation && getPubkey() === ownerPubkey && isAuthorizedDeviceSyncSource(peer, get(devices))), get(nostrClient).runtime, announcements.publicReader)
+    if (run !== generation) { await fileTransport.dispose(); return }
+    fileTransport.activate()
+  } finally {
+    if (!adoptedAnnouncements) await announcements.close()
   }
-  if (run !== generation) {
-    await fileTransport.dispose()
-    await tcp.dispose()
-    await node.stop()
-    return
-  }
-  // Authorize TCP by the signed device list, not physical adjacency. FIPS may
-  // route through a seed or keep a stream alive after changing its next hop.
-  for (const device of state.registeredDevices) {
-    if (device.identityPubkey === state.identityPubkey) continue
-    const peer = normalizeDeviceSyncPeer(`02${device.identityPubkey}`)
-    peers.add(peer)
-    tcp.setPeer(peer, true)
-  }
-  activeNode = node
-  activeTcp = tcp
-  activeHistory = history
-  activeKey = key
-  activeOwnerPubkey = ownerPubkey
-  activePeers = peers
-  await attachDirectFiles(node, ownerPubkey, secretKey, async device => {
-    const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
-    if (peer) await node.connect(peer.remoteAddr)
-  })
-  if (run !== generation) { await fileTransport.dispose(); return }
-  // Message synchronization remains restricted to this account's registered devices.
-  await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers).filter(peer =>
-    run === generation && getPubkey() === ownerPubkey && isAuthorizedDeviceSyncSource(peer, get(devices))), get(nostrClient).runtime)
-  if (run !== generation) { await fileTransport.dispose(); return }
-  fileTransport.activate()
 }
 
 export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): void {
