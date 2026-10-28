@@ -6,6 +6,7 @@ import type { Page } from '@playwright/test'
 
 async function openSigner(page: Page) {
   await page.goto('/')
+  await page.getByRole('button', { name: 'Already have an account?' }).click()
   await page.getByRole('button', { name: 'Link this device' }).click()
   const code = page.locator('button[title^="nostrconnect://"]')
   await expect(code).toBeVisible()

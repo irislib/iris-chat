@@ -48,6 +48,7 @@ try {
   const continueInBrowser = page.getByRole('button', { name: 'Continue in browser', exact: true })
   await expect(continueInBrowser).toBeVisible({ timeout: 15_000 })
   await continueInBrowser.click()
+  await page.getByRole('button', { name: 'Already have an account?' }).click()
   await page.getByRole('button', { name: 'Link this device', exact: true }).click()
   const code = page.locator('button[title^="nostrconnect://"]')
   await expect(code).toBeVisible()

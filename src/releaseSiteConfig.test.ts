@@ -52,6 +52,7 @@ describe('release site config', () => {
       'exec',
       'playwright',
       'test',
+      'e2e/private-key-login.spec.ts',
       'e2e/nip07.spec.ts',
       'e2e/contact-memory.spec.ts',
       'e2e/private-contact-sync.spec.ts',

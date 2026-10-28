@@ -38,6 +38,9 @@ test.describe('NIP-07 Login', () => {
 
     await page.goto('/')
 
+    await expect(page.getByRole('button', { name: 'Login with Extension' })).toBeHidden()
+    await page.getByRole('button', { name: 'Already have an account?' }).click()
+
     // Should show NIP-07 login button
     const nip07Button = page.locator('button:has-text("Login with Extension")')
     await expect(nip07Button).toBeVisible()
@@ -56,6 +59,7 @@ test.describe('NIP-07 Login', () => {
     await page.goto('/')
 
     // Login with NIP-07
+    await page.getByRole('button', { name: 'Already have an account?' }).click()
     await page.click('button:has-text("Login with Extension")')
     await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 5000 })
 
@@ -96,6 +100,7 @@ test.describe('NIP-07 Login', () => {
     await page2.goto('/')
 
     // Login with NIP-07
+    await page2.getByRole('button', { name: 'Already have an account?' }).click()
     await page2.click('button:has-text("Login with Extension")')
     await expect(page2.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 5000 })
 
@@ -137,6 +142,7 @@ test.describe('NIP-07 Login', () => {
     await page.goto('/')
 
     // Login with NIP-07
+    await page.getByRole('button', { name: 'Already have an account?' }).click()
     await page.click('button:has-text("Login with Extension")')
     await expect(page.getByRole('button', { name: 'New Chat' })).toBeVisible({ timeout: 5000 })
 

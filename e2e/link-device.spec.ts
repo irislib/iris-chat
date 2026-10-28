@@ -39,6 +39,7 @@ async function loginWithStoredKey(page: Page) {
 
 async function openLinkThisDevice(page: Page): Promise<string> {
   await page.goto('/')
+  await page.getByRole('button', { name: 'Already have an account?' }).click()
   await page.getByRole('button', { name: 'Link this device' }).click()
   await expect(page.getByRole('heading', { name: 'Link this device' })).toBeVisible({
     timeout: 10_000,
