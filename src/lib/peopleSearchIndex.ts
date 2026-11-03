@@ -1,4 +1,4 @@
-import { HashTree, LinkType, fromHex, nhashDecode, toHex, type CID, type Store, type TreeEntry } from '@hashtree/core'
+import { HashTree, LinkType, fromHex, objectKeyFromHex, nhashDecode, toHex, type CID, type Store, type TreeEntry } from '@hashtree/core'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { nip19, verifyEvent, type Event } from 'nostr-tools'
 import type { PeopleSubscribe } from './messagingPeople'
@@ -93,9 +93,9 @@ function rootFromEvent(value: unknown, owner: string): CID | undefined {
     const legacy = tag('hash') ? {} : JSON.parse(event.content)
     const hash = tag('hash') ?? legacy.hash
     const key = tag('key') ?? legacy.key
-    if (!HEX_KEY.test(hash) || (key !== undefined && !HEX_KEY.test(key)) ||
+    if (!HEX_KEY.test(hash) ||
         (legacy.visibility && legacy.visibility !== 'public')) return
-    return { hash: fromHex(hash), ...(key ? { key: fromHex(key) } : {}) }
+    return { hash: fromHex(hash), ...(key !== undefined ? { key: objectKeyFromHex(key) } : {}) }
   } catch { return }
 }
 

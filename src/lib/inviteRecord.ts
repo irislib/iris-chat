@@ -1,4 +1,4 @@
-import { decryptChk, encryptChk, sha256, nhashEncode, nhashDecode } from '@hashtree/core'
+import { decryptObject, encryptObject, sha256, nhashEncode, nhashDecode } from '@hashtree/core'
 
 // A private hashtree file consisting of one CHK-encrypted leaf. No public form.
 export const MAX_INVITE_BYTES = 16 * 1024
@@ -34,14 +34,14 @@ export function validateInviteRecord(value: unknown): InviteRecord {
 }
 
 export function encodeInviteReference(cid: { hash: Uint8Array; key: Uint8Array }): string {
-  if (cid.hash.length !== 32 || cid.key.length !== 32) throw new Error('Invalid private invite reference')
+  if (!cid.key) throw new Error('Invalid private invite reference')
   return nhashEncode(cid)
 }
 
 export function decodeInviteReference(reference: string): { hash: Uint8Array; key: Uint8Array } {
   if (!reference.startsWith('nhash1') || reference.length > 160) throw new Error('Invalid private invite reference')
   const cid = nhashDecode(reference)
-  if (!cid.key || cid.hash.length !== 32 || cid.key.length !== 32 || nhashEncode(cid) !== reference) {
+  if (!cid.key || nhashEncode(cid) !== reference) {
     throw new Error('Invalid private invite reference')
   }
   return { hash: cid.hash, key: cid.key }
@@ -51,7 +51,7 @@ export async function encodeInviteRecord(record: InviteRecord): Promise<{ refere
   validateInviteRecord(record)
   const plaintext = new TextEncoder().encode(JSON.stringify(record))
   if (plaintext.length + 16 > MAX_INVITE_BYTES) throw new Error('Invite is too large')
-  const { ciphertext, key } = await encryptChk(plaintext)
+  const { ciphertext, key } = await encryptObject(plaintext)
   return { reference: encodeInviteReference({ hash: await sha256(ciphertext), key }), ciphertext }
 }
 
@@ -59,5 +59,5 @@ export async function decodeInviteRecord(reference: string, ciphertext: Uint8Arr
   const { hash, key } = decodeInviteReference(reference)
   if (ciphertext.length > MAX_INVITE_BYTES || ciphertext.length < 16 ||
     !(await sha256(ciphertext)).every((byte, i) => byte === hash[i])) throw new Error('Invalid invite record')
-  return validateInviteRecord(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await decryptChk(ciphertext, key))))
+  return validateInviteRecord(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await decryptObject(ciphertext, key))))
 }

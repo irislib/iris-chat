@@ -1,7 +1,7 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto'
 import { afterEach, expect, it, vi } from 'vitest'
-import { HashTree, MemoryStore, decryptChk, nhashDecode, sha256, toHex, tryDecodeTreeNode } from '@hashtree/core'
+import { HashTree, MemoryStore, decryptObject, nhashDecode, sha256, toHex, tryDecodeTreeNode } from '@hashtree/core'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
 
 vi.mock('./identity', () => ({ getPubkey: vi.fn(), getPrivkeyBytes: vi.fn(), isNip07Login: () => false }))
@@ -34,21 +34,21 @@ it('encrypts every uploaded attachment chunk and cannot read it with the hash al
     const result = await uploadFile(new File([bytes], name))
     const cid = nhashDecode(result.nhash)
     await vi.waitFor(async () => expect((await getAttachmentCache().receipts(getPubkey()!, [result.nhash]))[0]?.uploadedUrls).toHaveLength(1), { timeout: 5000 })
-    expect(cid.key, name).toHaveLength(32)
+    expect(cid.key, name).toHaveLength(33)
     const store = new MemoryStore()
     const pending = [cid], visited = new Set<string>()
     while (pending.length) {
       const node = pending.pop()!, hash = toHex(node.hash)
       if (visited.has(hash)) continue
       visited.add(hash)
-      expect(node.key, `${name}: each root and child needs a key`).toHaveLength(32)
+      expect(node.key, `${name}: each root and child needs a key`).toHaveLength(33)
       const cipher = blobs.get(hash)!
       expect(cipher, `${name}: the real upload must store every node`).toBeDefined()
       await store.put(node.hash, cipher)
-      const plain = await decryptChk(cipher, node.key!)
+      const plain = await decryptObject(cipher, node.key!)
       expect(cipher).not.toEqual(plain)
-      const wrong = new Uint8Array(node.key!); wrong[0] ^= 1
-      await expect(decryptChk(cipher, wrong)).rejects.toThrow()
+      const wrong = new Uint8Array(node.key!); wrong[1] ^= 1
+      await expect(decryptObject(cipher, wrong)).rejects.toThrow()
       const tree = tryDecodeTreeNode(plain)
       if (tree) pending.push(...tree.links.map(link => ({ hash: link.hash, key: link.key })))
     }

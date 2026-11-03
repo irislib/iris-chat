@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encryptChk, sha256 } from '@hashtree/core'
+import { encryptObject, fromHex, sha256 } from '@hashtree/core'
 import { encodeInviteReference, decodeInviteReference, encodeInviteRecord, decodeInviteRecord, type InviteRecord } from './inviteRecord'
 
 import fixture from './test-fixtures/private-invite-v1.json'
@@ -9,9 +9,10 @@ const record: InviteRecord = { v: 1, type: 'personal', name: 'Alice', nonce: 'a'
 } }
 
 describe('private invite records', () => {
-  it('matches the shared TypeScript and Rust wire fixture exactly', async () => {
+  it('reads the shared legacy Rust fixture and writes a versioned reference for the same ciphertext', async () => {
+    expect(await decodeInviteRecord(fixture.reference, fromHex(fixture.ciphertext))).toEqual(fixture.record)
     const encoded = await encodeInviteRecord(fixture.record as InviteRecord)
-    expect(encoded.reference).toBe(fixture.reference)
+    expect(decodeInviteReference(encoded.reference).key).toEqual(Uint8Array.of(1, ...decodeInviteReference(fixture.reference).key))
     expect(Array.from(encoded.ciphertext, b => b.toString(16).padStart(2, '0')).join('')).toBe(fixture.ciphertext)
   })
   it('round trips a standard encrypted hashtree leaf through a standard encrypted nhash reference', async () => {
@@ -27,7 +28,7 @@ describe('private invite records', () => {
     const { reference, ciphertext } = await encodeInviteRecord(record)
     const corrupt = ciphertext.slice(); corrupt[0] ^= 1
     await expect(decodeInviteRecord(reference, corrupt)).rejects.toThrow()
-    const cid = decodeInviteReference(reference); cid.key[0] ^= 1
+    const cid = decodeInviteReference(reference); cid.key[1] ^= 1
     await expect(decodeInviteRecord(encodeInviteReference(cid), ciphertext)).rejects.toThrow()
     for (const ref of ['', 'a'.repeat(43), reference + '=', 'A'.repeat(85) + 'B']) expect(() => decodeInviteReference(ref)).toThrow()
   })
@@ -36,7 +37,7 @@ describe('private invite records', () => {
       { ...record, invite: { ...record.invite, version: undefined } }, { ...record, invite: { ...record.invite, version: 1 } },
       { ...record, nonce: '' }, { ...record, name: 'a'.repeat(101) }, { ...record, type: 'group' },
       { ...record, expiresAt: -1 }, { ...record, maxUses: 0 }]) {
-      const { key, ciphertext } = await encryptChk(new TextEncoder().encode(JSON.stringify(invalid)))
+      const { key, ciphertext } = await encryptObject(new TextEncoder().encode(JSON.stringify(invalid)))
       const ref = encodeInviteReference({ hash: await sha256(ciphertext), key })
       await expect(decodeInviteRecord(ref, ciphertext)).rejects.toThrow()
     }

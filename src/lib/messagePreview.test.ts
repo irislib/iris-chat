@@ -13,3 +13,12 @@ it('valid bare, filename and wrapped attachments are concise without losing capt
   expect(messagePreview(`${hash}\n${hash}/file.txt`)).toBe('Attachment\nAttachment')
   for (const text of ['nhash1lookslikehash',hash.slice(0,-1)+'x',`prefix${hash}`,'ordinary text']) expect(messagePreview(text)).toBe(text)
 })
+
+it('recognizes attachments encrypted with each versioned suite', () => {
+  for (const suite of [1, 2]) {
+    const key = Uint8Array.of(suite, ...new Uint8Array(32).fill(2))
+    const ref = nhashEncode({hash: new Uint8Array(32).fill(1), key})
+    expect(messagePreview(ref)).toBe('Attachment')
+    expect(renderRumor(14, ref)?.body).toBe('Attachment')
+  }
+})

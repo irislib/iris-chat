@@ -4,7 +4,7 @@ import { directFilePreview } from './directFileProtocol'
 const reference = /(?<![\p{L}\p{N}_])(?:(?:htree|nhash):\/\/)?nhash1[a-z0-9]+(?:\/[^\s<>\]\)]+)?/giu
 function attachmentReference(text: string): boolean {
   const hash = text.replace(/^(?:htree|nhash):\/\//i,'').split('/')[0]
-  try { const cid = nhashDecode(hash); return cid.hash.length === 32 && (!cid.key || cid.key.length === 32) } catch { return false }
+  try { nhashDecode(hash); return true } catch { return false }
 }
 /** Presentation only: never resolve a tree or rewrite the saved message. */
 export function messagePreview(content: string, names: Record<string,string> = {}): string {
