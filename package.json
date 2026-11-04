@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "2.6.55",
+  "version": "2.6.56",
   "type": "module",
   "description": "Decentralized encrypted messaging over Nostr",
   "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
@@ -51,6 +51,7 @@
     "vitest": "^4.1.12",
     "workbox-build": "^7.4.1",
     "workbox-window": "^7.4.1",
+    "wrangler": "4.157.0",
     "ws": "^8.22.0"
   },
   "dependencies": {

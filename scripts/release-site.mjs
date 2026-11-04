@@ -78,7 +78,7 @@ function takeArgValue(args, flag) {
  * @returns {string[]}
  */
 function wranglerPagesCommand(...args) {
-  return ['npx', 'wrangler@4', ...args]
+  return ['pnpm', 'exec', 'wrangler', ...args]
 }
 
 /**
@@ -86,7 +86,7 @@ function wranglerPagesCommand(...args) {
  * @returns {string[]}
  */
 function wranglerWorkerCommand(...args) {
-  return ['npx', 'wrangler@4', 'deploy', ...args]
+  return ['pnpm', 'exec', 'wrangler', 'deploy', ...args]
 }
 
 /**

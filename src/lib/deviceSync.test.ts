@@ -183,6 +183,7 @@ import { expirationStore } from './expirationStore'
 import { chatMutes, clearChatMutes } from './chatMuteStore'
 import { deviceHistoryPair, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { pinnedChatIds, clearChatPins } from './chatPinStore'
+import * as attachmentRuntime from './hashtree'
 
 const owner = 'a'.repeat(64)
 const device = 'b'.repeat(64)
@@ -326,6 +327,34 @@ describe('device sync', () => {
       expect((fips.transports[1].allowIncomingPeer as (peer: string) => boolean)(`02${'b'.repeat(64)}`)).toBe(false)
     } finally {
       await stopDeviceSync()
+      ;(devices as unknown as Writable<DeviceState>).set(original)
+    }
+  })
+
+  it('limits identified attachment service and reads to the current sibling roster', async () => {
+    const original = get(devices)
+    const prepare = vi.spyOn(attachmentRuntime, 'prepareAttachmentPeers')
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalled())
+      const [, peers, allow, providers] = prepare.mock.calls[0]
+      expect(peers()).toContain(`02${device}`)
+      expect(allow(`02${device}`)).toBe(true)
+      expect(allow(`03${device}`)).toBe(true)
+      expect(allow(`02${owner}`)).toBe(false)
+      expect(allow(`02${peerOwner}`)).toBe(false)
+      expect(allow(`02${groupMember}`)).toBe(false)
+      expect(providers?.servers.length).toBeGreaterThan(0)
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({ ...state,
+        registeredDevices: state.registeredDevices.filter(row => row.identityPubkey !== device) }))
+      // The old callbacks must lose authorization immediately, before restart.
+      expect(peers()).not.toContain(`02${device}`)
+      expect(allow(`02${device}`)).toBe(false)
+      await stopDeviceSync()
+      expect(allow(`02${device}`)).toBe(false)
+      expect(providers?.peers()).toEqual([])
+    } finally {
+      await stopDeviceSync(); prepare.mockRestore()
       ;(devices as unknown as Writable<DeviceState>).set(original)
     }
   })

@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
-import { HashTree, nhashDecode, nhashEncode, MemoryStore, sha256 } from '@hashtree/core'
+import { HashTree, nhashDecode, nhashEncode, MemoryStore, sha256, fromHex } from '@hashtree/core'
 import { TcpBlobTransport } from '@hashtree/fips-transport'
 import type { FipsDatagramEndpoint, FipsServiceContext } from '@fips/tcp'
 import { AttachmentStore } from './attachmentStore'
@@ -78,4 +78,26 @@ it('cancels a startup download on account change and releases its reader journal
   vi.mocked(getPubkey).mockReturnValue('b'.repeat(64)); setAttachmentAccount('b'.repeat(64))
   expect((await outcome)?.message).toBe('Account changed')
   expect((await getAttachmentCache().stats()).files).toBe(0)
+})
+
+it('falls back to unsigned HTTP after anonymous setup fails without using an identified provider', async () => {
+  const secret = generateSecretKey(); vi.mocked(getPubkey).mockReturnValue(getPublicKey(secret)); vi.mocked(getPrivkeyBytes).mockReturnValue(secret)
+  setAttachmentAccount(getPubkey())
+  const store = new MemoryStore(), bytes = new Uint8Array([11, 27, 39])
+  const result = await new HashTree({ store }).putFile(bytes)
+  const sendDatagram = vi.fn(async () => {})
+  activateAttachmentPeers({ registerService: () => () => {}, sendDatagram }, () => ['02' + 'c'.repeat(64)], () => false,
+    { servers: ['https://invalid.example/fips'], peers: () => ['02' + 'c'.repeat(64)] })
+  const http = vi.fn(async (url: string, init?: RequestInit) => {
+    expect(new Headers(init?.headers).has('Authorization')).toBe(false)
+    expect(init?.method ?? 'GET').toBe('GET')
+    const hash = /\/([a-f0-9]{64})\.bin$/.exec(url)?.[1]
+    if (!hash) throw new Error('Unexpected file request')
+    const block = await store.get(fromHex(hash))
+    return new Response(block ? new Uint8Array(block) : null, { status: block ? 200 : 404 })
+  })
+  vi.stubGlobal('fetch', http)
+  expect(await downloadFile(nhashEncode(result.cid))).toEqual(bytes)
+  expect(http).toHaveBeenCalled()
+  expect(sendDatagram).not.toHaveBeenCalled()
 })

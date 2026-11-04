@@ -981,13 +981,15 @@ async function updateRuntime(
         rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
         () => run === generation && getPubkey() === ownerPubkey)
     })
-    const fileTransport = prepareAttachmentPeers(node, () => [...new Set([
-      ...callPeers,
-      ...groupFileDevices(),
-      ...get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
-      ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
-    ])].filter(peer => peer !== toHex(identity.publicKey) &&
-      allowedFilePeer(peer)), peer => run === generation && getPubkey() === ownerPubkey && allowedFilePeer(peer))
+    const currentFiles = () => run === generation && getPubkey() === ownerPubkey
+    const fileTransport = prepareAttachmentPeers(node,
+      () => get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
+      peer => currentFiles() && isAuthorizedDeviceSyncSource(peer, get(devices)),
+      { servers: seeds, peers: () => !currentFiles() ? [] : [...new Set([
+        ...callPeers,
+        ...groupFileDevices(),
+        ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
+      ])].filter(peer => peer !== toHex(identity.publicKey) && allowedFilePeer(peer)) })
     try {
       await node.start()
     } catch (error) {

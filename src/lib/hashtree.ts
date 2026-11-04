@@ -16,10 +16,8 @@ import {
 import { writable } from 'svelte/store'
 import { AttachmentStore } from './attachmentStore'
 import { AttachmentReplication } from './attachmentReplication'
-import { TcpBlobTransport } from '@hashtree/fips-transport'
 import type { FipsDatagramEndpoint } from '@fips/tcp'
-import { normalizeDeviceSyncPeer } from './deviceSyncTcp'
-import { attachmentEndpoint } from './attachmentEndpoint'
+import { createAttachmentTransport, type AttachmentProviders } from './attachmentTransport'
 import { getPubkey, getPrivkeyBytes, isNip07Login, isLinkedDeviceLogin } from './identity'
 import { finalizeEvent } from 'nostr-tools'
 
@@ -31,9 +29,8 @@ const DEFAULT_BLOSSOM_SERVERS = [
 
 // Only encrypted attachment blocks enter this bounded store, never private event indexes.
 let attachmentCache: AttachmentStore | undefined
-let attachmentPeers: TcpBlobTransport | undefined
+let attachmentPeers: ReturnType<typeof createAttachmentTransport> | undefined
 let attachmentPeerCleanup: (() => Promise<void>) | undefined
-let peerIds: () => readonly string[] = () => []
 let activeAccount: { owner: string; replication: AttachmentReplication } | undefined
 const peerReadyWaiters = new Set<() => void>()
 function notifyPeerReady() { for (const complete of peerReadyWaiters) complete() }
@@ -90,33 +87,31 @@ export function setAttachmentAccount(owner: string | null) {
   uploadsChanged()
 }
 /** Register inbound service before discovery; publish the client only after startup succeeds. */
-export function prepareAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean) {
-  const transport = attachmentEndpoint(node)
-  const tcp = new TcpBlobTransport({ endpoint: transport.endpoint, localStore: getAttachmentCache(), allowIncomingPeer: allow })
+export function prepareAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean, providers?: AttachmentProviders) {
+  const transport = createAttachmentTransport({ endpoint: node, store: getAttachmentCache(), siblings: peers, allowSibling: allow, providers })
   let closed = false
   const dispose = async () => {
     if (closed) return
-    closed = true; transport.close()
-    if (attachmentPeers === tcp) { attachmentPeers = undefined; peerIds = () => []; attachmentPeerCleanup = undefined }
-    await tcp.close()
+    closed = true
+    if (attachmentPeers === transport) { attachmentPeers = undefined; attachmentPeerCleanup = undefined }
+    await transport.close()
   }
   return {
     activate() {
       if (closed) throw new Error('Attachment transport closed')
       void deactivateAttachmentPeers()
-      peerIds = () => peers().map(normalizeDeviceSyncPeer)
-      attachmentPeers = tcp; attachmentPeerCleanup = dispose
+      attachmentPeers = transport; attachmentPeerCleanup = dispose
       notifyPeerReady()
     },
     dispose,
   }
 }
-export function activateAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean) {
-  prepareAttachmentPeers(node, peers, allow).activate()
+export function activateAttachmentPeers(node: FipsDatagramEndpoint, peers: () => readonly string[], allow: (peer: string) => boolean, providers?: AttachmentProviders) {
+  prepareAttachmentPeers(node, peers, allow, providers).activate()
 }
 export async function deactivateAttachmentPeers() {
   const cleanup = attachmentPeerCleanup
-  attachmentPeers = undefined; peerIds = () => []; attachmentPeerCleanup = undefined
+  attachmentPeers = undefined; attachmentPeerCleanup = undefined
   await cleanup?.()
 }
 
@@ -169,14 +164,13 @@ function getHashTree(readId: string): HashTree {
       if (activeAccount !== account) throw new Error('Account changed')
       const cached = await cache.get(hash)
       if (cached) { await cache.writer(readId).put(hash, cached); return cached }
-      const peers = peerIds(), readyAtStart = !!attachmentPeers
+      const readyAtStart = !!attachmentPeers
       let remoteError: unknown
-      let data = (peers.length ? await attachmentPeers?.get(hash, peers).catch(() => null) : null) ?? await blossom.get(hash).catch(error => { remoteError = error; return null })
+      let data = await attachmentPeers?.get(hash).catch(() => null) ?? await blossom.get(hash).catch(error => { remoteError = error; return null })
       // History can render before device initialization starts file transport.
       // An offline HTTP server must not turn that startup ordering into a permanent failure.
       if (!data && !readyAtStart && await waitForAttachmentPeers(account)) {
-        const readyPeers = peerIds()
-        data = readyPeers.length ? await attachmentPeers?.get(hash, readyPeers).catch(() => null) ?? null : null
+        data = await attachmentPeers?.get(hash).catch(() => null) ?? null
       }
       if (activeAccount !== account) throw new Error('Account changed')
       if (!data && remoteError) throw remoteError
