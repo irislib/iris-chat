@@ -23,7 +23,11 @@ const server=createServer(async(req,res)=>{
  if(pathname==='/__fixture'){res.end('<!doctype html><title>Fixture</title>');return;}
  const file=path.resolve(dist,`.${pathname==='/'?'/index.html':pathname}`);
  if(!file.startsWith(dist+path.sep)){res.writeHead(403).end();return;}
- try{const bytes=await readFile(file);res.writeHead(200,{'content-type':{'.js':'application/javascript','.html':'text/html','.css':'text/css','.wasm':'application/wasm'}[path.extname(file)]??'application/octet-stream','cache-control':'no-store'}).end(bytes);}catch{res.writeHead(404).end();}
+ try{let bytes=await readFile(file);
+ // Route the message worker's sockets at the transport boundary as well as the
+ // page sockets. Keep all application/protocol code from the actual built asset.
+ if(app==='chat'&&/^nostrWorker-.*\.js$/.test(path.basename(file)))bytes=Buffer.concat([Buffer.from(`const __GraphFixtureWebSocket=globalThis.WebSocket;globalThis.WebSocket=class extends __GraphFixtureWebSocket{constructor(url,protocols){super(${JSON.stringify(relay.url('custom'))},protocols)}};\n`),bytes]);
+ res.writeHead(200,{'content-type':{'.js':'application/javascript','.html':'text/html','.css':'text/css','.wasm':'application/wasm'}[path.extname(file)]??'application/octet-stream','cache-control':'no-store'}).end(bytes);}catch{res.writeHead(404).end();}
 }).listen(0,'127.0.0.1');await once(server,'listening');
 const origin=`http://127.0.0.1:${server.address().port}`,relay=await createGraphPolicyRelay(servedEvents),browser=await chromium.launch({headless:true});
 const cacheInfo={name:app==='contacts'?'iris-public-social-graph':'iris-chat-people-graph',store:app==='contacts'?'graphs':'accounts',version:app==='contacts'?1:10,key:app==='contacts'?root:owner};
@@ -84,7 +88,7 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
   if(unsupported){assert.equal(sync().flatMap(r=>r.requests).length,0,'Unsupported NEG must not fall back to REQ');await assertCached(page,newEvents,true);assert.equal(http,0);}
   else{
    await assertCached(page,newEvents);const requests=sync().flatMap(r=>r.requests);assert(requests.length>0);assert(requests.every(filters=>filters.every(f=>Array.isArray(f.ids)&&Object.keys(f).every(k=>k==='ids'))),'Only exact-ID body fetches may follow NEG');assert(newEvents.every(e=>sync().some(r=>r.servedIds.includes(e.id))));assert.equal(http,custom?0:1);if(pendingCustom)assert.equal((await cached(page)).getFollowedByUser(friend).has(httpMarker),false,'Revoked bootstrap must not merge after custom settings');
-   if(app==='chat'){assert(relay.publishLive(lateEvents)>=2,'Normal live follow/mute subscription remains active');}
+   if(app==='chat'){await expect.poll(()=>records().some(r=>!r.neg&&!r.closed&&[...r.active.values()].flat().some(f=>f.authors?.includes(owner))),{timeout:15000}).toBe(true);assert(relay.publishLive(lateEvents)>=2,'Normal live follow/mute subscription remains active');}
    else{servedEvents.splice(0,servedEvents.length,...lateEvents);await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));}
    await assertCached(page,lateEvents);
   }
