@@ -225,6 +225,8 @@ export function createReleasePlan(options) {
         'src/lib/groupWake.test.ts',
         'src/lib/groupRelayPolicy.test.ts',
         'src/lib/inviteProvenance.test.ts',
+        'src/lib/peopleGraph.test.ts',
+        'src/lib/relayStore.test.ts',
         'src/lib/nostrWorkerRuntime.test.ts',
         'src/lib/nostrPubsubRuntime.test.ts',
         'src/lib/privateDiscoveryRouting.test.ts',
@@ -240,6 +242,12 @@ export function createReleasePlan(options) {
       id: 'test-smoke',
       label: `Smoke-test ${profile.appName} portable build`,
       command: ['pnpm', 'run', 'smoke:portable'],
+      cwd: appDir,
+    },
+    {
+      id: 'test-graph',
+      label: `Verify ${profile.appName} graph reconciliation and retained cache`,
+      command: ['node', './scripts/smoke-negentropy-graph.mjs', 'chat'],
       cwd: appDir,
     },
     {

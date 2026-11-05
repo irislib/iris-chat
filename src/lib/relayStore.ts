@@ -27,14 +27,13 @@ export { DEFAULT_RELAYS }
 function loadRelays(): Set<string> {
   try {
     const stored = localStorage.getItem(RELAYS_STORAGE_KEY)
-    if (stored) {
+    if (stored !== null) {
       const parsed = JSON.parse(stored)
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return new Set(parsed)
-      }
+      return new Set(Array.isArray(parsed) && parsed.every(url => typeof url === 'string') ? parsed : [])
     }
   } catch {
-    // ignore
+    // Unknown saved policy must not silently enable public relays.
+    return new Set()
   }
   return new Set(DEFAULT_RELAYS)
 }

@@ -44,8 +44,8 @@ export function graphConsidersUserOvermuted(graph: SocialGraph, pubkey: string):
 interface PeopleGraphOptions {
   loadGraph: (owner: string) => Promise<SocialGraph>
   loadEvents: (owner: string) => Promise<Event[]>
-  saveEvents: (owner: string, events: Event[]) => Promise<void>
-  saveGraph?: (owner: string, graph: SocialGraph) => Promise<void>
+  saveEvents?: (owner: string, events: Event[]) => Promise<void>
+  saveGraph?: (owner: string, graph: SocialGraph, events: Event[]) => Promise<void>
   catchup?: (graph: SocialGraph, changed: () => void) => Promise<() => void>
   subscribe: (authors: string[], event: (event: Event) => void, done: () => void) => () => void
   changed: (state: PeopleGraphState) => void
@@ -284,8 +284,8 @@ export class PeopleGraphController {
       bytes += JSON.stringify(event).length
       return bytes <= MAX_CACHE_BYTES
     })
-    await this.options.saveEvents(owner, events).catch(() => {})
-    if (graph) await this.options.saveGraph?.(owner, graph).catch(() => {})
+    if (graph && this.options.saveGraph) await this.options.saveGraph(owner, graph, events).catch(() => {})
+    else await this.options.saveEvents?.(owner, events).catch(() => {})
   }
 
   stop() {
@@ -314,6 +314,13 @@ const state = writable<PeopleGraphState>({ ownerPubkey: null, ready: false, vers
 export const peopleGraph = { subscribe: state.subscribe }
 const cache = new Dexie('iris-chat-people-graph')
 cache.version(1).stores({ accounts: 'owner' })
+// Each hydrated graph owns only the exact snapshot it observed. A conflicting tab
+// or unreadable row permanently disables saves for this instance, including close.
+const cacheOwnership = new WeakMap<SocialGraph, { expected?: Uint8Array; existed: boolean; blocked: boolean; writes: Promise<void> }>()
+function sameGraphBytes(left: unknown, right: Uint8Array | undefined): boolean {
+  return left === undefined && right === undefined || left instanceof Uint8Array && right instanceof Uint8Array &&
+    left.length === right.length && left.every((byte, index) => byte === right[index])
+}
 let seed: Promise<Uint8Array> | undefined
 function loadSeed(): Promise<Uint8Array> {
   return seed ??= (async () => {
@@ -328,33 +335,59 @@ function loadSeed(): Promise<Uint8Array> {
 
 const controller = new PeopleGraphController({
   loadGraph: async owner => {
-    const saved = (await cache.table('accounts').get(owner))?.graph
-    if (saved instanceof Uint8Array) {
-      try { return await SocialGraph.fromBinary(owner, saved) } catch { /* Retain events and use the bootstrap if corrupt. */ }
+    let saved: unknown, existed = false, blocked = false
+    try {
+      const row = await cache.table('accounts').get(owner)
+      existed = row !== undefined
+      saved = row?.graph
+      if (existed && !(saved instanceof Uint8Array)) blocked = true
+    } catch { blocked = true }
+    let graph: SocialGraph | undefined
+    if (saved !== undefined) {
+      try {
+        if (!(saved instanceof Uint8Array)) throw new Error('Unreadable graph cache')
+        graph = await SocialGraph.fromBinary(owner, saved)
+      } catch { blocked = true }
     }
     const configured = [...get(relayStore).relays]
     const normalize = (urls: readonly string[]) => [...new Set(urls.map(url => url.replace(/\/$/, '')))].sort().join(',')
-    if (normalize(configured) !== normalize(DEFAULT_RELAYS)) return SocialGraph.fromBinary(owner, await loadSeed())
-    try {
-      const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
-      const graph = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY, signal: AbortSignal.timeout(2500) })
-      await graph.setRoot(owner)
-      return graph
-    } catch { return SocialGraph.fromBinary(owner, await loadSeed()) }
+    if (!graph && !blocked && normalize(configured) === normalize(DEFAULT_RELAYS)) {
+      const bootstrap = new AbortController()
+      const unsubscribe = relayStore.subscribe(next => {
+        if (normalize([...next.relays]) !== normalize(DEFAULT_RELAYS)) bootstrap.abort()
+      })
+      try {
+        const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
+        const candidate = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY,
+          signal: AbortSignal.any([bootstrap.signal, AbortSignal.timeout(2500)]) })
+        await candidate.setRoot(owner)
+        if (!bootstrap.signal.aborted) graph = candidate
+      } catch { /* The packaged graph keeps offline starts usable. */ }
+      finally { unsubscribe() }
+    }
+    graph ??= await SocialGraph.fromBinary(owner, await loadSeed())
+    cacheOwnership.set(graph, { expected: saved instanceof Uint8Array ? saved.slice() : undefined,
+      existed, blocked, writes: Promise.resolve() })
+    return graph
   },
   loadEvents: async owner => (await cache.table('accounts').get(owner))?.events ?? [],
-  saveEvents: async (owner, events) => {
-    await cache.transaction('rw', cache.table('accounts'), async () => {
-      const previous = await cache.table('accounts').get(owner)
-      await cache.table('accounts').put({ ...previous, owner, events })
-    })
-  },
-  saveGraph: async (owner, graph) => {
-    const bytes = await graph.toBinary()
-    await cache.transaction('rw', cache.table('accounts'), async () => {
-      const previous = await cache.table('accounts').get(owner)
-      await cache.table('accounts').put({ ...previous, owner, graph: bytes })
-    })
+  saveGraph: async (owner, graph, events) => {
+    const ownership = cacheOwnership.get(graph)
+    if (!ownership || ownership.blocked) return
+    ownership.writes = ownership.writes.then(async () => {
+      if (ownership.blocked) return
+      const bytes = await graph.toBinary()
+      await cache.transaction('rw', cache.table('accounts'), async () => {
+        const previous = await cache.table('accounts').get(owner)
+        if ((previous !== undefined) !== ownership.existed || !sameGraphBytes(previous?.graph, ownership.expected)) {
+          ownership.blocked = true
+          return
+        }
+        await cache.table('accounts').put({ ...previous, owner, graph: bytes, events })
+      })
+      if (!ownership.blocked) { ownership.expected = bytes.slice(); ownership.existed = true }
+    }).catch(() => { ownership.blocked = true })
+    await ownership.writes
   },
   catchup: async (graph, onChange) => {
     const { startGraphSync } = await import('nostr-social-graph/publicGraphSync')

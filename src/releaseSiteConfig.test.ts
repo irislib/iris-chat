@@ -123,6 +123,7 @@ describe('release site config', () => {
       'build',
       'test-portable',
       'test-smoke',
+      'test-graph',
       'test-e2e-nip07',
       'publish',
       'deploy',
