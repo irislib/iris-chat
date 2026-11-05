@@ -13,7 +13,7 @@ const app=process.argv[2];assert(['contacts','chat'].includes(app));
 const root='4523be58d395b1b196a9b8c82b038b6895cb02b683d0c253a955068dba1facd0';
 const key=new Uint8Array(32).fill(42),owner=getPublicKey(key),friend=getPublicKey(new Uint8Array(32).fill(43)),muted=getPublicKey(new Uint8Array(32).fill(44));
 const lists=(created_at, follows=friend, mutes=muted)=>[3,10000].map(kind=>finalizeEvent({kind,created_at,content:'',tags:[['p',kind===3?follows:mutes]]},key));
-const seedEvents=lists(100),newEvents=lists(300),lateEvents=lists(400,muted,friend),servedEvents=[...newEvents];
+const seedEvents=lists(100),newEvents=lists(300),lateEvents=lists(400,muted,friend),personalEvents=lists(500,muted,friend),servedEvents=[...newEvents];
 const seed=new SocialGraph(root);seed.addFollower(root,owner);seed.handleEvent(seedEvents,true);
 const seedBytes=Buffer.from(await seed.toBinary()),httpMarker=getPublicKey(new Uint8Array(32).fill(45));
 const httpSeed=await SocialGraph.fromBinary(root,seedBytes);httpSeed.addFollower(friend,httpMarker);const httpSeedBytes=Buffer.from(await httpSeed.toBinary());
@@ -34,7 +34,7 @@ async function stored(page){return page.evaluate(async info=>{
  },cacheInfo);}
 async function cached(page){const record=await stored(page);return record?.bytes?SocialGraph.fromBinary(cacheInfo.key,new Uint8Array(record.bytes)):null;}
 async function assertCached(page,events,partial=false){await expect.poll(async()=>{const graph=await cached(page);return events.map(e=>graph?.getListRevision(owner,e.kind)?.id)},{timeout:15000}).toEqual(events.map(e=>e.id));const graph=await cached(page);assert.equal(graph.getListRevision(owner,3).complete,!partial);assert.equal(graph.getListRevision(owner,10000).complete,true);assert.deepEqual([...graph.getMutedByUser(owner)],[events[1].tags[0][1]]);}
-async function retain(page,invalid=false,events=[]){const graph=new SocialGraph(root);graph.addFollower(root,owner);graph.handleEvent(newEvents,true);graph.markListIncomplete(owner,3);await page.evaluate(async({info,bytes,newEvents})=>{
+async function retain(page,invalid=false,events=[]){const graph=new SocialGraph(root);graph.addFollower(root,owner);graph.handleEvent(events.length?events:newEvents,true);if(!events.length)graph.markListIncomplete(owner,3);await page.evaluate(async({info,bytes,newEvents})=>{
  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(info.name,info.version);r.onupgradeneeded=()=>r.result.createObjectStore(info.store,info.store==='accounts'?{keyPath:'owner'}:undefined);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
  try{await new Promise((resolve,reject)=>{const tx=db.transaction(info.store,'readwrite'),store=tx.objectStore(info.store);if(info.store==='accounts')store.put({owner:info.key,graph:new Uint8Array(bytes),events:newEvents});else store.put(new Uint8Array(bytes),info.key);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}finally{db.close();}
  },{info:cacheInfo,bytes:invalid?[255,0,254,1]:[...await graph.toBinary()],newEvents:events});}
@@ -59,7 +59,7 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  const page=await context.newPage();const ready=()=>app==='chat'?page.getByRole('button',{name:'New Chat',exact:true}):page.locator('[data-contact-index="0"]');
  try{
   await page.goto(origin,{waitUntil:'domcontentloaded'});
-  if(conflict){await expect.poll(()=>http,{timeout:15000}).toBe(1);await retain(blocker,false,newEvents);retained=await stored(blocker);releaseBootstrap();}
+  if(conflict){await expect.poll(()=>http,{timeout:15000}).toBe(1);await retain(blocker,false,personalEvents);retained=await stored(blocker);releaseBootstrap();}
   await expect(ready()).toBeVisible({timeout:30000});
   if(pendingCustom){
    await expect.poll(()=>http,{timeout:15000}).toBe(1);
