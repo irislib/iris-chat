@@ -355,11 +355,21 @@ const controller = new PeopleGraphController({
   },
   catchup: async (graph, onChange) => {
     const { startGraphSync } = await import('nostr-social-graph/publicGraphSync')
-    const configured = [...relayStore.getState().relays]
-    const relays = configured.length === DEFAULT_RELAYS.length && configured.every(url => DEFAULT_RELAYS.includes(url))
-      ? ['wss://graph-relay.iris.to', ...configured] : configured
-    return startGraphSync({ getGraph: () => graph, relays,
-      maxAuthors: MAX_NEAR_AUTHORS, maxBytes: MAX_CACHE_BYTES, onChange })
+    let stop: (() => void) | undefined
+    let previous = ''
+    const unsubscribe = relayStore.subscribe(state => {
+      const configured = [...state.relays]
+      const key = JSON.stringify(configured)
+      if (key === previous) return
+      previous = key
+      stop?.()
+      const relays = configured.length === DEFAULT_RELAYS.length && configured.every(url => DEFAULT_RELAYS.includes(url))
+        ? ['wss://graph-relay.iris.to', ...configured] : configured
+      stop = startGraphSync({ getGraph: () => graph, relays,
+        maxAuthors: MAX_NEAR_AUTHORS, maxBytes: MAX_CACHE_BYTES, onChange })
+    })
+    return () => { unsubscribe(); stop?.() }
+
   },
   changed: next => state.set(next),
   subscribe: (authors, onEvent, done) => {
