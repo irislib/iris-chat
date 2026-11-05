@@ -215,3 +215,39 @@ describe('people graph runtime', () => {
     controller.stop()
   })
 })
+
+
+it('persists a catch-up graph and cancels a late catch-up handle on account switch', async () => {
+  const first = getPublicKey(generateSecretKey()), second = getPublicKey(generateSecretKey())
+  const saved = new Map<string, Uint8Array>()
+  const stops: Array<ReturnType<typeof vi.fn>> = []
+  const completions: Array<() => void> = []
+  const controller = new PeopleGraphController({
+    loadGraph: async owner => saved.has(owner) ? SocialGraph.fromBinary(owner, saved.get(owner)!) : new SocialGraph(owner),
+    loadEvents: async () => [], saveEvents: async () => {},
+    saveGraph: async (owner, graph) => { saved.set(owner, await graph.toBinary()) },
+    subscribe: (_authors, _event, done) => { queueMicrotask(done); return () => {} },
+    changed: () => {},
+    catchup: async (graph, changed) => {
+      graph.addFollower(graph.getRoot(), key('7'))
+      changed()
+      const stop = vi.fn(); stops.push(stop)
+      return new Promise(resolve => completions.push(() => resolve(stop)))
+    },
+  })
+  await controller.setOwner(first)
+  await controller.flush()
+  await controller.setOwner(second)
+  completions[0]()
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(stops[0]).toHaveBeenCalledOnce()
+  // Saving the previous account must never capture the new account's graph.
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(saved.has(first)).toBe(true)
+  const recovered = await SocialGraph.fromBinary(first, saved.get(first)!)
+  expect(recovered.isFollowing(first, key('7'))).toBe(true)
+  expect(recovered.isFollowing(second, key('7'))).toBe(false)
+  completions[1]()
+  controller.stop()
+})

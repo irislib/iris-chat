@@ -4,6 +4,7 @@ import { get, writable } from 'svelte/store'
 import Dexie from 'dexie'
 import { identity, nostrClient } from './identity'
 import { following, followingHead } from './following'
+import { relayStore } from './relayStore'
 
 const MAX_NEAR_AUTHORS = 512
 const AUTHOR_BATCH_SIZE = 128
@@ -44,6 +45,8 @@ interface PeopleGraphOptions {
   loadGraph: (owner: string) => Promise<SocialGraph>
   loadEvents: (owner: string) => Promise<Event[]>
   saveEvents: (owner: string, events: Event[]) => Promise<void>
+  saveGraph?: (owner: string, graph: SocialGraph) => Promise<void>
+  catchup?: (graph: SocialGraph, changed: () => void) => Promise<() => void>
   subscribe: (authors: string[], event: (event: Event) => void, done: () => void) => () => void
   changed: (state: PeopleGraphState) => void
 }
@@ -121,6 +124,18 @@ export class PeopleGraphController {
     this.state = { ...this.state, ready: true }
     this.emit()
     void this.hydrateNear(generation)
+    if (this.options.catchup) {
+      void this.options.catchup(graph, () => {
+        if (generation === this.generation) {
+          if (graph.getListRevision(owner, 3)?.complete) this.discoveryEdge = false
+          this.updateDiscoveryEdge()
+          void this.flush()
+        }
+      }).then(stop => {
+        if (generation === this.generation) this.stops.add(stop)
+        else stop()
+      }).catch(() => {})
+    }
   }
 
   setFollowing(follows: Set<string>) {
@@ -263,12 +278,14 @@ export class PeopleGraphController {
     // Closing during hydration must not replace the saved graph with a partial snapshot.
     if (!this.state.ownerPubkey || !this.state.ready) return
     const owner = this.state.ownerPubkey
+    const graph = this.graph
     let bytes = 0
     const events = [...this.events.values()].reverse().filter(event => {
       bytes += JSON.stringify(event).length
       return bytes <= MAX_CACHE_BYTES
     })
     await this.options.saveEvents(owner, events).catch(() => {})
+    if (graph) await this.options.saveGraph?.(owner, graph).catch(() => {})
   }
 
   stop() {
@@ -310,9 +327,37 @@ function loadSeed(): Promise<Uint8Array> {
 }
 
 const controller = new PeopleGraphController({
-  loadGraph: async owner => SocialGraph.fromBinary(owner, await loadSeed()),
+  loadGraph: async owner => {
+    const saved = (await cache.table('accounts').get(owner))?.graph
+    if (saved instanceof Uint8Array) {
+      try { return await SocialGraph.fromBinary(owner, saved) } catch { /* Retain events and use the bootstrap if corrupt. */ }
+    }
+    try {
+      const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
+      const graph = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY })
+      await graph.setRoot(owner)
+      return graph
+    } catch { return SocialGraph.fromBinary(owner, await loadSeed()) }
+  },
   loadEvents: async owner => (await cache.table('accounts').get(owner))?.events ?? [],
-  saveEvents: async (owner, events) => { await cache.table('accounts').put({ owner, events }) },
+  saveEvents: async (owner, events) => {
+    await cache.transaction('rw', cache.table('accounts'), async () => {
+      const previous = await cache.table('accounts').get(owner)
+      await cache.table('accounts').put({ ...previous, owner, events })
+    })
+  },
+  saveGraph: async (owner, graph) => {
+    const bytes = await graph.toBinary()
+    await cache.transaction('rw', cache.table('accounts'), async () => {
+      const previous = await cache.table('accounts').get(owner)
+      await cache.table('accounts').put({ ...previous, owner, graph: bytes })
+    })
+  },
+  catchup: async (graph, onChange) => {
+    const { startGraphSync } = await import('nostr-social-graph/publicGraphSync')
+    return startGraphSync({ getGraph: () => graph, relays: [...relayStore.getState().relays],
+      maxAuthors: MAX_NEAR_AUTHORS, maxBytes: MAX_CACHE_BYTES, onChange })
+  },
   changed: next => state.set(next),
   subscribe: (authors, onEvent, done) => {
     const sub = get(nostrClient).subscribe(
