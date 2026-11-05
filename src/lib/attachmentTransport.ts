@@ -11,6 +11,12 @@ import { normalizeDeviceSyncPeer } from './deviceSyncTcp'
 export interface AttachmentProviders {
   servers: readonly string[]
   peers: () => readonly string[]
+  ownPeer: string
+}
+
+const providerPeer = (peer: string) => {
+  const key = peer.trim().toLowerCase()
+  return normalizeDeviceSyncPeer(/^[0-9a-f]{64}$/.test(key) ? `02${key}` : key)
 }
 
 /** Provider reads must never acquire this account's identity or private cache. */
@@ -36,7 +42,7 @@ export function createAttachmentTransport(options: {
   const siblings = new TcpBlobTransport({ endpoint: siblingEndpoint.endpoint,
     localStore: options.store, allowIncomingPeer: allowed })
 
-  type AnonymousReader = { provider: ReturnType<typeof createFipsWorkerP2PProvider>; stop: () => Promise<void> } | undefined
+  type AnonymousReader = { get: (hash: string) => Promise<Uint8Array | null>; updatePeers: () => Promise<void>; stop: () => Promise<void> } | undefined
   let reader: AnonymousReader
   let starting: Promise<AnonymousReader> | undefined
 
@@ -44,24 +50,58 @@ export function createAttachmentTransport(options: {
     if (closed || !options.providers?.servers.length) return
     const identity = await generateIdentity()
     if (closed) { identity.secretKey.fill(0); return }
+    const blockedPeers = () => new Set([
+      providerPeer(options.providers!.ownPeer),
+      ...options.siblings().filter(peer => options.allowSibling(normalizeDeviceSyncPeer(peer))).map(providerPeer),
+    ])
+    let blocked = blockedPeers()
+    let policyRevision = 0, changingPolicy = false
+    let policyReady = Promise.resolve()
     // No WebRTC/Nostr discovery, account announcements or shared device links.
-    const node = new FipsNode({ identity, forwarding: false, routingMode: 'reply_learned',
+    const node = new FipsNode({ identity, forwarding: false, strictClient: true, routingMode: 'reply_learned',
+      blockedPeerPubkeys: [...blocked],
       transports: [new WebSocketTransport({ seedUrls: options.providers.servers })] })
-    const endpoint = attachmentEndpoint(node)
+    const updatePeers = () => {
+      const next = blockedPeers()
+      if (next.size === blocked.size && [...next].every(peer => blocked.has(peer))) return policyReady
+      blocked = next
+      changingPolicy = true
+      const revision = ++policyRevision
+      // The library installs the deny set before returning this promise and
+      // cancels prepared FMP/FSP work, not only our application datagrams.
+      const reconfigured = node.setBlockedPeerPubkeys([...blocked])
+      const previous = provider
+      const tcpClosing = previous.transport.close()
+      previous.close()
+      policyReady = Promise.all([reconfigured, tcpClosing]).then(() => {
+        if (revision !== policyRevision || closed || stopping) return
+        provider = makeProvider()
+        changingPolicy = false
+      }, async error => { await stop(); throw error })
+      void policyReady.catch(() => {})
+      return policyReady
+    }
+    const allowProvider = (peer: string) => {
+      if (closed) return false
+      void updatePeers()
+      return !changingPolicy && !blocked.has(providerPeer(peer))
+    }
+    const endpoint = attachmentEndpoint(node, allowProvider)
     const adjacent = new Set<string>()
     node.on('peer', value => {
       const event = value as PeerEvent, peer = normalizeDeviceSyncPeer(event.remotePubkey)
       if (event.state === 'connected') adjacent.add(peer)
       else if (event.state === 'disconnected') adjacent.delete(peer)
     })
-    const provider = createFipsWorkerP2PProvider({ node: endpoint.endpoint, localStore: noCache,
+    const makeProvider = () => createFipsWorkerP2PProvider({ node: endpoint.endpoint, localStore: noCache,
       allowIncomingPeer: () => false,
       // Existing configured peers remain local-only sources. Seeds must first
       // prove that they implement the blob service, using an anonymous probe.
       providerRoutes: () => closed ? [] : [...new Set(options.providers!.peers().map(normalizeDeviceSyncPeer))]
-        .filter(peer => !allowed(peer)).map(peerId => ({ peerId, htl: 0 })),
-      candidatePeerIds: () => closed ? [] : [...adjacent].filter(peer => !allowed(peer)),
+        .filter(allowProvider).map(peerId => ({ peerId, htl: 0 })),
+      candidatePeerIds: () => closed ? [] : [...adjacent].filter(allowProvider),
     })
+    let provider = makeProvider()
     let stopping: Promise<void> | undefined
     const stop = () => stopping ??= (async () => {
       endpoint.close(); adjacent.clear()
@@ -70,7 +110,18 @@ export function createAttachmentTransport(options: {
       await Promise.allSettled([tcpClosing, node.stop()])
       identity.secretKey.fill(0)
     })()
-    const current = { provider, stop }
+    const current = { stop, updatePeers, async get(hash: string) {
+      await updatePeers()
+      if (closed || changingPolicy) return null
+      const revision = policyRevision
+      try {
+        const data = await provider.fetch(hash)
+        return closed || revision !== policyRevision ? null : data
+      } catch (error) {
+        if (closed || revision !== policyRevision) return null
+        throw error
+      }
+    } }
     reader = current
     try {
       await node.start()
@@ -96,9 +147,10 @@ export function createAttachmentTransport(options: {
       }
       const anonymous = await starting
       if (closed || !anonymous) return null
-      const data = await anonymous.provider.fetch(toHex(hash))
+      const data = await anonymous.get(toHex(hash))
       return closed ? null : data
     },
+    updatePeers(): Promise<void> { return reader?.updatePeers() ?? Promise.resolve() },
     close(): Promise<void> {
       if (closing) return closing
       closed = true; siblingEndpoint.close()

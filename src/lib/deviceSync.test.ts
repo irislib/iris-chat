@@ -15,6 +15,7 @@ import type { Group } from './groups'
 
 const fips = vi.hoisted(() => ({
   transports: [] as Array<Record<string, unknown>>,
+  configs: [] as Array<Record<string, unknown>>,
   nodes: [] as Array<{ emit: (event: string, value: unknown) => void; stop: ReturnType<typeof vi.fn> }>,
   start: vi.fn(async () => undefined),
   sendDatagram: vi.fn(async () => undefined),
@@ -50,7 +51,7 @@ vi.mock('./directFiles', () => ({
 vi.mock('@fips/core', () => ({
   FipsNode: class {
     private listeners = new Map<string, Set<(value: unknown) => void>>()
-    constructor() { fips.nodes.push(this) }
+    constructor(config: Record<string, unknown>) { fips.nodes.push(this); fips.configs.push(config) }
     registerService() { return () => undefined }
     on(event: string, listener: (value: unknown) => void) {
       const listeners = this.listeners.get(event) ?? new Set()
@@ -184,6 +185,8 @@ import { chatMutes, clearChatMutes } from './chatMuteStore'
 import { deviceHistoryPair, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { pinnedChatIds, clearChatPins } from './chatPinStore'
 import * as attachmentRuntime from './hashtree'
+import * as attachmentTransport from './attachmentTransport'
+import { detachDirectFiles } from './directFiles'
 
 const owner = 'a'.repeat(64)
 const device = 'b'.repeat(64)
@@ -267,6 +270,7 @@ describe('device sync', () => {
     vi.mocked(get(nostrClient).runtime.addSource).mockClear()
     fips.start.mockReset().mockResolvedValue(undefined)
     fips.nodes.length = 0
+    fips.configs.length = 0
     fips.transports.length = 0
     ndr.knownSnapshots = []
     ndr.applyTrustedAppKeysSnapshot.mockClear()
@@ -278,6 +282,7 @@ describe('device sync', () => {
     try {
       await vi.waitFor(() => expect(tcp.instances.length).toBeGreaterThan(0))
       expect(fips.transports).toHaveLength(1)
+      expect(fips.configs[0]).toMatchObject({ strictClient: true })
       expect(fips.transports[0]).toMatchObject({
         relays: ['wss://relay.example'],
         stunServers: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'],
@@ -355,6 +360,42 @@ describe('device sync', () => {
       expect(providers?.peers()).toEqual([])
     } finally {
       await stopDeviceSync(); prepare.mockRestore()
+      ;(devices as unknown as Writable<DeviceState>).set(original)
+    }
+  })
+
+  it('closes a pending attachment read before roster cleanup waits on direct files', async () => {
+    const original = get(devices)
+    const create = vi.spyOn(attachmentTransport, 'createAttachmentTransport')
+    const policy = vi.spyOn(attachmentRuntime, 'updateAttachmentPeerPolicy')
+    let releaseCleanup: (() => void) | undefined
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(get(nostrClient).runtime.addSource).toHaveBeenCalled())
+      const transport = create.mock.results[0].value as ReturnType<typeof attachmentTransport.createAttachmentTransport>
+      const close = vi.spyOn(transport, 'close')
+      fips.sendDatagram.mockClear()
+      const pending = transport.get(new Uint8Array(32))
+      await vi.waitFor(() => expect(fips.sendDatagram).toHaveBeenCalledWith(expect.objectContaining({ dstPort: 39018 })))
+      vi.mocked(detachDirectFiles).mockImplementationOnce(() => new Promise<void>(resolve => { releaseCleanup = resolve }))
+      policy.mockClear()
+      ;(devices as unknown as Writable<DeviceState>).update(state => ({ ...state,
+        registeredDevices: [...state.registeredDevices, { identityPubkey: groupMember, createdAt: 110 }] }))
+      // The real device-store subscriber must reach the library admission and
+      // transport cancellation barriers without waiting for unrelated cleanup.
+      expect(policy).toHaveBeenCalledOnce()
+      expect(close).toHaveBeenCalledOnce()
+      expect(releaseCleanup).toBeTypeOf('function')
+      expect(fips.nodes[0].stop).not.toHaveBeenCalled()
+      await expect(pending).resolves.toBeNull()
+      await expect(transport.get(new Uint8Array(32))).resolves.toBeNull()
+      releaseCleanup!()
+      await vi.waitFor(() => expect(fips.nodes).toHaveLength(2))
+      close.mockRestore()
+    } finally {
+      releaseCleanup?.()
+      await stopDeviceSync()
+      create.mockRestore(); policy.mockRestore()
       ;(devices as unknown as Writable<DeviceState>).set(original)
     }
   })

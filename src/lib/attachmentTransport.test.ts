@@ -86,7 +86,7 @@ function observeProvider(node: FipsNode, blocks: Map<string, Uint8Array>) {
     while (pumping) await pause()
     await tcp.dispose()
   })
-  return { requests, rejectNext: () => { rejectNext = true }, hold: () => { hold = true } }
+  return { requests, rejectNext: () => { rejectNext = true }, hold: () => { hold = true }, resume: () => { hold = false } }
 }
 
 it('keeps provider requests anonymous on real wire retries, restart, and shutdown', async () => {
@@ -100,7 +100,7 @@ it('keeps provider requests anonymous on real wire retries, restart, and shutdow
   const makeReader = () => createAttachmentTransport({ endpoint: device, store,
     // An unrelated peer in this list still must never receive identified reads.
     siblings: () => [providerKey], allowSibling: () => false,
-    providers: { servers: [seed.url], peers: () => [providerKey] } })
+    providers: { servers: [seed.url], ownPeer: deviceKey, peers: () => [providerKey] } })
   const first = makeReader(); cleanups.push(() => first.close())
   server.rejectNext()
   expect(await first.get(hash)).toEqual(bytes)
@@ -140,6 +140,50 @@ it('keeps provider requests anonymous on real wire retries, restart, and shutdow
   await pause()
   expect(server.requests).toHaveLength(count)
   expect(identifiedSend).not.toHaveBeenCalled()
+}, 30000)
+
+it('cancels a pending anonymous read when its provider becomes a sibling and recovers through an allowed provider', async () => {
+  const { seed, nodes: [device, firstProvider, secondProvider] } = await network(3)
+  const own = normalizeDeviceSyncPeer(toHex(device.identity.publicKey))
+  const first = normalizeDeviceSyncPeer(toHex(firstProvider.identity.publicKey))
+  const second = normalizeDeviceSyncPeer(toHex(secondProvider.identity.publicKey))
+  const bytes = new Uint8Array([31, 41, 59]), hash = await sha256(bytes)
+  const nextBytes = new Uint8Array([26, 53, 58]), nextHash = await sha256(nextBytes)
+  const a = observeProvider(firstProvider, new Map([[toHex(hash), bytes]]))
+  const b = observeProvider(secondProvider, new Map([[toHex(nextHash), nextBytes]]))
+  const siblings = new Set<string>()
+  let providers = [first]
+  const ownSessions: string[] = []
+  const unsubscribe = device.on('session', event => ownSessions.push(normalizeDeviceSyncPeer((event as { remotePubkey: string }).remotePubkey)))
+  cleanups.push(async () => { unsubscribe() })
+  const liveStop = vi.spyOn(device, 'stop')
+  const reader = createAttachmentTransport({ endpoint: device, store: new MemoryStore(),
+    siblings: () => [...siblings], allowSibling: peer => siblings.has(normalizeDeviceSyncPeer(peer)),
+    providers: { servers: [seed.url], ownPeer: `03${own.slice(2)}`,
+      peers: () => [own, `03${own.slice(2)}`, ...providers] } })
+  cleanups.push(() => reader.close())
+  expect(await reader.get(hash)).toEqual(bytes)
+  const anonymous = a.requests[0]!.peer
+  a.hold()
+  const pending = reader.get(hash)
+  await vi.waitFor(() => expect(a.requests).toHaveLength(2), { timeout: 5000 })
+  siblings.add(first)
+  providers = [first, second]
+  // This is the same synchronous policy entry point used by the device store.
+  const changed = reader.updatePeers()
+  const count = a.requests.length
+  await changed
+  await expect(pending).resolves.toBeNull()
+  a.resume()
+  expect(await reader.get(nextHash)).toEqual(nextBytes)
+  // A newly authorized sibling may receive the identified local-only attempt,
+  // but no request from the anonymous reader may continue to that identity.
+  expect(a.requests.slice(count).every(request => request.peer !== anonymous)).toBe(true)
+  expect(b.requests.length).toBeGreaterThan(0)
+  expect(b.requests.every(request => request.peer === anonymous)).toBe(true)
+  expect(ownSessions).not.toContain(normalizeDeviceSyncPeer(anonymous))
+  expect(liveStop).not.toHaveBeenCalled()
+  liveStop.mockRestore()
 }, 30000)
 
 it('denies unrelated cache probes and preserves only dynamically authorized sibling reads', async () => {

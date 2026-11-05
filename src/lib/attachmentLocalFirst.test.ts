@@ -87,7 +87,7 @@ it('falls back to unsigned HTTP after anonymous setup fails without using an ide
   const result = await new HashTree({ store }).putFile(bytes)
   const sendDatagram = vi.fn(async () => {})
   activateAttachmentPeers({ registerService: () => () => {}, sendDatagram }, () => ['02' + 'c'.repeat(64)], () => false,
-    { servers: ['https://invalid.example/fips'], peers: () => ['02' + 'c'.repeat(64)] })
+    { servers: ['https://invalid.example/fips'], ownPeer: getPubkey()!, peers: () => ['02' + 'c'.repeat(64)] })
   const http = vi.fn(async (url: string, init?: RequestInit) => {
     expect(new Headers(init?.headers).has('Authorization')).toBe(false)
     expect(init?.method ?? 'GET').toBe('GET')

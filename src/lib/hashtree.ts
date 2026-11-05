@@ -115,6 +115,11 @@ export async function deactivateAttachmentPeers() {
   await cleanup?.()
 }
 
+/** Install new anonymous-reader admission before other roster work can await. */
+export function updateAttachmentPeerPolicy(): Promise<void> {
+  return attachmentPeers?.updatePeers() ?? Promise.resolve()
+}
+
 /**
  * Create a Nostr signer for Blossom NIP-98 auth
  */

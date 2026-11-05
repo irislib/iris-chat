@@ -50,7 +50,7 @@ import {
 } from './groups'
 import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
-import { prepareAttachmentPeers, deactivateAttachmentPeers } from './hashtree'
+import { prepareAttachmentPeers, deactivateAttachmentPeers, updateAttachmentPeerPolicy } from './hashtree'
 import { DeviceSyncTcp, normalizeDeviceSyncPeer } from './deviceSyncTcp'
 import { DeviceHistorySync } from './deviceHistorySync'
 import { closeRevokedDeviceHistoryPairs, deviceHistoryPair, deviceHistoryProgress, loadDeviceHistoryPairs, saveDeviceHistoryPair } from './deviceHistoryPolicy'
@@ -821,9 +821,12 @@ async function stopActiveNode(): Promise<void> {
   activeOwnerPubkey = ''
   activePeers = new Set()
   detachCalls()
+  // Close attachment gates and cancel started anonymous sends before any
+  // unrelated cleanup can suspend this roster/account transition.
+  const attachmentClosing = deactivateAttachmentPeers()
   await detachDirectFiles()
   await deactivateNostrPubsub()
-  await deactivateAttachmentPeers()
+  await attachmentClosing
   await tcp?.dispose().catch(() => undefined)
   await node?.stop().catch(() => undefined)
   await announcements?.close()
@@ -900,7 +903,7 @@ async function updateRuntime(
     const transports = seeds.length ? [new WebSocketTransport({ seedUrls: seeds }), transport] : [transport]
     await loadDeviceHistoryPairs(ownerPubkey, state.identityPubkey!)
     await closeRevokedDeviceHistoryPairs(ownerPubkey, state.identityPubkey!, get(devices).registeredDevices.map(device => device.identityPubkey))
-    const node = new FipsNode({ identity, transports, routingMode: 'reply_learned' })
+    const node = new FipsNode({ identity, transports, strictClient: true, routingMode: 'reply_learned' })
     const peers = new Set<string>()
     const callPeers = new Set<string>()
     let tcp: DeviceSyncTcp
@@ -985,7 +988,7 @@ async function updateRuntime(
     const fileTransport = prepareAttachmentPeers(node,
       () => get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
       peer => currentFiles() && isAuthorizedDeviceSyncSource(peer, get(devices)),
-      { servers: seeds, peers: () => !currentFiles() ? [] : [...new Set([
+      { servers: seeds, ownPeer: toHex(identity.publicKey), peers: () => !currentFiles() ? [] : [...new Set([
         ...callPeers,
         ...groupFileDevices(),
         ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
@@ -1071,6 +1074,7 @@ export function startDeviceSync(ownerPubkey: string, secretKey: Uint8Array): voi
   const contactsTimer = setInterval(() => reconcilePrivateContacts(get(devices)), 5000)
   storeUnsubscribers.push(() => clearInterval(contactsTimer))
   deviceUnsubscribe = devices.subscribe((state) => {
+    void updateAttachmentPeerPolicy().catch(error => console.warn('[deviceSync] Attachment policy failed:', error))
     if (state.identityPubkey && state.lastEventTimestamp > 0) void closeRevokedDeviceHistoryPairs(ownerPubkey, state.identityPubkey, (state.isCurrentDeviceRegistered ? state.registeredDevices.map(device => device.identityPubkey) : [])).catch(error => console.warn('Could not close removed device history', error))
     reconcilePrivateContacts(state)
     void refreshCurrentDeviceDescription(ownerPubkey).catch(error => console.warn('Could not sync device name', error))
