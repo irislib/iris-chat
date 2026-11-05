@@ -4,7 +4,7 @@ import { get, writable } from 'svelte/store'
 import Dexie from 'dexie'
 import { identity, nostrClient } from './identity'
 import { following, followingHead } from './following'
-import { relayStore } from './relayStore'
+import { relayStore, DEFAULT_RELAYS } from './relayStore'
 
 const MAX_NEAR_AUTHORS = 512
 const AUTHOR_BATCH_SIZE = 128
@@ -355,7 +355,10 @@ const controller = new PeopleGraphController({
   },
   catchup: async (graph, onChange) => {
     const { startGraphSync } = await import('nostr-social-graph/publicGraphSync')
-    return startGraphSync({ getGraph: () => graph, relays: [...relayStore.getState().relays],
+    const configured = [...relayStore.getState().relays]
+    const relays = configured.length === DEFAULT_RELAYS.length && configured.every(url => DEFAULT_RELAYS.includes(url))
+      ? ['wss://graph-relay.iris.to', ...configured] : configured
+    return startGraphSync({ getGraph: () => graph, relays,
       maxAuthors: MAX_NEAR_AUTHORS, maxBytes: MAX_CACHE_BYTES, onChange })
   },
   changed: next => state.set(next),
