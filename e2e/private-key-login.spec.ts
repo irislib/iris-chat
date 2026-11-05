@@ -3,6 +3,17 @@ import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 
 for (const format of ['nsec', 'hex'] as const) {
   test(`existing account logs in with ${format} and survives reload`, async ({ page }, testInfo) => {
+    let bootstrapRequests = 0
+    await page.route('https://graph-api.iris.to/**', route => { bootstrapRequests++; return route.abort() })
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window)
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args)
+        const input = args[0], url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+        if (/socialGraph[^/]*\.bin/.test(url)) (window as Window & { graphSeedLoaded?: boolean }).graphSeedLoaded = true
+        return response
+      }
+    })
     const secret = generateSecretKey()
     const hex = Buffer.from(secret).toString('hex')
     const input = format === 'nsec' ? nip19.nsecEncode(secret) : hex.toUpperCase()
@@ -24,6 +35,10 @@ for (const format of ['nsec', 'hex'] as const) {
     await field.fill(`  ${input}  `)
     await field.press('Enter')
     await expect(page.getByRole('button', { name: 'New Chat', exact: true })).toBeVisible()
+    // The fixture stores a custom local relay. A completed local seed fetch proves
+    // the graph loader ran without adding the fixed public HTTP bootstrap.
+    await expect.poll(() => page.evaluate(() => Boolean((window as Window & { graphSeedLoaded?: boolean }).graphSeedLoaded))).toBe(true)
+    expect(bootstrapRequests).toBe(0)
     expect(await page.evaluate(() => localStorage.getItem('iris-chat-identity'))).toBe(hex)
     await page.reload()
     await expect(page.getByRole('button', { name: 'New Chat', exact: true })).toBeVisible()

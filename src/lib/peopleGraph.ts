@@ -332,9 +332,12 @@ const controller = new PeopleGraphController({
     if (saved instanceof Uint8Array) {
       try { return await SocialGraph.fromBinary(owner, saved) } catch { /* Retain events and use the bootstrap if corrupt. */ }
     }
+    const configured = [...get(relayStore).relays]
+    const normalize = (urls: readonly string[]) => [...new Set(urls.map(url => url.replace(/\/$/, '')))].sort().join(',')
+    if (normalize(configured) !== normalize(DEFAULT_RELAYS)) return SocialGraph.fromBinary(owner, await loadSeed())
     try {
       const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
-      const graph = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY })
+      const graph = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY, signal: AbortSignal.timeout(2500) })
       await graph.setRoot(owner)
       return graph
     } catch { return SocialGraph.fromBinary(owner, await loadSeed()) }
