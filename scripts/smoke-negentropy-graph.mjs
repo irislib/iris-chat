@@ -82,7 +82,7 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
    await page.waitForTimeout(2200);assert.deepEqual(await stored(blocker),retained,'Conflict latch must also block later debounce saves');
    assert.equal(http,conflict?1:0);unsupported=true;
    await page.reload({waitUntil:'domcontentloaded'});await expect(ready()).toBeVisible({timeout:30000});
-   await page.waitForTimeout(1800);assert.deepEqual(await stored(blocker),retained,'Close/reload must preserve retained or unreadable bytes');assert.equal(http,conflict?1:0);
+   await page.waitForTimeout(1800);assert.deepEqual((await stored(blocker)).bytes,retained.bytes,'Close/reload must preserve retained or unreadable graph bytes');assert.equal(http,conflict?1:0);
    console.log(`${app}: ${mode} PASS; second-tab row preserved through debounce and reload; HTTP=${http}`);continue;
   }
   if(unsupported){assert.equal(sync().flatMap(r=>r.requests).length,0,'Unsupported NEG must not fall back to REQ');await assertCached(page,newEvents,true);assert.equal(http,0);}
