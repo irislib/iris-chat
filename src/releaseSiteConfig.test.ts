@@ -124,6 +124,7 @@ describe('release site config', () => {
       'test-portable',
       'test-smoke',
       'test-graph',
+      'test-relay-policy',
       'test-e2e-nip07',
       'publish',
       'deploy',
