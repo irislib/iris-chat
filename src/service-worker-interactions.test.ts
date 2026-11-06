@@ -14,16 +14,17 @@ import { buildPrivateSetting } from 'nostr-social-graph/privateEvents'
 const key=(n:number)=>new Uint8Array(32).fill(n)
 const owner=getPublicKey(key(1)),peer=getPublicKey(key(2)),device=getPublicKey(key(3))
 const handlers=new Map<string,(event:unknown)=>void>()
+let clients: Array<{ visibilityState: string; postMessage: (message: { type: string; event: Event }) => void }> = []
 let notices:Array<{data:Record<string,unknown>;close:ReturnType<typeof vi.fn>}> = []
 const showNotification=vi.fn(async(_title:string,options:NotificationOptions)=>{notices.push({data:options.data,close:vi.fn()})})
 beforeAll(async()=>{
-  vi.stubGlobal('self',{registration:{scope:'https://chat.invalid/',showNotification,getNotifications:async()=>notices},clients:{matchAll:async()=>[]},addEventListener:(type:string,handler:(event:unknown)=>void)=>handlers.set(type,handler)})
+  vi.stubGlobal('self',{registration:{scope:'https://chat.invalid/',showNotification,getNotifications:async()=>notices},clients:{matchAll:async()=>clients},addEventListener:(type:string,handler:(event:unknown)=>void)=>handlers.set(type,handler)})
   await import('./service-worker')
 })
 beforeEach(async()=>{
   await Promise.all([db.messages.clear(),db.sessionManager.clear(),db.processedEvents.clear(),db.groups.clear(),db.sessions.clear(),db.pendingPushEvents.clear()])
   await db.sessionManager.put({key:'v1/device-manager/owner-pubkey',value:owner})
-  showNotification.mockClear();notices=[]
+  showNotification.mockClear();notices=[];clients=[]
 })
 async function push(event:Event){let work:Promise<void>|undefined;handlers.get('push')!({data:{json:()=>JSON.parse(JSON.stringify({event}))},waitUntil:(promise:Promise<void>)=>{work=promise}});await work}
 async function pairwiseWakes() {
@@ -226,4 +227,39 @@ it('cold group wakes authenticate the session sender and preserve the canonical 
   await db.sessionManager.put({key:`v1/user/${peer}`,value:record})
   await db.groups.update(data.id,{members:[peer]})
   await push(wake);expect(showNotification).not.toHaveBeenCalled()
+})
+
+
+it.each([false,true])('decides the push preview before foreground ratchet ingestion; notification failure=%s',async(failNotification:boolean)=>{
+  const sender=Session.init(getPublicKey(key(5)),key(4),true,key(6))
+  const receiver=Session.init(getPublicKey(key(4)),key(5),false,key(6))
+  const sessionKey=`v1/user/${peer}`
+  const saveReceiver=()=>db.sessionManager.put({key:sessionKey,value:{publicKey:peer,devices:[{
+    deviceId:device,activeSession:{name:'direct',state:serializeSessionState(receiver.state)},inactiveSessions:[],createdAt:100}]}})
+  await saveReceiver()
+  const event=sender.sendEvent({kind:14,pubkey:peer,content:'preview before foreground ingestion',tags:[]}).event
+  let ingestion:Promise<unknown>|undefined
+  const order:string[]=[]
+  const postMessage=vi.fn((message:{type:string;event:Event})=>{
+    if(message.type!=='PUSH_NOSTR_EVENT')return
+    order.push('foreground')
+    expect(receiver.receiveEvent(message.event)?.content).toBe('preview before foreground ingestion')
+    // The foreground ratchet is durable before its separate processed-event
+    // preview write. The worker must not rely on that later cache write.
+    ingestion=saveReceiver()
+  })
+  clients=[{visibilityState:'hidden',postMessage}]
+  showNotification.mockImplementationOnce(async()=>{
+    order.push('notification')
+    if(failNotification)throw new Error('notification test rejection')
+  })
+  await push(event)
+  await ingestion
+  expect(showNotification).toHaveBeenCalledOnce()
+  expect(showNotification.mock.calls[0][1]).toMatchObject({body:'preview before foreground ingestion'})
+  expect(order).toEqual(['notification','foreground'])
+  expect(postMessage).toHaveBeenCalledOnce()
+  expect(await db.pendingPushEvents.get(event.id)).toBeDefined()
+  expect(await db.processedEvents.get(event.id)).toBeUndefined()
+  expect(await db.sessionManager.get(sessionKey)).toBeDefined()
 })

@@ -217,11 +217,11 @@ async function forwardPushEventToClients(event: NostrEvent): Promise<void> {
   }
 }
 
-async function capturePushNostrEvent(payload: unknown): Promise<void> {
+async function capturePushNostrEvent(payload: unknown): Promise<NostrEvent | undefined> {
   const nostrEvent = extractPushNostrEvent(payload)
   if (!nostrEvent) return
   await savePendingPushEvent(nostrEvent as unknown as NostrEvent)
-  await forwardPushEventToClients(nostrEvent as unknown as NostrEvent)
+  return nostrEvent as unknown as NostrEvent
 }
 
 async function getOwnerPubkeyFromSessionManager(): Promise<string | null> {
@@ -505,9 +505,10 @@ self.addEventListener('push', (event) => {
   if (!event.data) return
 
   const handlePush = async () => {
+    let capturedEvent: NostrEvent | undefined
     try {
       const payload = event.data?.json()
-      await capturePushNostrEvent(payload)
+      capturedEvent = await capturePushNostrEvent(payload)
       if (!payload?.event) {
         await showFallbackNotification()
         return
@@ -619,6 +620,10 @@ self.addEventListener('push', (event) => {
       console.error('[sw] push error:', error)
       // Leave undeciphered events queued. userVisibleOnly browsers may show
       // their own fallback alert even when the app does not display one.
+    } finally {
+      // Decide the notification before the foreground app can advance the
+      // ratchet. Early returns and notification failures must still deliver.
+      if (capturedEvent) await forwardPushEventToClients(capturedEvent)
     }
   }
 
