@@ -8,10 +8,11 @@ overrides:
   '@hashtree/fips-transport': $@hashtree/fips-transport
   '@hashtree/index': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-index-0.1.15.tgz
   '@hashtree/mesh': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-mesh-0.3.3.tgz
-  '@hashtree/nostr': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-nostr-0.2.6.tgz
+  '@hashtree/nostr': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.40/hashtree-nostr-0.2.7.tgz
   '@hashtree/nostr-pubsub': $@hashtree/nostr-pubsub
   '@hashtree/worker': $@hashtree/worker
   '@fips/core': $@fips/core
+  '@fips/transport-websocket': $@fips/transport-websocket
   '@fips/tcp': $@fips/tcp
   dexie: ^4.4.4
   '@isaacs/brace-expansion': 5.0.1
