@@ -10,6 +10,7 @@ export class NostrWorkerClient {
   private restartTimer?: ReturnType<typeof setTimeout>
   private nextId = 0
   private relays: readonly string[] = []
+  private privateRelays: readonly string[] = []
   private stats: RuntimeRelayStats[] = []
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
   private readonly subscriptions = new Map<number, { filters: NostrFilter[]; handlers: RuntimeSubscriptionHandlers; options: RuntimeSubscribeOptions }>()
@@ -39,7 +40,7 @@ export class NostrWorkerClient {
       else for (const subscription of this.subscriptions.values()) subscription.handlers.onError?.(new Error('Message worker could not restart'))
     }
     worker.postMessage({ method: 'init', args: [this.owner] })
-    worker.postMessage({ method: 'setRelays', args: [this.relays] })
+    worker.postMessage({ method: 'setRelays', args: [this.relays, this.privateRelays] })
     for (const [id, sub] of this.subscriptions) worker.postMessage({ id, method: 'subscribe', args: [sub.filters, sub.options] })
     for (const { source } of this.sources.values()) this.attachSource(source)
     return worker
@@ -61,7 +62,10 @@ export class NostrWorkerClient {
     if (owner === this.owner) return
     this.close(); this.owner = owner
   }
-  setRelays(relays: readonly string[]) { this.relays = [...relays]; this.worker?.postMessage({ method: 'setRelays', args: [relays] }) }
+  setRelays(relays: readonly string[], privateRelays: readonly string[] = relays) {
+    this.relays = [...relays]; this.privateRelays = [...privateRelays]
+    this.worker?.postMessage({ method: 'setRelays', args: [this.relays, this.privateRelays] })
+  }
   getRelayStats() {
     if (this.worker) void this.call<RuntimeRelayStats[]>('getRelayStats', []).then(stats => { this.stats = stats }).catch(() => {})
     return this.stats

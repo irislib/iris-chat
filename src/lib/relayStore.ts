@@ -3,12 +3,13 @@
  */
 import { writable, derived, get } from 'svelte/store'
 import type NostrClient from './nostrClient'
-import { DEFAULT_RELAYS } from './defaultRelays'
+import { DEFAULT_RELAYS, DEFAULT_PUBLIC_RELAYS } from './defaultRelays'
 
 export type RelayStatus = 'disconnected' | 'connecting' | 'connected'
 
 export interface RelayState {
   relays: Set<string>
+  defaults: boolean
   statuses: Map<string, RelayStatus>
   connectedCount: number
   showConnectivity: boolean
@@ -24,18 +25,22 @@ function normalizeRelayUrl(url: string): string {
 
 export { DEFAULT_RELAYS }
 
-function loadRelays(): Set<string> {
+export function getPublicRelays(state: Pick<RelayState, 'relays' | 'defaults'>): string[] {
+  return state.defaults ? [...DEFAULT_PUBLIC_RELAYS] : [...state.relays]
+}
+
+function loadRelays(): Pick<RelayState, 'relays' | 'defaults'> {
   try {
     const stored = localStorage.getItem(RELAYS_STORAGE_KEY)
     if (stored !== null) {
       const parsed = JSON.parse(stored)
-      return new Set(Array.isArray(parsed) && parsed.every(url => typeof url === 'string') ? parsed : [])
+      return { relays: new Set(Array.isArray(parsed) && parsed.every(url => typeof url === 'string') ? parsed : []), defaults: false }
     }
   } catch {
     // Unknown saved policy must not silently enable public relays.
-    return new Set()
+    return { relays: new Set(), defaults: false }
   }
-  return new Set(DEFAULT_RELAYS)
+  return { relays: new Set(DEFAULT_RELAYS), defaults: true }
 }
 
 function saveRelays(relays: Set<string>): void {
@@ -64,9 +69,11 @@ function saveShowConnectivity(show: boolean): void {
 }
 
 function createRelayStore() {
-  const initialRelays = loadRelays()
+  const initialPolicy = loadRelays()
+  const initialRelays = initialPolicy.relays
   const { subscribe, update, set } = writable<RelayState>({
     relays: initialRelays,
+    defaults: initialPolicy.defaults,
     statuses: new Map([...initialRelays].map(url => [url, 'disconnected' as RelayStatus])),
     connectedCount: 0,
     showConnectivity: loadShowConnectivity(),
@@ -82,7 +89,7 @@ function createRelayStore() {
         for (const url of relays) {
           newStatuses.set(url, state.statuses.get(url) || 'disconnected')
         }
-        return { ...state, relays, statuses: newStatuses }
+        return { ...state, relays, defaults: false, statuses: newStatuses }
       })
     },
 
@@ -94,7 +101,7 @@ function createRelayStore() {
         saveRelays(newRelays)
         const newStatuses = new Map(state.statuses)
         newStatuses.set(url, 'disconnected')
-        return { ...state, relays: newRelays, statuses: newStatuses }
+        return { ...state, relays: newRelays, defaults: false, statuses: newStatuses }
       })
     },
 
@@ -105,16 +112,17 @@ function createRelayStore() {
         saveRelays(newRelays)
         const newStatuses = new Map(state.statuses)
         newStatuses.delete(url)
-        return { ...state, relays: newRelays, statuses: newStatuses }
+        return { ...state, relays: newRelays, defaults: false, statuses: newStatuses }
       })
     },
 
     resetToDefaults() {
       const defaults = new Set(DEFAULT_RELAYS)
-      saveRelays(defaults)
+      try { localStorage.removeItem(RELAYS_STORAGE_KEY) } catch { /* Current selection remains usable in memory. */ }
       update(state => ({
         ...state,
         relays: defaults,
+        defaults: true,
         statuses: new Map(DEFAULT_RELAYS.map(url => [url, 'disconnected' as RelayStatus])),
         connectedCount: 0,
       }))

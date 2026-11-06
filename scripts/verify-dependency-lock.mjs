@@ -39,16 +39,16 @@ const releases = {
     "integrity": "sha512-CPvJzniY+nItLVEQpH4jaRnmU7AMkD3kAN5yByXMgmm4MNChAk8X8HY8oJIw1riX/gW3/WKD8c+eUtSgu98DDA=="
   },
   "nostr-social-graph": {
-    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.0.2/nostr-social-graph-4.0.2.tgz",
-    "integrity": "sha512-F2EKjnxS58WPOF3UmhM13xwjFDmMMkz/XFctv//efPk/cfxViPfhmQl1PlxI9G8+mULKNPxY39vC1Dka3g0Ykw=="
+    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.0.3/nostr-social-graph-4.0.3.tgz",
+    "integrity": "sha512-8IJtPhoDrWZvCrNiq5/Z2A+70oZZP8xFYasXt76FwmPspTuO8edEuqDH7kbPq83Vwm+1m1s8Vwpl/lF7JbXL7w=="
   },
   "@hashtree/worker": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.35/hashtree-worker-0.4.22.tgz",
-    "integrity": "sha512-7F9OeSjf2VfouuM6SYVgkfjPOwescm7VXHksXFcU+b35rx9LS3jq+KvNoSZaY1e7Kd7XLj5HX6BiiWhH27ojQA=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.38/hashtree-worker-0.4.23.tgz",
+    "integrity": "sha512-VoCicyPS1ksStzr1swScV1UZ8MwnwaiI02HKq4xRV6ZVee8ukWv8JkhKaj2e4RSOZ32cnoHC+KheowGrKrdeBA=="
   },
   "@hashtree/fips-transport": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.32/hashtree-fips-transport-0.4.30.tgz",
-    "integrity": "sha512-iwnYWnwfpBXZbHfDA7dii+OM3MUZ7Oomo5lYexsjAfBJr6JoLoNADub3R4AZeI6dNE1JeCXWWITwQlkMwyQMgA=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.38/hashtree-fips-transport-0.5.0.tgz",
+    "integrity": "sha512-1hUDOllGMrhtcfs9YosXqdNE7VVqEhe45uHB92AK4UTrlTFitin6NVWTdGnDVNBImPA2doPkJSmBdlBMF4N17A=="
   },
   "@hashtree/nostr-pubsub": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-nostr-pubsub-0.1.9.tgz",

@@ -142,14 +142,14 @@ export default class NostrClient {
   readonly pool = {
     connectedRelays: () => this.runtime.getRelayStats().filter(relay => relay.connected),
   }
-  constructor(options: { explicitRelayUrls?: string[] } = {}) {
+  constructor(options: { explicitRelayUrls?: string[]; privateRelayUrls?: string[] } = {}) {
     this.runtime = new NostrWorkerClient(async event => {
       if (!this.signer) throw new Error('Not logged in')
       return this.signer.signEvent(event)
     })
-    if (options.explicitRelayUrls) this.runtime.setRelays(options.explicitRelayUrls)
+    if (options.explicitRelayUrls) this.runtime.setRelays(options.explicitRelayUrls, options.privateRelayUrls)
   }
-  setRelays(relays: string[]) { this.runtime.setRelays(relays) }
+  setRelays(relays: string[], privateRelays: string[] = relays) { this.runtime.setRelays(relays, privateRelays) }
   subscribe(filter: Filter | Filter[], options: SubscriptionOptions = {}, autoStart = true) {
     const subscription = new EventSubscription(this, Array.isArray(filter) ? filter : [filter], options)
     if (autoStart) queueMicrotask(() => subscription.start())

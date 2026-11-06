@@ -4,7 +4,7 @@ import { get, writable } from 'svelte/store'
 import Dexie from 'dexie'
 import { identity, nostrClient } from './identity'
 import { following, followingHead } from './following'
-import { relayStore, DEFAULT_RELAYS } from './relayStore'
+import { relayStore, getPublicRelays } from './relayStore'
 
 const MAX_NEAR_AUTHORS = 512
 const AUTHOR_BATCH_SIZE = 128
@@ -349,12 +349,10 @@ const controller = new PeopleGraphController({
         graph = await SocialGraph.fromBinary(owner, saved)
       } catch { blocked = true }
     }
-    const configured = [...get(relayStore).relays]
-    const normalize = (urls: readonly string[]) => [...new Set(urls.map(url => url.replace(/\/$/, '')))].sort().join(',')
-    if (!graph && !blocked && normalize(configured) === normalize(DEFAULT_RELAYS)) {
+    if (!graph && !blocked && get(relayStore).defaults) {
       const bootstrap = new AbortController()
       const unsubscribe = relayStore.subscribe(next => {
-        if (normalize([...next.relays]) !== normalize(DEFAULT_RELAYS)) bootstrap.abort()
+        if (!next.defaults) bootstrap.abort()
       })
       try {
         const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
@@ -394,12 +392,12 @@ const controller = new PeopleGraphController({
     let stop: (() => void) | undefined
     let previous = ''
     const unsubscribe = relayStore.subscribe(state => {
-      const configured = [...state.relays]
-      const key = JSON.stringify(configured)
+      const configured = getPublicRelays(state)
+      const key = JSON.stringify([state.defaults, configured])
       if (key === previous) return
       previous = key
       stop?.()
-      const relays = configured.length === DEFAULT_RELAYS.length && configured.every(url => DEFAULT_RELAYS.includes(url))
+      const relays = state.defaults
         ? ['wss://graph-relay.iris.to', ...configured] : configured
       stop = startGraphSync({ getGraph: () => graph, relays,
         maxAuthors: MAX_NEAR_AUTHORS, maxBytes: MAX_CACHE_BYTES, onChange })

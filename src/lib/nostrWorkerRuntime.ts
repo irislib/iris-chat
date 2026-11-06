@@ -5,6 +5,7 @@ import {
 import { createEventStore, migratePrivatePending } from './eventStore'
 import { assertWorkerPublicationPolicy } from './workerPublicationPolicy'
 import { privateDiscoverySubscribe } from './privateDiscoveryRouting'
+import { isPublicRelayKind, publicRelaySubscriptions } from './publicRelayRouting'
 
 /** The worker and restart recovery share the same durable admission boundary. */
 export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRuntimeOptions['signAuthEvent']) {
@@ -30,7 +31,12 @@ export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRun
   }
   const privateSender = createPrivateRelayPublisher({ store: senderStore })
   const discovery = createAnonymousRelayDiscovery({ store: runtime.store, historyTimeoutMs: 5000 })
-  runtime.subscribe = privateDiscoverySubscribe(runtime.subscribe.bind(runtime), discovery.subscribe.bind(discovery))
+  let publicRelays: readonly string[] = []
+  const sourceIds = new Set<string>()
+  const publicReads = publicRelaySubscriptions(
+    privateDiscoverySubscribe(runtime.subscribe.bind(runtime), discovery.subscribe.bind(discovery)),
+    () => publicRelays, () => [...sourceIds])
+  runtime.subscribe = publicReads.subscribe
   let closed = false
   const migration = migratePrivatePending(runtime.store, privateStore, () => !closed)
   void migration.then(() => { if (!closed) void privateSender.retryPending() }).catch(error => {
@@ -40,20 +46,31 @@ export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRun
   runtime.publish = async (event, options = {}) => {
     assertWorkerPublicationPolicy(event)
     await migration
-    return isPrivateRelayEvent(event) ? privateSender.publish(event, options) : publish(event, options)
+    if (isPrivateRelayEvent(event)) return privateSender.publish(event, options)
+    const publicOptions = options.relays === undefined && isPublicRelayKind(event.kind)
+      ? { ...options, relays: publicRelays, sources: options.sources ?? [...sourceIds] } : options
+    return publish(event, publicOptions)
   }
   const setRelays = runtime.setRelays.bind(runtime)
-  runtime.setRelays = relays => {
-    setRelays(relays)
-    privateSender.setRelays(relays)
-    discovery.setRelays(relays)
+  const setRelayRoutes = (relays: readonly string[], privateRelays: readonly string[] = relays) => {
+    const changed = JSON.stringify(publicRelays) !== JSON.stringify(relays)
+    publicRelays = [...relays]
+    // The runtime's implicit route is the existing private policy. Only known
+    // public operations receive the additional public destinations above.
+    setRelays(privateRelays)
+    privateSender.setRelays(privateRelays)
+    discovery.setRelays(privateRelays)
+    if (changed) publicReads.update()
   }
+  runtime.setRelays = relays => setRelayRoutes(relays)
   const addSource = runtime.addSource.bind(runtime), removeSource = runtime.removeSource.bind(runtime)
   runtime.addSource = source => {
     addSource(source)
+    sourceIds.add(source.id); publicReads.update()
     if (source.publish) privateSender.addSource({ ...source, publish: source.publish })
   }
-  runtime.removeSource = id => { removeSource(id); privateSender.removeSource(id) }
+  runtime.removeSource = id => { removeSource(id); privateSender.removeSource(id)
+    if (sourceIds.delete(id)) publicReads.update() }
   const getRelayStats = runtime.getRelayStats.bind(runtime)
   runtime.getRelayStats = () => {
     const stats = new Map(getRelayStats().map(stat => [stat.url, stat]))
@@ -65,11 +82,12 @@ export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRun
   const close = runtime.close.bind(runtime)
   runtime.close = async () => {
     closed = true
+    publicReads.close()
     // Stop networking before awaiting a potentially slow durable migration.
     const closing = Promise.all([discovery.close(), close(), privateSender.close()])
     await migration.catch(() => {})
     await closing
     await Promise.all([closeReceiverStore(), closePrivateStore()])
   }
-  return runtime
+  return Object.assign(runtime, { setRelayRoutes })
 }

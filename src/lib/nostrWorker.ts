@@ -28,7 +28,7 @@ self.onmessage = async ({ data }) => {
   try {
     let value: unknown
     switch (method) {
-      case 'setRelays': runtime.setRelays(args[0]); break
+      case 'setRelays': runtime.setRelayRoutes(args[0], args[1] ?? args[0]); break
       case 'getRelayStats': value = runtime.getRelayStats(); break
       case 'query': {
         const controller = new AbortController(); queries.set(id, controller)

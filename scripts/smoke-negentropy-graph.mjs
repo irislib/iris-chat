@@ -1,3 +1,4 @@
+import {createDenyProxy, assertWorkerNetworkBlocked} from './isolatedBrowser.ts';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
@@ -29,7 +30,7 @@ const server=createServer(async(req,res)=>{
  if(app==='chat'&&/^nostrWorker-.*\.js$/.test(path.basename(file)))bytes=Buffer.concat([Buffer.from(`const __GraphFixtureWebSocket=globalThis.WebSocket;globalThis.WebSocket=class extends __GraphFixtureWebSocket{constructor(url,protocols){super(${JSON.stringify(relay.url('custom'))},protocols)}};\n`),bytes]);
  res.writeHead(200,{'content-type':{'.js':'application/javascript','.html':'text/html','.css':'text/css','.wasm':'application/wasm'}[path.extname(file)]??'application/octet-stream','cache-control':'no-store'}).end(bytes);}catch{res.writeHead(404).end();}
 }).listen(0,'127.0.0.1');await once(server,'listening');
-const origin=`http://127.0.0.1:${server.address().port}`,relay=await createGraphPolicyRelay(servedEvents),browser=await chromium.launch({headless:true});
+const origin=`http://127.0.0.1:${server.address().port}`,relay=await createGraphPolicyRelay(servedEvents),boundary=await createDenyProxy(),browser=await chromium.launch({headless:true,proxy:{server:boundary.url,bypass:'127.0.0.1,localhost,[::1]'}});
 const cacheInfo={name:app==='contacts'?'iris-public-social-graph':'iris-chat-people-graph',store:app==='contacts'?'graphs':'accounts',version:app==='contacts'?1:10,key:app==='contacts'?root:owner};
 async function stored(page){return page.evaluate(async info=>{
  if(!(await indexedDB.databases()).some(db=>db.name===info.name))return null;
@@ -46,8 +47,9 @@ const modes=[...(app==='chat'?['fresh-neg','custom-neg','pending-custom','empty-
 if(process.argv[3])assert(modes.includes(process.argv[3]));
 try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  servedEvents.splice(0,servedEvents.length,...newEvents);const start=relay.records.length,records=()=>relay.records.slice(start),sync=()=>records().filter(r=>r.neg);
- const conflict=mode==='pending-other-tab',invalid=mode==='unreadable-cache',pendingCustom=mode==='pending-custom',empty=mode==='empty-retained',custom=mode==='custom-neg',context=await browser.newContext({serviceWorkers:'allow'});let http=0,unsupported=mode==='unsupported-retained',releaseBootstrap;
+ const conflict=mode==='pending-other-tab',invalid=mode==='unreadable-cache',pendingCustom=mode==='pending-custom',empty=mode==='empty-retained',custom=mode==='custom-neg',context=await browser.newContext({serviceWorkers:'block'});let http=0,unsupported=mode==='unsupported-retained',releaseBootstrap;
  const bootstrapGate=new Promise(resolve=>{releaseBootstrap=resolve;});
+ const boundaryPage=await context.newPage();await assertWorkerNetworkBlocked(boundaryPage,boundary);await boundaryPage.close();
  await context.route('https://graph-api.iris.to/**',async route=>{http++;if(conflict||pendingCustom)await bootstrapGate;return route.fulfill({body:httpSeedBytes,contentType:'application/octet-stream',headers:{'x-graph-root':root,'access-control-allow-origin':'*','access-control-expose-headers':'x-graph-root'}})});
  await context.route(/\/assets\/socialGraph[^/]*\.bin$/,route=>route.fulfill({body:seedBytes,contentType:'application/octet-stream'}));
  // Bridge browser WebSocket I/O to the same real local NEG responder used by worker apps.
@@ -95,4 +97,4 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
   const before=http;await page.reload({waitUntil:'domcontentloaded'});await expect(ready()).toBeVisible({timeout:30000});await assertCached(page,unsupported?newEvents:lateEvents,unsupported);assert.equal(http,before,'Reload must preserve graph without replacement HTTP');assert.deepEqual(records().flatMap(r=>r.errors),[]);
   console.log(`${app}: ${mode} PASS; exact signed follow/mute IDs and retained partial cache; HTTP=${http}; NEG sockets=${sync().length}`);
  }finally{releaseBootstrap();await context.close();}
-}}finally{await browser.close();await relay.close();await new Promise(resolve=>server.close(resolve));}
+}}finally{await browser.close();await boundary.close();await relay.close();await new Promise(resolve=>server.close(resolve));}

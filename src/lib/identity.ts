@@ -8,7 +8,7 @@ import {
   updateLocalProfile,
   type Profile,
 } from './profile'
-import { relayStore } from './relayStore'
+import { relayStore, getPublicRelays } from './relayStore'
 
 // Helper functions
 export function bytesToHex(bytes: Uint8Array): string {
@@ -40,9 +40,11 @@ export const identity = writable<Identity | null>(null)
 export const isLoggedIn = derived(identity, $identity => $identity !== null)
 
 // Create NostrClient instance with relays from store
-const initialRelays = [...relayStore.getState().relays]
+const initialPolicy = relayStore.getState()
+const initialRelays = getPublicRelays(initialPolicy)
 const client = new NostrClient({
   explicitRelayUrls: initialRelays,
+  privateRelayUrls: [...initialPolicy.relays],
 })
 
 export const nostrClient = writable<NostrClient>(client)
@@ -67,18 +69,13 @@ function initRelayTracking() {
 initRelayTracking()
 
 // Reconnect NostrClient when relays change
-let previousRelays = new Set(initialRelays)
+let previousPolicy = JSON.stringify([initialRelays, [...initialPolicy.relays]])
 relayStore.subscribe(state => {
-  const newUrls = state.relays
-
-  // Skip if relays haven't actually changed (prevents initial subscription trigger)
-  if (previousRelays.size === newUrls.size && [...previousRelays].every(url => newUrls.has(url))) {
-    return
-  }
-
-  client.setRelays([...newUrls])
-
-  previousRelays = new Set(newUrls)
+  const publicRelays = getPublicRelays(state), privateRelays = [...state.relays]
+  const policy = JSON.stringify([publicRelays, privateRelays])
+  if (previousPolicy === policy) return
+  client.setRelays(publicRelays, privateRelays)
+  previousPolicy = policy
 })
 
 export function parseNsecFromHash(): string | null {

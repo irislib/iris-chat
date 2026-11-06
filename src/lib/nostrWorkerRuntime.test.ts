@@ -12,6 +12,43 @@ import { callWakeEvent, sendCallWakeups, queuedCallWakeEnvelope } from './callPu
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
 
+it('keeps private delivery and discovery off the added public route, including live settings changes', async () => {
+  const publicRelay = new TestRelay(), privateRelay = new TestRelay(), selectedRelay = new TestRelay()
+  const frames = new Map<TestRelay, unknown[][]>()
+  for (const relay of [publicRelay, privateRelay, selectedRelay]) {
+    frames.set(relay, [])
+    relay.observeWire = message => frames.get(relay)!.push(message)
+    await relay.start(); cleanup.push(() => relay.stop())
+  }
+  const owner = getPublicKey(generateSecretKey()), peer = getPublicKey(generateSecretKey())
+  const runtime = createNostrWorkerRuntime(owner); cleanup.push(() => runtime.close())
+  runtime.setRelayRoutes([publicRelay.url, privateRelay.url], [privateRelay.url])
+  const requestKinds = (relay: TestRelay) => frames.get(relay)!.filter(frame => frame[0] === 'REQ')
+    .flatMap(frame => (frame.slice(2) as Array<{ kinds?: number[] }>).flatMap(filter => filter.kinds ?? []))
+  await runtime.query([{ kinds: [1060], '#p': [owner] }], { cache: 'network-only', sources: [] })
+  await runtime.query([{ kinds: [37368], authors: [peer] }], { cache: 'network-only', sources: [] })
+  await runtime.query([{ kinds: [0], authors: [peer] }], { cache: 'network-only', sources: [] })
+  expect(requestKinds(publicRelay)).toEqual([0])
+  expect(requestKinds(privateRelay)).toEqual(expect.arrayContaining([1060, 37368, 0]))
+  const sealed = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
+    .sendEvent({ kind: 14, content: 'loopback private message' }, [['p', peer]]).event
+  const publicPost = finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'loopback public post' }, generateSecretKey())
+  await runtime.publish(sealed, { requireAck: true, queue: false })
+  await runtime.publish(publicPost, { requireAck: true, queue: false })
+  await vi.waitFor(() => expect(privateRelay.publishedEvents.map(event => event.id)).toEqual(expect.arrayContaining([sealed.id, publicPost.id])))
+  await vi.waitFor(() => expect(publicRelay.publishedEvents.map(event => event.id)).toEqual([publicPost.id]))
+  runtime.subscribe([{ kinds: [3] }], { onEvent() {} }, { cache: 'network-only', sources: [] })
+  await vi.waitFor(() => expect(requestKinds(publicRelay)).toContain(3))
+  runtime.setRelayRoutes([selectedRelay.url], [selectedRelay.url])
+  await vi.waitFor(() => expect(requestKinds(selectedRelay)).toContain(3))
+  await vi.waitFor(() => expect(frames.get(publicRelay)!.some(frame => frame[0] === 'CLOSE')).toBe(true))
+  runtime.setRelayRoutes([], [])
+  const emptyPost = finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'must stay local' }, generateSecretKey())
+  expect((await runtime.publish(emptyPost, { requireAck: true, queue: false })).sources).toEqual([])
+  const emptyRead = await runtime.query([{ kinds: [3] }], { cache: 'network-only', sources: [] })
+  expect(emptyRead.sources).toEqual([])
+})
+
 it('restarts the real worker queue without replaying identity-bearing call alerts or losing safe pending events', async () => {
   const relay = new TestRelay()
   await relay.start()
