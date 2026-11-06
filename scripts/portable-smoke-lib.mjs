@@ -84,6 +84,8 @@ export async function runPortableSmoke({ distDir, title, screenshotPath, validat
   const page = await browser.newPage()
   const packagedGraph = await readFile(path.resolve('node_modules/nostr-social-graph/data/socialGraph.bin'))
   await page.route('https://graph-api.iris.to/**', route => route.fulfill({ body: packagedGraph, contentType: 'application/octet-stream', headers: { 'x-graph-root': '4523be58d395b1b196a9b8c82b038b6895cb02b683d0c253a955068dba1facd0' } }))
+  // Native download metadata is unrelated to this portable/offline UI check.
+  await page.route('https://cdn.iris.to/**/releases%2Firis-chat-rs/latest/release.json', route => route.fulfill({ status: 404, body: 'Offline fixture' }))
   const documentResponses = []
   const localResponseFailures = []
   const pageErrors = []
