@@ -5,6 +5,7 @@ import { webkit, devices } from '@playwright/test'
 import { test, expect, useTestRelay } from './fixtures'
 import { useDirectFileDestination } from './fixtures/directFileDestination'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
+import { installDirectFileDiagnostics } from './fixtures/directFileDiagnostics'
 
 for (const mode of ['chosen destination', 'downloads after restart']) test(`first files use ${mode}`,  async ({ browser, testRelayUrl, baseURL }, info) => {
   test.skip(mode === 'chosen destination' && info.project.name !== 'chromium', 'Native file pickers are Chromium-only; other browsers use Downloads')
@@ -19,10 +20,12 @@ for (const mode of ['chosen destination', 'downloads after restart']) test(`firs
     return webkit.launchPersistentContext(profile, { ...devices['iPhone 13'], baseURL, acceptDownloads: true })
   }
   const contexts = await Promise.all([newContext(), newContext()])
+  const diagnostics: Awaited<ReturnType<typeof installDirectFileDiagnostics>>[] = []
   const logs: string[] = []
   const bytes = Buffer.alloc(mode === 'downloads after restart' ? 4 * 1024 * 1024 : 512 * 1024, 123)
   try {
     for (const context of contexts) {
+      if (info.project.name === 'webkit-files') diagnostics.push(await installDirectFileDiagnostics(context))
       await useTestRelay(context, testRelayUrl)
       if (mode === 'chosen destination') await useDirectFileDestination(context)
       else await context.addInitScript(() => Object.assign(window, { showSaveFilePicker: undefined, showDirectoryPicker: undefined, __filePickerCalls: [] }))
@@ -80,6 +83,12 @@ for (const mode of ['chosen destination', 'downloads after restart']) test(`firs
     await expect(a.locator('[data-testid^="direct-file-transfer-"]').getByRole('status')).toHaveText('Sent')
     await b.screenshot({ path: info.outputPath('received.png') })
   } finally {
+    if (diagnostics.length) await info.attach('direct-file-diagnostics', {
+      body: JSON.stringify(await Promise.all(diagnostics.map((diagnostic, index) => diagnostic.snapshot(
+        contexts[index].pages().find(page => /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\//.test(page.url())),
+      )))),
+      contentType: 'application/json',
+    })
     await info.attach('browser-log', { body: logs.join('\n'), contentType: 'text/plain' })
     await Promise.all(contexts.map(context => context.close()))
     await seed.close()
