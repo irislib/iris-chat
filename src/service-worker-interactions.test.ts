@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto'
 import { beforeAll,beforeEach,expect,it,vi } from 'vitest'
 import { AppKeys,Group,InMemoryStorageAdapter,Session,serializeSessionState,privateGroupDeliveryRumor } from 'nostr-double-ratchet'
-import { getEventHash,getPublicKey,type Event,type VerifiedEvent } from 'nostr-tools'
+import { getEventHash,getPublicKey,verifyEvent,type Event,type VerifiedEvent } from 'nostr-tools'
 import { nhashEncode } from '@hashtree/core'
 import { decryptGroupPush,groupPushChannels } from './lib/groupPush'
 import { db } from './lib/storage'
@@ -243,6 +243,7 @@ it.each([false,true])('decides the push preview before foreground ratchet ingest
   const postMessage=vi.fn((message:{type:string;event:Event})=>{
     if(message.type!=='PUSH_NOSTR_EVENT')return
     order.push('foreground')
+    if(!verifyEvent(message.event))throw new Error('Foreground fixture event must verify')
     expect(receiver.receiveEvent(message.event)?.content).toBe('preview before foreground ingestion')
     // The foreground ratchet is durable before its separate processed-event
     // preview write. The worker must not rely on that later cache write.
