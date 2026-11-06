@@ -120,7 +120,7 @@ export async function runPortableSmoke({ distDir, title, screenshotPath, validat
       if (shouldIgnoreConsoleError(text)) {
         return
       }
-      consoleErrors.push(text)
+      consoleErrors.push(`${text} ${message.location().url}`)
     }
   })
 

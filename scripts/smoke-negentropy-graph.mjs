@@ -47,7 +47,7 @@ const modes=[...(app==='chat'?['fresh-neg','custom-neg','pending-custom','empty-
 if(process.argv[3])assert(modes.includes(process.argv[3]));
 try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  servedEvents.splice(0,servedEvents.length,...newEvents);const start=relay.records.length,records=()=>relay.records.slice(start),sync=()=>records().filter(r=>r.neg);
- const conflict=mode==='pending-other-tab',invalid=mode==='unreadable-cache',pendingCustom=mode==='pending-custom',empty=mode==='empty-retained',custom=mode==='custom-neg',context=await browser.newContext({serviceWorkers:'block'});let http=0,unsupported=mode==='unsupported-retained',releaseBootstrap;
+ const conflict=mode==='pending-other-tab',invalid=mode==='unreadable-cache',pendingCustom=mode==='pending-custom',empty=mode==='empty-retained',custom=mode==='custom-neg',context=await browser.newContext({serviceWorkers:'allow'});let http=0,unsupported=mode==='unsupported-retained',releaseBootstrap;
  const bootstrapGate=new Promise(resolve=>{releaseBootstrap=resolve;});
  const boundaryPage=await context.newPage();await assertWorkerNetworkBlocked(boundaryPage,boundary);await boundaryPage.close();
  await context.route('https://graph-api.iris.to/**',async route=>{http++;if(conflict||pendingCustom)await bootstrapGate;return route.fulfill({body:httpSeedBytes,contentType:'application/octet-stream',headers:{'x-graph-root':root,'access-control-allow-origin':'*','access-control-expose-headers':'x-graph-root'}})});
