@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 
 const root = new URL('../', import.meta.url)
 const manifest = JSON.parse(await readFile(new URL('package.json', root), 'utf8'))
@@ -102,6 +103,33 @@ if ((packages.match(/^  ['"]?@fips\/tcp@/gm) ?? []).length !== 1) {
 }
 if (manifest.scripts?.test?.startsWith('pnpm verify:dependency-lock') !== true) {
   throw new Error('The normal test gate must verify GitHub dependency integrity')
+}
+
+
+// The vendor path is stable; its contents are the qualified shared SDK release.
+const fileTransfer = {
+  specifier: 'file:vendor/fips-file-transfer-0.1.0.tgz',
+  version: '0.1.1',
+  sha256: 'fd40ec68ea586d2adf460859ce86794c33b39af5b8f44cfec7d03d851bafc9ef',
+  integrity: 'sha512-M4+KerF8mCx8MjAjnCyJKt1kq0d5Dvq/Ac20TJd0uRgyc3mxriBMYH37HOqnBQ5ehGqiGd9bY7wzrCdqOq8LTw==',
+}
+if (manifest.dependencies?.['@fips/file-transfer'] !== fileTransfer.specifier) {
+  throw new Error('File transfers must use the verified shared SDK vendor archive')
+}
+const fileTransferBytes = await readFile(new URL(fileTransfer.specifier.slice(5), root))
+if (createHash('sha256').update(fileTransferBytes).digest('hex') !== fileTransfer.sha256 ||
+    `sha512-${createHash('sha512').update(fileTransferBytes).digest('base64')}` !== fileTransfer.integrity) {
+  throw new Error('File-transfer vendor bytes differ from the verified SDK release')
+}
+const fileTransferKey = `  '@fips/file-transfer@${fileTransfer.specifier}':`
+const fileTransferStart = packages.indexOf(fileTransferKey)
+const fileTransferEnd = packages.indexOf('\n\n', fileTransferStart)
+const fileTransferEntry = fileTransferStart < 0 ? '' : packages.slice(fileTransferStart, fileTransferEnd < 0 ? undefined : fileTransferEnd)
+if ((packages.match(/^  ['"]?@fips\/file-transfer@/gm) ?? []).length !== 1 ||
+    !fileTransferEntry.includes(`tarball: ${fileTransfer.specifier}`) ||
+    !fileTransferEntry.includes(`integrity: ${fileTransfer.integrity}`) ||
+    fileTransferEntry.match(/^    version: (.+)$/m)?.[1] !== fileTransfer.version) {
+  throw new Error('File-transfer lock metadata must match the verified vendor release')
 }
 
 console.log('Verified immutable shared runtime release integrity')
