@@ -31,6 +31,7 @@
   import { getDelegateManager, initMultiDevice, resetManagers } from './lib/privateChats'
   import { setAttachmentAccount } from './lib/hashtree'
   import { startDeviceSync, stopDeviceSync } from './lib/deviceSync'
+  import { createDeviceSyncLifecycle } from './lib/deviceSyncLifecycle'
   import { deviceHistoryProgress } from './lib/deviceHistoryPolicy'
   import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
   import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
@@ -243,7 +244,15 @@
     mobileView = 'main'
   }
 
+  let sessionStopping = false
+  let deviceSyncLifecycle: ReturnType<typeof createDeviceSyncLifecycle> | undefined
+
   onMount(() => {
+    deviceSyncLifecycle = createDeviceSyncLifecycle(window, {
+      currentOwner: () => sessionStopping ? null : get(identity)?.pubkey ?? null,
+      start: owner => startDeviceSync(owner, getDelegateManager().getIdentityKey()),
+      stop: stopDeviceSync,
+    })
     const handleNotificationHash = () => {
       const target = notificationFromHash(window.location.hash)
       if (target) pendingNotification = target
@@ -380,7 +389,7 @@
 
       if (currentIdentity?.pubkey && multiDeviceReady) {
         void multiDeviceReady
-          .then(() => startDeviceSync(currentIdentity.pubkey, getDelegateManager().getIdentityKey()))
+          .then(() => deviceSyncLifecycle?.start(currentIdentity.pubkey))
           .catch((e) => console.error('[app] initMultiDevice failed:', e))
       }
 
@@ -422,7 +431,6 @@
     document.addEventListener('visibilitychange', handleVisibilityChange)
 
     cleanup = () => {
-      void stopDeviceSync()
       window.removeEventListener('popstate', handlePopState)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage)
@@ -432,10 +440,14 @@
     }
     })()
 
-    return () => { window.removeEventListener('hashchange', handleNotificationHash); cleanup?.() }
+    return () => {
+      void deviceSyncLifecycle?.dispose().catch(() => undefined)
+      window.removeEventListener('hashchange', handleNotificationHash); cleanup?.()
+    }
   })
 
   async function handleLogin() {
+    sessionStopping = false
     deviceRemovalNotice = false
     const currentIdentity = get(identity)
     let multiDeviceReady: Promise<void> | null = null
@@ -456,7 +468,7 @@
 
     if (currentIdentity?.pubkey && multiDeviceReady) {
       void multiDeviceReady
-        .then(() => startDeviceSync(currentIdentity.pubkey, getDelegateManager().getIdentityKey()))
+        .then(() => deviceSyncLifecycle?.start(currentIdentity.pubkey))
         .catch((e) => console.error('[app] initMultiDevice failed:', e))
     }
 
@@ -607,13 +619,15 @@
   $effect(() => { setAttachmentAccount($identity?.pubkey ?? null) })
 
   async function handleLogout() {
+    sessionStopping = true
+    const deviceClosing = deviceSyncLifecycle?.stop() ?? stopDeviceSync()
     cancelPendingJoin()
     const owner = get(identity)?.pubkey
     pendingNotification = null
     stopMessageExpirationCleanup()
     await clearChatMutes()
     await clearChatPins()
-    await stopDeviceSync()
+    await deviceClosing
     leaveChat()
     clearGroupData()
     resetManagers()
