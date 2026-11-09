@@ -2,14 +2,18 @@ import { test, expect, useTestRelay } from './fixtures'
 import type { BrowserContext, Page } from '@playwright/test'
 import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { readFileSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
 
 test('three browsers share cached encrypted files on the existing FIPS node with Blossom unavailable', async ({ browser, testRelayUrl, baseURL }) => {
-  test.setTimeout(120_000)
+  // Two added reload/file phases retain the existing readiness and file limits.
+  test.setTimeout(300_000)
   const seed = await startLocalFipsWebSocketSeed()
   const contexts: BrowserContext[] = []
   const logs: string[] = []
+  const devicePeerIds = new Map<Page, string>()
   let sharingFiles = false
   async function user() {
+    const alreadyConnected = new Set(seed.connectedPeers())
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'], serviceWorkers: 'block' })
     contexts.push(context)
     await useTestRelay(context, testRelayUrl)
@@ -42,6 +46,8 @@ test('three browsers share cached encrypted files on the existing FIPS node with
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await expect(page).toHaveURL(/#settings$/)
     await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect.poll(() => seed.connectedPeers().filter(id => !alreadyConnected.has(id))).toHaveLength(1)
+    devicePeerIds.set(page, seed.connectedPeers().find(id => !alreadyConnected.has(id))!)
     return page
   }
   async function connect(a: Page, b: Page, greeting: string) {
@@ -87,6 +93,45 @@ test('three browsers share cached encrypted files on the existing FIPS node with
     await b.getByRole('button', { name: 'Copy', exact: true }).click()
     const link = await b.evaluate(() => navigator.clipboard.readText())
     expect(link).toMatch(/nhash1/)
+    const initialPeerIds = [a, b, c].map(page => devicePeerIds.get(page)!)
+    expect(new Set(initialPeerIds).size).toBe(3)
+    // Keep the original routed transport and HTTP restrictions. Only the sender
+    // owns each random file, generated after that browser has actually reloaded.
+    for (const [endpoint, sender, receiver] of [[0, a, b], [1, b, a]] as const) {
+      await sender.reload()
+      await sender.getByTestId('sidebar-chat-list').getByRole('button').first().click()
+      await expect(sender.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 30_000 })
+      await expect.poll(() => seed.connectedPeers().slice().sort()).toEqual(initialPeerIds.slice().sort())
+      const filename = `recovered-${endpoint}.jpg`
+      const freshBytes = Buffer.concat([Buffer.from(bytes), randomBytes(32)])
+      const freshHash = createHash('sha256').update(freshBytes).digest('hex')
+      await expect(receiver.getByAltText(filename)).toHaveCount(0)
+      await sender.locator('input[type=file]').first().setInputFiles({
+        name: filename, mimeType: 'image/jpeg', buffer: freshBytes,
+      })
+      await expect(sender.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+      await sender.getByRole('button', { name: 'Send', exact: true }).click()
+      const receivedImage = receiver.getByAltText(filename)
+      await expect(receivedImage).toBeVisible({ timeout: 30_000 })
+      const received = await receivedImage.evaluate(async element => {
+        const url = new URL((element as HTMLImageElement).src)
+        if (url.protocol !== 'blob:') throw new Error('Peer image must render from its downloaded local bytes')
+        const data = await (await fetch(url.href)).arrayBuffer()
+        return {
+          bytes: data.byteLength,
+          hash: Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data)),
+            byte => byte.toString(16).padStart(2, '0')).join(''),
+        }
+      })
+      expect(received).toEqual({ bytes: freshBytes.length, hash: freshHash })
+      // The seed authenticates the real browser endpoints. A rotated or extra
+      // endpoint must not masquerade as retention of the registered device ID.
+      await expect.poll(() => seed.connectedPeers().slice().sort()).toEqual(initialPeerIds.slice().sort())
+      console.log('PEER_RELOAD_RECOVERY', JSON.stringify({
+        app: 'iris-chat', endpoint, reloaded: true, identityPreserved: true,
+        peerRecovered: true, freshHash, bytes: received.bytes, transport: 'routed-fips',
+      }))
+    }
     await a.context().close()
     await b.reload()
     await b.getByTestId('sidebar-chat-list').getByRole('button').first().click()
