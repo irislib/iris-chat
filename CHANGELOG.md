@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.64 - 2026-11-11
+
+- Private messages no longer name the device that receives them. Every message event used to carry the receiving device's public key outside the encryption, so anyone reading a message server could link each delivery, and each group message's burst of deliveries, to the devices receiving it. Message events now carry only what is needed to decrypt them. Messages from apps that have not updated are still received.
+- Calls to someone whose app has not updated will not wake that app until it is updated. Messages keep working in both directions. Update native apps to their release with the same change.
+- A message that an earlier version of this site left waiting to be sent, for example while offline, is not sent after this update. Send it again.
+- Keep receiving messages with a very large number of contacts. A request for more than about 480 sender keys was refused whole, which stopped delivery.
+
 ## 2.6.48 - 2026-10-15
 
 - Mention people with `@` and add emoji with `:` in direct and group chats. Mention identities survive editing, undo, and redo, including people with the same name.
