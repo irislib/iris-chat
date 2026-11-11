@@ -1,4 +1,4 @@
-import { canRetryWorkerPublication } from './workerPublicationPolicy'
+import { canRetryWorkerPublication, type PublicationCarrier } from './workerPublicationPolicy'
 import { isPrivateRelayEvent, type RuntimeEventStore } from 'nostr-pubsub/private-relays'
 import type { RuntimeOutboxEntry } from 'nostr-pubsub'
 import Dexie, { type Table } from 'dexie'
@@ -20,11 +20,30 @@ export function createEventStore(owner = 'public', lane?: 'public' | 'private') 
   })
   const pending = store.listPending.bind(store)
   pendingReaders.set(store, pending)
+  // A queued message envelope looks exactly like shared group ciphertext, so the
+  // queue keeps who vouched for it beside its retry row. Rows without that
+  // record, including every row from an older version, stay local.
+  const vouchers = pointers.roots as unknown as Table<{ carrier: PublicationCarrier; at: number }, string>
+  const voucherKey = (id: string) => `carrier/${id}`
+  const vouched = async (ids: string[]): Promise<Set<string>> => {
+    if (!ids.length) return new Set()
+    const rows = await vouchers.bulkGet(ids.map(voucherKey))
+    return new Set(ids.filter((_, index) => rows[index]?.carrier === 'pairwise'))
+  }
   // Keep old signed data locally, but never expose it to automatic publication.
   // Filtering on every read also covers a still-open older tab adding a row.
-  store.listPending = async () => (await pending()).filter(entry => canRetryWorkerPublication(entry.event) &&
-    (!lane || isPrivateRelayEvent(entry.event) === (lane === 'private')))
-  return store
+  store.listPending = async () => {
+    const entries = await pending()
+    const pairwise = await vouched(entries.filter(entry => [1060, 21111].includes(entry.event.kind)).map(entry => entry.event.id))
+    return entries.filter(entry => canRetryWorkerPublication(entry.event, pairwise.has(entry.event.id) ? 'pairwise' : undefined) &&
+      (!lane || isPrivateRelayEvent(entry.event) === (lane === 'private')))
+  }
+  const deletePending = store.deletePending.bind(store)
+  store.deletePending = async id => { await deletePending(id); await vouchers.delete(voucherKey(id)) }
+  return Object.assign(store, {
+    /** Called only for an envelope the publication context vouched for. */
+    vouchPending: async (id: string, carrier: PublicationCarrier) => { await vouchers.put({ carrier, at: Date.now() }, voucherKey(id)) },
+  })
 }
 
 /** Copy before retiring an old mixed-lane retry; failed migrations remain recoverable. */

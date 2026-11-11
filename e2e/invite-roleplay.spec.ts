@@ -93,7 +93,9 @@ test('a third member reaches both existing members without creating empty direct
       await expect(page.getByTestId('sidebar-chat-list').getByText('No messages yet', { exact: true })).toHaveCount(0)
     }
     expect(testRelay.publishedEvents.some(event=>event.kind===37368 && event.tags.some(tag=>tag[0]==='type' && tag[1]==='group_roster'))).toBe(false)
-    expect(testRelay.publishedEvents.filter(event=>event.kind===1060).every(event=>event.tags.filter(tag=>tag[0]==='p').length===1)).toBe(true)
+    // A message event names no recipient: only the version and header are outside the encryption.
+    expect(testRelay.publishedEvents.filter(event=>event.kind===1060).length).toBeGreaterThan(0)
+    expect(testRelay.publishedEvents.filter(event=>event.kind===1060).every(event=>event.tags.map(tag=>tag[0]).join()==='v,header')).toBe(true)
     expect(requests.some(filter=>filter.authors?.some(author=>sharedAuthors.has(author)))).toBe(false)
     expect(requests.some(filter=>Array.isArray(filter['#type']) && filter['#type'].includes('group_roster'))).toBe(false)
   } finally {

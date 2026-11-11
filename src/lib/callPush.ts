@@ -1,6 +1,7 @@
 import { finalizeEvent, generateSecretKey, getEventHash, verifyEvent, type VerifiedEvent } from 'nostr-tools'
 import { hasMetadataPrivacyVersion, Invite, type Rumor } from 'nostr-double-ratchet'
 import { CALL_CODEC, validCallId } from './callProtocol'
+import { namesNoRecipient } from './workerPublicationPolicy'
 
 export const CALL_WAKE_KIND = 21111
 export const CALL_WAKE_SIGNAL_KIND = 21112
@@ -27,11 +28,30 @@ const pending = new Map<string, {
   active: () => boolean
 }>()
 
-/** The disposable routing signer conveys no identity; only the ratchet authenticates the caller. */
+type SendingSession = { state?: { ourCurrentNostrKey?: { publicKey?: string } | null } | null } | null | undefined
+type SessionRecords = ReadonlyMap<string, { devices?: ReadonlyMap<string, { activeSession?: unknown; inactiveSessions?: unknown[] }> }>
+
+/**
+ * A message event names nobody. The device it was encrypted for is the one whose
+ * session signed it with its current ratchet key; read it while that is still so.
+ */
+export function envelopeRecipientDevice(records: SessionRecords, envelope: Pick<VerifiedEvent, 'kind' | 'pubkey'>): string | undefined {
+  if (envelope.kind !== 1060) return
+  for (const record of records.values()) {
+    for (const [device, sessions] of record.devices ?? []) {
+      const all = [sessions.activeSession, ...(sessions.inactiveSessions ?? [])] as SendingSession[]
+      if (all.some(session => session?.state?.ourCurrentNostrKey?.publicKey === envelope.pubkey)) return device
+    }
+  }
+}
+
+/**
+ * The disposable routing signer conveys no identity; only the ratchet authenticates the caller.
+ * `recipient` comes from the delivery record: the envelope itself can never supply it.
+ */
 export function callWakeEvent(recipient: string, envelope: VerifiedEvent, bootstrap?: VerifiedEvent): VerifiedEvent {
-  if (envelope.kind !== 1060 || !hasMetadataPrivacyVersion(envelope) || !verifyEvent({ ...envelope }) ||
-    envelope.tags.filter(tag => tag[0] === 'p').length !== 1 ||
-    !envelope.tags.some(tag => tag[0] === 'p' && tag[1] === recipient)) throw new Error('Invalid call wake envelope')
+  if (!/^[0-9a-f]{64}$/.test(recipient) || !namesNoRecipient(envelope) || !hasMetadataPrivacyVersion(envelope) ||
+    !verifyEvent({ ...envelope })) throw new Error('Invalid call wake envelope')
   if (bootstrap && (bootstrap.kind !== 1059 || !hasMetadataPrivacyVersion(bootstrap) || !verifyEvent({ ...bootstrap }) ||
     !bootstrap.tags.some(tag => tag[0] === 'p' && tag[1] === invites.get(recipient)?.ephemeral))) {
     throw new Error('Invalid call bootstrap')
@@ -50,8 +70,11 @@ export function callWakeEvent(recipient: string, envelope: VerifiedEvent, bootst
   return event
 }
 
-/** Called only after the normal ratchet outbox durably stores this exact ciphertext. */
-export async function queuedCallWakeEnvelope(envelope: VerifiedEvent, innerEventId?: string): Promise<void> {
+/**
+ * Called only after the normal ratchet outbox durably stores this exact ciphertext.
+ * `recipient` is the device the session behind a message envelope belongs to.
+ */
+export async function queuedCallWakeEnvelope(envelope: VerifiedEvent, innerEventId?: string, recipient?: string): Promise<void> {
   if (envelope.kind === 1059 && hasMetadataPrivacyVersion(envelope) && verifyEvent({ ...envelope })) {
     const ephemeral = envelope.tags.find(tag => tag[0] === 'p')?.[1]
     if (ephemeral) {
@@ -65,7 +88,6 @@ export async function queuedCallWakeEnvelope(envelope: VerifiedEvent, innerEvent
   const item = pending.get(innerEventId)
   if (!item) return
   if (Date.now() >= item.until || !item.active()) { pending.delete(innerEventId); return }
-  const recipient = envelope.tags.find(tag => tag[0] === 'p')?.[1]
   if (!recipient || !item.targets.has(recipient)) return
   item.envelopes.set(recipient, envelope)
   const invite = invites.get(recipient)
@@ -88,7 +110,7 @@ export async function acceptedCallWakeBootstrap(event: VerifiedEvent): Promise<v
   if (!entry || entry.event.id !== event.id) return
   entry.acknowledged = true
   for (const [inner, item] of pending) {
-    for (const envelope of item.envelopes.values()) await queuedCallWakeEnvelope(envelope, inner)
+    for (const [recipient, envelope] of item.envelopes) await queuedCallWakeEnvelope(envelope, inner, recipient)
   }
 }
 

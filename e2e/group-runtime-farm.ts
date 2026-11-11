@@ -1,5 +1,5 @@
 import { setImmediate as yieldToIo } from 'node:timers/promises'
-import { createNostrRuntime, createPrivateRelayPublisher, createAnonymousRelayDiscovery, splitRelayDiscoveryFilters, isPrivateRelayEvent, MemoryEventStore } from 'nostr-pubsub/private-relays'
+import { createNostrRuntime, createPrivateRelayPublisher, isPrivateRelayEvent, MemoryEventStore } from 'nostr-pubsub/private-relays'
 import { finalizeEvent, generateSecretKey, getPublicKey, getEventHash, type Filter, type UnsignedEvent, type VerifiedEvent } from 'nostr-tools'
 import {
   AppKeys, CHAT_MESSAGE_KIND, GROUP_SENDER_KEY_DISTRIBUTION_KIND, InMemoryStorageAdapter, NdrRuntime,
@@ -35,7 +35,6 @@ class SnapshotStorage implements StorageAdapter {
 class RelayClient {
   private readonly receiver
   private readonly privateSender
-  private readonly discovery
   readonly publishedDirectEvents = new Map<string, { author: string; recipients: string[] }>()
   readonly receivedDirectIds = new Set<string>()
   readonly ready = Promise.resolve()
@@ -46,22 +45,11 @@ class RelayClient {
     this.receiver = createNostrRuntime({ relays: [url], store, websocketImplementation: globalThis.WebSocket,
       historyTimeoutMs: 1000, signAuthEvent: async (_relay, template) => finalizeEvent(template, authenticationKey) })
     this.privateSender = createPrivateRelayPublisher({ relays: [url], websocketImplementation: globalThis.WebSocket })
-    this.discovery = createAnonymousRelayDiscovery({ relays: [url], store, websocketImplementation: globalThis.WebSocket,
-      historyTimeoutMs: 1000 })
-  }
-
-  private routes(filter: Filter) {
-    const split = splitRelayDiscoveryFilters([filter])
-    return [
-      ...(split.receiver.length ? [{ runtime: this.receiver, filters: split.receiver }] : []),
-      ...split.discovery.map(filters => ({ runtime: this.discovery, filters })),
-    ]
   }
 
   subscribe = (filter: Filter, event: (event: VerifiedEvent) => void, eose?: () => void) => {
-    const completed = new Set<number>()
-    const routes = this.routes(filter)
-    const subscriptions = routes.map(({ runtime, filters }, index) => runtime.subscribe(filters, {
+    // Profile, device and invite lookups share the account runtime's connection.
+    const subscription = this.receiver.subscribe([filter], {
       onEvent: incoming => {
         if (incoming.kind === 1060) {
           this.receivedDirectIds.add(incoming.id)
@@ -70,27 +58,22 @@ class RelayClient {
         // Match the production cross-bundle verification boundary.
         event(structuredClone(incoming) as VerifiedEvent)
       },
-      onEose: status => {
-        if (!status.complete) return
-        completed.add(index)
-        if (completed.size === routes.length) eose?.()
-      },
-    }))
-    return () => { for (const subscription of subscriptions) subscription.close() }
+      onEose: status => { if (status.complete) eose?.() },
+    })
+    return () => subscription.close()
   }
 
   fetch = async (filter: Filter): Promise<VerifiedEvent[]> => {
-    const reports = await Promise.all(this.routes(filter).map(({ runtime, filters }) => runtime.query(filters)))
-    if (reports.some(report => !report.complete)) throw new Error('Fixture discovery did not receive complete relay history')
-    return [...new Map(reports.flatMap(report => report.events).map(event => [event.id, structuredClone(event) as VerifiedEvent])).values()]
+    const report = await this.receiver.query([filter])
+    if (!report.complete) throw new Error('Fixture discovery did not receive complete relay history')
+    return report.events.map(event => structuredClone(event) as VerifiedEvent)
   }
 
-  publish = async (event: VerifiedEvent) => {
+  publish = async (event: VerifiedEvent, recipients: string[] = []) => {
     if (event.kind === 37368 && event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
       || [10445, 10446, 10447, 21113].includes(event.kind)) throw new Error('Private group intermediates cannot be public')
-    if (event.kind === 1060) this.publishedDirectEvents.set(event.id, {
-      author: event.pubkey, recipients: event.tags.filter(tag => tag[0] === 'p').map(tag => tag[1]!),
-    })
+    // A message event names nobody; its sender's session record supplies the device.
+    if (event.kind === 1060) this.publishedDirectEvents.set(event.id, { author: event.pubkey, recipients })
     const result = await (isPrivateRelayEvent(event) ? this.privateSender : this.receiver)
       .publish(event, { requireAck: true, queue: false })
     if (!result.remoteAccepted) throw new Error('Fixture publication was not acknowledged by its relay')
@@ -98,7 +81,7 @@ class RelayClient {
   }
 
   async close() {
-    await Promise.all([this.discovery.close(), this.privateSender.close(), this.receiver.close()])
+    await Promise.all([this.privateSender.close(), this.receiver.close()])
   }
 }
 
@@ -127,7 +110,7 @@ export class GroupFarmDevice {
       ...(this.ownerIdentityKey ? { ownerIdentityKey: this.ownerIdentityKey } : {}),
       nostrSubscribe: relay.subscribe, nostrFetch: relay.fetch,
       nostrPublish: async (event: UnsignedEvent | VerifiedEvent) => {
-        if ('sig' in event) return relay.publish(event)
+        if ('sig' in event) return relay.publish(event, this.sessionDevices(event.pubkey))
         if (!this.ownerIdentityKey) throw new Error('Linked runtime must sign with its own device key')
         return relay.publish(finalizeEvent(event, this.ownerIdentityKey))
       },
@@ -196,6 +179,19 @@ export class GroupFarmDevice {
   }
 
   getState() { return this.runtime.getState() }
+
+  /** Devices whose session currently signs with this ratchet key. */
+  private sessionDevices(author: string): string[] {
+    const devices: string[] = []
+    for (const record of this.runtime.getSessionUserRecords().values()) {
+      for (const [device, sessions] of record.devices ?? []) {
+        const all = [sessions.activeSession, ...(sessions.inactiveSessions ?? [])] as Array<
+          { state?: { ourCurrentNostrKey?: { publicKey?: string } } | null } | null | undefined>
+        if (all.some(session => session?.state?.ourCurrentNostrKey?.publicKey === author)) devices.push(device)
+      }
+    }
+    return devices
+  }
 
   sendContact(owner: string, content: string) { return this.runtime.sendMessage(owner, content) }
 

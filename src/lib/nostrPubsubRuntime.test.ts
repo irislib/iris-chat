@@ -11,7 +11,7 @@ import type {
 
 import { NostrPubsubRuntime as SharedMesh } from './nostrPubsubRuntime'
 import { createNostrRuntime, FipsPubsubWireCodec, type NostrFilter, type NostrEvent } from 'nostr-pubsub'
-import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
+import { createNostrWorkerRuntime, MESSAGE_AUTHOR_REQUEST_BYTES } from './nostrWorkerRuntime'
 import { RecordReader } from './deviceSyncTcp'
 import { TestRelay } from '../../e2e/test-relay'
 
@@ -20,10 +20,12 @@ afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runt
 
 // Exercise Chat's adapter through the real common runtime rather than a second app-owned bus.
 class NostrPubsubRuntime extends SharedMesh {
-  readonly events = createNostrRuntime({ websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket, relays: [], batchWindowMs: 1, historyTimeoutMs: 100, publishTimeoutMs: 100 })
+  readonly events = createNostrRuntime({ websocketImplementation: WebSocket as unknown as typeof globalThis.WebSocket, relays: [], batchWindowMs: 1, historyTimeoutMs: 100, publishTimeoutMs: 100,
+    maxFilterBytesPerBatch: MESSAGE_AUTHOR_REQUEST_BYTES })
   constructor() { super(); runtimes.push(this.events) }
-  activate(node: FipsPubsubClientNode, peer: string, peers: () => readonly string[]) {
-    return super.activate(node, peer, peers, this.events)
+  activate(node: FipsPubsubClientNode, peer: string, peers: () => readonly string[], _runtime?: unknown, _announcements?: unknown,
+    pairwiseCarriers?: (ids: string[]) => Promise<ReadonlySet<string>>) {
+    return super.activate(node, peer, peers, this.events, undefined, pairwiseCarriers)
   }
   subscribe(filter: NostrFilter, onEvent: (event: NostrEvent) => void) {
     const subscription = this.events.subscribe([filter], { onEvent })
@@ -158,7 +160,9 @@ describe('NostrPubsubRuntime', () => {
       const receiving = worker.subscribe([{ kinds: [1059], '#p': [ownInvite.inviterEphemeralPublicKey] }], { onEvent() {} })
       stops.push(() => receiving.close())
       const received = vi.fn()
-      stops.push(sibling.subscribe({ kinds: [1060], '#p': [peerDevice] }, received))
+      // A message names no recipient: the sibling follows the sender's ratchet key.
+      const session = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
+      stops.push(sibling.subscribe({ kinds: [1060], authors: [session.state.ourCurrentNostrKey!.publicKey] }, received))
       const pump = async () => {
         await Promise.all([local.idle(), sibling.idle(), contact.idle()])
         await new Promise(resolve => setTimeout(resolve, 0))
@@ -167,9 +171,10 @@ describe('NostrPubsubRuntime', () => {
       await worker.query([{ kinds: [0, 37368], authors: [owner, peerOwner] }], {
         cache: 'network-only', deadline: Date.now() + 2000,
       })
-      const sealed = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true,
-        generateSecretKey()).sendEvent({ kind: 14, content: 'private fixture' }, [['p', peerDevice]]).event
-      const publication = await worker.publish(sealed, { relays: [], sources: ['fips'], queue: false })
+      const sealed = session.sendEvent({ kind: 14, content: 'private fixture' }).event
+      expect(sealed.tags.map(tag => tag[0])).toEqual(['v', 'header'])
+      await expect(worker.publish(sealed, { relays: [], sources: ['fips'], queue: false })).rejects.toThrow('Group messages must use private sessions')
+      const publication = await worker.publish(sealed, { relays: [], sources: ['fips'], queue: false, carrier: 'pairwise' })
       expect(publication.sources).toContainEqual({ id: 'fips', accepted: false, queued: true })
       for (let turn = 0; turn < 20 && !received.mock.calls.length; turn++) await pump()
       expect(received).toHaveBeenCalledTimes(1)
@@ -183,6 +188,7 @@ describe('NostrPubsubRuntime', () => {
       expect(requests).toContainEqual(expect.objectContaining({ kinds: [1059], '#p': [ownInvite.inviterEphemeralPublicKey] }))
       expect(requests.every(filter => !filter.kinds?.some(kind => [0, 30078, 37368].includes(kind)))).toBe(true)
       expect(JSON.stringify(requests)).not.toContain(peerOwner)
+      expect(JSON.stringify(sent)).not.toContain(peerDevice)
       expect(sent.some(frame => frame.message.type === 'event' && frame.message.event.id === sealed.id)).toBe(true)
     } finally {
       stops.forEach(stop => stop())
@@ -190,6 +196,59 @@ describe('NostrPubsubRuntime', () => {
       await worker.close()
       await relay.stop()
       warning.mockRestore()
+    }
+  })
+
+  it('replays cached message envelopes to own devices only when a private session produced them', async () => {
+    const network = new MemoryFipsNetwork()
+    const alice = new NostrPubsubRuntime(), bob = new NostrPubsubRuntime()
+    const seal = (content: string) => {
+      const session = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
+      return session.sendEvent({ kind: 14, content }).event
+    }
+    const carrier = seal('pairwise carrier'), lost = seal('carrier whose record was trimmed')
+    // Shared group ciphertext is signed by a sender key and has the very same tags.
+    const sharedGroup = finalizeEvent({ kind: 1060, created_at: carrier.created_at, content: 'shared group ciphertext',
+      tags: [['v', '2'], ['header', 'opaque']] }, generateSecretKey())
+    const tagged = finalizeEvent({ kind: 1060, created_at: carrier.created_at, content: carrier.content,
+      tags: [...carrier.tags, ['p', getPublicKey(generateSecretKey())]] }, generateSecretKey())
+    const cached = [carrier, lost, sharedGroup, tagged]
+    for (const event of cached) await alice.events.store.put(event)
+    const asked: string[][] = []
+    const received = vi.fn()
+    try {
+      // The durable outbox vouches by id; a recipient tag is refused even then.
+      await alice.activate(network.node(PEER_A), PEER_A, () => [PEER_B], undefined, undefined, async ids => {
+        asked.push(ids)
+        return new Set([carrier.id, tagged.id])
+      })
+      await bob.activate(network.node(PEER_B), PEER_B, () => [PEER_A])
+      bob.subscribe({ kinds: [1060], authors: cached.map(event => event.pubkey) }, received)
+      await settle([alice, bob], () => received.mock.calls.length === 1)
+      await settle([alice, bob], () => true)
+      expect(received.mock.calls.map(([event]: [NostrEvent]) => event.id)).toEqual([carrier.id])
+      expect(asked.length).toBeGreaterThan(0)
+      expect(new Set(asked.flat())).toEqual(new Set(cached.map(event => event.id)))
+      const replayed = network.messages().filter(frame => frame.from === PEER_A && frame.message.type === 'event')
+        .map(frame => (frame.message as { event: NostrEvent }).event.id)
+      expect(new Set(replayed)).toEqual(new Set([carrier.id]))
+    } finally {
+      await Promise.all([alice.deactivate(), bob.deactivate()])
+    }
+    // With no record at all, nothing of this kind leaves the cache.
+    const silent = new NostrPubsubRuntime(), listener = new NostrPubsubRuntime()
+    const none = vi.fn()
+    const quiet = new MemoryFipsNetwork()
+    for (const event of cached) await silent.events.store.put(event)
+    try {
+      await silent.activate(quiet.node(PEER_A), PEER_A, () => [PEER_B])
+      await listener.activate(quiet.node(PEER_B), PEER_B, () => [PEER_A])
+      listener.subscribe({ kinds: [1060], authors: cached.map(event => event.pubkey) }, none)
+      for (let turn = 0; turn < 5; turn++) await settle([silent, listener], () => true)
+      expect(none).not.toHaveBeenCalled()
+      expect(quiet.messages().some(frame => frame.from === PEER_A && frame.message.type === 'event')).toBe(false)
+    } finally {
+      await Promise.all([silent.deactivate(), listener.deactivate()])
     }
   })
 
@@ -243,6 +302,33 @@ describe('NostrPubsubRuntime', () => {
     } finally {
       await bob.deactivate()
       await alice.deactivate()
+    }
+  })
+
+  it('carries a full 1,000-author chunk as two parts, where one frame would carry nothing', async () => {
+    const network = new MemoryFipsNetwork()
+    const alice = new NostrPubsubRuntime(), bob = new NostrPubsubRuntime()
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const keys = Array.from({ length: 2 }, () => generateSecretKey())
+    const filler = (count: number) => Array.from({ length: count }, () => getPublicKey(generateSecretKey()))
+    const whole = vi.fn(), parts = vi.fn()
+    await alice.activate(network.node(PEER_A), PEER_A, () => [PEER_B])
+    await bob.activate(network.node(PEER_B), PEER_B, () => [PEER_A])
+    try {
+      // One filter with every author exceeds the 65,525-byte frame and is dropped whole.
+      bob.subscribe({ kinds: [1060], authors: [getPublicKey(keys[0]!), ...filler(999)] }, whole)
+      bob.subscribe({ kinds: [1060], authors: [getPublicKey(keys[1]!), ...filler(499)] }, parts)
+      bob.subscribe({ kinds: [1060], authors: filler(500) }, parts)
+      await settle([alice, bob], () => true)
+      for (const key of keys) await alice.publish(finalizeEvent({ kind: 1060, created_at: 1_700_000_010, tags: [], content: 'chunk' }, key))
+      await settle([alice, bob], () => parts.mock.calls.length === 1)
+      await settle([alice, bob], () => true)
+      expect(whole).not.toHaveBeenCalled()
+      expect(parts).toHaveBeenCalledTimes(1)
+    } finally {
+      await bob.deactivate()
+      await alice.deactivate()
+      warning.mockRestore()
     }
   })
 

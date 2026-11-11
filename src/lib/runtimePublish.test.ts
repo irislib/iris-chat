@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { VerifiedEvent } from 'nostr-tools'
 import { db } from './storage'
 import { DexieStorageAdapter } from './sessionManagerStorage'
-import { createRuntimePublish, getPublishedRelayUrls } from './runtimePublish'
+import { markSharedGroupCiphertext } from 'nostr-double-ratchet'
+import { createRuntimePublish, getPublishedRelayUrls, pairwiseCarrierIds } from './runtimePublish'
 
 const waitFor = (assertion: () => void | Promise<void>) =>
   vi.waitFor(assertion, { interval: 1, timeout: 1000 })
@@ -21,14 +22,15 @@ const event = (id: string): VerifiedEvent =>
     pubkey: 'e'.repeat(64),
     created_at: 100,
     kind: 1060,
-    tags: [['p', 'f'.repeat(64)]],
+    tags: [['v', '2'], ['header', `opaque:${id}`]],
     content: `encrypted:${id}`,
     sig: id.repeat(128),
   }) as VerifiedEvent
 const accepted = () => new Set([{ url: 'wss://relay.example' }])
 const queues: ReturnType<typeof createRuntimePublish>[] = []
 const storage = new DexieStorageAdapter()
-const rows = async () => (await db.sessionManager.toArray()).map((row) => row.value)
+// Queue rows only; the record of which envelopes the queue accepted outlives them.
+const rows = async () => (await db.sessionManager.where('key').startsWith('v1/runtime-outbox/').toArray()).map((row) => row.value)
 const queueFor = (
   publish: Parameters<typeof createRuntimePublish>[0]['publish'],
   options: Partial<Parameters<typeof createRuntimePublish>[0]> = {}
@@ -105,7 +107,7 @@ describe('durable runtime publication', () => {
     const publish = vi.fn(async () => accepted())
     queueFor(publish, { storage: new DexieStorageAdapter(), onAcceptedRelays }).start()
     await waitFor(() => expect(publish).toHaveBeenCalledOnce())
-    expect(publish.mock.calls[0]).toEqual([event('a'), expect.any(AbortSignal), undefined])
+    expect(publish.mock.calls[0]).toEqual([event('a'), expect.any(AbortSignal), undefined, 'pairwise'])
     await waitFor(async () => expect(await rows()).toEqual([]))
     expect(onAcceptedRelays).toHaveBeenCalledExactlyOnceWith('inner-a', [
       'wss://relay.example',
@@ -337,7 +339,7 @@ it('retires blocked direct retries and holds newer envelopes across restart with
   const queue = queueFor(publish, { canPublish, onlineTarget })
   queue.start()
   await waitFor(async () => expect(await rows()).toHaveLength(1))
-  expect(publish.mock.calls).toEqual([[event('c'), expect.any(AbortSignal), { recipientOwnerPubkey: other, createdAt: 90 }]])
+  expect(publish.mock.calls).toEqual([[event('c'), expect.any(AbortSignal), { recipientOwnerPubkey: other, createdAt: 90 }, 'pairwise']])
   blocked = false
   onlineTarget.dispatchEvent(new Event('online'))
   await waitFor(async () => expect(await rows()).toEqual([]))
@@ -356,4 +358,66 @@ it('aborts direct transport as soon as its block policy changes', async () => {
   queue.cancelDirect(target)
   await cancelled
   expect(await rows()).toHaveLength(1)
+})
+
+describe('message envelopes name no recipient and come from private sessions', () => {
+  const tagged = (id: string) => ({ ...event(id), tags: [...event(id).tags, ['p', 'f'.repeat(64)]] }) as VerifiedEvent
+
+  it('refuses to queue a recipient tag, any other tag, or shared group ciphertext', async () => {
+    const publish = vi.fn(async () => accepted())
+    const queue = queueFor(publish)
+    await expect(queue.publish(tagged('a'))).rejects.toThrow('must not name a recipient')
+    await expect(queue.enqueue({ ...event('b'), tags: [...event('b').tags, ['expiration', '1']] })).rejects.toThrow('only the version and header')
+    await expect(queue.enqueue({ ...event('b'), tags: [['v', '2']] })).rejects.toThrow('only the version and header')
+    // Same shape as a pairwise carrier: only the library that made it can tell.
+    markSharedGroupCiphertext(event('e').id)
+    await expect(queue.publish(event('e'))).rejects.toThrow('Group messages must use private sessions')
+    expect(publish).not.toHaveBeenCalled()
+    expect(await db.sessionManager.count()).toBe(0)
+  })
+
+  it('never publishes a stored envelope it did not accept itself, after a restart or on any retry', async () => {
+    // Left by an older version: a carrier naming its device, and ciphertext whose
+    // origin nothing recorded. After a reload no memory can tell the second apart.
+    const legacy = tagged('a'), unknown = event('b')
+    await storage.put('v1/runtime-outbox/owner-a/' + legacy.id, { event: legacy, innerEventId: 'legacy' })
+    await storage.put('v1/runtime-outbox/owner-a/' + unknown.id, { event: unknown, innerEventId: 'unknown' })
+    const first = queueFor(async () => new Set())
+    await expect(first.publish(event('c'), 'accepted')).rejects.toThrow('not accepted')
+    first.close()
+    db.close()
+    await db.open()
+
+    const publish = vi.fn(async (_event: VerifiedEvent) => accepted())
+    const onError = vi.fn()
+    const onlineTarget = new EventTarget()
+    const queue = queueFor(publish, { storage: new DexieStorageAdapter(), onError, onlineTarget })
+    queue.start()
+    await waitFor(() => expect(publish).toHaveBeenCalledOnce())
+    expect(publish.mock.calls[0]).toEqual([event('c'), expect.any(AbortSignal), undefined, 'pairwise'])
+    onlineTarget.dispatchEvent(new Event('online'))
+    await waitFor(async () => expect((await rows()).map(row => (row as { event: VerifiedEvent }).event.id).sort()).toEqual([legacy.id, unknown.id].sort()))
+    onlineTarget.dispatchEvent(new Event('online'))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(publish).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+    // Nothing is erased, and only the accepted envelope may be replayed to own devices.
+    expect(await pairwiseCarrierIds(storage, 'owner-a', [legacy.id, unknown.id, event('c').id])).toEqual(new Set([event('c').id]))
+    expect(await pairwiseCarrierIds(storage, 'owner-b', [event('c').id])).toEqual(new Set())
+  })
+
+  it('keeps the record of every queued envelope while trimming old delivered ones', async () => {
+    const queue = queueFor(async () => new Set())
+    await queue.enqueue(event('a'), 'still-queued')
+    const delivered = (index: number) => index.toString(16).padStart(64, '0')
+    for (let index = 0; index < 40; index++) {
+      await db.sessionManager.put({ key: `v1/pairwise-carrier/owner-a/${delivered(index)}`, value: 1000 + index })
+    }
+    // Older than every delivered envelope, but still waiting to be sent.
+    await db.sessionManager.put({ key: 'v1/pairwise-carrier/owner-a/' + event('a').id, value: 1 })
+    queueFor(async () => new Set(), { carrierRecordLimit: 32 }).start()
+    await waitFor(async () => expect(await db.sessionManager.where('key').startsWith('v1/pairwise-carrier/owner-a/').count()).toBe(24))
+    const oldest = delivered(0), newest = delivered(39)
+    expect(await pairwiseCarrierIds(storage, 'owner-a', [event('a').id, oldest, newest])).toEqual(new Set([event('a').id, newest]))
+  })
 })

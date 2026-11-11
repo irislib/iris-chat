@@ -1,5 +1,6 @@
 import type { Event, EventTemplate } from 'nostr-tools'
-import type { NostrRuntime, RuntimeSource, RuntimeRelayStats, RuntimeSubscriptionHandlers, RuntimeSubscribeOptions, NostrFilter } from 'nostr-pubsub'
+import type { NostrEvent, NostrRuntime, RuntimeSource, RuntimeRelayStats, RuntimeSubscriptionHandlers, RuntimeSubscribeOptions, NostrFilter } from 'nostr-pubsub'
+import type { WorkerPublishOptions } from './workerPublicationPolicy'
 import { serveNostrSource } from '@hashtree/worker/nostr-source-port'
 
 /** The UI retains keys; one worker owns relay connections, verification, and durable indexes. */
@@ -74,7 +75,9 @@ export class NostrWorkerClient {
     const { signal, ...serializable } = options
     return this.call('query', [filters, serializable], signal)
   }
-  publish: NostrRuntime['publish'] = (event, options = {}) => this.call('publish', [event, options])
+  // `carrier` vouches for a message envelope; the worker refuses one without it.
+  publish = (event: NostrEvent, options: WorkerPublishOptions = {}): ReturnType<NostrRuntime['publish']> =>
+    this.call('publish', [event, options])
   subscribe: NostrRuntime['subscribe'] = (filters, handlers, options = {}) => {
     const worker = this.start(), id = ++this.nextId
     const { signal, ...serializable } = options

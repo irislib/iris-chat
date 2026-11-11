@@ -11,8 +11,14 @@ type Runtime = Pick<NostrRuntime, 'addSource' | 'removeSource' | 'query'>
 export class NostrPubsubRuntime {
   private client?: FipsNostrPubsubClient
   private runtime?: Runtime
+  /**
+   * `pairwiseCarriers` answers which cached message envelopes this account's
+   * private sessions produced. Shared group ciphertext has the same shape, so
+   * a kind 1060 without that record is never replayed.
+   */
   async activate(node: FipsPubsubClientNode, localPeerId: string,
-    peers: () => readonly string[], runtime: Runtime, publicAnnouncements?: NostrEventReader): Promise<void> {
+    peers: () => readonly string[], runtime: Runtime, publicAnnouncements?: NostrEventReader,
+    pairwiseCarriers: (ids: string[]) => Promise<ReadonlySet<string>> = async () => new Set()): Promise<void> {
     await this.deactivate()
     this.runtime = runtime
     // Device authorization uses x-only keys. FIPS can authenticate either
@@ -36,7 +42,9 @@ export class NostrPubsubRuntime {
         const announcements = await publicAnnouncements?.query(filters, options)
         // Privately discovered peer addresses must never leave the identified
         // receiver. The separate reader admits only this device's own advert.
-        const events = [...result.events.filter(event => event.kind !== 37195 && canRetryWorkerPublication(event)).map(event => ({
+        const pairwise = await pairwiseCarriers(result.events.filter(event => event.kind === 1060).map(event => event.id))
+        const events = [...result.events.filter(event => event.kind !== 37195 &&
+          canRetryWorkerPublication(event, pairwise.has(event.id) ? 'pairwise' : undefined)).map(event => ({
           event: verifyNostrEvent(event), source: localIndexSource('chat-cache'), priority: SOURCE_PRIORITY_LOCAL_INDEX,
         })), ...(announcements?.events ?? [])]
         const byId = new Map(events.map(item => [item.event.id, item]))

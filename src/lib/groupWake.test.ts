@@ -26,7 +26,7 @@ it('sends group data only through distinct private sessions and resumes unfinish
   const deliver=async (recipient:string,rumor:Rumor) => {
     if (rumor.kind===PRIVATE_GROUP_DELIVERY_KIND && recipient===other && !online) throw new Error('offline')
     const pair=sessions.get(recipient)!
-    const wire=pair.send.sendEvent(rumor,[['p',pair.device]]).event
+    const wire=pair.send.sendEvent(rumor).event
     wires.push(wire)
     // Every delivery uses persisted receiving state, including the first reply.
     const restored=new Session(deserializeSessionState(serializeSessionState(pair.receive)))
@@ -46,11 +46,11 @@ it('sends group data only through distinct private sessions and resumes unfinish
   expect(new Set(wires.map(event=>event.pubkey)).size).toBe(3)
   for (const wire of wires) {
     const serialized = JSON.stringify(wire)
-    for (const hidden of [owner,other,sibling,device,sent.outer.pubkey,data.id,sent.outer.id]) {
+    for (const hidden of [owner,other,sibling,device,...[...sessions.values()].map(pair=>pair.device),sent.outer.pubkey,data.id,sent.outer.id]) {
       expect(serialized).not.toContain(hidden)
     }
     expect(wire.kind).toBe(1060)
-    expect(wire.tags.map(tag=>tag[0])).toEqual(['v','header','p'])
+    expect(wire.tags.map(tag=>tag[0])).toEqual(['v','header'])
   }
 })
 

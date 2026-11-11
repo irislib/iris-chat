@@ -43,8 +43,12 @@ export class PrivateGroupWire {
     expect(new Set(authenticationKeys).size).toBe(privateConnections.size)
     for (const { event } of privateEvents) {
       expect(keys.has(event.pubkey)).toBe(false)
-      expect(event.tags.filter(tag => tag[0] === 'p')).toHaveLength(1)
-      if (event.kind === 1060) expect(event.tags).toContainEqual(['v', '2'])
+      // Invite responses and call alerts name one routing key. A message names nobody.
+      if (event.kind === 1060) {
+        expect(event.tags.map(tag => tag[0])).toEqual(['v', 'header'])
+        expect(event.tags).toContainEqual(['v', '2'])
+        for (const key of keys) expect(JSON.stringify(event)).not.toContain(key)
+      } else expect(event.tags.filter(tag => tag[0] === 'p')).toHaveLength(1)
     }
     const groupAuthors = new Set(sharedGroupAuthors)
     for (const filters of this.subscriptions.values()) for (const filter of filters) {

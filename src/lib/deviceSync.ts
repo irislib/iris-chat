@@ -38,6 +38,8 @@ import { devices, type DeviceState } from './devices'
 import { getPubkey, nostrClient } from './identity'
 import { AppEvent } from './nostrClient'
 import { sendCallWakeups } from './callPush'
+import { pairwiseCarrierIds } from './runtimePublish'
+import { DexieStorageAdapter } from './sessionManagerStorage'
 import { getNdrRuntime, cancelGroupPublications } from './privateChats'
 import {
   groups,
@@ -980,7 +982,8 @@ async function updateRuntime(
       const { preparePeerNdrRuntime } = await import('./privateChats')
       const runtime = await preparePeerNdrRuntime(call.owner)
       await sendCallWakeups(ownerPubkey, call.peers, call.id, call.video,
-        event => new AppEvent(get(nostrClient), event).publish(),
+        // Built only around an envelope the durable ratchet queue accepted.
+        event => new AppEvent(get(nostrClient), event).publish({ carrier: 'pairwise' }),
         rumor => runtime.sendEvent(call.owner, rumor, ownerPubkey, { includeLocalSiblings: false }),
         () => run === generation && getPubkey() === ownerPubkey)
     })
@@ -1033,7 +1036,8 @@ async function updateRuntime(
     if (run !== generation) { await fileTransport.dispose(); return }
     // Message synchronization remains restricted to this account's registered devices.
     await activateNostrPubsub(node, toHex(identity.publicKey), () => Array.from(peers).filter(peer =>
-      run === generation && getPubkey() === ownerPubkey && isAuthorizedDeviceSyncSource(peer, get(devices))), get(nostrClient).runtime, announcements.publicReader)
+      run === generation && getPubkey() === ownerPubkey && isAuthorizedDeviceSyncSource(peer, get(devices))), get(nostrClient).runtime, announcements.publicReader,
+      ids => pairwiseCarrierIds(new DexieStorageAdapter(ownerPubkey), ownerPubkey, ids))
     if (run !== generation) { await fileTransport.dispose(); return }
     fileTransport.activate()
   } finally {

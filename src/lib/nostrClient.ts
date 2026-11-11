@@ -1,4 +1,5 @@
-import type { RuntimeCacheMode, RuntimePublishOptions } from 'nostr-pubsub'
+import type { RuntimeCacheMode } from 'nostr-pubsub'
+import type { WorkerPublishOptions } from './workerPublicationPolicy'
 import { NostrWorkerClient } from './nostrWorkerClient'
 import { createNostrIdentitySignerFromSecretKey, createNostrIdentitySignerFromNip07, type NostrIdentityEventSigner } from '@iris/identity'
 import { getPublicKey, type Event, type EventTemplate, type Filter, type VerifiedEvent } from 'nostr-tools'
@@ -77,7 +78,7 @@ export class AppEvent implements Event {
     Object.assign(this, event)
     return this.sig
   }
-  async publish(options: RuntimePublishOptions = {}): Promise<Set<{url: string}>> {
+  async publish(options: WorkerPublishOptions = {}): Promise<Set<{url: string}>> {
     if (!this.client) throw new Error('No event runtime')
     if (!this.sig) await this.sign()
     const result = await this.client.runtime.publish(this.rawEvent(), options)

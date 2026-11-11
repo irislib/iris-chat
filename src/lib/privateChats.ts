@@ -1,6 +1,6 @@
 import { parseLinkInviteInput } from './linkInvites'
 import { migrateStoredPrivateContacts } from './privateContactMigration'
-import { queuedCallWakeEnvelope, observeCallWakeInvite, acceptedCallWakeBootstrap } from './callPush'
+import { queuedCallWakeEnvelope, observeCallWakeInvite, acceptedCallWakeBootstrap, envelopeRecipientDevice } from './callPush'
 import { get } from 'svelte/store'
 import {
   AppEvent,
@@ -45,6 +45,7 @@ import {
 } from './deviceLabels'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
 import { createRuntimePublish } from './runtimePublish'
+import type { PublicationCarrier } from './workerPublicationPolicy'
 import { rememberInviteResponse } from './inviteProvenance'
 import { privateGroupRelayFetch, privateGroupRelaySubscribe } from './groupRelayPolicy'
 import { notifyMessageRelayPublish } from './messageRelayStatus'
@@ -246,7 +247,7 @@ const createSign = (client: ReturnType<typeof getNostrClient>) => {
 }
 
 const createRelayPublish = (client: ReturnType<typeof getNostrClient>) => {
-  return async (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => {
+  return async (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext, carrier?: PublicationCarrier) => {
     signal.throwIfAborted()
     let relayUrls = [...relayStore.getState().relays].map(url => new URL(url).toString())
     if (context) {
@@ -258,6 +259,8 @@ const createRelayPublish = (client: ReturnType<typeof getNostrClient>) => {
     signal.throwIfAborted()
     const receipt = await client.runtime.publish(event, {
       relays: relayUrls, sources: ['fips'], requireAck: true, queue: false, localEcho: false,
+      // Only the durable ratchet queue knows this envelope came from a private session.
+      ...(carrier && { carrier }),
     })
     // FIPS delivery is queued transport, never evidence of relay acceptance.
     return new Set(receipt.sources.filter(source => source.accepted && relayUrls.includes(source.id))
@@ -419,11 +422,14 @@ const getRuntime = (): NdrRuntime => {
     nostrSubscribe: createSubscribe(client),
     nostrSign: sign,
     nostrEnqueue: async (event, innerEventId, context) => {
+      // The envelope names nobody. Read its device from the signing session now,
+      // before any later message can move that session to its next ratchet key.
+      const device = runtime ? envelopeRecipientDevice(runtime.getSessionUserRecords(), event) : undefined
       const { saveAuthorizationEvent } = await import('./authorizationSync')
       await saveAuthorizationEvent(ownerPubkey, event, () => get(identity)?.pubkey === ownerPubkey)
       await publication.enqueue(event, innerEventId, context)
       if (get(identity)?.pubkey === ownerPubkey) {
-        void queuedCallWakeEnvelope(event, innerEventId).catch(error => console.warn('Call wake could not be sent', error))
+        void queuedCallWakeEnvelope(event, innerEventId, device).catch(error => console.warn('Call wake could not be sent', error))
       }
     },
     nostrPublish: async (event, innerEventId, context) => {

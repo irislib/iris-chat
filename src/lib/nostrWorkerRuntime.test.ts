@@ -31,9 +31,9 @@ it('keeps private delivery and discovery off the added public route, including l
   expect(requestKinds(publicRelay)).toEqual([0])
   expect(requestKinds(privateRelay)).toEqual(expect.arrayContaining([1060, 37368, 0]))
   const sealed = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
-    .sendEvent({ kind: 14, content: 'loopback private message' }, [['p', peer]]).event
+    .sendEvent({ kind: 14, content: 'loopback private message' }).event
   const publicPost = finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'loopback public post' }, generateSecretKey())
-  await runtime.publish(sealed, { requireAck: true, queue: false })
+  await runtime.publish(sealed, { requireAck: true, queue: false, carrier: 'pairwise' })
   await runtime.publish(publicPost, { requireAck: true, queue: false })
   await vi.waitFor(() => expect(privateRelay.publishedEvents.map(event => event.id)).toEqual(expect.arrayContaining([sealed.id, publicPost.id])))
   await vi.waitFor(() => expect(publicRelay.publishedEvents.map(event => event.id)).toEqual([publicPost.id]))
@@ -67,18 +67,36 @@ it('restarts the real worker queue without replaying identity-bearing call alert
   const oldInvite = finalizeEvent({ kind: 30078, created_at: now, tags: [['d', 'double-ratchet/invites/old-device']], content: '' }, key)
   const invite = finalizeEvent(Invite.createNew(owner, owner).getEvent(), key)
   const session = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
-  const sealed = session.sendEvent({ kind: 14, content: 'new encrypted message' }, [['p', recipient]]).event
+  const sealed = session.sendEvent({ kind: 14, content: 'new encrypted message' }).event
+  expect(sealed.tags.map(tag => tag[0])).toEqual(['v', 'header'])
+  const unvouched = session.sendEvent({ kind: 14, content: 'nothing recorded where this came from' }).event
+  // The shape the previous version queued: a real carrier that names its device.
+  const tagged = finalizeEvent({ kind: 1060, created_at: now, content: sealed.content, tags: [...sealed.tags, ['p', recipient]] }, generateSecretKey())
   const identityWake = finalizeEvent({ kind: 21111, created_at: now, tags: [['p', recipient]],
     content: JSON.stringify({ type: 'call-wake', v: 2, events: [sealed] }) }, key)
   const wake = callWakeEvent(recipient, sealed)
+  const unvouchedWake = callWakeEvent(recipient, unvouched)
+  const taggedWake = finalizeEvent({ kind: 21111, created_at: now, tags: [['p', recipient]],
+    content: JSON.stringify({ type: 'call-wake', v: 3, events: [tagged] }) }, generateSecretKey())
   const publicPost = finalizeEvent({ kind: 1, created_at: now, tags: [], content: 'public queued post' }, key)
   const beforeRestart = createEventStore(owner)
   const sharedGroup=finalizeEvent({kind:1060,created_at:now,content:'shared group ciphertext',tags:[['v','2'],['header','opaque']]},generateSecretKey())
   const publicGroupRoster=finalizeEvent({kind:37368,created_at:now,content:'',tags:[['type','group_roster'],['member',owner],['member',recipient]]},key)
-  for (const event of [legacy, identityWake, oldMessage, oldBootstrap, oldInvite, sharedGroup,publicGroupRoster,invite, wake, publicPost, sealed]) {
+  const quarantined = [legacy, identityWake, oldMessage, oldBootstrap, oldInvite, sharedGroup, publicGroupRoster, tagged, taggedWake]
+  for (const event of [...quarantined, invite, publicPost]) {
     await beforeRestart.putPending({ event, attempts: 1, updatedAt: Date.now(), relays: [relay.url], sources: [] })
   }
   await beforeRestart.close()
+  // The private lane keeps who vouched for a message envelope beside its retry row.
+  // Shared group ciphertext has the same shape and nothing vouches for it.
+  const privateLane = () => createEventStore(`${owner}:private-send`, 'private')
+  const lane = privateLane()
+  const unvouchedRows = [unvouched, unvouchedWake, tagged, taggedWake]
+  for (const event of [sealed, wake, ...unvouchedRows]) {
+    await lane.putPending({ event, attempts: 1, updatedAt: Date.now(), relays: [relay.url], sources: [] })
+  }
+  for (const event of [sealed, wake, tagged, taggedWake]) await lane.vouchPending(event.id, 'pairwise')
+  await lane.close()
 
   // This is the same factory used by nostrWorker.ts. setRelays automatically
   // starts the shared runtime retry against the persisted production store.
@@ -92,7 +110,13 @@ it('restarts the real worker queue without replaying identity-bearing call alert
   await vi.waitFor(async () => expect(await runtime.store.listPending()).toEqual([]), { timeout: 5000 })
   // No guessed ciphertext or signed authorization is erased by this gate.
   const retained = await HashtreeRuntimeEventStore.prototype.listPending.call(runtime.store)
-  expect(new Set(retained.map(entry => entry.event.id))).toEqual(new Set([legacy.id, identityWake.id, oldMessage.id, oldBootstrap.id, oldInvite.id,sharedGroup.id,publicGroupRoster.id]))
+  expect(new Set(retained.map(entry => entry.event.id))).toEqual(new Set(quarantined.map(event => event.id)))
+  const reopened = privateLane()
+  expect(await reopened.listPending()).toEqual([])
+  expect(new Set((await HashtreeRuntimeEventStore.prototype.listPending.call(reopened)).map(entry => entry.event.id)))
+    .toEqual(new Set(unvouchedRows.map(event => event.id)))
+  await reopened.close()
+  for (const event of [...quarantined, ...unvouchedRows]) expect(relay.publishedEvents.some(published => published.id === event.id)).toBe(false)
 
   await expect(runtime.publish(legacy, { relays: [relay.url], requireAck: true, queue: false }))
     .rejects.toThrow('Old call alerts cannot be resent')
@@ -109,6 +133,24 @@ it('restarts the real worker queue without replaying identity-bearing call alert
     await expect(runtime.publish(event,{relays:[relay.url],requireAck:true,queue:false})).rejects.toThrow()
     expect(relay.publishedEvents.some(published=>published.id===event.id)).toBe(false)
   }
+  // Without a statement of where it came from, a message envelope is treated as group ciphertext.
+  for (const queue of [true, false]) {
+    await expect(runtime.publish(sharedGroup, { relays: [relay.url], queue })).rejects.toThrow('Group messages must use private sessions')
+    await expect(runtime.publish(unvouched, { relays: [relay.url], queue })).rejects.toThrow('Group messages must use private sessions')
+    await expect(runtime.publish(unvouchedWake, { relays: [relay.url], queue })).rejects.toThrow('Invalid encrypted call alert')
+  }
+  // A recipient is refused whatever vouches for the envelope, alone or inside a call alert.
+  await expect(runtime.publish(tagged, { relays: [relay.url], requireAck: true, queue: false, carrier: 'pairwise' }))
+    .rejects.toThrow('Message envelopes must not name a recipient')
+  await expect(runtime.publish(taggedWake, { relays: [relay.url], requireAck: true, queue: false, carrier: 'pairwise' }))
+    .rejects.toThrow('Invalid encrypted call alert')
+  const extra = finalizeEvent({ kind: 1060, created_at: now, content: sealed.content, tags: [...sealed.tags, ['expiration', String(now + 60)]] }, generateSecretKey())
+  await expect(runtime.publish(extra, { relays: [relay.url], requireAck: true, queue: false, carrier: 'pairwise' }))
+    .rejects.toThrow('only the version and header')
+  for (const event of [sharedGroup, unvouched, unvouchedWake, tagged, taggedWake, extra]) {
+    expect(relay.publishedEvents.some(published => published.id === event.id)).toBe(false)
+  }
+  expect((await runtime.query([{ ids: [sharedGroup.id, unvouched.id, tagged.id] }], { cache: 'cache-only' })).events).toEqual([])
 })
 
 it('keeps first contact, queued messages and call delivery off identity-authenticated receiver connections', async () => {
@@ -128,10 +170,11 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
   const ownerProof = finalizeEvent(new AppKeys([{ identityPubkey: owner, createdAt: Math.floor(Date.now() / 1000) }]).getEvent({ ownerPubkey: owner }), key)
   const bootstrap = await peerInvite.accept(owner, key, owner, ownerProof)
   expect(bootstrap.event.tags.some(tag => tag[0] === 'owner-proof')).toBe(true)
-  const sealed = bootstrap.session.sendEvent({ kind: 14, content: 'queued before restart' }, [['p', peer]]).event
-  const sealFor = (recipient: string, kind: number) => Session.init(getPublicKey(generateSecretKey()),
-    generateSecretKey(), true, generateSecretKey()).sendEvent({ kind, content: 'encrypted group or sibling copy' }, [['p', recipient]]).event
-  const ownCopy = sealFor(ownDevice, 21113), groupCopy = sealFor(otherGroupMember, 21113)
+  const sealed = bootstrap.session.sendEvent({ kind: 14, content: 'queued before restart' }).event
+  const seal = (kind: number) => Session.init(getPublicKey(generateSecretKey()),
+    generateSecretKey(), true, generateSecretKey()).sendEvent({ kind, content: 'encrypted group or sibling copy' }).event
+  // One copy for an own linked device and one for another group member.
+  const ownCopy = seal(21113), groupCopy = seal(21113)
   let rejectQueued = true
   relay.acceptFilter = event => {
     if (event.id === sealed.id && rejectQueued) { rejectQueued = false; return false }
@@ -139,8 +182,9 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
   }
   let wake!: VerifiedEvent
   const invite = finalizeEvent(ownInvite.getEvent(), key)
-  const pending = createEventStore(owner)
+  const pending = createEventStore(`${owner}:private-send`, 'private')
   await pending.putPending({ event: sealed, attempts: 1, updatedAt: Date.now(), relays: [relay.url], sources: [] })
+  await pending.vouchPending(sealed.id, 'pairwise')
   await pending.close()
 
   const runtime = createNostrWorkerRuntime(owner, async (_relay, event) => finalizeEvent(event, key))
@@ -155,20 +199,21 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
     { kinds: [0, 10002, 10050], authors: [owner, peer, otherGroupMember] },
   ], { onEvent: () => {} })
   cleanup.push(() => lookups.close())
-  const retried = await runtime.publish(sealed, { relays: [relay.url], queue: true })
-  if (!retried.accepted) expect((await runtime.publish(sealed, { relays: [relay.url], queue: true })).accepted).toBe(true)
+  const retried = await runtime.publish(sealed, { relays: [relay.url], queue: true, carrier: 'pairwise' })
+  if (!retried.accepted) expect((await runtime.publish(sealed, { relays: [relay.url], queue: true, carrier: 'pairwise' })).accepted).toBe(true)
   await runtime.publish(invite, { relays: [relay.url], requireAck: true, queue: false })
-  for (const event of [bootstrap.event, ownCopy, groupCopy]) {
-    await runtime.publish(event, { relays: [relay.url], requireAck: true, queue: false })
+  await runtime.publish(bootstrap.event, { relays: [relay.url], requireAck: true, queue: false })
+  for (const event of [ownCopy, groupCopy]) {
+    await runtime.publish(event, { relays: [relay.url], requireAck: true, queue: false, carrier: 'pairwise' })
   }
   const forbiddenHttp = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Identified HTTP publication forbidden'))
   cleanup.push(() => forbiddenHttp.mockRestore())
   await sendCallWakeups(owner, [`02${peer}`], 'ab'.repeat(16), false, async event => {
     wake = event
-    return runtime.publish(event, { relays: [relay.url], requireAck: true, queue: false })
+    return runtime.publish(event, { relays: [relay.url], requireAck: true, queue: false, carrier: 'pairwise' })
   }, async rumor => {
-    const envelope = bootstrap.session.sendEvent(rumor, [['p', peer]]).event
-    await queuedCallWakeEnvelope(envelope, rumor.id)
+    const envelope = bootstrap.session.sendEvent(rumor).event
+    await queuedCallWakeEnvelope(envelope, rumor.id, peer)
     return rumor
   }, () => true)
   expect(forbiddenHttp).not.toHaveBeenCalled()
@@ -183,6 +228,12 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
   }, { timeout: 5000 })
 
   const privateIds = new Set([sealed.id, bootstrap.event.id, wake.id, ownCopy.id, groupCopy.id])
+  // No message event on the wire says which device or person it is for.
+  for (const event of relay.publishedEvents.filter(event => event.kind === 1060)) {
+    expect(event.tags.map(tag => tag[0])).toEqual(['v', 'header'])
+    for (const hidden of [owner, peer, peerDevice, ownDevice, otherGroupMember]) expect(JSON.stringify(event)).not.toContain(hidden)
+  }
+  expect(JSON.parse(wake.content).events.at(-1).tags.map((tag: string[]) => tag[0])).toEqual(['v', 'header'])
   const cached = await runtime.query([{ ids: [...privateIds] }], { cache: 'cache-only' })
   // Call wakes are ephemeral; retained ciphertext remains available to FIPS.
   expect(new Set(cached.events.map(event => event.id))).toEqual(new Set([...privateIds].filter(id => id !== wake.id)))
@@ -211,19 +262,22 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
   const identityConnections = new Set(wire.filter(({ message }) => message[0] === 'AUTH' &&
     (message[1] as { pubkey: string }).pubkey === owner).map(({ connection }) => connection))
   expect([...privateConnections].every(connection => !identityConnections.has(connection))).toBe(true)
+  // Profile, relay-list, device and invite lookups use the account's own
+  // connection, one request per author batch, and never a sending connection.
   const discoveryFrames = wire.filter(({ message }) => message[0] === 'REQ' &&
     (message.slice(2) as Array<{ kinds?: number[] }>).some(filter => filter.kinds?.some(kind => [0, 10002, 10050, 30078, 37368].includes(kind))))
-  for (const connection of new Set(discoveryFrames.map(frame => frame.connection))) {
+  const discoveryConnections = new Set(discoveryFrames.map(frame => frame.connection))
+  expect(discoveryConnections.size).toBe(1)
+  for (const connection of discoveryConnections) {
     const frames = wire.filter(frame => frame.connection === connection).map(frame => frame.message)
-    expect(identityConnections.has(connection)).toBe(false)
+    expect(identityConnections.has(connection)).toBe(true)
     expect(privateConnections.has(connection)).toBe(false)
-    expect(frames.some(frame => frame[0] === 'EVENT')).toBe(false)
-    const auth = frames.filter(frame => frame[0] === 'AUTH').map(frame => frame[1] as { pubkey: string })
-    expect(auth.length).toBeGreaterThan(0)
-    expect(auth.every(event => ![owner, peer, peerDevice].includes(event.pubkey))).toBe(true)
-    const filters = frames.filter(frame => frame[0] === 'REQ').flatMap(frame =>
-      frame.slice(2) as Array<{ authors?: string[]; '#p'?: string[] }>)
-    expect(new Set(filters.flatMap(filter => filter.authors ?? filter['#p'] ?? [])).size).toBe(1)
-    expect(filters.every(filter => !filter['#p']?.includes(ownInvite.inviterEphemeralPublicKey))).toBe(true)
+    expect(frames.some(frame => frame[0] === 'EVENT' && privateIds.has((frame[1] as { id: string }).id))).toBe(false)
   }
+  const lookupFilters = discoveryFrames.flatMap(frame => frame.message.slice(2) as Array<{ kinds?: number[]; authors?: string[]; '#p'?: string[] }>)
+    .filter(filter => filter.kinds?.some(kind => [0, 10002, 10050, 30078, 37368].includes(kind)))
+  expect(lookupFilters).toContainEqual({ kinds: [37368], authors: [owner, peer] })
+  expect(lookupFilters).toContainEqual({ kinds: [0, 10002, 10050], authors: [owner, peer, otherGroupMember] })
+  expect(lookupFilters).toContainEqual({ kinds: [30078], authors: [peer], '#l': ['double-ratchet/invites'] })
+  expect(lookupFilters).toContainEqual({ kinds: [37368], '#p': [peerDevice] })
 })

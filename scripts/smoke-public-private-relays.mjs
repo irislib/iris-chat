@@ -54,9 +54,11 @@ try {
   assert.deepEqual(kinds(publicRelay), [0]);
   assert(kinds(privateRelay).includes(1060) && kinds(privateRelay).includes(37368));
   const message = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
-    .sendEvent({ kind: 14, content: 'loopback private routing proof' }, [['p', peer]]).event;
+    .sendEvent({ kind: 14, content: 'loopback private routing proof' }).event;
+  assert.deepEqual(message.tags.map(tag => tag[0]), ['v', 'header'], 'A message event names no recipient');
+  await assert.rejects(call('publish', [message, { requireAck: true, queue: false }]), /Group messages must use private sessions/);
   const post = finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'loopback public routing proof' }, generateSecretKey());
-  await call('publish', [message, { requireAck: true, queue: false }]);
+  await call('publish', [message, { requireAck: true, queue: false, carrier: 'pairwise' }]);
   await call('publish', [post, { requireAck: true, queue: false }]);
   await expect.poll(() => publicRelay.publishedEvents.map(event => event.id)).toEqual([post.id]);
   await expect.poll(() => privateRelay.publishedEvents.map(event => event.id).sort()).toEqual([message.id, post.id].sort());

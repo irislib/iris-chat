@@ -6,6 +6,7 @@ import {
 } from './nostrClient'
 import {
   buildRuntimeBackfillFilters,
+  MESSAGE_EVENT_KIND,
   RuntimeSubscriptionTracker,
   type NostrSubscribe,
 } from 'nostr-double-ratchet'
@@ -13,6 +14,11 @@ import type { VerifiedEvent } from 'nostr-tools'
 
 
 const DIRECT_MESSAGE_BACKFILL_LIMIT = 200
+// The library opens one subscription per chunk of at most 1,000 message authors.
+// A relay takes a whole chunk in one request. A device-to-device frame holds
+// 65,525 bytes, about 975 authors, so there a large chunk is followed in parts.
+const PEER_AUTHOR_LIMIT = 900
+const PEER_AUTHOR_PART = 500
 const RECENT_EVENT_LIMIT = 1024
 const RECENT_EVENT_TTL_MS = 10 * 60 * 1000
 
@@ -57,17 +63,36 @@ export const createRuntimeSubscribe = (
     const forwardEvent = (event: AppEvent) =>
       forward(event.rawEvent() as Parameters<typeof onEvent>[0])
 
+    // Every chunk is tracked, deduplicated and backfilled on its own: chunks
+    // are never merged back into one filter a relay would refuse whole.
     const registered = tracker.registerFilter(filter)
 
-    const liveSubscription = client.subscribe(
+    const authors = Array.isArray(filter.kinds) && filter.kinds.includes(MESSAGE_EVENT_KIND) &&
+      Array.isArray(filter.authors) ? filter.authors : []
+    const peerParts: string[][] = []
+    if (authors.length > PEER_AUTHOR_LIMIT) {
+      for (let start = 0; start < authors.length; start += PEER_AUTHOR_PART) {
+        peerParts.push(authors.slice(start, start + PEER_AUTHOR_PART))
+      }
+    }
+    const liveSubscriptions = [
+      client.subscribe(
         filter as EventFilter,
         // Let the runtime follow all configured relays, including reconnects.
         // A snapshot of currently connected relays can strand live interests.
-        { closeOnEose: false, cacheUsage, sources: ['fips'] },
+        { closeOnEose: false, cacheUsage, sources: peerParts.length ? [] : ['fips'] },
         false
-      )
-    liveSubscription.on('event', forwardEvent)
-    liveSubscription.start()
+      ),
+      ...peerParts.map(part => client.subscribe(
+        { ...filter, authors: part } as EventFilter,
+        { closeOnEose: false, cacheUsage: CacheMode.ONLY_RELAY, relayUrls: [], sources: ['fips'] },
+        false
+      )),
+    ]
+    for (const liveSubscription of liveSubscriptions) {
+      liveSubscription.on('event', forwardEvent)
+      liveSubscription.start()
+    }
 
     const backfillSubscriptions = buildRuntimeBackfillFilters(
       registered,
@@ -94,7 +119,7 @@ export const createRuntimeSubscribe = (
       for (const backfillSubscription of backfillSubscriptions) {
         backfillSubscription.stop()
       }
-      liveSubscription.stop()
+      for (const liveSubscription of liveSubscriptions) liveSubscription.stop()
     }
   }
 }

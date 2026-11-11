@@ -32,12 +32,12 @@ const releases = {
     "integrity": "sha512-hdqjU1MoGjc55BL5WM93jgVxW7cYOWCWHcYUl5glUT8boEinFfmlmnhyjGp7TNwWgxZKQ7Rgag9XiyDnRUGBUA=="
   },
   "nostr-pubsub": {
-    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.24/nostr-pubsub-0.5.24.tgz",
-    "integrity": "sha512-IYAPHnhLlYpIkUbG0jPCJC3lxXz3In72kqDdmBSpFN0RvP74HpyLhEWBzSP/YA5XRt/1TnqoxeQ2JXL2Q5SYhQ=="
+    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.29/nostr-pubsub-0.5.29.tgz",
+    "integrity": "sha512-ENSpu5VHgKmf14Gg239I/h7k0taZ2BcQ1EumMbE4NEnIbUUX7auCVCmQDlOJfwArSIpTgUEDkKyI10NSYS6A/A=="
   },
   "nostr-double-ratchet": {
-    "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.183.tgz",
-    "integrity": "sha512-CPvJzniY+nItLVEQpH4jaRnmU7AMkD3kAN5yByXMgmm4MNChAk8X8HY8oJIw1riX/gW3/WKD8c+eUtSgu98DDA=="
+    "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.185.tgz",
+    "integrity": "sha512-eHZvUbmoUTih9sXfZ18ipQ8OOuGKUD8jWN74QX/M4XWPtiRcGsrG8K8WefAkaMc/wMnw9088lp7mbxbS0ZGnOw=="
   },
   "nostr-social-graph": {
     "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.0.4/nostr-social-graph-4.0.4.tgz",

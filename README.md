@@ -135,17 +135,30 @@ These local synthetic tests do not measure physical camera/display or Wi-Fi late
 Private communication must preserve metadata privacy as well as forward secrecy.
 Relay events and notification requests must never expose both participants'
 identities through signers, tags, filters, authentication, or correlations between
-them. Prefer session and invite keys. A recipient device tag is allowed only when
-needed for delivery and the sender uses an unlinkable session key; invite responses
-target the invite's ephemeral key. Authenticate callers and apply contact rules
+them. Prefer session and invite keys. Authenticate callers and apply contact rules
 locally after ratchet decryption. FIPS remains available for live traffic.
+
+Message events (kind 1060) carry only the version and header tags and never name
+a recipient: device keys are public, so a recipient tag would let anyone querying
+a relay link each delivery, and each group fanout burst, to the devices receiving
+it. Receivers find messages by the sender ratchet keys they follow, in chunks of
+at most 1,000 authors per subscription. Envelopes from older clients that still
+carry the tag are read; this app refuses to send, retry or replay one. Shared
+group ciphertext has the same wire shape as a private-session envelope, so what
+may be sent is decided by a record of where an envelope came from, never by its
+tags: the durable ratchet queue records each envelope it accepts, and a message
+event without that record is not sent, retried after a reload, wrapped in a call
+alert, or replayed to this account's own devices. Do not add a routing tag to a
+private event. Invite responses still target the invite's ephemeral key, and a
+call alert (kind 21111) still names the one device it rings.
 
 Call wake envelopes use a fresh disposable signing key and carry only existing
 double-ratchet ciphertext and invite responses. Never use an account or device
 key to sign them. Old identity-bearing wakes and messages from pre-privacy-version
 sessions remain blocked on queue restart; their local records are preserved.
-`callPush.test.ts` and `nostrWorkerRuntime.test.ts` inspect the actual wire data
-and retry path and are required by the site release gate. Encryption/decryption
+`callPush.test.ts`, `nostrWorkerRuntime.test.ts`, `noRecipientTag.test.ts` and
+`sharedGroupCiphertext.test.ts` inspect the actual wire data and retry path and
+are required by the site release gate. Encryption/decryption
 tests alone cannot establish metadata privacy.
 
 ```bash

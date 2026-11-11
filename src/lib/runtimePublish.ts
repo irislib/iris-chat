@@ -1,5 +1,6 @@
 import { assertPrivatePublicationPolicy, coversLegacyPrivateRoster } from './privatePublishPolicy'
-import type { NostrPublishContext, StorageAdapter } from 'nostr-double-ratchet'
+import { isSharedGroupCiphertext, type NostrPublishContext, type StorageAdapter } from 'nostr-double-ratchet'
+import { namesNoRecipient, type PublicationCarrier } from './workerPublicationPolicy'
 import { DexieStorageAdapter } from './sessionManagerStorage'
 import type { VerifiedEvent } from 'nostr-tools'
 
@@ -9,10 +10,26 @@ interface PendingPublication {
   context?: NostrPublishContext
 }
 
+// A pairwise ratchet carrier and shared group ciphertext look the same on the
+// wire. This queue receives envelopes straight from the private sessions, in the
+// context that knows which is which, and records that it accepted each one. The
+// record outlives the queue row: retries after a reload and local replay to this
+// account's own devices both ask for it, and anything without one stays local.
+const VOUCHER_LIMIT = 8192
+const voucherPrefix = (owner: string) => `v1/pairwise-carrier/${owner}/`
+
+/** Message envelope ids this account's private sessions produced. */
+export async function pairwiseCarrierIds(storage: StorageAdapter, owner: string, ids: readonly string[]): Promise<Set<string>> {
+  const prefix = voucherPrefix(owner)
+  const known = await Promise.all(ids.map(async id => await storage.get(prefix + id) !== undefined))
+  return new Set(ids.filter((_, index) => known[index]))
+}
+
 interface RuntimePublishOptions {
   /** Public identity key whose outgoing envelopes this queue may publish. */
   owner: string
-  publish: (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext) => Promise<RuntimePublishResult>
+  publish: (event: VerifiedEvent, signal: AbortSignal, context?: NostrPublishContext,
+    carrier?: PublicationCarrier) => Promise<RuntimePublishResult>
   onAcceptedEvent?: (event: VerifiedEvent) => void | Promise<void>
   onAcceptedRelays?: (
     innerEventId: string | undefined,
@@ -26,11 +43,16 @@ interface RuntimePublishOptions {
   /** Wake durable retries when a configured relay becomes connected. */
   subscribeConnected?: (onChange: (relayUrls: readonly string[]) => void) => () => void
   retryIntervalMs?: number
+  /** Accepted-envelope records kept for replay to own devices; queued ones are always kept. */
+  carrierRecordLimit?: number
 }
 
 export const createRuntimePublish = (options: RuntimePublishOptions) => {
   const storage = options.storage ?? new DexieStorageAdapter()
   const prefix = `v1/runtime-outbox/${options.owner}/`
+  const vouchers = voucherPrefix(options.owner)
+  const voucherLimit = Math.max(4, options.carrierRecordLimit ?? VOUCHER_LIMIT)
+  let vouchedSincePrune = 0
   const controller = new AbortController()
   const { signal } = controller
   const enqueuing = new Map<string, Promise<void>>()
@@ -52,6 +74,12 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
     signal.throwIfAborted()
     if (!event.id || !event.sig) throw new Error('Cannot queue an unsigned event')
     assertPrivatePublicationPolicy(event)
+    if (event.kind === 1060) {
+      // Device keys are public: a recipient tag lets anyone link deliveries to devices.
+      if (event.tags.some(tag => tag[0] === 'p')) throw new Error('Message envelopes must not name a recipient')
+      if (!namesNoRecipient(event)) throw new Error('Message envelopes carry only the version and header')
+      if (isSharedGroupCiphertext(event.id)) throw new Error('Group messages must use private sessions')
+    }
     const key = prefix + event.id
     const pending = enqueuing.get(key)
     if (pending) return pending
@@ -59,6 +87,11 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
     // Keep the signed envelope unchanged even if its caller later mutates it.
     const row: PendingPublication = { event: structuredClone(event), innerEventId, ...(context && { context: { ...context } }) }
     const writing = (async () => {
+      if (event.kind === 1060) {
+        await storage.put(vouchers + event.id, Date.now())
+        signal.throwIfAborted()
+        if (++vouchedSincePrune >= 512) void pruneVouchers().catch(report)
+      }
       const existing = await storage.get<PendingPublication>(key)
       signal.throwIfAborted()
       if (!existing) await storage.put(key, row)
@@ -80,6 +113,14 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       signal.throwIfAborted()
       if (!row) return
       assertPrivatePublicationPolicy(row.event)
+      let carrier: PublicationCarrier | undefined
+      if (row.event.kind === 1060) {
+        // Envelopes queued by an older version name their recipient, and nothing
+        // vouches for a row this queue did not accept itself: both stay local.
+        if (!namesNoRecipient(row.event) || await storage.get(vouchers + row.event.id) === undefined) return
+        signal.throwIfAborted()
+        carrier = 'pairwise'
+      }
       if (!row.context && row.innerEventId && options.resolveContext) {
         row.context = await options.resolveContext(row.innerEventId)
         signal.throwIfAborted()
@@ -97,7 +138,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       const attemptSignal = groupController ? AbortSignal.any([signal, groupController.signal]) : signal
       let accepted: RuntimePublishResult
       try {
-        accepted = await options.publish(row.event, attemptSignal, row.context)
+        accepted = await options.publish(row.event, attemptSignal, row.context, carrier)
         attemptSignal.throwIfAborted()
       } finally {
         if (groupController) policyAttempts.delete(groupController)
@@ -132,6 +173,20 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
 
   const report = (error: unknown) => {
     if (!signal.aborted) options.onError(error)
+  }
+
+  // Replay only needs recent envelopes; a queued one never loses its record.
+  const pruneVouchers = async () => {
+    vouchedSincePrune = 0
+    const keys = await storage.list(vouchers)
+    if (signal.aborted || keys.length <= voucherLimit) return
+    const queued = new Set((await storage.list(prefix)).map(key => key.slice(prefix.length)))
+    const aged = (await Promise.all(keys.filter(key => !queued.has(key.slice(vouchers.length)))
+      .map(async key => ({ key, at: await storage.get<number>(key) ?? 0 })))).sort((a, b) => a.at - b.at)
+    for (const { key } of aged.slice(0, keys.length - Math.floor(voucherLimit * 3 / 4))) {
+      if (signal.aborted) return
+      await storage.del(key)
+    }
   }
 
   const retry = async () => {
@@ -180,6 +235,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       })
       timer = setInterval(retry, Math.max(1000, options.retryIntervalMs ?? 30_000))
       void retry()
+      void pruneVouchers().catch(report)
     },
     close() {
       controller.abort()
