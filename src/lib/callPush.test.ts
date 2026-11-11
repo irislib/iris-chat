@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent, type VerifiedEvent } from 'nostr-tools'
 import { Session, Invite, AppKeys, type Rumor } from 'nostr-double-ratchet'
-import { callWakeEvent, envelopeRecipientDevice, observeCallWakeInvite, queuedCallWakeEnvelope, acceptedCallWakeBootstrap, sendCallWakeups } from './callPush'
+import { awaitsCallWake, callWakeEvent, envelopeRecipientDevice, observeCallWakeInvite, queuedCallWakeEnvelope, acceptedCallWakeBootstrap, sendCallWakeups } from './callPush'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
@@ -140,8 +140,11 @@ it('rings each device with its own envelope, read from the session that signed i
   const envelopes = [toSecond, toFirst, unknown].map(session => session.sendEvent(rumor).event)
   expect(envelopes.map(envelope => envelopeRecipientDevice(records, envelope))).toEqual([second, first, undefined])
   expect(envelopeRecipientDevice(records, { ...envelopes[0], kind: 1059 })).toBeUndefined()
+  // Only an offer that still has devices to ring needs its envelopes looked up.
+  expect([awaitsCallWake(rumor.id), awaitsCallWake('f'.repeat(64)), awaitsCallWake()]).toEqual([true, false, false])
   for (const envelope of envelopes) await queuedCallWakeEnvelope(envelope, rumor.id, envelopeRecipientDevice(records, envelope))
   expect(publish).toHaveBeenCalledTimes(2)
+  expect(awaitsCallWake(rumor.id)).toBe(false)
   const rung = new Map(publish.mock.calls.map(([wake]: [VerifiedEvent]) => [wake.tags[0][1], JSON.parse(wake.content).events[0].id]))
   expect(rung).toEqual(new Map([[second, envelopes[0].id], [first, envelopes[1].id]]))
   for (const [wake] of publish.mock.calls) {

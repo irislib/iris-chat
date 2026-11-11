@@ -11,7 +11,7 @@ import NostrClient from './nostrClient'
 import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
 import { createRuntimePublish } from './runtimePublish'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
-import { CALL_WAKE_KIND, CALL_WAKE_SIGNAL_KIND, envelopeRecipientDevice, queuedCallWakeEnvelope, sendCallWakeups } from './callPush'
+import { CALL_WAKE_KIND, CALL_WAKE_SIGNAL_KIND, awaitsCallWake, envelopeRecipientDevice, queuedCallWakeEnvelope, sendCallWakeups } from './callPush'
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -57,8 +57,8 @@ class Device {
       nostrFetch: async (filter: Filter) => (await worker.query([filter], { cache: 'network-only', sources: [] }))
         .events.map(event => structuredClone(event) as VerifiedEvent),
       nostrEnqueue: async (event, innerEventId, context) => {
-        // The envelope names nobody, so its device is read from the session that signed it.
-        const device = envelopeRecipientDevice(this.runtime.getSessionUserRecords(), event)
+        // The envelope names nobody, so a call offer's device is read from the session that signed it.
+        const device = awaitsCallWake(innerEventId) ? envelopeRecipientDevice(this.runtime.getSessionUserRecords(), event) : undefined
         await publication.enqueue(event, innerEventId, context)
         this.wake?.(event, innerEventId, device)
       },

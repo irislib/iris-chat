@@ -45,6 +45,9 @@ export function envelopeRecipientDevice(records: SessionRecords, envelope: Pick<
   }
 }
 
+/** Whether an outgoing call still waits for the envelopes of this inner event. */
+export const awaitsCallWake = (innerEventId?: string): boolean => !!innerEventId && pending.has(innerEventId)
+
 /**
  * The disposable routing signer conveys no identity; only the ratchet authenticates the caller.
  * `recipient` comes from the delivery record: the envelope itself can never supply it.

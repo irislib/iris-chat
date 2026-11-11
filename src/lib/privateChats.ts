@@ -1,6 +1,6 @@
 import { parseLinkInviteInput } from './linkInvites'
 import { migrateStoredPrivateContacts } from './privateContactMigration'
-import { queuedCallWakeEnvelope, observeCallWakeInvite, acceptedCallWakeBootstrap, envelopeRecipientDevice } from './callPush'
+import { queuedCallWakeEnvelope, observeCallWakeInvite, acceptedCallWakeBootstrap, envelopeRecipientDevice, awaitsCallWake } from './callPush'
 import { get } from 'svelte/store'
 import {
   AppEvent,
@@ -422,9 +422,10 @@ const getRuntime = (): NdrRuntime => {
     nostrSubscribe: createSubscribe(client),
     nostrSign: sign,
     nostrEnqueue: async (event, innerEventId, context) => {
-      // The envelope names nobody. Read its device from the signing session now,
-      // before any later message can move that session to its next ratchet key.
-      const device = runtime ? envelopeRecipientDevice(runtime.getSessionUserRecords(), event) : undefined
+      // The envelope names nobody. For a call offer, read its device from the signing
+      // session now, before a later message moves that session to its next ratchet key.
+      const device = runtime && awaitsCallWake(innerEventId)
+        ? envelopeRecipientDevice(runtime.getSessionUserRecords(), event) : undefined
       const { saveAuthorizationEvent } = await import('./authorizationSync')
       await saveAuthorizationEvent(ownerPubkey, event, () => get(identity)?.pubkey === ownerPubkey)
       await publication.enqueue(event, innerEventId, context)
