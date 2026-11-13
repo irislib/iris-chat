@@ -135,8 +135,8 @@ it('restarts the real worker queue without replaying identity-bearing call alert
   }
   // Without a statement of where it came from, a message envelope is treated as group ciphertext.
   for (const queue of [true, false]) {
-    await expect(runtime.publish(sharedGroup, { relays: [relay.url], queue })).rejects.toThrow('Group messages must use private sessions')
-    await expect(runtime.publish(unvouched, { relays: [relay.url], queue })).rejects.toThrow('Group messages must use private sessions')
+    await expect(runtime.publish(sharedGroup, { relays: [relay.url], queue })).rejects.toThrow('Missing encrypted message provenance')
+    await expect(runtime.publish(unvouched, { relays: [relay.url], queue })).rejects.toThrow('Missing encrypted message provenance')
     await expect(runtime.publish(unvouchedWake, { relays: [relay.url], queue })).rejects.toThrow('Invalid encrypted call alert')
   }
   // A recipient is refused whatever vouches for the envelope, alone or inside a call alert.
@@ -280,4 +280,40 @@ it('keeps first contact, queued messages and call delivery off identity-authenti
   expect(lookupFilters).toContainEqual({ kinds: [0, 10002, 10050], authors: [owner, peer, otherGroupMember] })
   expect(lookupFilters).toContainEqual({ kinds: [30078], authors: [peer], '#l': ['double-ratchet/invites'] })
   expect(lookupFilters).toContainEqual({ kinds: [37368], '#p': [peerDevice] })
+})
+
+it('reads and replays a group event on an anonymous socket and publishes it once on a separate socket', async () => {
+  const relay = new TestRelay()
+  relay.authRequired = true
+  const frames: { connection: number; msg: unknown[] }[] = []
+  relay.observeWire = (msg, connection) => frames.push({ msg, connection })
+  await relay.start()
+  cleanup.push(() => relay.stop())
+  const account = generateSecretKey()
+  const owner = getPublicKey(account)
+  const runtime = createNostrWorkerRuntime(owner, async (_relay, template) => finalizeEvent(template, account))
+  cleanup.push(() => runtime.close())
+  runtime.setRelays([relay.url])
+  const event = finalizeEvent({ kind: 1060, created_at: Math.floor(Date.now() / 1000),
+    tags: [['v', '2'], ['header', 'encrypted']], content: 'ciphertext' }, generateSecretKey())
+  const filter = { kinds: [1060], authors: [event.pubkey] }
+  const received: string[] = []
+  const sub = runtime.subscribeToGroup([filter], { onEvent: event => received.push(event.id) }, { cache: 'network-only' })
+  cleanup.push(() => sub.close())
+  await runtime.publish(event, { carrier: 'group-sender-key', requireAck: true, queue: false })
+  await vi.waitFor(() => expect(received).toContain(event.id))
+  sub.close()
+  const history = await runtime.queryGroup([filter], { cache: 'network-only' })
+  expect(history.events.map(value => value.id)).toContain(event.id)
+  const groupReads = frames.filter(({ msg }) => msg[0] === 'REQ' && JSON.stringify(msg.slice(2)).includes(event.pubkey))
+  const writes = frames.filter(({ msg }) => msg[0] === 'EVENT' && (msg[1] as VerifiedEvent).id === event.id)
+  // A NIP-42 challenge can resend the identical signed event after AUTH.
+  expect(new Set(writes.map(({ msg }) => (msg[1] as VerifiedEvent).id))).toEqual(new Set([event.id]))
+  expect(relay.publishedEvents.map(value => value.id)).toEqual([event.id])
+  expect(groupReads.length).toBeGreaterThan(0)
+  for (const { connection } of [...writes, ...groupReads]) {
+    const auth = frames.find(row => row.connection === connection && row.msg[0] === 'AUTH')!
+    expect((auth.msg[1] as VerifiedEvent).pubkey).not.toBe(owner)
+  }
+  expect(groupReads.some(row => row.connection === writes[0].connection)).toBe(false)
 })

@@ -1,7 +1,8 @@
 import {
-  createNostrRuntime, createPrivateRelayPublisher,
+  createNostrRuntime, createPrivateRelayPublisher, MemoryEventStore,
   isPrivateRelayEvent, type NostrEvent, type NostrRuntimeOptions, type RuntimeEventStore,
 } from 'nostr-pubsub/private-relays'
+import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure'
 import { createEventStore, migratePrivatePending } from './eventStore'
 import { assertWorkerPublicationPolicy, type WorkerPublishOptions } from './workerPublicationPolicy'
 import { privateDiscoverySubscribe } from './privateDiscoveryRouting'
@@ -36,6 +37,36 @@ export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRun
     deletePending: id => privateStore.deletePending(id),
   }
   const privateSender = createPrivateRelayPublisher({ store: senderStore })
+  let groupReader: ReturnType<typeof createNostrRuntime> | undefined
+  let messageRelays: readonly string[] = []
+
+  function groupRead(filters: Parameters<typeof runtime.subscribe>[0]) {
+    const allowedKeys = ['kinds', 'authors', 'since', 'until', 'limit']
+    if (!filters.length || filters.some(filter =>
+      filter.kinds?.length !== 1 || filter.kinds[0] !== 1060 || !filter.authors?.length ||
+      filter.authors.some(author => !/^[0-9a-f]{64}$/.test(author)) ||
+      Object.keys(filter).some(key => !allowedKeys.includes(key)))) {
+      throw new Error('Group history requires an encrypted-message author filter')
+    }
+    if (!groupReader) {
+      // Share local ciphertext history, with independent sockets and an empty outbox.
+      const store = new MemoryEventStore()
+      store.put = event => receiverStore.put(event)
+      store.query = (requested, options) => receiverStore.query(requested, options)
+      groupReader = createNostrRuntime({
+        store,
+        maxFilterBytesPerBatch: MESSAGE_AUTHOR_REQUEST_BYTES,
+        signAuthEvent: async (_relay, template) => finalizeEvent(template, generateSecretKey()),
+      })
+      groupReader.setRelays(messageRelays)
+    }
+    return groupReader
+  }
+  const subscribeToGroup: typeof runtime.subscribe = (filters, handlers, options) =>
+    groupRead(filters).subscribe(filters, handlers, { ...options, sources: [] })
+  const queryGroup: typeof runtime.query = (filters, options) =>
+    groupRead(filters).query(filters, { ...options, sources: [] })
+
   let publicRelays: readonly string[] = []
   const sourceIds = new Set<string>()
   const publicReads = publicRelaySubscriptions(
@@ -56,7 +87,7 @@ export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRun
     if (isPrivateRelayEvent(event)) {
       // A queued envelope outlives this call and this worker, so its voucher must too.
       if (carrier && !options.requireAck && options.queue !== false) await privateStore.vouchPending(event.id, carrier)
-      return privateSender.publish(event, options)
+      return privateSender.publish(event, carrier === 'group-sender-key' ? { ...options, sources: [] } : options)
     }
     const publicOptions = options.relays === undefined && isPublicRelayKind(event.kind)
       ? { ...options, relays: publicRelays, sources: options.sources ?? [...sourceIds] } : options
@@ -71,6 +102,8 @@ export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRun
     // public operations receive the additional public destinations above.
     setRelays(privateRelays)
     privateSender.setRelays(privateRelays)
+    messageRelays = [...privateRelays]
+    groupReader?.setRelays(messageRelays)
     if (changed) publicReads.update()
   }
   runtime.setRelays = relays => setRelayRoutes(relays)
@@ -95,10 +128,10 @@ export function createNostrWorkerRuntime(owner: string, signAuthEvent?: NostrRun
     closed = true
     publicReads.close()
     // Stop networking before awaiting a potentially slow durable migration.
-    const closing = Promise.all([close(), privateSender.close()])
+    const closing = Promise.all([close(), privateSender.close(), groupReader?.close()])
     await migration.catch(() => {})
     await closing
     await Promise.all([closeReceiverStore(), closePrivateStore()])
   }
-  return Object.assign(runtime, { setRelayRoutes, publish: publishWithPolicy })
+  return Object.assign(runtime, { setRelayRoutes, subscribeToGroup, queryGroup, publish: publishWithPolicy })
 }

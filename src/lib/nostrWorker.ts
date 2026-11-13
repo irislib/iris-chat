@@ -30,16 +30,16 @@ self.onmessage = async ({ data }) => {
     switch (method) {
       case 'setRelays': runtime.setRelayRoutes(args[0], args[1] ?? args[0]); break
       case 'getRelayStats': value = runtime.getRelayStats(); break
-      case 'query': {
+      case 'query': case 'queryGroup': {
         const controller = new AbortController(); queries.set(id, controller)
-        try { value = await runtime.query(args[0], { ...args[1], signal: controller.signal }) }
+        try { value = await runtime[method as 'query' | 'queryGroup'](args[0], { ...args[1], signal: controller.signal }) }
         finally { queries.delete(id) }
         break
       }
       case 'cancel': queries.get(args[0])?.abort(); return
       case 'publish': value = await runtime.publish(args[0], args[1]); break
-      case 'subscribe':
-        subscriptions.set(id, runtime.subscribe(args[0], {
+      case 'subscribe': case 'subscribeToGroup':
+        subscriptions.set(id, runtime[method as 'subscribe' | 'subscribeToGroup'](args[0], {
           onEvent: (event, info) => self.postMessage({ id, type: 'event', event, info }),
           onEose: status => self.postMessage({ id, type: 'eose', status }),
           onError: error => self.postMessage({ id, type: 'subscriptionError', error: error.message }),

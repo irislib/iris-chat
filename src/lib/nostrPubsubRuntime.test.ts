@@ -173,7 +173,7 @@ describe('NostrPubsubRuntime', () => {
       })
       const sealed = session.sendEvent({ kind: 14, content: 'private fixture' }).event
       expect(sealed.tags.map(tag => tag[0])).toEqual(['v', 'header'])
-      await expect(worker.publish(sealed, { relays: [], sources: ['fips'], queue: false })).rejects.toThrow('Group messages must use private sessions')
+      await expect(worker.publish(sealed, { relays: [], sources: ['fips'], queue: false })).rejects.toThrow('Missing encrypted message provenance')
       const publication = await worker.publish(sealed, { relays: [], sources: ['fips'], queue: false, carrier: 'pairwise' })
       expect(publication.sources).toContainEqual({ id: 'fips', accepted: false, queued: true })
       for (let turn = 0; turn < 20 && !received.mock.calls.length; turn++) await pump()

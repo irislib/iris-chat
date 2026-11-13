@@ -218,8 +218,11 @@ describe("FspSessionManager", () => {
       await manager.handleFromPeer(peer, remote.nodeAddr, msg3);
       await vi.advanceTimersByTimeAsync(0);
       expect(outgoingDone).toBe(true);
-      const encrypted = sent.find(frame => peekFspPhase(frame) === FSP_PHASE_ESTABLISHED)!;
-      expect(initiator.decryptIncoming(encrypted).data?.payload).toEqual(payload);
+      // The established session can announce transport capabilities before the application datagram.
+      const delivered = sent.filter(frame => peekFspPhase(frame) === FSP_PHASE_ESTABLISHED)
+        .map(frame => initiator.decryptIncoming(frame).data)
+        .filter(data => data?.dstPort === 4_242);
+      expect(delivered.map(data => data?.payload)).toEqual([payload]);
     } finally {
       releaseRoute();
       await vi.advanceTimersByTimeAsync(15_000);

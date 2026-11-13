@@ -5,16 +5,15 @@ import { DexieStorageAdapter } from './sessionManagerStorage'
 import type { VerifiedEvent } from 'nostr-tools'
 
 interface PendingPublication {
+  carrier?: PublicationCarrier
   event: VerifiedEvent
   innerEventId?: string
   context?: NostrPublishContext
 }
 
-// A pairwise ratchet carrier and shared group ciphertext look the same on the
-// wire. This queue receives envelopes straight from the private sessions, in the
-// context that knows which is which, and records that it accepted each one. The
-// record outlives the queue row: retries after a reload and local replay to this
-// account's own devices both ask for it, and anything without one stays local.
+// The kind and tags are identical for direct and group data. Persist the local
+// handoff so a restart can authenticate the source. Pairwise receipts also
+// authorize replay to the account's own devices after the queue row retires.
 const VOUCHER_LIMIT = 8192
 const voucherPrefix = (owner: string) => `v1/pairwise-carrier/${owner}/`
 
@@ -35,7 +34,7 @@ interface RuntimePublishOptions {
     innerEventId: string | undefined,
     relayUrls: string[]
   ) => void | Promise<void>
-  canPublish?: (context: NostrPublishContext) => boolean | 'hold' | Promise<boolean | 'hold'>
+  canPublish?: (context: NostrPublishContext, event: VerifiedEvent) => boolean | 'hold' | Promise<boolean | 'hold'>
   resolveContext?: (innerEventId: string) => Promise<NostrPublishContext | undefined>
   onError: (error: unknown) => void
   storage?: StorageAdapter
@@ -74,20 +73,27 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
     signal.throwIfAborted()
     if (!event.id || !event.sig) throw new Error('Cannot queue an unsigned event')
     assertPrivatePublicationPolicy(event)
+    let carrier: PublicationCarrier | undefined
     if (event.kind === 1060) {
       // Device keys are public: a recipient tag lets anyone link deliveries to devices.
       if (event.tags.some(tag => tag[0] === 'p')) throw new Error('Message envelopes must not name a recipient')
       if (!namesNoRecipient(event)) throw new Error('Message envelopes carry only the version and header')
-      if (isSharedGroupCiphertext(event.id)) throw new Error('Group messages must use private sessions')
+      if (context && 'groupSenderKey' in context && context.groupSenderKey) {
+        if (!context.groupId || context.recipientOwnerPubkey) throw new Error('Missing group publication scope')
+        carrier = 'group-sender-key'
+      } else {
+        if (isSharedGroupCiphertext(event.id)) throw new Error('Missing encrypted message provenance')
+        carrier = 'pairwise'
+      }
     }
     const key = prefix + event.id
     const pending = enqueuing.get(key)
     if (pending) return pending
 
     // Keep the signed envelope unchanged even if its caller later mutates it.
-    const row: PendingPublication = { event: structuredClone(event), innerEventId, ...(context && { context: { ...context } }) }
+    const row: PendingPublication = { event: structuredClone(event), innerEventId, ...(carrier === 'group-sender-key' && { carrier }), ...(context && { context: structuredClone(context) }) }
     const writing = (async () => {
-      if (event.kind === 1060) {
+      if (carrier === 'pairwise') {
         await storage.put(vouchers + event.id, Date.now())
         signal.throwIfAborted()
         if (++vouchedSincePrune >= 512) void pruneVouchers().catch(report)
@@ -117,9 +123,14 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
       if (row.event.kind === 1060) {
         // Envelopes queued by an older version name their recipient, and nothing
         // vouches for a row this queue did not accept itself: both stay local.
-        if (!namesNoRecipient(row.event) || await storage.get(vouchers + row.event.id) === undefined) return
+        if (!namesNoRecipient(row.event)) return
+        if (row.carrier === 'group-sender-key' && row.context && 'groupSenderKey' in row.context && row.context.groupSenderKey && row.context.groupId) {
+          carrier = row.carrier
+        } else {
+          if (await storage.get(vouchers + row.event.id) === undefined) return
+          carrier = 'pairwise'
+        }
         signal.throwIfAborted()
-        carrier = 'pairwise'
       }
       if (!row.context && row.innerEventId && options.resolveContext) {
         row.context = await options.resolveContext(row.innerEventId)
@@ -127,7 +138,7 @@ export const createRuntimePublish = (options: RuntimePublishOptions) => {
         if (row.context) await storage.put(key, row)
       }
       if (row.context && options.canPublish) {
-        const decision = await options.canPublish(row.context)
+        const decision = await options.canPublish(row.context, row.event)
         signal.throwIfAborted()
         if (decision === false) { await storage.del(key); return }
         if (decision === 'hold') return

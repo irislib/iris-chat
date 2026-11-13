@@ -34,6 +34,7 @@ class SnapshotStorage implements StorageAdapter {
 /** Real NIP-01 sockets: the farm never shares decrypted messages or ratchet state. */
 class RelayClient {
   private readonly receiver
+  private readonly groupReader
   private readonly privateSender
   readonly publishedDirectEvents = new Map<string, { author: string; recipients: string[] }>()
   readonly receivedDirectIds = new Set<string>()
@@ -44,8 +45,19 @@ class RelayClient {
     const store = new MemoryEventStore()
     this.receiver = createNostrRuntime({ relays: [url], store, websocketImplementation: globalThis.WebSocket,
       historyTimeoutMs: 1000, signAuthEvent: async (_relay, template) => finalizeEvent(template, authenticationKey) })
+    this.groupReader = createNostrRuntime({ relays: [url], websocketImplementation: globalThis.WebSocket,
+      historyTimeoutMs: 1000, signAuthEvent: async (_relay, template) => finalizeEvent(template, generateSecretKey()) })
     this.privateSender = createPrivateRelayPublisher({ relays: [url], websocketImplementation: globalThis.WebSocket })
   }
+
+  subscribeToGroup = (filter: Filter, event: (event: VerifiedEvent) => void, eose?: () => void) => {
+    const sub = this.groupReader.subscribe([filter], {
+      onEvent: incoming => event(structuredClone(incoming) as VerifiedEvent),
+      onEose: status => { if (status.complete) eose?.() },
+    })
+    return () => sub.close()
+  }
+  fetchGroup = async (filter: Filter) => (await this.groupReader.query([filter])).events.map(e => structuredClone(e) as VerifiedEvent)
 
   subscribe = (filter: Filter, event: (event: VerifiedEvent) => void, eose?: () => void) => {
     // Profile, device and invite lookups share the account runtime's connection.
@@ -109,6 +121,7 @@ export class GroupFarmDevice {
       storage: this.storage,
       ...(this.ownerIdentityKey ? { ownerIdentityKey: this.ownerIdentityKey } : {}),
       nostrSubscribe: relay.subscribe, nostrFetch: relay.fetch,
+      nostrGroupSubscribe: relay.subscribeToGroup, nostrGroupFetch: relay.fetchGroup,
       nostrPublish: async (event: UnsignedEvent | VerifiedEvent) => {
         if ('sig' in event) return relay.publish(event, this.sessionDevices(event.pubkey))
         if (!this.ownerIdentityKey) throw new Error('Linked runtime must sign with its own device key')

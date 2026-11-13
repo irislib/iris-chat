@@ -4,11 +4,10 @@ import { hasMetadataPrivacyVersion } from 'nostr-double-ratchet'
 import { assertPrivatePublicationPolicy } from './privatePublishPolicy'
 
 /**
- * What produced a message envelope. A pairwise ratchet carrier and shared group
- * ciphertext have the same wire shape, so only the queue that accepted the
- * envelope from a private session can vouch for it. Nothing else may be sent.
+ * A pairwise ratchet carrier and a group sender-key event have the same wire
+ * shape. Their producer records the carrier locally for dispatch and retries.
  */
-export type PublicationCarrier = 'pairwise'
+export type PublicationCarrier = 'pairwise' | 'group-sender-key'
 export type WorkerPublishOptions = RuntimePublishOptions & { carrier?: PublicationCarrier }
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -39,7 +38,7 @@ export function assertWorkerPublicationPolicy(event: NostrEvent, carrier?: Publi
     // Device keys are public: a recipient tag lets anyone link deliveries to devices.
     if (event.tags.some(tag => tag[0] === 'p')) throw new Error('Message envelopes must not name a recipient')
     if (!namesNoRecipient(event)) throw new Error('Message envelopes carry only the version and header')
-    if (carrier !== 'pairwise') throw new Error('Group messages must use private sessions')
+    if (carrier !== 'pairwise' && carrier !== 'group-sender-key') throw new Error('Missing encrypted message provenance')
   }
   if (event.kind !== 21111) return
   let value: unknown

@@ -26,7 +26,6 @@ import {
   type NostrFetch,
   type NostrSubscribe,
   type NostrPublishContext,
-  PAIRWISE_GROUP_DELIVERY_VERSION,
 } from 'nostr-double-ratchet'
 import {
   nostrClient,
@@ -259,7 +258,7 @@ const createRelayPublish = (client: ReturnType<typeof getNostrClient>) => {
     signal.throwIfAborted()
     const receipt = await client.runtime.publish(event, {
       relays: relayUrls, sources: ['fips'], requireAck: true, queue: false, localEcho: false,
-      // Only the durable ratchet queue knows this envelope came from a private session.
+      // The durable queue supplies local provenance to the worker.
       ...(carrier && { carrier }),
     })
     // FIPS delivery is queued transport, never evidence of relay acceptance.
@@ -399,7 +398,7 @@ const getRuntime = (): NdrRuntime => {
       return message.sessionId.startsWith('group:') ? { groupId: message.sessionId.slice(6) }
         : { recipientOwnerPubkey: message.sessionId, createdAt: Math.floor(message.timestamp / 1000) }
     },
-    canPublish: async context => {
+    canPublish: async (context, event) => {
       if (context.recipientOwnerPubkey) {
         const { privateDirectPublicationPolicy } = await import('./privateStateStore')
         const direct=await privateDirectPublicationPolicy(ownerPubkey, context.recipientOwnerPubkey, context.createdAt)
@@ -410,6 +409,24 @@ const getRuntime = (): NdrRuntime => {
       const { groups, canSendToGroup } = await import('./groups')
       const { db } = await import('./storage')
       const stored = get(groups).get(groupId) ?? await db.groups.get(groupId)
+      if ('groupSenderKey' in context && context.groupSenderKey) {
+        const group = runtime?.getGroupManager()?.getGroup(groupId)
+        const device = runtime?.getState().currentDevicePubkey
+        if (!group || !device || !stored) return 'hold'
+        const intended = context.groupMemberPubkeys
+        if (!intended?.length || [group.members, stored.members].some(members => {
+          const current = [...new Set(members)].sort()
+          return current.length !== intended.length || current.some((member, index) => member !== intended[index])
+        })) return false
+        const intendedDevices = context.groupDevicePubkeys
+        if (intendedDevices) {
+          const devices = runtime?.getSessionManager()?.groupDevicePubkeys(intended)
+          if (!devices) return 'hold'
+          if (devices.length !== intendedDevices.length || devices.some((key, index) => key !== intendedDevices[index])) return false
+        }
+        const author = await storage.get<string>(`v1/broadcast-channel/group/${groupId}/sender/${device}/sender-event-pubkey`)
+        if (event.pubkey !== author) return false
+      }
       if (context.recipientOwnerPubkey && !stored?.members.includes(context.recipientOwnerPubkey)) return false
       return canSendToGroup(stored, ownerPubkey)
     },
@@ -417,9 +434,16 @@ const getRuntime = (): NdrRuntime => {
   })
   runtimePublication = publication
   runtimeOwnerPubkey = ownerPubkey
-  if (PAIRWISE_GROUP_DELIVERY_VERSION !== 1) throw new Error('Private group delivery is required')
   runtime = new NdrRuntime({
     nostrSubscribe: createSubscribe(client),
+    nostrGroupSubscribe: (filter, onEvent) => {
+      const sub = client.runtime.subscribeToGroup([filter], { onEvent: event => onEvent(event as VerifiedEvent) })
+      return () => sub.close()
+    },
+    nostrGroupFetch: async filter => {
+      const result = await client.runtime.queryGroup([filter], { cache: 'network-only' })
+      return result.events as VerifiedEvent[]
+    },
     nostrSign: sign,
     nostrEnqueue: async (event, innerEventId, context) => {
       // The envelope names nobody. For a call offer, read its device from the signing

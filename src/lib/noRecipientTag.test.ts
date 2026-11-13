@@ -54,6 +54,12 @@ class Device {
       ...(ownerKey ? { ownerIdentityKey: ownerKey } : {}),
       // Match the production cross-bundle verification boundary.
       nostrSubscribe: (filter, onEvent) => subscribe(filter, event => onEvent(structuredClone(event))),
+      nostrGroupSubscribe: (filter, onEvent) => {
+        const sub = worker.subscribeToGroup([filter], { onEvent: event => onEvent(structuredClone(event) as VerifiedEvent) })
+        return () => sub.close()
+      },
+      nostrGroupFetch: async filter => (await worker.queryGroup([filter], { cache: 'network-only' })).events
+        .map(event => structuredClone(event) as VerifiedEvent),
       nostrFetch: async (filter: Filter) => (await worker.query([filter], { cache: 'network-only', sources: [] }))
         .events.map(event => structuredClone(event) as VerifiedEvent),
       nostrEnqueue: async (event, innerEventId, context) => {
@@ -159,16 +165,17 @@ it('publishes direct, first-contact, group and call messages without naming any 
   const identities = [alice.owner, bob.owner, carol.owner, ...everyone.map(device => device.device)]
   expect(new Set(identities).size).toBe(7)
   const messages = relay.publishedEvents.filter(event => event.kind === 1060)
-  // Handshake carriers, both directions, roster and key handoffs, group fanout and the call offer.
+  // Handshake carriers, both directions, roster and key handoffs, one shared group message and the call offer.
   expect(messages.length).toBeGreaterThanOrEqual(12)
   for (const event of messages) {
     expect(event.tags.map(tag => tag[0])).toEqual(['v', 'header'])
     expect(event.tags[0]).toEqual(['v', '2'])
     const wire = JSON.stringify(event)
-    for (const hidden of [...identities, group.id, sent.outer.id, sent.outer.pubkey]) expect(wire).not.toContain(hidden)
+    for (const hidden of [...identities, group.id]) expect(wire).not.toContain(hidden)
+    if (event.id !== sent.outer.id) expect(wire).not.toContain(sent.outer.pubkey)
   }
-  // The shared sender-key ciphertext itself never reaches the relay.
-  expect(relay.publishedEvents.some(event => event.id === sent.outer.id || event.pubkey === sent.outer.pubkey)).toBe(false)
+  // All recipient devices recovered this same signed event.
+  expect(messages.filter(event => event.pubkey === sent.outer.pubkey).map(event => event.id)).toEqual([sent.outer.id])
 
   expect(wakes.map(wake => wake.tags).sort()).toEqual([[['p', b1!.device]], [['p', b2!.device]]].sort())
   for (const wake of wakes) {

@@ -25,17 +25,12 @@ export function createEventStore(owner = 'public', lane?: 'public' | 'private') 
   // record, including every row from an older version, stay local.
   const vouchers = pointers.roots as unknown as Table<{ carrier: PublicationCarrier; at: number }, string>
   const voucherKey = (id: string) => `carrier/${id}`
-  const vouched = async (ids: string[]): Promise<Set<string>> => {
-    if (!ids.length) return new Set()
-    const rows = await vouchers.bulkGet(ids.map(voucherKey))
-    return new Set(ids.filter((_, index) => rows[index]?.carrier === 'pairwise'))
-  }
-  // Keep old signed data locally, but never expose it to automatic publication.
-  // Filtering on every read also covers a still-open older tab adding a row.
+  // Only recorded publication handoffs can be retried after a worker restart.
+  // Missing or unrecognized vouchers leave old ciphertext in local storage.
   store.listPending = async () => {
     const entries = await pending()
-    const pairwise = await vouched(entries.filter(entry => [1060, 21111].includes(entry.event.kind)).map(entry => entry.event.id))
-    return entries.filter(entry => canRetryWorkerPublication(entry.event, pairwise.has(entry.event.id) ? 'pairwise' : undefined) &&
+    const rows = await vouchers.bulkGet(entries.map(entry => voucherKey(entry.event.id)))
+    return entries.filter((entry, index) => canRetryWorkerPublication(entry.event, rows[index]?.carrier) &&
       (!lane || isPrivateRelayEvent(entry.event) === (lane === 'private')))
   }
   const deletePending = store.deletePending.bind(store)

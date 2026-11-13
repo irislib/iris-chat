@@ -8,7 +8,7 @@ async function sharedGroupAuthors(): Promise<Set<string>> {
     .map(row=>row.value as string))
 }
 
-/** A shared channel is decoded locally, never subscribed to on a message server. */
+/** Keep shared group-author requests off the account-authenticated receive connection. */
 export async function privateGroupRelayFilter(filter:Filter):Promise<Filter | undefined> {
   if ((!filter.kinds || filter.kinds.includes(37368)) && filter['#type']?.includes('group_roster')) return
   if (filter.kinds && !filter.kinds.includes(1060) || !filter.authors?.length) return filter

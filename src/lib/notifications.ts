@@ -245,7 +245,8 @@ async function getSessionAuthorsByChat(supportsSilentPush = false): Promise<Map<
   }
 
   // Shared group authors would link the identities in authenticated member
-  // subscriptions. Group notifications arrive through individual ratchet sessions.
+  // subscriptions. Legacy deliveries and private group controls still arrive
+  // through ratchet sessions. Shared-author history is fetched anonymously.
   // Keep a member's session active when their direct chat is muted but a group
   // still needs deliveries; the worker applies the actual decrypted chat's mute.
   for (const group of await db.groups.toArray()) {

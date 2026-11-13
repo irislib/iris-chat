@@ -143,13 +143,16 @@ a recipient: device keys are public, so a recipient tag would let anyone queryin
 a relay link each delivery, and each group fanout burst, to the devices receiving
 it. Receivers find messages by the sender ratchet keys they follow, in chunks of
 at most 1,000 authors per subscription. Envelopes from older clients that still
-carry the tag are read; this app refuses to send, retry or replay one. Shared
-group ciphertext has the same wire shape as a private-session envelope, so what
-may be sent is decided by a record of where an envelope came from, never by its
-tags: the durable ratchet queue records each envelope it accepts, and a message
-event without that record is not sent, retried after a reload, wrapped in a call
-alert, or replayed to this account's own devices. Do not add a routing tag to a
-private event. Invite responses still target the invite's ephemeral key, and a
+carry the tag are read; this app refuses to send, retry or replay one.
+
+A group sender encrypts each message once and publishes one signed event from
+its per-group sender key. Membership changes and sender keys travel through
+private sessions. Receivers fetch group events over separate anonymously
+authenticated relay connections. A relay can correlate clients that follow the
+same sender key. Group authors stay out of account-linked Web Push filters.
+A closed browser catches up when reopened. The durable outbox records each
+event's producer locally and rechecks group membership before retrying.
+Do not add a routing tag to a private event. Invite responses still target the invite's ephemeral key, and a
 call alert (kind 21111) still names the one device it rings.
 
 Call wake envelopes use a fresh disposable signing key and carry only existing

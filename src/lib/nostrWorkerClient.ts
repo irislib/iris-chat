@@ -14,7 +14,7 @@ export class NostrWorkerClient {
   private privateRelays: readonly string[] = []
   private stats: RuntimeRelayStats[] = []
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
-  private readonly subscriptions = new Map<number, { filters: NostrFilter[]; handlers: RuntimeSubscriptionHandlers; options: RuntimeSubscribeOptions }>()
+  private readonly subscriptions = new Map<number, { filters: NostrFilter[]; handlers: RuntimeSubscriptionHandlers; options: RuntimeSubscribeOptions; method: string }>()
   private readonly sources = new Map<string, { source: RuntimeSource; close?: () => void }>()
   constructor(private readonly sign: (event: EventTemplate) => Promise<Event>) {}
   private start(): Worker {
@@ -42,7 +42,7 @@ export class NostrWorkerClient {
     }
     worker.postMessage({ method: 'init', args: [this.owner] })
     worker.postMessage({ method: 'setRelays', args: [this.relays, this.privateRelays] })
-    for (const [id, sub] of this.subscriptions) worker.postMessage({ id, method: 'subscribe', args: [sub.filters, sub.options] })
+    for (const [id, sub] of this.subscriptions) worker.postMessage({ id, method: sub.method, args: [sub.filters, sub.options] })
     for (const { source } of this.sources.values()) this.attachSource(source)
     return worker
   }
@@ -71,6 +71,10 @@ export class NostrWorkerClient {
     if (this.worker) void this.call<RuntimeRelayStats[]>('getRelayStats', []).then(stats => { this.stats = stats }).catch(() => {})
     return this.stats
   }
+  queryGroup: NostrRuntime['query'] = (filters, options = {}) => {
+    const { signal, ...serializable } = options
+    return this.call('queryGroup', [filters, serializable], signal)
+  }
   query: NostrRuntime['query'] = (filters, options = {}) => {
     const { signal, ...serializable } = options
     return this.call('query', [filters, serializable], signal)
@@ -78,7 +82,9 @@ export class NostrWorkerClient {
   // `carrier` vouches for a message envelope; the worker refuses one without it.
   publish = (event: NostrEvent, options: WorkerPublishOptions = {}): ReturnType<NostrRuntime['publish']> =>
     this.call('publish', [event, options])
-  subscribe: NostrRuntime['subscribe'] = (filters, handlers, options = {}) => {
+  subscribe: NostrRuntime['subscribe'] = (...args) => this.open('subscribe', ...args)
+  subscribeToGroup: NostrRuntime['subscribe'] = (...args) => this.open('subscribeToGroup', ...args)
+  private open(method: 'subscribe' | 'subscribeToGroup', filters: NostrFilter[], handlers: RuntimeSubscriptionHandlers, options: RuntimeSubscribeOptions = {}) {
     const worker = this.start(), id = ++this.nextId
     const { signal, ...serializable } = options
     const close = () => {
@@ -86,8 +92,8 @@ export class NostrWorkerClient {
       this.worker?.postMessage({ method: 'unsubscribe', args: [id] })
     }
     if (!signal?.aborted) {
-      this.subscriptions.set(id, { filters, handlers, options: serializable })
-      worker.postMessage({ id, method: 'subscribe', args: [filters, serializable] })
+      this.subscriptions.set(id, { filters, handlers, options: serializable, method })
+      worker.postMessage({ id, method, args: [filters, serializable] })
       signal?.addEventListener('abort', close, { once: true })
     }
     return { close }

@@ -11,14 +11,14 @@ import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
 import { canRetryWorkerPublication, namesNoRecipient } from './workerPublicationPolicy'
 
 const cleanup: Array<() => void | Promise<void>> = []
-afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.resetModules() })
+afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
 
 /** Real sender-key ciphertext from the library, and a real pairwise carrier beside it. */
 async function fixtures() {
   const key = generateSecretKey(), owner = getPublicKey(key), member = getPublicKey(generateSecretKey())
   const group = new Group({ data: { id: 'shared-ciphertext', name: 'Friends', members: [owner, member], admins: [owner], createdAt: 100 },
     ourOwnerPubkey: owner, ourDevicePubkey: owner, storage: new InMemoryStorageAdapter() })
-  const sent = await group.sendMessage('group text', { sendPairwise: async () => {}, publishOuter: async () => { throw new Error('never published') } })
+  const sent = await group.sendMessage('group text', { sendPairwise: async () => {}, publishOuter: async event => event as VerifiedEvent })
   const outer = sent.outer as VerifiedEvent
   const carrier = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
     .sendEvent({ kind: 14, content: 'pairwise text' }).event
@@ -36,15 +36,15 @@ it('has exactly the wire shape of a pairwise carrier, so no tag can tell them ap
   expect(isForbiddenGroupRelayEvent(carrier)).toBe(false)
 })
 
-it('is refused by the ratchet outbox when sent, and left unsent by every retry after a reload', async () => {
+it('requires group provenance and keeps an unvouched historical row local after restart', async () => {
   const { outer, carrier } = await fixtures()
-  const { createRuntimePublish } = await import('./runtimePublish')
+  const { createRuntimePublish, pairwiseCarrierIds } = await import('./runtimePublish')
   const storage = new InMemoryStorageAdapter()
   const publish = vi.fn(async (_event: VerifiedEvent) => new Set([{ url: 'wss://relay.example' }]))
   const queue = createRuntimePublish({ storage, owner: 'owner', publish, onError: vi.fn(), onlineTarget: new EventTarget() })
   cleanup.push(() => queue.close())
-  await expect(queue.enqueue(outer)).rejects.toThrow('Group messages must use private sessions')
-  await expect(queue.publish(outer, 'inner', { groupId: 'shared-ciphertext' })).rejects.toThrow('Group messages must use private sessions')
+  await expect(queue.enqueue(outer)).rejects.toThrow('Missing encrypted message provenance')
+  await expect(queue.publish(outer, 'inner', { groupId: 'shared-ciphertext' })).rejects.toThrow('Missing encrypted message provenance')
   expect(await storage.list('')).toEqual([])
   expect(publish).not.toHaveBeenCalled()
   await queue.publish(carrier)
@@ -54,20 +54,9 @@ it('is refused by the ratchet outbox when sent, and left unsent by every retry a
   // A reload forgets which ids were group ciphertext. A row an older version
   // left behind is then indistinguishable, and nothing vouches for it.
   await storage.put('v1/runtime-outbox/owner/' + outer.id, { event: outer, innerEventId: 'inner', context: { groupId: 'shared-ciphertext' } })
-  vi.resetModules()
-  vi.doMock('nostr-double-ratchet', async (importOriginal: () => Promise<typeof import('nostr-double-ratchet')>) => ({
-    ...await importOriginal(), isSharedGroupCiphertext: () => false,
-  }))
-  cleanup.push(() => vi.doUnmock('nostr-double-ratchet'))
-  expect((await import('nostr-double-ratchet')).isSharedGroupCiphertext(outer.id)).toBe(false)
-  const reloaded = await import('./runtimePublish')
-  const forgetful = reloaded.createRuntimePublish({ storage: new InMemoryStorageAdapter(), owner: 'other', publish, onError: vi.fn(), onlineTarget: new EventTarget() })
-  cleanup.push(() => forgetful.close())
-  // Proof the reloaded queue no longer recognises it by memory alone.
-  await expect(forgetful.enqueue(outer)).resolves.toBeUndefined()
   const onError = vi.fn(), onlineTarget = new EventTarget()
   const replay = vi.fn(async (_event: VerifiedEvent) => new Set([{ url: 'wss://relay.example' }]))
-  const restarted = reloaded.createRuntimePublish({ storage, owner: 'owner', publish: replay, onError, onlineTarget, retryIntervalMs: 1000 })
+  const restarted = createRuntimePublish({ storage, owner: 'owner', publish: replay, onError, onlineTarget, retryIntervalMs: 1000 })
   cleanup.push(() => restarted.close())
   restarted.start()
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -77,10 +66,35 @@ it('is refused by the ratchet outbox when sent, and left unsent by every retry a
   expect(replay).not.toHaveBeenCalled()
   expect(onError).not.toHaveBeenCalled()
   expect(await storage.get('v1/runtime-outbox/owner/' + outer.id)).toBeTruthy()
-  expect(await reloaded.pairwiseCarrierIds(storage, 'owner', [outer.id, carrier.id])).toEqual(new Set([carrier.id]))
+  expect(await pairwiseCarrierIds(storage, 'owner', [outer.id, carrier.id])).toEqual(new Set([carrier.id]))
 })
 
-it('is refused by the worker on direct sends, inside a call alert, and from its retry queue after a restart', async () => {
+it('restores a sender-key handoff and checks its recorded membership before publishing', async () => {
+  const { owner, member, outer } = await fixtures()
+  const { createRuntimePublish, pairwiseCarrierIds } = await import('./runtimePublish')
+  const context = { groupId: 'shared-ciphertext', groupSenderKey: true as const, groupMemberPubkeys: [owner, member].sort() }
+  const storage = new InMemoryStorageAdapter()
+  const publish = vi.fn(async () => new Set([{ url: 'wss://relay.example' }]))
+  let authorized: boolean | 'hold' = 'hold'
+  const policy = vi.fn(() => authorized)
+  const onlineTarget = new EventTarget()
+  const options = { storage, owner, publish, canPublish: policy, onError: vi.fn(), onlineTarget }
+  const first = createRuntimePublish(options)
+  await first.enqueue(outer, 'inner', context)
+  first.close()
+  const restarted = createRuntimePublish(options)
+  cleanup.push(() => restarted.close())
+  restarted.start()
+  await vi.waitFor(() => expect(policy).toHaveBeenCalledWith(context, structuredClone(outer)))
+  expect(publish).not.toHaveBeenCalled()
+  expect(await pairwiseCarrierIds(storage, owner, [outer.id])).toEqual(new Set())
+  authorized = true
+  onlineTarget.dispatchEvent(new Event('online'))
+  await vi.waitFor(() => expect(publish).toHaveBeenCalledWith(structuredClone(outer), expect.any(AbortSignal), context, 'group-sender-key'))
+  expect(publish).toHaveBeenCalledTimes(1)
+})
+
+it('keeps unvouched group data out of direct sends, call alerts and automatic worker retries', async () => {
   const { owner, member, outer, carrier } = await fixtures()
   const relay = new TestRelay()
   await relay.start(); cleanup.push(() => relay.stop())
@@ -100,7 +114,7 @@ it('is refused by the worker on direct sends, inside a call alert, and from its 
   runtime.setRelays([relay.url])
   await vi.waitFor(() => expect(relay.publishedEvents.map(event => event.id)).toEqual([carrier.id]), { timeout: 5000 })
   for (const options of [{}, { queue: true }, { queue: false }, { requireAck: true, queue: false }, { relays: [] as string[], sources: ['fips'] }]) {
-    await expect(runtime.publish(outer, { relays: [relay.url], ...options })).rejects.toThrow('Group messages must use private sessions')
+    await expect(runtime.publish(outer, { relays: [relay.url], ...options })).rejects.toThrow('Missing encrypted message provenance')
     await expect(runtime.publish(alert, { relays: [relay.url], ...options })).rejects.toThrow('Invalid encrypted call alert')
   }
   // Two more retry rounds of the private lane.

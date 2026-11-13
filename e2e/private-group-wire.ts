@@ -51,9 +51,23 @@ export class PrivateGroupWire {
       } else expect(event.tags.filter(tag => tag[0] === 'p')).toHaveLength(1)
     }
     const groupAuthors = new Set(sharedGroupAuthors)
-    for (const filters of this.subscriptions.values()) for (const filter of filters) {
+    let groupRead = false, authenticatedGroupRead = false
+    for (const [connection, filters] of this.subscriptions) for (const filter of filters) {
       expect((filter['#type'] as string[] | undefined) ?? []).not.toContain('group_roster')
-      expect(filter.authors?.some(author => groupAuthors.has(author)) ?? false).toBe(false)
+      if (filter.authors?.some(author => groupAuthors.has(author))) {
+        const signer = this.authentication.get(connection)
+        // A backfill can close before the relay's AUTH challenge is answered.
+        // Every observed identity must be anonymous, including on live reads.
+        groupRead = true
+        if (signer) {
+          authenticatedGroupRead = true
+          expect(keys.has(signer)).toBe(false)
+        }
+        expect(privateConnections.has(connection)).toBe(false)
+        expect(filter.kinds).toEqual([1060])
+        expect(filter.authors.every(author => !keys.has(author))).toBe(true)
+      }
     }
+    if (groupRead) expect(authenticatedGroupRead).toBe(true)
   }
 }

@@ -371,7 +371,7 @@ describe('message envelopes name no recipient and come from private sessions', (
     await expect(queue.enqueue({ ...event('b'), tags: [['v', '2']] })).rejects.toThrow('only the version and header')
     // Same shape as a pairwise carrier: only the library that made it can tell.
     markSharedGroupCiphertext(event('e').id)
-    await expect(queue.publish(event('e'))).rejects.toThrow('Group messages must use private sessions')
+    await expect(queue.publish(event('e'))).rejects.toThrow('Missing encrypted message provenance')
     expect(publish).not.toHaveBeenCalled()
     expect(await db.sessionManager.count()).toBe(0)
   })

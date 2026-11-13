@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.6.65 - 2026-11-13
+
+- Group messages now use one sender-key event for all group members. Update every device that needs to receive new group messages. Existing conversations and saved messages remain readable.
+- Group messages arrive while the app is connected and catch up when it reopens. A closed browser receives no push notifications for new group messages. Direct-message notifications continue to work.
+
 ## 2.6.64 - 2026-11-11
 
 - Private messages no longer name the device that receives them. Every message event used to carry the receiving device's public key outside the encryption, so anyone reading a message server could link each delivery, and each group message's burst of deliveries, to the devices receiving it. Message events now carry only what is needed to decrypt them. Messages from apps that have not updated are still received.
