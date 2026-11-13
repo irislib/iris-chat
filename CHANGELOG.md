@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.6.66 - 2026-11-13
+
+- When a group message needs a missing sender key, Iris Chat requests it from the device that wrote the message if its identity is verified. This reduces repeat deliveries to other linked devices during recovery.
+
 ## 2.6.65 - 2026-11-13
 
 - Group messages now use one sender-key event for all group members. Update every device that needs to receive new group messages. Existing conversations and saved messages remain readable.
