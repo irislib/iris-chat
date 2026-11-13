@@ -49,8 +49,8 @@ test('a third member reaches both existing members without creating empty direct
     await send(bob, 'I can make it')
     await expect(alice.getByText('I can make it', { exact: true }).last()).toBeVisible()
 
-    // A notification service receives only individual session authors. Suppress
-    // the shared channels entirely and require authenticated private group wakes.
+    // After both directions are established, the relay can deliver ordinary
+    // messages from the shared authors alone. Roster changes still use private sessions.
     const sharedAuthors = new Set(await alice.evaluate(async () => {
       const database = await new Promise<IDBDatabase>((resolve,reject) => {
         const request = indexedDB.open('iris-chat')
@@ -68,15 +68,16 @@ test('a third member reaches both existing members without creating empty direct
       } finally { database.close() }
     }))
     expect(sharedAuthors.size).toBe(2)
-    testRelay.deliveryFilter = event => !sharedAuthors.has(event.pubkey) &&
-      !event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster')
-    await send(alice, 'Delivered through our private session')
-    await expect(bob.getByText('Delivered through our private session', {exact:true}).last()).toBeVisible()
+    const privateMembership = testRelay.deliveryFilter
+    testRelay.deliveryFilter = event => (event.kind !== 1060 || sharedAuthors.has(event.pubkey)) && privateMembership(event)
+    await send(alice, 'Delivered once to the group')
+    await expect(bob.getByText('Delivered once to the group', {exact:true}).last()).toBeVisible()
     await bob.reload()
-    await expect(bob.getByText('Delivered through our private session', {exact:true}).last()).toBeVisible()
+    await expect(bob.getByText('Delivered once to the group', {exact:true}).last()).toBeVisible()
     await send(bob, 'Private group reply after restart')
     await expect(alice.getByText('Private group reply after restart', {exact:true}).last()).toBeVisible()
 
+    testRelay.deliveryFilter = privateMembership
     await alice.getByRole('button', { name: 'Picnic 2 members', exact: true }).click()
     await alice.getByRole('button', { name: 'Add', exact: true }).click()
     await alice.getByRole('button', { name: 'Cara Bobcat Cara Bobcat', exact: true }).click()
@@ -96,7 +97,7 @@ test('a third member reaches both existing members without creating empty direct
     // A message event names no recipient: only the version and header are outside the encryption.
     expect(testRelay.publishedEvents.filter(event=>event.kind===1060).length).toBeGreaterThan(0)
     expect(testRelay.publishedEvents.filter(event=>event.kind===1060).every(event=>event.tags.map(tag=>tag[0]).join()==='v,header')).toBe(true)
-    expect(requests.some(filter=>filter.authors?.some(author=>sharedAuthors.has(author)))).toBe(false)
+    expect(requests.some(filter=>filter.kinds?.includes(1060) && filter.authors?.some(author=>sharedAuthors.has(author)))).toBe(true)
     expect(requests.some(filter=>Array.isArray(filter['#type']) && filter['#type'].includes('group_roster'))).toBe(false)
   } finally {
     if (testInfo.status !== testInfo.expectedStatus) await testInfo.attach('group-roster-events', {body: JSON.stringify(testRelay.publishedEvents.filter(event => event.tags.some(tag => tag[0] === 'type' && tag[1] === 'group_roster'))), contentType:'application/json'})
