@@ -56,7 +56,7 @@ try {
   const message = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
     .sendEvent({ kind: 14, content: 'loopback private routing proof' }).event;
   assert.deepEqual(message.tags.map(tag => tag[0]), ['v', 'header'], 'A message event names no recipient');
-  await assert.rejects(call('publish', [message, { requireAck: true, queue: false }]), /Group messages must use private sessions/);
+  await assert.rejects(call('publish', [message, { requireAck: true, queue: false }]), /Missing encrypted message provenance/);
   const post = finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000), tags: [], content: 'loopback public routing proof' }, generateSecretKey());
   await call('publish', [message, { requireAck: true, queue: false, carrier: 'pairwise' }]);
   await call('publish', [post, { requireAck: true, queue: false }]);
