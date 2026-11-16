@@ -82,8 +82,9 @@ export async function runPortableSmoke({ distDir, title, screenshotPath, validat
   const { server, url } = await startServer(distDir, entryHtml)
   const browser = await chromium.launch({ headless: true })
   const page = await browser.newPage()
-  const packagedGraph = await readFile(path.resolve('node_modules/nostr-social-graph/data/socialGraph.bin'))
-  await page.route('https://graph-api.iris.to/**', route => route.fulfill({ body: packagedGraph, contentType: 'application/octet-stream', headers: { 'x-graph-root': '4523be58d395b1b196a9b8c82b038b6895cb02b683d0c253a955068dba1facd0' } }))
+  // This shell smoke exercises the packaged offline fallback. The graph-specific
+  // browser suite serves a complete signed Hashtree directory on loopback.
+  await page.routeWebSocket(/^wss:\/\/(?:temp\.iris\.to|relay\.primal\.net)\/?$/, socket => socket.close());
   // Native download metadata is unrelated to this portable/offline UI check.
   await page.route('https://cdn.iris.to/**/releases%2Firis-chat-rs/latest/release.json', route => route.fulfill({ status: 404, body: 'Offline fixture' }))
   const documentResponses = []

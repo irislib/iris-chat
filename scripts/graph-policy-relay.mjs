@@ -21,7 +21,7 @@ export function createNegSession(events = [], filter = {}) {
 }
 
 /** Real codec and WebSocket I/O; ordinary live subscriptions are tracked separately. */
-export async function createGraphPolicyRelay(events) {
+export async function createGraphPolicyRelay(events,nameEvent) {
   const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   await once(server, 'listening');
   const records = [];
@@ -48,6 +48,10 @@ export async function createGraphPolicyRelay(events) {
         else if (frame[0] === 'EVENT' && frame[1]?.id) socket.send(JSON.stringify(['OK', frame[1].id, true, 'fixture accepted']));
         else if (frame[0] === 'REQ') {
           const filters = frame.slice(2); record.requests.push(filters); record.active.set(id, filters);
+          if (nameEvent && filters.some(filter => matches(nameEvent, filter) &&
+              filter.kinds?.includes(30064) && filter['#d']?.includes('social-graph'))) {
+            socket.send(JSON.stringify(['EVENT', id, nameEvent]));
+          }
           // Only exact-ID reads following real NEG receive initial bodies. This
           // prevents live subscriptions from accidentally satisfying the NEG test.
           if (record.neg && filters.every(filter => Array.isArray(filter.ids) && Object.keys(filter).every(key => key === 'ids'))) {

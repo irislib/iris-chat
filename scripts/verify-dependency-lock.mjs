@@ -40,8 +40,8 @@ const releases = {
     "integrity": "sha512-4/PMo+4ppVe1Qc67iMazqnsEQNq2n35mxb+iTSkxcwHJgkX3Fv2v7vI3aa6Xc5MVh+E49ISFukj6PTvekBuFfg=="
   },
   "nostr-social-graph": {
-    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.0.4/nostr-social-graph-4.0.4.tgz",
-    "integrity": "sha512-7lMB0fYsjIBQwn/03lY8+0gq41rzifG4hmp5iczjrdBZ/FWQQvkkrH2HGtL80lMhkYr5+UqV63DaBdtoaReDtA=="
+    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.2.0/nostr-social-graph-4.2.0.tgz",
+    "integrity": "sha512-DUFZNJ2jGreQgqsvxvn8UwMucM48h6dvB3AyUuql2ber0pRBJA8a0R20rLqYuT2FNbfhDyQyEMQLRxQVQK0Ebg=="
   },
   "@hashtree/worker": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.41/hashtree-worker-0.4.25.tgz",

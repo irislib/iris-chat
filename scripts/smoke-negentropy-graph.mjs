@@ -7,6 +7,7 @@ import path from 'node:path';
 import {WebSocket} from 'ws';
 import {chromium, expect} from '@playwright/test';
 import {SocialGraph} from 'nostr-social-graph';
+import {createNamedGraphFixture} from 'nostr-social-graph/testing/namedGraph';
 import {finalizeEvent, getPublicKey} from 'nostr-tools/pure';
 import {createGraphPolicyRelay} from './graph-policy-relay.mjs';
 
@@ -18,6 +19,8 @@ const seedEvents=lists(100),newEvents=lists(300),lateEvents=lists(400,muted,frie
 const seed=new SocialGraph(root);seed.addFollower(root,owner);seed.handleEvent(seedEvents,true);
 const seedBytes=Buffer.from(await seed.toBinary()),httpMarker=getPublicKey(new Uint8Array(32).fill(45));
 const httpSeed=await SocialGraph.fromBinary(root,seedBytes);httpSeed.addFollower(friend,httpMarker);const httpSeedBytes=Buffer.from(await httpSeed.toBinary());
+const snapshot=await createNamedGraphFixture(root,httpSeedBytes);
+const directoryHash=snapshot.event.tags.find(tag=>tag[0]==='hash')[1];
 const dist=path.resolve('dist');
 const server=createServer(async(req,res)=>{
  const pathname=new URL(req.url,'http://localhost').pathname;
@@ -25,12 +28,14 @@ const server=createServer(async(req,res)=>{
  const file=path.resolve(dist,`.${pathname==='/'?'/index.html':pathname}`);
  if(!file.startsWith(dist+path.sep)){res.writeHead(403).end();return;}
  try{let bytes=await readFile(file);
+ // Only this test server trusts the fixture signer. The client verifies every signature and block.
+ if(file.endsWith('.js'))bytes=Buffer.from(bytes.toString().replaceAll('npub1yscmnnadrmvape0mvgzfx9uyl267klnhzy8znsr6ysl8wtxngpqsnx6dm0',snapshot.publisher));
  // Route the message worker's sockets at the transport boundary as well as the
  // page sockets. Keep all application/protocol code from the actual built asset.
  if(app==='chat'&&/^nostrWorker-.*\.js$/.test(path.basename(file)))bytes=Buffer.concat([Buffer.from(`const __GraphFixtureWebSocket=globalThis.WebSocket;globalThis.WebSocket=class extends __GraphFixtureWebSocket{constructor(url,protocols){super(${JSON.stringify(relay.url('custom'))},protocols)}};\n`),bytes]);
  res.writeHead(200,{'content-type':{'.js':'application/javascript','.html':'text/html','.css':'text/css','.wasm':'application/wasm'}[path.extname(file)]??'application/octet-stream','cache-control':'no-store'}).end(bytes);}catch{res.writeHead(404).end();}
 }).listen(0,'127.0.0.1');await once(server,'listening');
-const origin=`http://127.0.0.1:${server.address().port}`,relay=await createGraphPolicyRelay(servedEvents),boundary=await createDenyProxy(),browser=await chromium.launch({headless:true,proxy:{server:boundary.url,bypass:'127.0.0.1,localhost,[::1]'}});
+const origin=`http://127.0.0.1:${server.address().port}`,relay=await createGraphPolicyRelay(servedEvents,snapshot.event),boundary=await createDenyProxy(),browser=await chromium.launch({headless:true,proxy:{server:boundary.url,bypass:'127.0.0.1,localhost,[::1]'}});
 const cacheInfo={name:app==='contacts'?'iris-public-social-graph':'iris-chat-people-graph',store:app==='contacts'?'graphs':'accounts',version:app==='contacts'?1:10,key:app==='contacts'?root:owner};
 async function stored(page){return page.evaluate(async info=>{
  if(!(await indexedDB.databases()).some(db=>db.name===info.name))return null;
@@ -50,7 +55,14 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  const conflict=mode==='pending-other-tab',invalid=mode==='unreadable-cache',pendingCustom=mode==='pending-custom',empty=mode==='empty-retained',custom=mode==='custom-neg',context=await browser.newContext({serviceWorkers:'allow'});let http=0,unsupported=mode==='unsupported-retained',releaseBootstrap;
  const bootstrapGate=new Promise(resolve=>{releaseBootstrap=resolve;});
  const boundaryPage=await context.newPage();await assertWorkerNetworkBlocked(boundaryPage,boundary);await boundaryPage.close();
- await context.route('https://graph-api.iris.to/**',async route=>{http++;if(conflict||pendingCustom)await bootstrapGate;return route.fulfill({body:httpSeedBytes,contentType:'application/octet-stream',headers:{'x-graph-root':root,'access-control-allow-origin':'*','access-control-expose-headers':'x-graph-root'}})});
+ let legacyRequests=0;
+ await context.route('https://graph-api.iris.to/**',route=>{legacyRequests++;return route.abort();});
+ await context.route(/^https:\/\/cdn\.iris\.to\/[0-9a-f]{64}\.bin$/,async route=>{
+  const hash=new URL(route.request().url()).pathname.slice(1,-4);
+  if(hash===directoryHash){http++;if(conflict||pendingCustom)await bootstrapGate;}
+  const block=await snapshot.readBlock(hash);if(!block)return route.abort();
+  return route.fulfill({body:Buffer.from(block),contentType:'application/octet-stream',headers:{'access-control-allow-origin':'*'}});
+ });
  await context.route(/\/assets\/socialGraph[^/]*\.bin$/,route=>route.fulfill({body:seedBytes,contentType:'application/octet-stream'}));
  // Bridge browser WebSocket I/O to the same real local NEG responder used by worker apps.
  await context.routeWebSocket(/^wss?:/,route=>{
@@ -85,7 +97,7 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
    assert.equal(http,conflict?1:0);unsupported=true;
    await page.reload({waitUntil:'domcontentloaded'});await expect(ready()).toBeVisible({timeout:30000});
    await page.waitForTimeout(1800);assert.deepEqual((await stored(blocker)).bytes,retained.bytes,'Close/reload must preserve retained or unreadable graph bytes');assert.equal(http,conflict?1:0);
-   console.log(`${app}: ${mode} PASS; second-tab row preserved through debounce and reload; HTTP=${http}`);continue;
+   console.log(`${app}: ${mode} PASS; second-tab row preserved through debounce and reload; signed directories=${http}`);continue;
   }
   if(unsupported){assert.equal(sync().flatMap(r=>r.requests).length,0,'Unsupported NEG must not fall back to REQ');await assertCached(page,newEvents,true);assert.equal(http,0);}
   else{
@@ -94,7 +106,10 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
    else{servedEvents.splice(0,servedEvents.length,...lateEvents);await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));}
    await assertCached(page,lateEvents);
   }
-  const before=http;await page.reload({waitUntil:'domcontentloaded'});await expect(ready()).toBeVisible({timeout:30000});await assertCached(page,unsupported?newEvents:lateEvents,unsupported);assert.equal(http,before,'Reload must preserve graph without replacement HTTP');assert.deepEqual(records().flatMap(r=>r.errors),[]);
-  console.log(`${app}: ${mode} PASS; exact signed follow/mute IDs and retained partial cache; HTTP=${http}; NEG sockets=${sync().length}`);
- }finally{releaseBootstrap();await context.close();}
+  const before=http;await page.reload({waitUntil:'domcontentloaded'});await expect(ready()).toBeVisible({timeout:30000});await assertCached(page,unsupported?newEvents:lateEvents,unsupported);assert.equal(http,before,'Reload must preserve graph without resolving another directory');assert.deepEqual(records().flatMap(r=>r.errors),[]);
+  console.log(`${app}: ${mode} PASS; exact signed follow/mute IDs and retained partial cache; signed directories=${http}; NEG sockets=${sync().length}`);
+ }finally{releaseBootstrap();await context.close();assert.equal(legacyRequests,0,'No graph API requests');
+   if(['custom-neg','empty-retained','unsupported-retained','unreadable-cache'].includes(mode)) {
+     assert.equal(records().flatMap(r=>r.requests).filter(filters=>filters.some(f=>f.kinds?.includes(30064))).length,0,'A retained or custom graph must not resolve the public name');
+   }}
 }}finally{await browser.close();await boundary.close();await relay.close();await new Promise(resolve=>server.close(resolve));}

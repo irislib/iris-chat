@@ -357,7 +357,7 @@ const controller = new PeopleGraphController({
       try {
         const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
         const candidate = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY,
-          signal: AbortSignal.any([bootstrap.signal, AbortSignal.timeout(2500)]) })
+          signal: AbortSignal.any([bootstrap.signal, AbortSignal.timeout(12000)]) })
         await candidate.setRoot(owner)
         if (!bootstrap.signal.aborted) graph = candidate
       } catch { /* The packaged graph keeps offline starts usable. */ }
