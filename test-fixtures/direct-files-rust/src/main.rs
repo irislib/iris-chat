@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?,
     );
     let (event_tx, events) = flume::unbounded();
-    let (sender, task) = direct_file_tcp::start_direct_file_tcp(endpoint.clone(), directory.join("state"), event_tx).await?;
+    let (sender, task) = direct_file_tcp::start_direct_file_tcp(endpoint.clone(), #[cfg(shared_file_engine)] directory.join("state"), event_tx).await?;
     let (commands_tx, commands) = flume::unbounded();
     std::thread::spawn(move || {
         for line in io::stdin().lock().lines().map_while(Result::ok) {
@@ -87,7 +87,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let files: Vec<_> = local_paths.iter().map(|path| { let bytes=fs::read(path).unwrap(); json!({"path":path,"bytes":STANDARD.encode(&bytes),"sha256":format!("{:x}",Sha256::digest(&bytes))}) }).collect();
                         json!({"type":"completed","id":transfer_id,"peer":peer,"files":files})
                     }
+                    #[cfg(shared_file_engine)]
                     DirectFileEvent::Offered { transfer_id, peer, .. } => json!({"type":"offered","id":transfer_id,"peer":peer}),
+                    #[cfg(shared_file_engine)]
                     DirectFileEvent::Paused { transfer_id, peer, error } => json!({"type":"paused","id":transfer_id,"peer":peer,"error":error}),
                     DirectFileEvent::Failed { transfer_id, peer, error } => json!({"type":"failed","id":transfer_id,"peer":peer,"error":error}),
                     DirectFileEvent::Declined { transfer_id, peer } => json!({"type":"declined","id":transfer_id,"peer":peer}),
@@ -145,6 +147,7 @@ fn execute(
                 device: keys.public_key().to_hex(),
                 caption: "Native direct files".into(),
                 expires_at_secs: nostr::Timestamp::now().as_secs() + 3600,
+                #[cfg(shared_file_engine)]
                 protocol_version: 2,
                 files: files
                     .iter()
@@ -166,14 +169,15 @@ fn execute(
         "receive" => {
             let offer = model::parse(text(command, "body")?)
                 .ok_or("Native parser rejected signed browser offer")?;
-            sender.receive_into(
-                offer.id.clone(),
-                offer.token.clone(),
-                peer(&offer.device)?,
-                offer.transport_files(&[]),
-                direct_file_directory_destination(directory.join("received").to_string_lossy().into_owned()),
-                offer.protocol_version >= 2,
-            )?;
+            let destination = direct_file_directory_destination(
+                directory.join("received").to_string_lossy().into_owned(),
+            );
+            let sender_peer = peer(&offer.device)?;
+            let files = offer.transport_files(&[]);
+            #[cfg(shared_file_engine)]
+            sender.receive_into(offer.id.clone(), offer.token.clone(), sender_peer, files, destination, offer.protocol_version >= 2)?;
+            #[cfg(not(shared_file_engine))]
+            sender.receive_into(offer.id.clone(), offer.token.clone(), sender_peer, files, destination)?;
             Ok(
                 json!({"id":offer.id,"device":offer.device,"owner":offer.owner,"recipient":offer.recipient}),
             )

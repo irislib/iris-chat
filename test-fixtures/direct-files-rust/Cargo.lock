@@ -1488,6 +1488,8 @@ dependencies = [
  "nostr",
  "nvpn-fips-core",
  "nvpn-fips-file-transfer",
+ "nvpn-fips-tcp",
+ "nvpn-fips-tcp-endpoint",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -1979,9 +1981,9 @@ dependencies = [
 
 [[package]]
 name = "nvpn-fips-core"
-version = "0.4.110"
+version = "0.4.123"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c051eabd066d2844014c8e6d01b26ab5d0b54d5d8f183918ead72bd3804f57bb"
+checksum = "6b23ab830c7abdd3510dd2586688a0b29f4a34646d524e7937145df70903599c"
 dependencies = [
  "async-wsocket",
  "base64",
@@ -2015,6 +2017,7 @@ dependencies = [
  "sha2 0.10.9",
  "simple-dns",
  "socket2 0.6.4",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-socks",
@@ -2029,7 +2032,9 @@ dependencies = [
 
 [[package]]
 name = "nvpn-fips-file-transfer"
-version = "0.1.0"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb2a357c1975069db052a763adfe6a0144deb507c42b76a2024247f19b3e37f2"
 dependencies = [
  "flume",
  "libc",
@@ -2061,10 +2066,14 @@ dependencies = [
 [[package]]
 name = "nvpn-fips-tcp"
 version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "299df22559c4af63e7d276fcb90cf000f2f1cd5546c213f17d8860154c1383d7"
 
 [[package]]
 name = "nvpn-fips-tcp-endpoint"
-version = "0.2.45"
+version = "0.2.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f3fa2f912e0d105a7ee4166c15df11ac5179d453a152b339e351868ecb871eb"
 dependencies = [
  "nvpn-fips-core",
  "nvpn-fips-tcp",
@@ -3329,6 +3338,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3425,9 +3447,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.52.3"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
