@@ -11,6 +11,9 @@ overrides:
   '@hashtree/nostr': https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.40/hashtree-nostr-0.2.7.tgz
   '@hashtree/nostr-pubsub': $@hashtree/nostr-pubsub
   '@hashtree/worker': $@hashtree/worker
+  nostr-pubsub: $nostr-pubsub
+  nostr-pubsub-reconcile: $nostr-pubsub-reconcile
+  nostr-social-graph: $nostr-social-graph
   '@fips/core': $@fips/core
   '@fips/transport-websocket': $@fips/transport-websocket
   '@fips/tcp': $@fips/tcp

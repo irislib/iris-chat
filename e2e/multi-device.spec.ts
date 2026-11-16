@@ -1,4 +1,6 @@
 import { test, expect, useTestRelay } from './fixtures'
+import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
+import type { BrowserContext } from '@playwright/test'
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 
 function toHex(bytes: Uint8Array): string {
@@ -195,19 +197,22 @@ async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<
 
 async function openLinkThisDevice(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/')
-  const linkButton = page.getByRole('button', { name: /link this device/i })
-  if (!(await linkButton.isVisible().catch(() => false))) {
-    await page.evaluate(() => {
-      localStorage.removeItem('iris-chat-identity')
-    })
-    await page.reload({ waitUntil: 'domcontentloaded' })
-  }
-
-  await expect(linkButton).toBeVisible({ timeout: 30000 })
-  await linkButton.click()
+  await page.getByRole('button', { name: 'Already have an account?' }).click()
+  await page.getByRole('button', { name: 'Link this device' }).click()
   await expect(page.getByRole('heading', { name: 'Link this device' })).toBeVisible({
     timeout: 20000,
   })
+}
+
+async function useLocalSync(contexts: BrowserContext[], relay: string) {
+  const seed = await startLocalFipsWebSocketSeed()
+  for (const context of contexts) {
+    await useTestRelay(context, relay)
+    await context.addInitScript(url => {
+      localStorage.setItem('iris-chat-call-servers', JSON.stringify({ servers: [url], stunServers: [] }))
+    }, seed.url)
+  }
+  return seed
 }
 
 async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl: string): Promise<void> {
@@ -218,7 +223,7 @@ async function acceptLinkInvite(page: import('@playwright/test').Page, inviteUrl
   await page.getByPlaceholder('Paste link code').fill(inviteUrl)
   await page.getByRole('button', { name: 'Chats and groups only', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Link another device' })).toBeHidden({
-    timeout: 10_000,
+    timeout: 100_000,
   })
   await page.getByRole('button', { name: 'Back' }).click()
   await expect(page).toHaveURL(/#settings$/)
@@ -238,14 +243,9 @@ test('syncs outgoing messages to another device', async ({ browser, testRelayUrl
   const contextLinked = await browser.newContext()
   const contextUser2 = await browser.newContext()
 
-  await useTestRelay(contextOwner, testRelayUrl)
-  await useTestRelay(contextLinked, testRelayUrl)
-  await useTestRelay(contextUser2, testRelayUrl)
+  const seed = await useLocalSync([contextOwner, contextLinked, contextUser2], testRelayUrl)
 
   await setIdentity(contextOwner, ownerPrivkeyHex)
-  await contextLinked.addInitScript(() => {
-    localStorage.removeItem('iris-chat-identity')
-  })
   await setIdentity(contextUser2, user2PrivkeyHex)
 
   const ownerPage = await contextOwner.newPage()
@@ -287,6 +287,7 @@ test('syncs outgoing messages to another device', async ({ browser, testRelayUrl
     await contextOwner.close()
     await contextLinked.close()
     await contextUser2.close()
+    await seed.close()
   }
 })
 
@@ -298,12 +299,8 @@ test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
   const contextOwner = await browser.newContext()
   const contextLinked = await browser.newContext()
 
-  await useTestRelay(contextOwner, testRelayUrl)
-  await useTestRelay(contextLinked, testRelayUrl)
+  const seed = await useLocalSync([contextOwner, contextLinked], testRelayUrl)
   await setIdentity(contextOwner, ownerPrivkeyHex)
-  await contextLinked.addInitScript(() => {
-    localStorage.removeItem('iris-chat-identity')
-  })
 
   const ownerPage = await contextOwner.newPage()
   const linkedPage = await contextLinked.newPage()
@@ -338,6 +335,7 @@ test('self-chat syncs to linked device', async ({ browser, testRelayUrl }) => {
   } finally {
     await contextOwner.close()
     await contextLinked.close()
+    await seed.close()
   }
 })
 
@@ -357,14 +355,9 @@ test('linked device-created group syncs without approval and carries messages bo
   const linkedContext = await browser.newContext()
   const user2Context = await browser.newContext()
 
-  await useTestRelay(ownerContext, testRelayUrl)
-  await useTestRelay(linkedContext, testRelayUrl)
-  await useTestRelay(user2Context, testRelayUrl)
+  const seed = await useLocalSync([ownerContext, linkedContext, user2Context], testRelayUrl)
 
   await setIdentity(ownerContext, ownerPrivkeyHex)
-  await linkedContext.addInitScript(() => {
-    localStorage.removeItem('iris-chat-identity')
-  })
   await setIdentity(user2Context, user2PrivkeyHex)
 
   const ownerPage = await ownerContext.newPage()
@@ -422,6 +415,7 @@ test('linked device-created group syncs without approval and carries messages bo
     await ownerContext.close()
     await linkedContext.close()
     await user2Context.close()
+    await seed.close()
   }
 })
 

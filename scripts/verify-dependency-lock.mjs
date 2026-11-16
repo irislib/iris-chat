@@ -8,8 +8,8 @@ const packages = lockfile.split('\nsnapshots:')[0]
 const pubsubRuntime = await readFile(new URL('src/lib/nostrPubsubRuntime.ts', root), 'utf8')
 const releases = {
   "nostr-pubsub-reconcile": {
-    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.1/nostr-pubsub-reconcile-0.1.1.tgz",
-    "integrity": "sha512-hrwY11Np7ufQaqMBQyHJvOjN+fjCfFQ0kTQDzVgALay0ogmP7RLAvDtQmx7U3KOGrGKGoZKLnbeKfsNLCykB+Q=="
+    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.2/nostr-pubsub-reconcile-0.1.2.tgz",
+    "integrity": "sha512-w2N8AE2bL5h7H0tOuTONOTprHS4/SVCP93lyipA/mekk+RogF3fZFh+s2lxLEDvW5tSjIJcBdX1lguX7wD5+2g=="
   },
   "@fips/core": {
     "url": "https://github.com/mmalmi/fips-ts/releases/download/runtime-v0.0.62/fips-core-0.0.57.tgz",
@@ -28,40 +28,40 @@ const releases = {
     "integrity": "sha512-lIY8SHl7ebkQnIHH+kW3Dlh/E1HU1QU0rCs5oB2SneGRm+7fZ6uy8L9FFoJ6/QGwuBERmEetvkZAfBD89EXJyQ=="
   },
   "@hashtree/core": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-core-0.4.0.tgz",
-    "integrity": "sha512-hdqjU1MoGjc55BL5WM93jgVxW7cYOWCWHcYUl5glUT8boEinFfmlmnhyjGp7TNwWgxZKQ7Rgag9XiyDnRUGBUA=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.42/hashtree-core-0.4.2.tgz",
+    "integrity": "sha512-9gPIe39QJoCUtVo8VhbDOX5bHAtGlJ2EZlQJqKh3l9++2CY1Njg2LINXQWBgKRqB0P2LBKoDpyYz1XIBoJ/SMw=="
   },
   "nostr-pubsub": {
-    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.29/nostr-pubsub-0.5.29.tgz",
-    "integrity": "sha512-ENSpu5VHgKmf14Gg239I/h7k0taZ2BcQ1EumMbE4NEnIbUUX7auCVCmQDlOJfwArSIpTgUEDkKyI10NSYS6A/A=="
+    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.31/nostr-pubsub-0.5.31.tgz",
+    "integrity": "sha512-vx3xVWFHT60YHobi53cVdsI0+JG4MsOfy4sI+hPurfEeMvesN/EW1n7I75ljtrGoh/kie9brq3sIk+pvxfccDQ=="
   },
   "nostr-double-ratchet": {
     "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.187.tgz",
     "integrity": "sha512-4/PMo+4ppVe1Qc67iMazqnsEQNq2n35mxb+iTSkxcwHJgkX3Fv2v7vI3aa6Xc5MVh+E49ISFukj6PTvekBuFfg=="
   },
   "nostr-social-graph": {
-    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.2.0/nostr-social-graph-4.2.0.tgz",
-    "integrity": "sha512-DUFZNJ2jGreQgqsvxvn8UwMucM48h6dvB3AyUuql2ber0pRBJA8a0R20rLqYuT2FNbfhDyQyEMQLRxQVQK0Ebg=="
+    "url": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.2.1/nostr-social-graph-4.2.1.tgz",
+    "integrity": "sha512-kXlUkf9It7K4mFs02lc5kmzhAu6ymjyCCbolqJsdtekddohch/h0OgtDaonttrmt4pBcxKCJvJlqcuLTybJZ1g=="
   },
   "@hashtree/worker": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.41/hashtree-worker-0.4.25.tgz",
-    "integrity": "sha512-viUPl2JUtrfJENEWZPvaTtT5x73Pvj5EmHn7qjsTP5T01uOg0tDm7xJww3cf6x23LILi6drOh97ss0WWYq/KVA=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.48/hashtree-worker-0.4.30.tgz",
+    "integrity": "sha512-eGw1RZxP1lsMQxo8irD4Xkfw16jx7INnTOx4GKBXWmrzO5AqKJ0asB+pOLJZhXxp6eukObTwSe8qqm2Wkcjh6g=="
   },
   "@hashtree/fips-transport": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.38/hashtree-fips-transport-0.5.0.tgz",
-    "integrity": "sha512-1hUDOllGMrhtcfs9YosXqdNE7VVqEhe45uHB92AK4UTrlTFitin6NVWTdGnDVNBImPA2doPkJSmBdlBMF4N17A=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.45/hashtree-fips-transport-0.5.1.tgz",
+    "integrity": "sha512-l0Yu279XQH8V+//Kl/SHe199qhwfgm4Nb0SXdNiJ9Dxtw1l1pu1vKz5PiVEMu/Qvn4Jfs3U2KRS12HWRyIf7qg=="
   },
   "@hashtree/nostr-pubsub": {
     "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-nostr-pubsub-0.1.9.tgz",
     "integrity": "sha512-7QfJ1LwAYb8ThdA/ECXJQYxh7BjQk/gTQS+XAfnZvzjxx5YSDRjGj+7bqLtbDdIAPDuIA9dUNYCfH8oj9RLdPQ=="
   },
   "@hashtree/dexie": {
-    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-dexie-0.1.13.tgz",
-    "integrity": "sha512-i34YCDwA+d4puwtC2f+4NreOLRC/RRTOe3PDHXctJvaqg2Ig+xpGcb2I1cbjjCY0cVJ8/BTemNYrH0LfXckPwQ=="
+    "url": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.46/hashtree-dexie-0.1.15.tgz",
+    "integrity": "sha512-YPn2gh0QQQRMcZY3zYmkycLqBjKJhA8GEmWq2/LPSbD0441YEQPCkWvTfAgRUsXA+gvjxB51tvqev1caXylp8A=="
   },
   "@iris/identity": {
-    "url": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.6/iris-identity-0.3.1.tgz",
-    "integrity": "sha512-HwLi00j/Buf85f//Q4FsKCzvDcidul2U+rNIkfwHZjusNPfJaw6p/Yk4nlKXGkpN4W+TGVj1tZmHGj9Tz8UBAg=="
+    "url": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz",
+    "integrity": "sha512-ZZ7qRjOXl+7fLqsSrWEn9eOysrsbXDsHQz6uxZZw+4wnw3qZXi3xHVdWAia7ykTmFm3euDjNHA+raG33xjacWg=="
   }
 }
 
@@ -95,11 +95,13 @@ for (const [name, release] of Object.entries(releases)) {
     throw new Error(`${name} lock metadata must match release version ${version}`)
   }
 }
-if ((packages.match(/^  ['"]?@fips\/core@/gm) ?? []).length !== 1) {
-  throw new Error('The dependency graph must contain one audited @fips/core release')
-}
-if ((packages.match(/^  ['"]?@fips\/tcp@/gm) ?? []).length !== 1) {
-  throw new Error('The dependency graph must contain one audited @fips/tcp release')
+// Older transitive pins must not create a second runtime in the worker or a peer source.
+const singletons = ['@fips/core', '@fips/tcp', 'nostr-pubsub', 'nostr-pubsub-reconcile', 'nostr-social-graph']
+for (const name of singletons) {
+  const entries = packages.match(new RegExp(`^  ['"]?${name}@`, 'gm')) ?? []
+  if (entries.length !== 1) {
+    throw new Error(`The dependency graph must contain one audited ${name} release`)
+  }
 }
 if (manifest.scripts?.test?.startsWith('pnpm verify:dependency-lock') !== true) {
   throw new Error('The normal test gate must verify GitHub dependency integrity')
