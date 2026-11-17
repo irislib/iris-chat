@@ -23,3 +23,6 @@ overrides:
 
 onlyBuiltDependencies:
   - esbuild
+
+patchedDependencies:
+  '@hashtree/nostr-pubsub@0.1.9': patches/hashtree-pubsub-pending-scopes.patch

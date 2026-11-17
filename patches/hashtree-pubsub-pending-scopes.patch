@@ -1,0 +1,42 @@
+diff --git a/dist/runtimeStore.js b/dist/runtimeStore.js
+--- a/dist/runtimeStore.js
++++ b/dist/runtimeStore.js
+@@ -37,7 +37,7 @@
+                 const event = await this.events.getById(state.outboxRoot, entry.id);
+                 // Replaceable events supersede older pending versions in the same index.
+                 if (event)
+-                    entries.push({ event, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources });
++                    entries.push({ event, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources, additionalScopes: entry.additionalScopes });
+             }
+             return entries;
+         });
+@@ -49,7 +49,7 @@
+             }
+             state.outboxRoot = await this.events.add(state.outboxRoot, entry.event);
+             state.pending = state.pending.filter(({ id }) => id !== entry.event.id);
+-            state.pending.push({ id: entry.event.id, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources });
++            state.pending.push({ id: entry.event.id, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources, additionalScopes: entry.additionalScopes });
+             const present = await Promise.all(state.pending.map(async (item) => ({
+                 item, exists: !!await this.events.getById(state.outboxRoot, item.id),
+             })));
+diff --git a/src/runtimeStore.ts b/src/runtimeStore.ts
+--- a/src/runtimeStore.ts
++++ b/src/runtimeStore.ts
+@@ -56,7 +56,7 @@
+       for (const entry of state.pending) {
+         const event = await this.events.getById(state.outboxRoot, entry.id);
+         // Replaceable events supersede older pending versions in the same index.
+-        if (event) entries.push({ event, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources });
++        if (event) entries.push({ event, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources, additionalScopes: entry.additionalScopes });
+       }
+       return entries;
+     });
+@@ -69,7 +69,7 @@
+       }
+       state.outboxRoot = await this.events.add(state.outboxRoot, entry.event);
+       state.pending = state.pending.filter(({ id }) => id !== entry.event.id);
+-      state.pending.push({ id: entry.event.id, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources });
++      state.pending.push({ id: entry.event.id, attempts: entry.attempts, updatedAt: entry.updatedAt, relays: entry.relays, sources: entry.sources, additionalScopes: entry.additionalScopes });
+       const present = await Promise.all(state.pending.map(async (item) => ({
+         item, exists: !!await this.events.getById(state.outboxRoot, item.id),
+       })));
