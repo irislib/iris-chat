@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { resolveHtreeCommand } from './hashtreePaths.mjs'
+import { resolveNativePublishCommand } from './hashtreePaths.mjs'
 import { defaultSiteTreeName, parsePublishOutput } from './release-site.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename)
 const distDir = path.resolve(__dirname, '..', 'dist')
 
 function main() {
-  const [command, ...args] = resolveHtreeCommand('add', '.', '--publish', defaultSiteTreeName)
+  const [command, ...args] = resolveNativePublishCommand(distDir, defaultSiteTreeName)
   const result = spawnSync(
     command,
     args,
