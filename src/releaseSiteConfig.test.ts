@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 // @vitest-environment node
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -5,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createReleasePlan, defaultSiteTreeName, parseArgs, runRelease } from '../scripts/release-site.mjs'
 
 describe('release site config', () => {
-  beforeEach(() => vi.stubEnv('HTREE_BIN', ''))
+  beforeEach(() => {
+    vi.stubEnv('HTREE_BIN', 'htree')
+    vi.stubEnv('IRIS_NATIVE_RELEASE_GATE', fileURLToPath(import.meta.url))
+  })
   afterEach(() => vi.unstubAllEnvs())
 
   it('uses a dedicated mutable tree for the published site by default', () => {
@@ -38,7 +42,8 @@ describe('release site config', () => {
       command: ['pnpm', 'install', '--frozen-lockfile'],
     })
     expect(publishStep?.command).toContain(defaultSiteTreeName)
-    expect(publishStep?.command[0]).toBe('htree')
+    expect(publishStep?.command[0]).toBe(process.execPath)
+    expect(publishStep?.command.slice(-2)).toEqual(['--htree', 'htree'])
     expect(publishStep?.command).not.toContain('--manifest-path')
     expect(publishStep?.command).not.toContain('iris-chat')
     expect(portableTestStep?.command.slice(0, 2)).toEqual(['pnpm', 'test'])
@@ -58,6 +63,7 @@ describe('release site config', () => {
       'e2e/private-contact-sync.spec.ts',
       'e2e/web-join.spec.ts',
       'e2e/direct-file-first.spec.ts',
+      'e2e/peer-attachments.spec.ts',
       'e2e/message-mutations.spec.ts',
       'e2e/link-device.spec.ts',
       'e2e/invite-roleplay.spec.ts',
@@ -75,10 +81,10 @@ describe('release site config', () => {
   it('uses an explicitly configured publisher binary', () => {
     vi.stubEnv('HTREE_BIN', '/configured/htree')
     const plan = createReleasePlan(parseArgs([]))
-    expect(plan.steps.find((step) => step.id === 'publish')?.command[0]).toBe('/configured/htree')
+    expect(plan.steps.find((step) => step.id === 'publish')?.command.slice(-2)).toEqual(['--htree', '/configured/htree'])
   })
 
-  it('runs hashtree publish and Cloudflare deploy in parallel after tests', async () => {
+  it('runs native Hashtree publish before Cloudflare deploy after tests', async () => {
     let activeReleaseSteps = 0
     let maxActiveReleaseSteps = 0
     const calls: string[] = []
@@ -129,54 +135,22 @@ describe('release site config', () => {
       'publish',
       'deploy',
     ])
-    expect(maxActiveReleaseSteps).toBe(2)
+    expect(maxActiveReleaseSteps).toBe(1)
   })
 
-  it('retries a soft-failed hashtree file-server upload and rejects retry errors', async () => {
-    const calls: { id: string; command: string[] }[] = []
-    const options = {
-      dryRun: false,
-      skipCloudflare: true,
-      pagesOnly: false,
-      treeName: defaultSiteTreeName,
-      branch: undefined,
-      pagesProject: undefined,
-      workerName: undefined,
-      routes: [],
-      domains: [],
-      workerCompatibilityDate: '2026-03-26',
-    }
-    const runner = async (step: { id: string; command: string[] }) => {
-      calls.push(step)
-      if (step.id === 'publish') {
-        return {
-          status: 0,
-          stdout: 'published: npub1example/iris-chat-site\nnhash1ace',
-          stderr: 'file server push failed: temporary upload failure',
-        }
-      }
-      if (step.id === 'push') {
-        return { status: 0, stdout: 'Uploaded: 3, Skipped: 0, Errors: 0', stderr: '' }
-      }
-      return { status: 0, stdout: '', stderr: '' }
-    }
-
-    await runRelease(options, runner, { buildOutputExists: () => true })
-
-    expect(calls.at(-1)).toEqual({
-      id: 'push',
-      label: 'Retry Iris Chat file-server upload',
-      command: ['htree', 'push', 'nhash1ace', '--force'],
-      cwd: expect.any(String),
-    })
-
-    await expect(runRelease(options, async (step) => {
-      const result = await runner(step)
-      return step.id === 'push'
-        ? { status: 0, stdout: 'Uploaded: 2, Skipped: 0, Errors: 1', stderr: '' }
-        : result
-    }, { buildOutputExists: () => true })).rejects.toThrow(
-      'Retry Iris Chat file-server upload completed with file-server errors',
-    )
+  it('leaves Cloudflare untouched when the native publish reports upload errors', async () => {
+    const calls: string[] = []
+    await expect(runRelease(parseArgs([]), async (step) => {
+      calls.push(step.id)
+      return step.id === 'publish'
+        ? {
+            status: 0,
+            stdout: 'published: npub1example/iris-chat-site\nnhash1ace',
+            stderr: 'file server push failed: temporary upload failure',
+          }
+        : { status: 0, stdout: '', stderr: '' }
+    }, { buildOutputExists: () => true })).rejects.toThrow('reported file-server errors')
+    expect(calls.at(-1)).toBe('publish')
+    expect(calls).not.toContain('deploy')
   })
 })

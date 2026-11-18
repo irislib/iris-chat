@@ -2,7 +2,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { resolveHtreeCommand } from './hashtreePaths.mjs'
+import { resolveHtreeCommand, resolveNativePublishCommand } from './hashtreePaths.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -217,6 +217,9 @@ export function createReleasePlan(options) {
         'src/lib/deviceSync.test.ts',
         'src/lib/deviceSyncTcp.test.ts',
         'src/lib/hashtreeSigner.test.ts',
+        'src/lib/attachmentTransport.test.ts',
+        'src/lib/attachmentEncryption.test.ts',
+        'src/lib/attachmentLocalFirst.test.ts',
         'src/lib/privateRuntimeInitialization.test.ts',
         'src/lib/privateChats.registration.test.ts',
         'src/lib/authorizationSync.test.ts',
@@ -264,13 +267,13 @@ export function createReleasePlan(options) {
     {
       id: 'test-e2e-nip07',
       label: `E2E-test ${profile.appName} joining, message changes, direct files and private contacts`,
-      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/private-key-login.spec.ts', 'e2e/nip07.spec.ts', 'e2e/contact-memory.spec.ts', 'e2e/private-contact-sync.spec.ts', 'e2e/web-join.spec.ts', 'e2e/direct-file-first.spec.ts', 'e2e/message-mutations.spec.ts', 'e2e/link-device.spec.ts', 'e2e/invite-roleplay.spec.ts', 'e2e/composer-identity.spec.ts', 'e2e/composer-completions.spec.ts', 'e2e/timed-mute.spec.ts', 'e2e/notification-navigation.spec.ts', 'e2e/sw-push-handler.spec.ts', 'e2e/device-removal.spec.ts', '--workers=2', '--retries=0'],
+      command: ['pnpm', 'exec', 'playwright', 'test', 'e2e/private-key-login.spec.ts', 'e2e/nip07.spec.ts', 'e2e/contact-memory.spec.ts', 'e2e/private-contact-sync.spec.ts', 'e2e/web-join.spec.ts', 'e2e/direct-file-first.spec.ts', 'e2e/peer-attachments.spec.ts', 'e2e/message-mutations.spec.ts', 'e2e/link-device.spec.ts', 'e2e/invite-roleplay.spec.ts', 'e2e/composer-identity.spec.ts', 'e2e/composer-completions.spec.ts', 'e2e/timed-mute.spec.ts', 'e2e/notification-navigation.spec.ts', 'e2e/sw-push-handler.spec.ts', 'e2e/device-removal.spec.ts', '--workers=2', '--retries=0'],
       cwd: appDir,
     },
     {
       id: 'publish',
       label: `Publish ${profile.appName} to hashtree`,
-      command: resolveHtreeCommand('add', '.', '--publish', options.treeName),
+      command: resolveNativePublishCommand(distDir, options.treeName, { dryRun: options.dryRun }),
       cwd: distDir,
     },
   ]
@@ -407,14 +410,6 @@ function parsePagesOutput(output) {
 
 /**
  * @param {ReleaseStep} step
- * @returns {boolean}
- */
-function isReleaseStep(step) {
-  return step.id === 'publish' || step.id === 'deploy'
-}
-
-/**
- * @param {ReleaseStep} step
  * @param {StepResult} result
  */
 function assertStepSucceeded(step, result) {
@@ -448,54 +443,26 @@ export async function runRelease(options, runner = defaultRunner, hooks = {}) {
     return { dryRun: true, steps: plan.steps }
   }
 
-  let publishOutput = ''
-  let publishNeedsPush = false
+  let publish
   let deployOutput = ''
-  const prereleaseSteps = plan.steps.filter((step) => !isReleaseStep(step))
-  const releaseSteps = plan.steps.filter(isReleaseStep)
-
-  for (const step of prereleaseSteps) {
+  for (const step of plan.steps) {
     const result = await runner(step)
     assertStepSucceeded(step, result)
     if (step.id === 'build') {
       ensureDistExists(buildOutputExists)
     }
-  }
-
-  const releaseResults = await Promise.allSettled(
-    releaseSteps.map((step) => Promise.resolve().then(() => runner(step))),
-  )
-
-  for (const [index, execution] of releaseResults.entries()) {
-    const step = releaseSteps[index]
-    if (execution.status === 'rejected') {
-      throw execution.reason
-    }
-    const result = execution.value
-    assertStepSucceeded(step, result)
     if (step.id === 'publish') {
-      publishOutput = `${result.stdout}\n${result.stderr}`
-      publishNeedsPush = fileServerPushFailed(result)
+      if (fileServerPushFailed(result)) {
+        throw new Error(`${step.label} reported file-server errors`)
+      }
+      publish = parsePublishOutput(`${result.stdout}\n${result.stderr}`)
     }
     if (step.id === 'deploy') {
       deployOutput = `${result.stdout}\n${result.stderr}`
     }
   }
 
-  const publish = parsePublishOutput(publishOutput)
-  if (publishNeedsPush) {
-    const pushStep = {
-      id: 'push',
-      label: `Retry ${profile.appName} file-server upload`,
-      command: resolveHtreeCommand('push', publish.nhash, '--force'),
-      cwd: appDir,
-    }
-    const result = await runner(pushStep)
-    assertStepSucceeded(pushStep, result)
-    if (fileServerPushFailed(result)) {
-      throw new Error(`${pushStep.label} completed with file-server errors`)
-    }
-  }
+  if (!publish) throw new Error('Missing Hashtree publication receipt')
 
   return {
     publish,
@@ -512,7 +479,9 @@ export function usage() {
   return `Usage: node ./scripts/release-site.mjs [options]
 
 Build once, test the built output, then publish to hashtree and deploy that same
-directory to Cloudflare Workers Static Assets or Cloudflare Pages in parallel.
+directory to Cloudflare Workers Static Assets or Cloudflare Pages after the native gate passes.
+
+Set IRIS_NATIVE_RELEASE_GATE to the absolute path of the pinned Iris Sites gate.
 
 Options:
   --worker-name <name>    Cloudflare Worker service name for static assets

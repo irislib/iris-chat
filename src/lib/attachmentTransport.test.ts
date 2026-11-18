@@ -186,40 +186,16 @@ it('cancels a pending anonymous read when its provider becomes a sibling and rec
   liveStop.mockRestore()
 }, 30000)
 
-it('denies unrelated cache probes and preserves only dynamically authorized sibling reads', async () => {
-  const { nodes: [holder, sibling, unrelated] } = await network(3)
-  const siblingKey = normalizeDeviceSyncPeer(toHex(sibling.identity.publicKey))
-  const holderKey = toHex(holder.identity.publicKey)
-  const allowed = new Set([siblingKey])
+it('serves cached attachment blocks by exact hash to a peer outside the device roster', async () => {
+  const { nodes: [holder, unrelated] } = await network(2)
   const store = new MemoryStore(), bytes = new Uint8Array([17, 23, 42]), hash = await sha256(bytes)
   await store.put(hash, bytes)
-  const reads = vi.spyOn(store, 'get')
   const service = createAttachmentTransport({ endpoint: holder, store,
-    siblings: () => [], allowSibling: peer => allowed.has(peer) })
+    siblings: () => [], allowSibling: () => false })
   cleanups.push(() => service.close())
-  const makeClient = (node: FipsNode) => {
-    const client = new TcpBlobTransport({ endpoint: node, localStore: emptyStore(), timeoutMs: 600 })
-    cleanups.push(() => client.close()); return client
-  }
-  const outsider = makeClient(unrelated)
-  for (const requested of [hash, new Uint8Array(32) as Hash]) {
-    await expect(outsider.get(requested, [holderKey], 0)).rejects.toThrow()
-  }
-  expect(reads).not.toHaveBeenCalled()
-  const own = makeClient(sibling)
-  expect(await own.get(hash, [holderKey], 0)).toEqual(bytes)
-  expect(reads).toHaveBeenCalled()
-  reads.mockClear(); allowed.clear()
-  await expect(own.get(hash, [holderKey], 0)).rejects.toThrow()
-  expect(reads).not.toHaveBeenCalled()
-  allowed.add(siblingKey)
-  expect(await own.get(hash, [holderKey], 0)).toEqual(bytes)
-  // Revocation must also cover a request already admitted before the cache read
-  // completes; no response may leave the now-unauthorized identified endpoint.
-  let release!: (value: Uint8Array | null) => void
-  reads.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
-  const inFlight = own.get(hash, [holderKey], 0).catch(() => null)
-  await vi.waitFor(() => expect(release).toBeTypeOf('function'))
-  allowed.clear(); release(bytes)
-  expect(await inFlight).toBeNull()
-}, 15000)
+  const client = new TcpBlobTransport({ endpoint: unrelated, localStore: emptyStore(), timeoutMs: 1200 })
+  cleanups.push(() => client.close())
+  const peers = [toHex(holder.identity.publicKey)]
+  expect(await client.get(hash, peers, 0)).toEqual(bytes)
+  expect(await client.get(await sha256(new Uint8Array([99])), peers, 0)).toBeNull()
+}, 10000)

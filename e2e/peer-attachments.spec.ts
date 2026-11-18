@@ -4,7 +4,7 @@ import { startLocalFipsWebSocketSeed } from './fixtures/localFipsWebSocketSeed'
 import { readFileSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 
-test('three browsers share cached encrypted files on the existing FIPS node with Blossom unavailable', async ({ browser, testRelayUrl, baseURL }) => {
+test('three browsers share cached encrypted files by hash over FIPS with Blossom unavailable', async ({ browser, testRelayUrl, baseURL }) => {
   // Two added reload/file phases retain the existing readiness and file limits.
   test.setTimeout(300_000)
   const seed = await startLocalFipsWebSocketSeed()
@@ -98,10 +98,13 @@ test('three browsers share cached encrypted files on the existing FIPS node with
     // Keep the original routed transport and HTTP restrictions. Only the sender
     // owns each random file, generated after that browser has actually reloaded.
     for (const [endpoint, sender, receiver] of [[0, a, b], [1, b, a]] as const) {
+      const device = devicePeerIds.get(sender)!
+      const before = seed.connectionsFor(device)
       await sender.reload()
+      await expect.poll(() => seed.connectionsFor(device)).toBeGreaterThan(before)
       await sender.getByTestId('sidebar-chat-list').getByRole('button').first().click()
       await expect(sender.getByPlaceholder('Type a message...')).toBeVisible({ timeout: 30_000 })
-      await expect.poll(() => seed.connectedPeers().slice().sort()).toEqual(initialPeerIds.slice().sort())
+      await expect.poll(() => seed.connectedPeers().filter(peer => initialPeerIds.includes(peer)).sort()).toEqual(initialPeerIds.slice().sort())
       const filename = `recovered-${endpoint}.jpg`
       const freshBytes = Buffer.concat([Buffer.from(bytes), randomBytes(32)])
       const freshHash = createHash('sha256').update(freshBytes).digest('hex')
@@ -124,9 +127,8 @@ test('three browsers share cached encrypted files on the existing FIPS node with
         }
       })
       expect(received).toEqual({ bytes: freshBytes.length, hash: freshHash })
-      // The seed authenticates the real browser endpoints. A rotated or extra
-      // endpoint must not masquerade as retention of the registered device ID.
-      await expect.poll(() => seed.connectedPeers().slice().sort()).toEqual(initialPeerIds.slice().sort())
+      // Anonymous readers can join independently of the three registered devices.
+      await expect.poll(() => seed.connectedPeers().filter(peer => initialPeerIds.includes(peer)).sort()).toEqual(initialPeerIds.slice().sort())
       console.log('PEER_RELOAD_RECOVERY', JSON.stringify({
         app: 'iris-chat', endpoint, reloaded: true, identityPreserved: true,
         peerRecovered: true, freshHash, bytes: received.bytes, transport: 'routed-fips',
@@ -138,7 +140,8 @@ test('three browsers share cached encrypted files on the existing FIPS node with
     expect(await imageBytes(b)).toEqual(bytes)
     // Cached pixels render before device initialization rejoins the network.
     // Forward only once the restored provider and third browser are connected.
-    await expect.poll(() => seed.connectedPeers().length).toBe(2)
+    await expect.poll(() => seed.connectedPeers().filter(peer => initialPeerIds.includes(peer)).sort())
+      .toEqual([devicePeerIds.get(b)!, devicePeerIds.get(c)!].sort())
     await b.getByRole('button', { name: 'Back', exact: true }).click()
     sharingFiles = false
     await connect(b, c, 'Cached peer')
