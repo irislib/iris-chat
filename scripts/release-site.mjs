@@ -202,6 +202,7 @@ export function createReleasePlan(options) {
         'pnpm',
         'test',
         'src/portableBuildConfig.test.ts',
+        'src/isolatedBrowser.test.ts',
         'src/releaseSiteConfig.test.ts',
         'src/staticAssetsWorker.test.ts',
         'src/lib/chat.invite.test.ts',

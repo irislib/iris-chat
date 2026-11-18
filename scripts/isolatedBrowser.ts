@@ -32,6 +32,11 @@ export async function createDenyProxy(): Promise<DenyProxy> {
   })
   server.on("connection", (socket) => {
     sockets.add(socket)
+    // CONNECT/upgrade sockets are detached from the HTTP parser. Chromium may
+    // reset a denied tunnel while its context closes; keep other errors fatal.
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "ECONNRESET") throw error
+    })
     socket.on("close", () => sockets.delete(socket))
   })
   server.on("clientError", (_error, socket) => socket.destroy())
