@@ -197,7 +197,7 @@ async function getLinkInviteUrl(page: import('@playwright/test').Page): Promise<
 
 async function openLinkThisDevice(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/')
-  await page.getByRole('button', { name: 'Already have an account?' }).click()
+  await page.getByRole('button', { name: 'Already have a profile?' }).click()
   await page.getByRole('button', { name: 'Link this device' }).click()
   await expect(page.getByRole('heading', { name: 'Link this device' })).toBeVisible({
     timeout: 20000,

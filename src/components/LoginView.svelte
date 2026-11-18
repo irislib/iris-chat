@@ -126,7 +126,7 @@
     </form>
   {:else if mode === 'existing'}
     <div class="space-y-4">
-      <h2 class="text-2xl font-bold text-white text-center">Existing account</h2>
+      <h2 class="text-2xl font-bold text-white text-center">Existing profile</h2>
       {#if error}<div role="alert" class="text-red-400 text-sm">{error}</div>{/if}
       <div class="space-y-3">
         {#if supportsNip07}
@@ -185,7 +185,7 @@
           onclick={() => { error = ''; mode = 'existing' }}
           disabled={loading}
         >
-          Already have an account?
+          Already have a profile?
         </button>
       </div>
     </div>

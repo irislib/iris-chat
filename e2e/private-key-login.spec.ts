@@ -23,8 +23,8 @@ for (const format of ['nsec', 'hex'] as const) {
     await expect(page.getByRole('button', { name: 'Link this device', exact: true })).toBeHidden()
     await expect(page.getByRole('button', { name: 'Log in with secret key', exact: true })).toBeHidden()
     await page.screenshot({ path: testInfo.outputPath('welcome.png') })
-    await page.getByRole('button', { name: 'Already have an account?' }).click()
-    await expect(page.getByRole('heading', { name: 'Existing account' })).toBeVisible()
+    await page.getByRole('button', { name: 'Already have a profile?' }).click()
+    await expect(page.getByRole('heading', { name: 'Existing profile' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Link this device', exact: true })).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('existing-account.png') })
     await page.getByRole('button', { name: 'Log in with secret key', exact: true }).click()
@@ -51,7 +51,7 @@ for (const format of ['nsec', 'hex'] as const) {
 test('invalid keys stay signed out and backing out clears the secret', async ({ page }) => {
   await page.goto('/')
   await page.getByPlaceholder('Name', { exact: true }).fill('Alice')
-  await page.getByRole('button', { name: 'Already have an account?' }).click()
+  await page.getByRole('button', { name: 'Already have a profile?' }).click()
   await page.getByRole('button', { name: 'Log in with secret key', exact: true }).click()
   const field = page.getByLabel('Secret key', { exact: true })
   for (const input of ['invalid', '0'.repeat(64), 'f'.repeat(64), nip19.npubEncode(getPublicKey(generateSecretKey()))]) {
