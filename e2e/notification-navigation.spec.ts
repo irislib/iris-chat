@@ -55,7 +55,7 @@ test('leaving a direct chat clears its route so reload does not reopen or mark i
   await expect(page.getByPlaceholder('Type a message...')).not.toBeVisible()
 })
 
-test('Log out is cancelable and clears this browser identity and chat data', async ({ page }) => {
+test('Settings sign-out is cancelable and clears this browser identity and chat data', async ({ page }) => {
   await login(page)
   await contact(page, 'c'.repeat(64), 'Private unsent draft')
   await page.evaluate(() => {
@@ -67,7 +67,11 @@ test('Log out is cancelable and clears this browser identity and chat data', asy
   if (page.viewportSize()!.width < 768) await page.getByRole('button', { name: 'Back', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await page.getByRole('link', { name: 'Profile', exact: true }).click()
+  await expect(page).toHaveURL(/#settings$/)
+  const menu = page.getByRole('navigation', { name: 'Settings sections' })
+  const signOut = menu.getByRole('button', { name: 'Sign out', exact: true })
+  await expect(signOut).toBeVisible()
+  await menu.getByRole('link', { name: 'Profile', exact: true }).click()
   const profile = page.getByRole('region', { name: 'Profile', exact: true })
   const copyKey = profile.getByRole('button', { name: 'Copy secret key', exact: true })
   await page.evaluate(() => {
@@ -82,12 +86,14 @@ test('Log out is cancelable and clears this browser identity and chat data', asy
   await expect(profile.getByRole('status')).toHaveText('Secret key copied.')
   await expect(page.locator('body')).toHaveAttribute('data-copied-secret', 'true')
   await expect(profile.getByText('Signed in with a secret key')).toBeVisible()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page).toHaveURL(/#settings$/)
   page.once('dialog', async dialog => { expect(dialog.message()).toContain('other devices are not affected'); await dialog.dismiss() })
-  await page.getByRole('button', { name: 'Log out', exact: true }).click()
-  await expect(profile).toBeVisible()
-  await profile.screenshot({ path: test.info().outputPath('profile-settings.png') })
+  await signOut.click()
+  await expect(signOut).toBeVisible()
+  await menu.screenshot({ path: test.info().outputPath('settings-sign-out.png') })
   page.once('dialog', dialog => dialog.accept())
-  await page.getByRole('button', { name: 'Log out', exact: true }).click()
+  await signOut.click()
   await expect(page.getByRole('button', { name: 'Go', exact: true })).toBeVisible()
   await page.reload()
   await expect(page.getByRole('button', { name: 'Go', exact: true })).toBeVisible()

@@ -64,7 +64,7 @@
   }
 
   function handleLogout() {
-    if (confirm('Log out?\n\nYour profile and chats will be removed from this browser. Your other devices are not affected. Make sure you have your secret key or another linked device before continuing.')) {
+    if (confirm('Sign out?\n\nYour profile and chats will be removed from this browser. Your other devices are not affected. Make sure you have your secret key or another linked device before continuing.')) {
       onLogout()
     }
   }
@@ -687,6 +687,12 @@
           {/each}
         </div>
       {/each}
+      {#if $identity}
+        <button type="button" class="settings-menu-row settings-logout text-red-400" onclick={handleLogout}>
+          <span class="i-carbon-logout text-xl" aria-hidden="true"></span>
+          <span>Sign out</span>
+        </button>
+      {/if}
     </nav>
 
     <section bind:this={detailPane} class="settings-detail" aria-label={detailTitle}>
@@ -800,12 +806,6 @@
             </div>
           {/if}
 
-          <div class="mt-4 pt-4 border-t border-surface-lighter">
-            <button class="settings-menu-row text-red-400" onclick={handleLogout}>
-              <span class="i-carbon-logout text-xl" aria-hidden="true"></span>
-              <span>Log out</span>
-            </button>
-          </div>
         </div>
       {/if}
         {:else if detailPage === 'appearance'}
@@ -1549,6 +1549,7 @@
   .settings-menu-row:focus-visible { background: rgb(var(--color-surface-light)); }
   .settings-menu-row:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
   .settings-profile-row { padding-top: 16px; padding-bottom: 16px; }
+  .settings-logout { margin-top: 16px; }
 
   .settings-detail { display: none; }
   .settings-detail :global([role="switch"]) { flex-shrink: 0; }
