@@ -1,6 +1,6 @@
 export const SETTINGS_PAGES = [
-  { id: 'profile', title: 'Profile', description: 'Name, picture and account', icon: 'i-carbon-user-avatar-filled', group: 'Account' },
-  { id: 'devices', title: 'Devices', description: 'Link and manage devices', icon: 'i-carbon-devices', group: 'Account' },
+  { id: 'profile', title: 'Profile', description: 'Name, picture and sign-in', icon: 'i-carbon-user-avatar-filled', group: 'Profile and devices' },
+  { id: 'devices', title: 'Devices', description: 'Link and manage devices', icon: 'i-carbon-devices', group: 'Profile and devices' },
   { id: 'appearance', title: 'Appearance', description: 'Theme', icon: 'i-carbon-paint-brush', group: 'Preferences' },
   { id: 'privacy', title: 'Privacy', description: 'Receipts, typing and message requests', icon: 'i-carbon-security', group: 'Preferences' },
   { id: 'calls', title: 'Calls', description: 'Voice, video and quality', icon: 'i-carbon-phone-filled', group: 'Preferences' },

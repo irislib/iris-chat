@@ -358,6 +358,7 @@
 
   // Get nsec for secret key
   const nsec = $derived.by(() => {
+    if (!$identity || $identity.isLinkedDevice || $identity.isNip07) return null
     const hex = getPrivkeyHex()
     if (!hex) return null
     const bytes = new Uint8Array(hex.match(/.{2}/g)!.map(b => parseInt(b, 16)))
@@ -674,10 +675,6 @@
           {/each}
         </div>
       {/each}
-      <button class="settings-menu-row settings-logout text-red-400" onclick={handleLogout}>
-        <span class="i-carbon-logout text-xl" aria-hidden="true"></span>
-        <span>Log out</span>
-      </button>
     </nav>
 
     <section bind:this={detailPane} class="settings-detail" aria-label={detailTitle}>
@@ -727,7 +724,7 @@
                 <Name pubkey={$identity.pubkey} />
               </h2>
               <p class="text-sm text-gray-400">
-                {$identity.isNip07 ? 'Logged in with extension' : 'Logged in with secret key'}
+                {$identity.isLinkedDevice ? 'Signed in on a linked device' : $identity.isNip07 ? 'Signed in with an extension' : 'Signed in with a secret key'}
               </p>
             </div>
           </div>
@@ -767,8 +764,8 @@
             {/if}
           </div>
 
-          <!-- Secret Key Section (only for non-NIP07) -->
-          {#if !$identity.isNip07 && nsec}
+          <!-- Secret Key Section -->
+          {#if nsec}
             <div class="mt-4 pt-4 border-t border-surface-lighter">
               <div class="flex items-center justify-between mb-2">
                 <span class="text-sm text-gray-400">Secret Key</span>
@@ -786,12 +783,17 @@
               {/if}
               <CopyButton text={nsec} label="Copy Secret Key" />
               <p class="text-xs text-red-400 mt-2">
-                Never share your secret key. Anyone with it can access your account.
+                Never share your secret key. Anyone with it can sign as you.
               </p>
             </div>
           {/if}
 
-
+          <div class="mt-4 pt-4 border-t border-surface-lighter">
+            <button class="settings-menu-row text-red-400" onclick={handleLogout}>
+              <span class="i-carbon-logout text-xl" aria-hidden="true"></span>
+              <span>Log out</span>
+            </button>
+          </div>
         </div>
       {/if}
         {:else if detailPage === 'appearance'}
@@ -1535,7 +1537,6 @@
   .settings-menu-row:focus-visible { background: rgb(var(--color-surface-light)); }
   .settings-menu-row:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
   .settings-profile-row { padding-top: 16px; padding-bottom: 16px; }
-  .settings-logout { margin-top: 16px; }
 
   .settings-detail { display: none; }
   .settings-detail :global([role="switch"]) { flex-shrink: 0; }
