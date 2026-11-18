@@ -69,7 +69,18 @@ test('Log out is cancelable and clears this browser identity and chat data', asy
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('link', { name: 'Profile', exact: true }).click()
   const profile = page.getByRole('region', { name: 'Profile', exact: true })
-  await expect(profile.getByRole('button', { name: 'Copy Secret Key', exact: true })).toBeVisible()
+  const copyKey = profile.getByRole('button', { name: 'Copy secret key', exact: true })
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: async (value: string) => {
+        document.body.dataset.copiedSecret = String(/^nsec1[0-9a-z]{58}$/.test(value))
+      } },
+    })
+  })
+  expect(await page.locator('[title^="nsec1"]').count()).toBe(0)
+  await copyKey.click()
+  await expect(profile.getByRole('status')).toHaveText('Secret key copied.')
+  await expect(page.locator('body')).toHaveAttribute('data-copied-secret', 'true')
   await expect(profile.getByText('Signed in with a secret key')).toBeVisible()
   page.once('dialog', async dialog => { expect(dialog.message()).toContain('other devices are not affected'); await dialog.dismiss() })
   await page.getByRole('button', { name: 'Log out', exact: true }).click()

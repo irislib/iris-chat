@@ -84,7 +84,7 @@
   let statusMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null)
   let subscriptions = $state<Record<string, NotificationSubscription>>({})
   let loadingSubscriptions = $state(false)
-  let showPrivateKey = $state(false)
+  let revealedPrivateKey = $state<string | null>(null)
   let registeringDevice = $state(false)
   let deviceError = $state('')
   let linkApproval: AbortController | undefined
@@ -151,7 +151,7 @@
   $effect(() => {
     // A new destination must not retain a revealed key, scanner, or old feedback.
     const destination = page
-    showPrivateKey = false
+    revealedPrivateKey = null
     showPictureModal = false
     statusMessage = null
     notificationStatus = null
@@ -356,14 +356,26 @@
   const npub = $derived($identity?.pubkey ? nip19.npubEncode($identity.pubkey) : null)
   const isLinkedDevice = $derived($identity?.isLinkedDevice ?? false)
 
-  // Get nsec for secret key
-  const nsec = $derived.by(() => {
-    if (!$identity || $identity.isLinkedDevice || $identity.isNip07) return null
+  const hasLocalKey = $derived(Boolean($identity && !$identity.isNip07 && !$identity.isLinkedDevice && getPrivkeyHex()))
+
+  function localSecretKey(): string | null {
+    if (!hasLocalKey) return null
     const hex = getPrivkeyHex()
     if (!hex) return null
     const bytes = new Uint8Array(hex.match(/.{2}/g)!.map(b => parseInt(b, 16)))
     return nip19.nsecEncode(bytes)
-  })
+  }
+
+  async function copySecretKey() {
+    try {
+      const key = localSecretKey()
+      if (!key) return
+      await navigator.clipboard.writeText(key)
+      if (detailPage === 'profile') statusMessage = { type: 'success', text: 'Secret key copied.' }
+    } catch {
+      if (detailPage === 'profile') statusMessage = { type: 'error', text: 'Could not copy the secret key.' }
+    }
+  }
 
   function handleThemeChange(event: Event) {
     const value = (event.currentTarget as HTMLSelectElement).value as ThemePreference
@@ -765,23 +777,23 @@
           </div>
 
           <!-- Secret Key Section -->
-          {#if nsec}
+          {#if hasLocalKey}
             <div class="mt-4 pt-4 border-t border-surface-lighter">
               <div class="flex items-center justify-between mb-2">
                 <span class="text-sm text-gray-400">Secret Key</span>
                 <button
                   class="text-xs text-primary hover:underline"
-                  onclick={() => showPrivateKey = !showPrivateKey}
+                  onclick={() => revealedPrivateKey = revealedPrivateKey ? null : localSecretKey()}
                 >
-                  {showPrivateKey ? 'Hide' : 'Show'}
+                  {revealedPrivateKey ? 'Hide' : 'Show'}
                 </button>
               </div>
-              {#if showPrivateKey}
+              {#if revealedPrivateKey}
                 <div class="bg-surface-light rounded p-2 mb-2">
-                  <code class="text-xs text-gray-300 break-all">{nsec}</code>
+                  <code class="text-xs text-gray-300 break-all">{revealedPrivateKey}</code>
                 </div>
               {/if}
-              <CopyButton text={nsec} label="Copy Secret Key" />
+              <button type="button" class="btn-secondary w-full" onclick={copySecretKey}>Copy secret key</button>
               <p class="text-xs text-red-400 mt-2">
                 Never share your secret key. Anyone with it can sign as you.
               </p>
