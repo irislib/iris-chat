@@ -63,6 +63,8 @@ The shared wire fixture is checked by both apps;
 - TCP/FIPS for ordered linked-device snapshots
 - Workbox (service worker)
 
+Fresh default discovery uses the packaged graph immediately, then loads a signed live snapshot in the background. Public snapshots need at least 10,000 reachable users; malformed or smaller snapshots leave the packaged graph usable. The current snapshot replaces overlapping projected seed lists while verified follow and mute updates remain authoritative. Saved personal graphs and custom relay settings do not trigger public snapshot replacement.
+
 ## Development
 
 ```bash

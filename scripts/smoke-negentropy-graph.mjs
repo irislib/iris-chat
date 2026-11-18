@@ -2,6 +2,8 @@ import {createDenyProxy, assertWorkerNetworkBlocked} from './isolatedBrowser.ts'
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {WebSocket} from 'ws';
@@ -18,8 +20,19 @@ const lists=(created_at, follows=friend, mutes=muted)=>[3,10000].map(kind=>final
 const seedEvents=lists(100),newEvents=lists(300),lateEvents=lists(400,muted,friend),personalEvents=lists(500,muted,friend),servedEvents=[...newEvents];
 const seed=new SocialGraph(root);seed.addFollower(root,owner);seed.handleEvent(seedEvents,true);
 const seedBytes=Buffer.from(await seed.toBinary()),httpMarker=getPublicKey(new Uint8Array(32).fill(45));
-const httpSeed=await SocialGraph.fromBinary(root,seedBytes);httpSeed.addFollower(friend,httpMarker);const httpSeedBytes=Buffer.from(await httpSeed.toBinary());
-const snapshot=await createNamedGraphFixture(root,httpSeedBytes);
+const qualityModes=['pending-default','tiny-default','malformed-default'];
+const quality=process.argv[3];
+const httpSeed=await SocialGraph.fromBinary(root,seedBytes);httpSeed.addFollower(friend,httpMarker);
+const targetUsers=quality==='tiny-default'?1000:10000;
+const extraUsers=targetUsers-httpSeed.size().users;
+for(let index=0;index<extraUsers;index++)httpSeed.addFollower(friend,(index+10000).toString(16).padStart(64,'0'));
+assert.equal(httpSeed.size().users,targetUsers);
+const snapshot=await createNamedGraphFixture(root,Buffer.from(await httpSeed.toBinary()));
+if(quality==='malformed-default'){
+ // A valid signed manifest with an invalid mobile digest must not reach the active graph.
+ snapshot.manifest.mobile_roots[root].sha256='0'.repeat(64);
+ snapshot.event=await snapshot.signedTree();
+}
 const directoryHash=snapshot.event.tags.find(tag=>tag[0]==='hash')[1];
 const dist=path.resolve('dist');
 const server=createServer(async(req,res)=>{
@@ -49,7 +62,7 @@ async function retain(page,invalid=false,events=[]){const graph=new SocialGraph(
  try{await new Promise((resolve,reject)=>{const tx=db.transaction(info.store,'readwrite'),store=tx.objectStore(info.store);if(info.store==='accounts')store.put({owner:info.key,graph:new Uint8Array(bytes),events:newEvents});else store.put(new Uint8Array(bytes),info.key);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}finally{db.close();}
  },{info:cacheInfo,bytes:invalid?[255,0,254,1]:[...await graph.toBinary()],newEvents:events});}
 const modes=[...(app==='chat'?['fresh-neg','custom-neg','pending-custom','empty-retained']:['fresh-neg']),'unsupported-retained','pending-other-tab','unreadable-cache'];
-if(process.argv[3])assert(modes.includes(process.argv[3]));
+if(process.argv[3])assert([...modes,...qualityModes].includes(process.argv[3]));
 try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  servedEvents.splice(0,servedEvents.length,...newEvents);const start=relay.records.length,records=()=>relay.records.slice(start),sync=()=>records().filter(r=>r.neg);
  const conflict=mode==='pending-other-tab',invalid=mode==='unreadable-cache',pendingCustom=mode==='pending-custom',empty=mode==='empty-retained',custom=mode==='custom-neg',context=await browser.newContext({serviceWorkers:'allow'});let http=0,unsupported=mode==='unsupported-retained',releaseBootstrap;
@@ -59,7 +72,7 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  await context.route('https://graph-api.iris.to/**',route=>{legacyRequests++;return route.abort();});
  await context.route(/^https:\/\/cdn\.iris\.to\/[0-9a-f]{64}\.bin$/,async route=>{
   const hash=new URL(route.request().url()).pathname.slice(1,-4);
-  if(hash===directoryHash){http++;if(conflict||pendingCustom)await bootstrapGate;}
+  if(hash===directoryHash){http++;if(conflict||pendingCustom||mode==='pending-default')await bootstrapGate;}
   const block=await snapshot.readBlock(hash);if(!block)return route.abort();
   return route.fulfill({body:Buffer.from(block),contentType:'application/octet-stream',headers:{'access-control-allow-origin':'*'}});
  });
@@ -78,7 +91,12 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  try{
   await page.goto(origin,{waitUntil:'domcontentloaded'});
   if(conflict){await expect.poll(()=>http,{timeout:15000}).toBe(1);await retain(blocker,false,personalEvents);retained=await stored(blocker);releaseBootstrap();}
-  await expect(ready()).toBeVisible({timeout:30000});
+  await expect(ready()).toBeVisible({timeout:mode==='pending-default'?5000:30000});
+  if(mode==='pending-default'){
+   await expect.poll(()=>http,{timeout:5000}).toBe(1);
+   await assertCached(page,newEvents);
+   releaseBootstrap();
+  }
   if(pendingCustom){
    await expect.poll(()=>http,{timeout:15000}).toBe(1);
    await page.evaluate(()=>{location.hash='settings/network'});await page.getByRole('button',{name:'Edit',exact:true}).click();
@@ -101,7 +119,13 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
   }
   if(unsupported){assert.equal(sync().flatMap(r=>r.requests).length,0,'Unsupported NEG must not fall back to REQ');await assertCached(page,newEvents,true);assert.equal(http,0);}
   else{
-   await assertCached(page,newEvents);const requests=sync().flatMap(r=>r.requests);assert(requests.length>0);assert(requests.every(filters=>filters.every(f=>Array.isArray(f.ids)&&Object.keys(f).every(k=>k==='ids'))),'Only exact-ID body fetches may follow NEG');assert(newEvents.every(e=>sync().some(r=>r.servedIds.includes(e.id))));assert.equal(http,custom?0:1);if(pendingCustom)assert.equal((await cached(page)).getFollowedByUser(friend).has(httpMarker),false,'Revoked bootstrap must not merge after custom settings');
+   await assertCached(page,newEvents);const requests=sync().flatMap(r=>r.requests);assert(requests.length>0);assert(requests.every(filters=>filters.every(f=>Array.isArray(f.ids)&&Object.keys(f).every(k=>k==='ids'))),'Only exact-ID body fetches may follow NEG');assert(newEvents.every(e=>sync().some(r=>r.servedIds.includes(e.id))));assert.equal(http,custom?0:1);
+   if(['tiny-default','malformed-default'].includes(mode)){
+    assert.equal((await cached(page)).getFollowedByUser(friend).has(httpMarker),false,'Rejected signed snapshot must leave embedded/live graph usable');
+   }else if(!custom&&!pendingCustom){
+    await expect.poll(async()=>(await cached(page))?.getFollowedByUser(friend).has(httpMarker),{timeout:15000}).toBe(true);
+   }
+   if(pendingCustom)assert.equal((await cached(page)).getFollowedByUser(friend).has(httpMarker),false,'Revoked bootstrap must not merge after custom settings');
    if(app==='chat'){await expect.poll(()=>records().some(r=>!r.neg&&!r.closed&&[...r.active.values()].flat().some(f=>f.authors?.includes(owner))),{timeout:15000}).toBe(true);assert(relay.publishLive(lateEvents)>=2,'Normal live follow/mute subscription remains active');}
    else{servedEvents.splice(0,servedEvents.length,...lateEvents);await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));}
    await assertCached(page,lateEvents);
@@ -113,3 +137,9 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
      assert.equal(records().flatMap(r=>r.requests).filter(filters=>filters.some(f=>f.kinds?.includes(30064))).length,0,'A retained or custom graph must not resolve the public name');
    }}
 }}finally{await browser.close();await boundary.close();await relay.close();await new Promise(resolve=>server.close(resolve));}
+
+// Run each negative/latency boundary with its own signed fixture and fresh browser.
+if(!process.argv[3])for(const mode of qualityModes){
+ const result=spawnSync(process.execPath,[fileURLToPath(import.meta.url),app,mode],{stdio:'inherit',timeout:90000});
+ assert.equal(result.status,0,`${app}: ${mode} failed: ${result.error??result.signal??result.status}`);
+}

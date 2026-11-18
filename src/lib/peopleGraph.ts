@@ -46,7 +46,9 @@ interface PeopleGraphOptions {
   loadEvents: (owner: string) => Promise<Event[]>
   saveEvents?: (owner: string, events: Event[]) => Promise<void>
   saveGraph?: (owner: string, graph: SocialGraph, events: Event[]) => Promise<void>
-  catchup?: (graph: SocialGraph, changed: () => void) => Promise<() => void>
+  catchup?: (getGraph: () => SocialGraph, changed: () => void) => Promise<() => void>
+  bootstrap?: (graph: SocialGraph, signal: AbortSignal) => Promise<SocialGraph | undefined>
+  canBootstrap?: (graph: SocialGraph) => boolean
   subscribe: (authors: string[], event: (event: Event) => void, done: () => void) => () => void
   changed: (state: PeopleGraphState) => void
 }
@@ -68,6 +70,7 @@ export class PeopleGraphController {
   state: PeopleGraphState = { ownerPubkey: null, ready: false, version: 0 }
   private graph: SocialGraph | null = null
   private generation = 0
+  private graphRevision = 0
   private stops = new Set<() => void>()
   private events = new Map<string, Event>()
   private knownFollows = new Set<string>()
@@ -124,10 +127,33 @@ export class PeopleGraphController {
     this.state = { ...this.state, ready: true }
     this.emit()
     void this.hydrateNear(generation)
+    if (this.options.bootstrap) {
+      const request = new AbortController()
+      const cancel = () => request.abort()
+      this.stops.add(cancel)
+      void this.options.bootstrap(graph, request.signal).then(async fresh => {
+        if (!fresh || generation !== this.generation) return
+        await fresh.setRoot(owner)
+        let version: number
+        do {
+          version = this.graphRevision
+          await fresh.merge(graph)
+          if (generation !== this.generation) return
+        } while (version !== this.graphRevision)
+        // Use the current signed projection as base, then keep complete live/cached heads.
+        // The stable revision check includes events received while merge yields.
+        if (this.options.canBootstrap && !this.options.canBootstrap(graph)) return
+        this.graph = fresh
+        this.discoveryEdge = false
+        this.updateDiscoveryEdge()
+        void this.flush()
+      }).catch(() => {}).finally(() => this.stops.delete(cancel))
+    }
     if (this.options.catchup) {
-      void this.options.catchup(graph, () => {
+      void this.options.catchup(() => this.graph ?? graph, () => {
         if (generation === this.generation) {
-          if (graph.getListRevision(owner, 3)?.complete) this.discoveryEdge = false
+          this.graphRevision++
+          if (this.graph?.getListRevision(owner, 3)?.complete) this.discoveryEdge = false
           this.updateDiscoveryEdge()
           void this.flush()
         }
@@ -169,6 +195,7 @@ export class PeopleGraphController {
     const key = `${event.kind}:${event.pubkey}`
     if ((this.events.get(key)?.created_at ?? -1) >= event.created_at) return false
     if (!this.graph?.handleEvent(event, true)) return false
+    this.graphRevision++
     // A signed contact head replaces all root edges, including the local seed.
     if (event.kind === 3 && event.pubkey === this.state.ownerPubkey) this.discoveryEdge = false
     this.updateDiscoveryEdge()
@@ -316,6 +343,7 @@ const cache = new Dexie('iris-chat-people-graph')
 cache.version(1).stores({ accounts: 'owner' })
 // Each hydrated graph owns only the exact snapshot it observed. A conflicting tab
 // or unreadable row permanently disables saves for this instance, including close.
+const bootstrapEligible = new WeakSet<SocialGraph>()
 const cacheOwnership = new WeakMap<SocialGraph, { expected?: Uint8Array; existed: boolean; blocked: boolean; writes: Promise<void> }>()
 function sameGraphBytes(left: unknown, right: Uint8Array | undefined): boolean {
   return left === undefined && right === undefined || left instanceof Uint8Array && right instanceof Uint8Array &&
@@ -349,24 +377,29 @@ const controller = new PeopleGraphController({
         graph = await SocialGraph.fromBinary(owner, saved)
       } catch { blocked = true }
     }
-    if (!graph && !blocked && get(relayStore).defaults) {
-      const bootstrap = new AbortController()
-      const unsubscribe = relayStore.subscribe(next => {
-        if (!next.defaults) bootstrap.abort()
-      })
-      try {
-        const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
-        const candidate = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY,
-          signal: AbortSignal.any([bootstrap.signal, AbortSignal.timeout(12000)]) })
-        await candidate.setRoot(owner)
-        if (!bootstrap.signal.aborted) graph = candidate
-      } catch { /* The packaged graph keeps offline starts usable. */ }
-      finally { unsubscribe() }
-    }
+    const freshDefault = !graph && !blocked && get(relayStore).defaults
     graph ??= await SocialGraph.fromBinary(owner, await loadSeed())
+    if (freshDefault) bootstrapEligible.add(graph)
     cacheOwnership.set(graph, { expected: saved instanceof Uint8Array ? saved.slice() : undefined,
       existed, blocked, writes: Promise.resolve() })
     return graph
+  },
+  canBootstrap: graph => get(relayStore).defaults && !cacheOwnership.get(graph)?.blocked,
+  bootstrap: async (graph, signal) => {
+    if (!bootstrapEligible.delete(graph) || !get(relayStore).defaults || signal.aborted) return undefined
+    const policy = new AbortController()
+    const unsubscribe = relayStore.subscribe(next => { if (!next.defaults) policy.abort() })
+    const request = AbortSignal.any([signal, policy.signal, AbortSignal.timeout(12000)])
+    try {
+      const { loadGraphBootstrap } = await import('nostr-social-graph/publicGraphSync')
+      // SDK validates public discovery quality; an existing personal cache never enters this path.
+      const candidate = await loadGraphBootstrap({ root: DEFAULT_DISCOVERY_PUBKEY, minUsers: 10_000, signal: request })
+      const ownership = cacheOwnership.get(graph)
+      if (request.aborted || !ownership || ownership.blocked) return undefined
+      cacheOwnership.set(candidate, ownership)
+      return candidate
+    } catch { return undefined; /* Keep the bundled graph usable offline. */ }
+    finally { unsubscribe() }
   },
   loadEvents: async owner => (await cache.table('accounts').get(owner))?.events ?? [],
   saveGraph: async (owner, graph, events) => {
@@ -387,7 +420,7 @@ const controller = new PeopleGraphController({
     }).catch(() => { ownership.blocked = true })
     await ownership.writes
   },
-  catchup: async (graph, onChange) => {
+  catchup: async (getGraph, onChange) => {
     const { startGraphSync } = await import('nostr-social-graph/publicGraphSync')
     let stop: (() => void) | undefined
     let previous = ''
@@ -399,7 +432,10 @@ const controller = new PeopleGraphController({
       stop?.()
       const relays = state.defaults
         ? ['wss://graph-relay.iris.to', ...configured] : configured
-      stop = startGraphSync({ getGraph: () => graph, relays,
+      stop = startGraphSync({ getGraph, relays,
+        // A pass may finish against the temporary graph while a newer base is adopted.
+        // Replay each verified event into the current instance too.
+        onEvent: event => { getGraph().handleEvent(event, true) },
         maxAuthors: MAX_NEAR_AUTHORS, maxBytes: MAX_CACHE_BYTES, onChange })
     })
     return () => { unsubscribe(); stop?.() }

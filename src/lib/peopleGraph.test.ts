@@ -38,11 +38,13 @@ describe('people graph search policy', () => {
   })
 })
 
-function fixture(loadGraph = async (owner: string) => new SocialGraph(owner)) {
+function fixture(loadGraph = async (owner: string) => new SocialGraph(owner), bootstrap?: ConstructorParameters<typeof PeopleGraphController>[0]['bootstrap'], canBootstrap?: () => boolean) {
   const subscriptions: Array<{ authors: string[]; event: (event: Event) => void; stop: ReturnType<typeof vi.fn> }> = []
   const saved = new Map<string, Event[]>()
   const controller = new PeopleGraphController({
     loadGraph,
+    bootstrap,
+    canBootstrap,
     loadEvents: async owner => saved.get(owner) ?? [],
     saveEvents: async (owner, events) => { saved.set(owner, events) },
     subscribe: (authors, event, done) => {
@@ -57,6 +59,88 @@ function fixture(loadGraph = async (owner: string) => new SocialGraph(owner)) {
 }
 
 describe('people graph runtime', () => {
+  it('discards a ready snapshot when relay preferences change during the merge', async () => {
+    const owner = getPublicKey(generateSecretKey()), old = key('4'), newer = key('5')
+    let allowed = true, release!: () => void, entered!: () => void
+    const ready = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const fresh = new SocialGraph(DEFAULT_DISCOVERY_PUBKEY); fresh.addFollower(DEFAULT_DISCOVERY_PUBKEY, newer)
+    const merge = fresh.merge.bind(fresh)
+    vi.spyOn(fresh, 'merge').mockImplementationOnce(async graph => { await merge(graph); entered(); await gate })
+    const { controller } = fixture(async root => {
+      const graph = new SocialGraph(root); graph.addFollower(DEFAULT_DISCOVERY_PUBKEY, old); return graph
+    }, async () => fresh, () => allowed)
+    await controller.setOwner(owner); await ready
+    allowed = false; release()
+    await Promise.resolve(); await Promise.resolve()
+    expect(controller.candidates()).toContain(old)
+    expect(controller.candidates()).not.toContain(newer)
+    controller.stop()
+  })
+
+  it('makes embedded discovery ready before the network and replaces overlapping projected lists', async () => {
+    const owner = getPublicKey(generateSecretKey()), person = key('4'), newer = key('5')
+    let deliver!: (graph: SocialGraph | undefined) => void
+    const embedded = new SocialGraph(owner)
+    embedded.handleEvent({ kind: 3, pubkey: DEFAULT_DISCOVERY_PUBKEY, created_at: 10,
+      id: 'a'.repeat(64), sig: '', content: '', tags: [['p', person]] }, true)
+    embedded.markListIncomplete(DEFAULT_DISCOVERY_PUBKEY, 3)
+    const { controller } = fixture(async () => embedded, () => new Promise(resolve => { deliver = resolve }))
+    await controller.setOwner(owner)
+    expect(controller.state.ready).toBe(true)
+    expect(controller.candidates()).toContain(person)
+    const fresh = new SocialGraph(DEFAULT_DISCOVERY_PUBKEY)
+    fresh.handleEvent({ kind: 3, pubkey: DEFAULT_DISCOVERY_PUBKEY, created_at: 20,
+      id: 'b'.repeat(64), sig: '', content: '', tags: [['p', newer]] }, true)
+    fresh.markListIncomplete(DEFAULT_DISCOVERY_PUBKEY, 3)
+    deliver(fresh)
+    await vi.waitFor(() => expect(controller.candidates()).toContain(newer))
+    expect(controller.candidates()).not.toContain(person)
+    controller.stop()
+  })
+
+  it('preserves verified live follows and mutes arriving while a snapshot merge yields', async () => {
+    const secret = generateSecretKey(), owner = getPublicKey(secret), friend = key('6'), muted = key('7')
+    let deliver!: (graph: SocialGraph | undefined) => void
+    const { controller, subscriptions } = fixture(undefined, () => new Promise(resolve => { deliver = resolve }))
+    await controller.setOwner(owner)
+    const fresh = new SocialGraph(DEFAULT_DISCOVERY_PUBKEY)
+    let merging!: () => void, release!: () => void
+    const started = new Promise<void>(resolve => { merging = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const merge = fresh.merge.bind(fresh)
+    vi.spyOn(fresh, 'merge').mockImplementationOnce(async graph => { await merge(graph); merging(); await gate })
+    deliver(fresh); await started
+    const subscription = subscriptions.find(value => value.authors.length === 1 && value.authors[0] === owner)!
+    subscription.event(signed(secret, 3, [friend], 40))
+    subscription.event(signed(secret, 10000, [muted], 41))
+    release()
+    await vi.waitFor(() => expect(fresh.getListRevision(owner, 10000)?.created_at).toBe(41))
+    expect(controller.candidates()).toContain(friend)
+    expect(controller.signals(muted).mutedByYou).toBe(true)
+    expect(fresh.merge).toHaveBeenCalledTimes(2)
+    controller.stop()
+  })
+
+  it('keeps embedded discovery after a rejected public snapshot and cancels it on identity change', async () => {
+    const owner = getPublicKey(generateSecretKey()), person = key('4')
+    const { controller } = fixture(async root => {
+      const graph = new SocialGraph(root); graph.addFollower(DEFAULT_DISCOVERY_PUBKEY, person); return graph
+    }, async () => { throw new Error('Malformed or underpopulated public snapshot') })
+    await controller.setOwner(owner)
+    await Promise.resolve()
+    expect(controller.state.ready).toBe(true)
+    expect(controller.candidates()).toContain(person)
+    controller.stop()
+    let request!: AbortSignal, deliver!: (graph: SocialGraph | undefined) => void
+    const pending = fixture(undefined, (_graph, signal) => { request = signal; return new Promise(resolve => { deliver = resolve }) })
+    await pending.controller.setOwner(owner)
+    pending.controller.stop()
+    expect(request.aborted).toBe(true)
+    deliver(new SocialGraph(owner)); await Promise.resolve()
+    expect(pending.controller.state.ownerPubkey).toBeNull()
+  })
+
   it('offers Sirius immediately and uses the seed network for an account without follows', async () => {
     const owner = getPublicKey(generateSecretKey()), person = key('4')
     let resolveSeed!: (graph: SocialGraph) => void
@@ -228,7 +312,8 @@ it('persists a catch-up graph and cancels a late catch-up handle on account swit
     saveGraph: async (owner, graph) => { saved.set(owner, await graph.toBinary()) },
     subscribe: (_authors, _event, done) => { queueMicrotask(done); return () => {} },
     changed: () => {},
-    catchup: async (graph, changed) => {
+    catchup: async (getGraph, changed) => {
+      const graph = getGraph()
       graph.addFollower(graph.getRoot(), key('7'))
       changed()
       const stop = vi.fn(); stops.push(stop)
