@@ -63,6 +63,9 @@ importers:
       '@hashtree/worker':
         specifier: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.48/hashtree-worker-0.4.30.tgz
         version: https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.48/hashtree-worker-0.4.30.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v4.2.1/nostr-social-graph-4.2.1.tgz(typescript@5.9.3))(typescript@5.9.3)
+      '@iris/profile-events':
+        specifier: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.13/iris-profile-events-0.1.0.tgz
+        version: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.13/iris-profile-events-0.1.0.tgz
       '@iris/identity':
         specifier: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz
         version: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v4.2.1/nostr-social-graph-4.2.1.tgz(typescript@5.9.3))(typescript@5.9.3)
@@ -1153,6 +1156,10 @@ packages:
     engines: {node: '>=20.9.0'}
     cpu: [x64]
     os: [win32]
+
+  '@iris/profile-events@https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.13/iris-profile-events-0.1.0.tgz':
+    resolution: {integrity: sha512-f61CH/ygvxssR12uvIgWJGcFkYCr4gXoxR/FR2nglqDmHCLtvuR4RPsM47d5ppL8eP64iUK06RjO055ZhwN3Rw==, tarball: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.13/iris-profile-events-0.1.0.tgz}
+    version: 0.1.0
 
   '@iris/identity@https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz':
     resolution: {integrity: sha512-ZZ7qRjOXl+7fLqsSrWEn9eOysrsbXDsHQz6uxZZw+4wnw3qZXi3xHVdWAia7ykTmFm3euDjNHA+raG33xjacWg==, tarball: https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz}
@@ -4426,6 +4433,8 @@ snapshots:
 
   '@img/sharp-win32-x64@0.35.5':
     optional: true
+
+  '@iris/profile-events@https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.13/iris-profile-events-0.1.0.tgz': {}
 
   '@iris/identity@https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz(nostr-social-graph@https://github.com/mmalmi/nostr-social-graph/releases/download/v4.2.1/nostr-social-graph-4.2.1.tgz(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:

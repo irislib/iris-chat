@@ -1,11 +1,14 @@
-import NostrClient, { SecretKeySigner, ExtensionSigner } from './nostrClient'
+import { buildProfileDraft } from '@iris/profile-events'
+import { signedProfileHeads } from './deviceSyncRecordStore'
+import { verifiedProfileEvent } from './deviceSyncRecords'
+import NostrClient, { AppEvent, SecretKeySigner, ExtensionSigner } from './nostrClient'
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { writable, derived, get } from 'svelte/store'
 import {
   saveLocalProfile,
   clearLocalProfile,
   getLocalProfile,
-  updateLocalProfile,
+  observeSignedProfile,
   type Profile,
 } from './profile'
 import { relayStore, getPublicRelays } from './relayStore'
@@ -154,14 +157,14 @@ export async function loginWithPrivkey(privkeyHex: string, displayName: string |
     freshlyGenerated,
   })
 
-  // Save local profile and publish to Nostr
-  if (displayName) {
+  if (freshlyGenerated && displayName) {
     saveLocalProfile(user.pubkey, displayName)
-
-    // Publish kind 0 profile event to relays
-    const profileUser = client.getUser({ pubkey: user.pubkey })
-    profileUser.profile = { name: displayName, displayName: displayName }
-    void profileUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
+    const event = new AppEvent(client, buildProfileDraft(null, { name: displayName, display_name: displayName }))
+    void event.sign(signer).then(async () => {
+      if (get(identity)?.pubkey !== user.pubkey) return
+      await event.publish()
+      await observeSignedProfile(event.rawEvent())
+    }).catch(err => console.error('[identity] failed to publish new profile:', err))
   }
 
   saveIdentity(privkeyHex)
@@ -191,16 +194,6 @@ export async function loginWithNip07(displayName: string | null = null): Promise
     isNip07: true,
     isLinkedDevice: false,
   })
-
-  // Save local profile and publish to Nostr if name provided
-  if (displayName) {
-    saveLocalProfile(user.pubkey, displayName)
-
-    // Publish kind 0 profile event to relays
-    const profileUser = client.getUser({ pubkey: user.pubkey })
-    profileUser.profile = { name: displayName, displayName: displayName }
-    await profileUser.publish().catch(err => console.error('[identity] failed to publish profile:', err))
-  }
 
   // Save marker to remember NIP-07 login
   saveIdentity('nip07')
@@ -277,12 +270,20 @@ export function logout(): void {
   clearLocalProfile()
 }
 
-export async function updateOwnProfile(input: {
-  name?: string
-  picture?: string
-  baseProfile?: Profile
-}): Promise<Profile> {
-  const currentIdentity = get(identity)
+type ProfileEdit = { name?: string; picture?: string; baseProfile?: Profile }
+let profileWriter: Promise<unknown> = Promise.resolve()
+
+export function updateOwnProfile(input: ProfileEdit): Promise<Profile> {
+  const account = get(identity)
+  const next = profileWriter.then(() => {
+    if (get(identity)?.signer !== account?.signer) throw new Error('Account changed')
+    return saveProfileEdit(input, account)
+  })
+  profileWriter = next.catch(() => {})
+  return next
+}
+
+async function saveProfileEdit(input: ProfileEdit, currentIdentity: Identity | null): Promise<Profile> {
   if (!currentIdentity) {
     throw new Error('Not logged in')
   }
@@ -300,50 +301,55 @@ export async function updateOwnProfile(input: {
     throw new Error('No profile changes provided')
   }
 
-  const base =
-    input.baseProfile && input.baseProfile.pubkey === currentIdentity.pubkey
-      ? input.baseProfile
-      : (getLocalProfile() ?? { pubkey: currentIdentity.pubkey })
-
-  const patch: Partial<Omit<Profile, 'pubkey'>> = {}
-  if (base.name !== undefined) patch.name = base.name
-  if (base.display_name !== undefined) patch.display_name = base.display_name
-  if (base.username !== undefined) patch.username = base.username
-  if (base.picture !== undefined) patch.picture = base.picture
-  if (base.nip05 !== undefined) patch.nip05 = base.nip05
-  if (base.about !== undefined) patch.about = base.about
-
-  if (name) {
-    patch.name = name
-    patch.display_name = name
+  const { pubkey, signer } = currentIdentity
+  if (!signer) throw new Error('Edit your profile on your main device')
+  const filter = [{ kinds: [0], authors: [pubkey], limit: 1 }]
+  const [local, cached, remote] = await Promise.all([
+    signedProfileHeads(pubkey, new Set([pubkey])),
+    client.runtime.query(filter, { cache: 'cache-only' }),
+    client.runtime.query(filter, { cache: 'network-only' }),
+  ])
+  const candidates = [...local, ...cached.events, ...remote.events]
+    .filter(event => event.pubkey === pubkey && event.kind === 0)
+    .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))
+  const head = candidates[0] ? verifiedProfileEvent(candidates[0]) : null
+  if ((candidates.length && !head) || (!head && (!remote.complete || remote.reason !== 'eose' || !remote.sources.length))) {
+    throw new Error('Could not read your full public profile. Try again once a relay is available.')
   }
-  if (picture) {
-    patch.picture = picture
-  }
-
-  const updatedProfile = updateLocalProfile(currentIdentity.pubkey, patch)
-
-  identity.update((value) => {
-    if (!value || value.pubkey !== currentIdentity.pubkey) return value
-    return {
-      ...value,
-      displayName: updatedProfile.display_name || updatedProfile.name || null,
+  const shown = input.baseProfile
+  if (shown?.eventId && shown.pubkey === pubkey && shown.eventId !== head?.id) {
+    if (!head || (shown.eventCreatedAt ?? 0) > head.created_at ||
+        (shown.eventCreatedAt === head.created_at && shown.eventId < head.id)) {
+      throw new Error('Your latest public profile is missing. Refresh your profile and try again.')
     }
-  })
-
-  const eventProfile: Record<string, string | number> = {}
-  for (const [key, value] of Object.entries(updatedProfile)) {
-    if (key === 'pubkey' || value === undefined) continue
-    if (key === 'display_name') {
-      eventProfile.displayName = value
-      continue
+    const latest = JSON.parse(head.content)
+    if ((name && ((shown.name ?? '') !== (latest.name ?? '') ||
+          (shown.display_name ?? shown.name ?? '') !== (latest.display_name ?? latest.name ?? ''))) ||
+        (picture && (shown.picture ?? '') !== (latest.picture ?? ''))) {
+      await observeSignedProfile(head)
+      throw new Error('This field changed elsewhere. Review the latest profile and save again.')
     }
-    eventProfile[key] = value
   }
 
-  const profileUser = client.getUser({ pubkey: currentIdentity.pubkey })
-  profileUser.profile = eventProfile
-  await profileUser.publish()
+  const patch = { ...(name && { name, display_name: name }), ...(picture && { picture }) }
+  const event = new AppEvent(client, buildProfileDraft(head ?? null, patch))
+  if (get(identity)?.signer !== signer || (await signer.user()).pubkey !== pubkey) throw new Error('Account changed')
+  await event.sign(signer)
+  if (event.pubkey !== pubkey || !verifiedProfileEvent(event.rawEvent())) {
+    throw new Error('This signed profile exceeds the supported size or is invalid.')
+  }
+  const [newest] = await signedProfileHeads(pubkey, new Set([pubkey]))
+  if (get(identity)?.signer !== signer) throw new Error('Account changed')
+  if (newest && (!head || newest.created_at > head.created_at ||
+      newest.created_at === head.created_at && newest.id < head.id)) {
+    throw new Error('Your profile changed while signing. Review it and save again.')
+  }
+  await event.publish()
+  if (get(identity)?.signer !== signer) throw new Error('Account changed')
+  const updatedProfile = await observeSignedProfile(event.rawEvent(), true)
+  if (!updatedProfile) throw new Error('Could not save your signed profile on this device.')
+  identity.update(value => value?.pubkey === pubkey
+    ? { ...value, displayName: updatedProfile.display_name || updatedProfile.name || null } : value)
 
   return updatedProfile
 }

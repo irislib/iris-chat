@@ -104,7 +104,7 @@ export function updateLocalProfile(
 ): Profile {
   const existing = loadLocalProfile()
   const merged: Profile = normalizeProfile({
-    ...(existing ?? { pubkey }),
+    ...(existing?.pubkey === pubkey ? existing : {}),
     pubkey,
     ...updates,
   })
@@ -185,7 +185,7 @@ function notifyListeners(pubkey: string, profile: Profile) {
   }
 }
 
-export async function observeSignedProfile(value: unknown): Promise<void> {
+export async function observeSignedProfile(value: unknown, saveOwn = false): Promise<Profile | undefined> {
   let event = verifiedProfileEvent(value)
   if (!event) return
   const owner = getPubkey()
@@ -199,7 +199,9 @@ export async function observeSignedProfile(value: unknown): Promise<void> {
   for (const field of ['name', 'display_name', 'username', 'picture', 'nip05', 'about'] as const) {
     if (typeof data[field] === 'string') profile[field] = data[field]
   }
-  addProfileToCache(profile)
+  if (saveOwn && owner === profile.pubkey && getPubkey() === owner) persistProfile(normalizeProfile(profile))
+  else addProfileToCache(profile)
+  return profile
 }
 
 function keepProfileLoaded(pubkey: string): () => void {

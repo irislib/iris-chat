@@ -163,10 +163,6 @@ export default class NostrClient {
     if (!result.complete && result.events.length === 0) throw new Error(`Message history unavailable: ${result.reason}`)
     return new Set(result.events.map(event => new AppEvent(this, event)))
   }
-  getUser({pubkey}: {pubkey: string}) {
-    const client = this
-    return { pubkey, profile: {} as Record<string, unknown>,
-      async publish() { return new AppEvent(client, {kind: 0, content: JSON.stringify(this.profile)}).publish() } }
-  }
+
 }
 export { NostrClient }

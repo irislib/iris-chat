@@ -148,3 +148,32 @@ test('favorite stars update across profile and chat avatars without changing pub
   await page.screenshot({ path: info.outputPath('not-favorite-mobile.png'), fullPage: true })
   expect(testRelay.publishedEvents.filter(event => event.pubkey === account && event.kind === 3)).toHaveLength(1)
 })
+
+test('restoring a login leaves the published profile intact and editing the name preserves its custom fields and tags', async ({ page, testRelayUrl, testRelay }) => {
+  const secret = generateSecretKey()
+  const pubkey = getPublicKey(secret)
+  const fields = { name: 'My profile', display_name: 'My profile', lud16: 'pay@example.com', custom: { nested: [1, true] } }
+  const base = finalizeEvent({ kind: 0, tags: [['custom', 'all', 'parts']], content: JSON.stringify(fields),
+    created_at: Math.floor(Date.now() / 1000) - 15 }, secret)
+  await publish(testRelayUrl, [base])
+  await page.addInitScript(({ key, pubkey }) => {
+    if (localStorage.getItem('iris-chat-identity')) return
+    localStorage.setItem('iris-chat-identity', key)
+    localStorage.setItem('iris-chat-local-profile', JSON.stringify({ pubkey, name: 'My profile' }))
+  }, {key: Buffer.from(secret).toString('hex'), pubkey})
+  await page.goto('/#settings/profile')
+  const name = page.getByLabel('Display name', { exact: true })
+  await expect(name).toHaveValue('My profile')
+  const profiles = () => testRelay.publishedEvents.filter(event => event.pubkey === pubkey && event.kind === 0)
+  expect(profiles().map(event => event.id)).toEqual([base.id])
+  await name.fill('Edited name')
+  await name.press('Enter')
+  await expect(page.getByText('Profile name updated', { exact: true })).toBeVisible()
+  await expect.poll(() => profiles().length).toBe(2)
+  const edited = profiles().find(event => event.id !== base.id)!
+  expect(JSON.parse(edited.content)).toEqual({ ...fields, name: 'Edited name', display_name: 'Edited name' })
+  expect(edited.tags).toEqual(base.tags)
+  await page.reload()
+  await expect(name).toHaveValue('Edited name')
+  expect(profiles().length).toBe(2)
+})

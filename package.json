@@ -1,7 +1,7 @@
 {
   "name": "iris-chat",
   "private": true,
-  "version": "2.6.69",
+  "version": "2.6.70",
   "type": "module",
   "description": "Decentralized encrypted messaging over Nostr",
   "repository": "https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat",
@@ -64,6 +64,7 @@
     "@hashtree/fips-transport": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.45/hashtree-fips-transport-0.5.1.tgz",
     "@hashtree/nostr-pubsub": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.27/hashtree-nostr-pubsub-0.1.9.tgz",
     "@hashtree/worker": "https://github.com/mmalmi/hashtree/releases/download/hashtree-ts-runtime-v0.5.48/hashtree-worker-0.4.30.tgz",
+    "@iris/profile-events": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.13/iris-profile-events-0.1.0.tgz",
     "@iris/identity": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz",
     "@iris/svelte-ui": "file:vendor/iris-svelte-ui-3d26f8c.tgz",
     "@noble/hashes": "^2.4.0",
