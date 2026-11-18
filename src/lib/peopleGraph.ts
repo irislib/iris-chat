@@ -150,7 +150,7 @@ export class PeopleGraphController {
       }).catch(() => {}).finally(() => this.stops.delete(cancel))
     }
     if (this.options.catchup) {
-      void this.options.catchup(() => this.graph ?? graph, () => {
+      void this.options.catchup(() => generation === this.generation ? this.graph ?? graph : graph, () => {
         if (generation === this.generation) {
           this.graphRevision++
           if (this.graph?.getListRevision(owner, 3)?.complete) this.discoveryEdge = false

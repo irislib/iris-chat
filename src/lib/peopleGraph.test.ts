@@ -306,6 +306,7 @@ it('persists a catch-up graph and cancels a late catch-up handle on account swit
   const saved = new Map<string, Uint8Array>()
   const stops: Array<ReturnType<typeof vi.fn>> = []
   const completions: Array<() => void> = []
+  const graphGetters: Array<() => SocialGraph> = []
   const controller = new PeopleGraphController({
     loadGraph: async owner => saved.has(owner) ? SocialGraph.fromBinary(owner, saved.get(owner)!) : new SocialGraph(owner),
     loadEvents: async () => [], saveEvents: async () => {},
@@ -313,6 +314,7 @@ it('persists a catch-up graph and cancels a late catch-up handle on account swit
     subscribe: (_authors, _event, done) => { queueMicrotask(done); return () => {} },
     changed: () => {},
     catchup: async (getGraph, changed) => {
+      graphGetters.push(getGraph)
       const graph = getGraph()
       graph.addFollower(graph.getRoot(), key('7'))
       changed()
@@ -323,6 +325,8 @@ it('persists a catch-up graph and cancels a late catch-up handle on account swit
   await controller.setOwner(first)
   await controller.flush()
   await controller.setOwner(second)
+  expect(graphGetters[0]().getRoot()).toBe(first)
+  expect(graphGetters[1]().getRoot()).toBe(second)
   completions[0]()
   await Promise.resolve()
   await Promise.resolve()
