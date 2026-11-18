@@ -37,10 +37,10 @@ export function createAttachmentTransport(options: {
   let closed = false
   let closing: Promise<void> | undefined
   const allowed = (peer: string) => !closed && options.allowSibling(normalizeDeviceSyncPeer(peer))
-  // Check every datagram too: revocation also cuts off already accepted streams.
-  const siblingEndpoint = attachmentEndpoint(options.endpoint, allowed)
-  const siblings = new TcpBlobTransport({ endpoint: siblingEndpoint.endpoint,
-    localStore: options.store, allowIncomingPeer: allowed })
+  // The blob service accepts exact-hash reads against attachment blocks only.
+  // The key for a Chat upload stays in the link, never in a blob request.
+  const cacheEndpoint = attachmentEndpoint(options.endpoint)
+  const cacheTransport = new TcpBlobTransport({ endpoint: cacheEndpoint.endpoint, localStore: options.store })
 
   type AnonymousReader = { get: (hash: string) => Promise<Uint8Array | null>; updatePeers: () => Promise<void>; stop: () => Promise<void> } | undefined
   let reader: AnonymousReader
@@ -134,29 +134,51 @@ export function createAttachmentTransport(options: {
     }
   }
 
+  function getReader(failed?: NonNullable<AnonymousReader>): Promise<AnonymousReader> {
+    if (failed && reader === failed) {
+      // A provider can keep its device ID across a reload and lose the session
+      // keys for this reader. Coalesce concurrent recoveries on one fresh node.
+      reader = undefined
+      starting = failed.stop().then(openAnonymousReader)
+    } else if (!starting) {
+      starting = openAnonymousReader()
+    }
+    const pending = starting
+    void pending.catch(() => { if (starting === pending) starting = undefined })
+    return pending
+  }
+
   return {
     async get(hash: Hash): Promise<Uint8Array | null> {
       if (closed) return null
       const peers = [...new Set(options.siblings().map(normalizeDeviceSyncPeer))].filter(allowed)
-      const local = peers.length ? await siblings.get(hash, peers, 0).catch(() => null) : null
+      const local = peers.length ? await cacheTransport.get(hash, peers, 0).catch(() => null) : null
       if (closed) return null
       if (local) return local
-      if (!starting) {
-        starting = openAnonymousReader()
-        void starting.catch(() => { starting = undefined })
-      }
-      const anonymous = await starting
+      const anonymous = await getReader()
       if (closed || !anonymous) return null
-      const data = await anonymous.get(toHex(hash))
-      return closed ? null : data
+      const key = toHex(hash)
+      try {
+        const data = await anonymous.get(key)
+        return closed ? null : data
+      } catch (error) {
+        if (closed) return null
+        // A definite miss returns null. Only an uncertain transport failure
+        // justifies retrying the hash through a fresh anonymous session.
+        if (!(error instanceof AggregateError)) throw error
+        const fresh = await getReader(anonymous)
+        if (closed || !fresh) return null
+        const data = await fresh.get(key)
+        return closed ? null : data
+      }
     },
     updatePeers(): Promise<void> { return reader?.updatePeers() ?? Promise.resolve() },
     close(): Promise<void> {
       if (closing) return closing
-      closed = true; siblingEndpoint.close()
+      closed = true; cacheEndpoint.close()
       const stopping = reader?.stop()
       return closing = (async () => {
-        await Promise.allSettled([siblings.close(), stopping, starting])
+        await Promise.allSettled([cacheTransport.close(), stopping, starting])
         await reader?.stop()
       })()
     },

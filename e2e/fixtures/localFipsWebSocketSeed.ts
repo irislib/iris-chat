@@ -23,6 +23,7 @@ export interface LocalFipsWebSocketSeed {
   close(): Promise<void>;
   shape(bytesPerSecond: number, dropEvery?: number): void;
   connectedPeers(): string[];
+  connectionsFor(peer: string): number;
 }
 
 class InboundWebSocketTransport implements Transport {
@@ -166,9 +167,13 @@ export async function startLocalFipsWebSocketSeed(): Promise<LocalFipsWebSocketS
     routingMode: 'reply_learned',
   });
   const peers = new Set<string>();
+  const connections = new Map<string, number>();
   node.on('peer', (value) => {
     const event = value as PeerEvent;
-    if (event.state === 'connected') peers.add(event.remotePubkey);
+    if (event.state === 'connected') {
+      peers.add(event.remotePubkey);
+      connections.set(event.remotePubkey, (connections.get(event.remotePubkey) ?? 0) + 1);
+    }
     else if (event.state === 'disconnected') peers.delete(event.remotePubkey);
   });
   await node.start();
@@ -177,5 +182,6 @@ export async function startLocalFipsWebSocketSeed(): Promise<LocalFipsWebSocketS
     close: () => node.stop(),
     shape: (rate, dropEvery = 0) => { transport.rate = rate; transport.dropEvery = dropEvery; },
     connectedPeers: () => [...peers],
+    connectionsFor: peer => connections.get(peer) ?? 0,
   };
 }
