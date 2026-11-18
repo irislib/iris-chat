@@ -28,15 +28,21 @@ export class AttachmentStore implements Store {
   constructor(name = 'iris-chat-attachments', readonly limit = ATTACHMENT_CACHE_BYTES, private now = Date.now) {
     this.db = new Dexie(name)
     this.db.version(3).stores({ blobs: '&hashHex,lastAccess', accesses: '&hashHex,lastAccess' })
-    this.db.version(4).stores({ blobs: '&hashHex,lastAccess', accesses: '&hashHex,lastAccess,safe', files: '&id,owner,created,state', usage: '&key' }).upgrade(async tx => {
-      let bytes = 0, blocks = 0
-      // An old cached block may be its only copy. Never guess that it is recoverable.
-      let after = ''
+    this.db.version(4).stores({ blobs: '&hashHex,lastAccess', accesses: '&hashHex,lastAccess,safe', files: '&id,owner,created,state', usage: '&key' })
+    // The shared DexieStore also used version 4, with different accounting tables.
+    this.db.version(5).stores({}).upgrade(async tx => {
+      const accesses = tx.table<Access, string>('accesses')
+      let bytes = 0, blocks = 0, after = ''
       while (true) {
-        const blob = await tx.table('blobs').where('hashHex').above(after).first() as Block | undefined
+        const blob = await tx.table<Block, string>('blobs').where('hashHex').above(after).first()
         if (!blob) break
-        bytes += blob.data.byteLength; blocks++; after = blob.hashHex
-        await tx.table('accesses').put({ hashHex: blob.hashHex, size: blob.data.byteLength, lastAccess: blob.lastAccess || this.now(), pins: 0, safe: 0, legacy: true })
+        const { hashHex, data } = blob
+        const prior = await accesses.get(hashHex)
+        const metadata = prior && typeof prior.pins === 'number' && typeof prior.safe === 'number'
+          ? prior
+          : { hashHex, lastAccess: prior?.lastAccess ?? blob.lastAccess ?? this.now(), pins: 0, safe: 0, legacy: true }
+        await accesses.put({ ...metadata, size: data.byteLength })
+        bytes += data.byteLength; blocks++; after = hashHex
       }
       await tx.table('usage').put({ key: 'total', bytes, blocks })
     })

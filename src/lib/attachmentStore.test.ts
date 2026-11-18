@@ -1,5 +1,6 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
 import { afterEach, expect, it } from 'vitest'
 import { HashTree, sha256, toHex, nhashEncode, nhashDecode } from '@hashtree/core'
 import { DexieStore } from '@hashtree/dexie'
@@ -69,6 +70,28 @@ it('preserves and counts legacy possible-only copies during migration', async ()
   await expect(store.put(await sha256(new Uint8Array(2)), new Uint8Array(2))).rejects.toThrow('storage is full')
   expect(await store.delete(hash)).toBe(false)
 })
+it('rebuilds version-four totals without losing pins, eviction safety or file records', async () => {
+  const name = crypto.randomUUID()
+  const v4 = new Dexie(name)
+  v4.version(4).stores({ blobs: '&hashHex,lastAccess', accesses: '&hashHex,lastAccess,safe', files: '&id,owner,created,state', usage: '&key' })
+  const hashes: Uint8Array[] = []
+  for (const size of [2, 3, 4]) {
+    const data = new Uint8Array(size), hash = await sha256(data), hashHex = toHex(hash)
+    hashes.push(hash)
+    await v4.table('blobs').put({ hashHex, data, lastAccess: size })
+    if (size !== 4) await v4.table('accesses').put({ hashHex, size, lastAccess: size, pins: size === 2 ? 1 : 0, safe: 1 })
+  }
+  await v4.table('files').put({ id: 'pending-file', state: 'pending' })
+  await v4.table('usage').put({ key: 'total', bytes: 5, blocks: 2 })
+  v4.close()
+  const store = create(9, name)
+  expect(await store.stats()).toMatchObject({ bytes: 9, blocks: 3, files: 1 })
+  expect(await store.delete(hashes[0]!)).toBe(false)
+  expect(await store.delete(hashes[1]!)).toBe(true)
+  expect(await store.delete(hashes[2]!)).toBe(false)
+  expect(await store.stats()).toMatchObject({ bytes: 6, blocks: 2 })
+})
+
 it('cleans an expired interrupted writer without deleting committed pending trees', async () => {
   let now = 0; const store = create(1024, undefined, () => now)
   const kept = await stage(store, new Uint8Array(10).fill(4))
