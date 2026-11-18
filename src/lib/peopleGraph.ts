@@ -134,6 +134,7 @@ export class PeopleGraphController {
       void this.options.bootstrap(graph, request.signal).then(async fresh => {
         if (!fresh || generation !== this.generation) return
         await fresh.setRoot(owner)
+        const hasOwnerList = fresh.getFollowedByUser(owner).size > 0 || !!fresh.getListRevision(owner, 3)
         let version: number
         do {
           version = this.graphRevision
@@ -144,7 +145,10 @@ export class PeopleGraphController {
         // The stable revision check includes events received while merge yields.
         if (this.options.canBootstrap && !this.options.canBootstrap(graph)) return
         this.graph = fresh
-        this.discoveryEdge = false
+        this.graphRevision++
+        // Preserve the local discovery edge copied from the temporary graph, but
+        // never classify a candidate or verified owner list as that local edge.
+        this.discoveryEdge = this.discoveryEdge && !hasOwnerList && !fresh.getListRevision(owner, 3)?.complete
         this.updateDiscoveryEdge()
         void this.flush()
       }).catch(() => {}).finally(() => this.stops.delete(cancel))
@@ -303,7 +307,7 @@ export class PeopleGraphController {
 
   private async persist() {
     // Closing during hydration must not replace the saved graph with a partial snapshot.
-    if (!this.state.ownerPubkey || !this.state.ready) return
+    if (!this.state.ownerPubkey || !this.state.ready || this.graphRevision === 0) return
     const owner = this.state.ownerPubkey
     const graph = this.graph
     let bytes = 0
@@ -318,6 +322,7 @@ export class PeopleGraphController {
   stop() {
     void this.persist()
     this.generation++
+    this.graphRevision = 0
     clearTimeout(this.refreshTimer)
     clearTimeout(this.saveTimer)
     this.refreshTimer = undefined

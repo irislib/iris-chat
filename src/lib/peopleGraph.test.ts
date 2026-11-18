@@ -38,13 +38,14 @@ describe('people graph search policy', () => {
   })
 })
 
-function fixture(loadGraph = async (owner: string) => new SocialGraph(owner), bootstrap?: ConstructorParameters<typeof PeopleGraphController>[0]['bootstrap'], canBootstrap?: () => boolean) {
+function fixture(loadGraph = async (owner: string) => new SocialGraph(owner), bootstrap?: ConstructorParameters<typeof PeopleGraphController>[0]['bootstrap'], canBootstrap?: () => boolean, saveGraph?: ConstructorParameters<typeof PeopleGraphController>[0]['saveGraph']) {
   const subscriptions: Array<{ authors: string[]; event: (event: Event) => void; stop: ReturnType<typeof vi.fn> }> = []
   const saved = new Map<string, Event[]>()
   const controller = new PeopleGraphController({
     loadGraph,
     bootstrap,
     canBootstrap,
+    saveGraph,
     loadEvents: async owner => saved.get(owner) ?? [],
     saveEvents: async (owner, events) => { saved.set(owner, events) },
     subscribe: (authors, event, done) => {
@@ -59,6 +60,35 @@ function fixture(loadGraph = async (owner: string) => new SocialGraph(owner), bo
 }
 
 describe('people graph runtime', () => {
+  it.each(['pending', 'offline'])('does not save an untouched %s bundle on early close', async mode => {
+    const owner = getPublicKey(generateSecretKey()), saveGraph = vi.fn(async () => {})
+    const bootstrap = vi.fn(async () => { if (mode === 'offline') throw new Error('offline'); return new Promise<SocialGraph | undefined>(() => {}) })
+    const { controller } = fixture(undefined, bootstrap, undefined, saveGraph)
+    for (let visit = 0; visit < 2; visit++) { await controller.setOwner(owner); controller.stop() }
+    expect(bootstrap).toHaveBeenCalledTimes(2)
+    expect(saveGraph).not.toHaveBeenCalled()
+  })
+
+  it('persists an accepted signed bootstrap even when no live list changed', async () => {
+    const owner = getPublicKey(generateSecretKey()), person = key('4'), saveGraph = vi.fn(async () => {})
+    const fresh = new SocialGraph(DEFAULT_DISCOVERY_PUBKEY); fresh.addFollower(DEFAULT_DISCOVERY_PUBKEY, person)
+    const { controller } = fixture(undefined, async () => fresh, undefined, saveGraph)
+    await controller.setOwner(owner)
+    await vi.waitFor(() => expect(controller.candidates()).toContain(person))
+    controller.stop()
+    expect(saveGraph).toHaveBeenCalledWith(owner, fresh, [])
+  })
+
+  it('leaves an already saved personal graph unchanged when no public update arrived', async () => {
+    const secret = generateSecretKey(), owner = getPublicKey(secret), saveGraph = vi.fn(async () => {})
+    const personal = new SocialGraph(owner); personal.handleEvent(signed(secret, 3, [key('7')]))
+    const bytes = await personal.toBinary()
+    const { controller } = fixture(root => SocialGraph.fromBinary(root, bytes), undefined, undefined, saveGraph)
+    await controller.setOwner(owner); controller.stop()
+    expect(saveGraph).not.toHaveBeenCalled()
+    expect(await personal.toBinary()).toEqual(bytes)
+  })
+
   it('discards a ready snapshot when relay preferences change during the merge', async () => {
     const owner = getPublicKey(generateSecretKey()), old = key('4'), newer = key('5')
     let allowed = true, release!: () => void, entered!: () => void
@@ -96,6 +126,18 @@ describe('people graph runtime', () => {
     deliver(fresh)
     await vi.waitFor(() => expect(controller.candidates()).toContain(newer))
     expect(controller.candidates()).not.toContain(person)
+    expect(controller.signals(newer).hasPublicPath).toBe(false)
+    controller.stop()
+  })
+
+  it('uses a candidate owner list as a public path instead of the local discovery edge', async () => {
+    const secret = generateSecretKey(), owner = getPublicKey(secret), person = key('5')
+    const fresh = new SocialGraph(DEFAULT_DISCOVERY_PUBKEY)
+    fresh.handleEvent(signed(secret, 3, [person], 20), true)
+    const { controller } = fixture(undefined, async () => fresh)
+    await controller.setOwner(owner)
+    await vi.waitFor(() => expect(controller.candidates()).toContain(person))
+    expect(controller.signals(person).hasPublicPath).toBe(true)
     controller.stop()
   })
 
@@ -154,7 +196,7 @@ describe('people graph runtime', () => {
     expect(controller.candidates()).toContain(person)
     expect(controller.signals(person).followDistance).toBe(2)
     controller.stop()
-    expect(saved.get(owner)).toEqual([])
+    expect(saved.get(owner)).toBeUndefined()
   })
 
   it('replaces the discovery entry point with actual follows and restores it after unfollowing', async () => {

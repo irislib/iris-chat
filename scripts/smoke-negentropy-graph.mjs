@@ -20,7 +20,7 @@ const lists=(created_at, follows=friend, mutes=muted)=>[3,10000].map(kind=>final
 const seedEvents=lists(100),newEvents=lists(300),lateEvents=lists(400,muted,friend),personalEvents=lists(500,muted,friend),servedEvents=[...newEvents];
 const seed=new SocialGraph(root);seed.addFollower(root,owner);seed.handleEvent(seedEvents,true);
 const seedBytes=Buffer.from(await seed.toBinary()),httpMarker=getPublicKey(new Uint8Array(32).fill(45));
-const qualityModes=['pending-default','tiny-default','malformed-default'];
+const qualityModes=['pending-default','tiny-default','malformed-default','untouched-pending'];
 const quality=process.argv[3];
 const httpSeed=await SocialGraph.fromBinary(root,seedBytes);httpSeed.addFollower(friend,httpMarker);
 const targetUsers=quality==='tiny-default'?1000:10000;
@@ -64,7 +64,7 @@ async function retain(page,invalid=false,events=[]){const graph=new SocialGraph(
 const modes=[...(app==='chat'?['fresh-neg','custom-neg','pending-custom','empty-retained']:['fresh-neg']),'unsupported-retained','pending-other-tab','unreadable-cache'];
 if(process.argv[3])assert([...modes,...qualityModes].includes(process.argv[3]));
 try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
- servedEvents.splice(0,servedEvents.length,...newEvents);const start=relay.records.length,records=()=>relay.records.slice(start),sync=()=>records().filter(r=>r.neg);
+ servedEvents.splice(0,servedEvents.length,...(mode==='untouched-pending'?[]:newEvents));const start=relay.records.length,records=()=>relay.records.slice(start),sync=()=>records().filter(r=>r.neg);
  const conflict=mode==='pending-other-tab',invalid=mode==='unreadable-cache',pendingCustom=mode==='pending-custom',empty=mode==='empty-retained',custom=mode==='custom-neg',context=await browser.newContext({serviceWorkers:'allow'});let http=0,unsupported=mode==='unsupported-retained',releaseBootstrap;
  const bootstrapGate=new Promise(resolve=>{releaseBootstrap=resolve;});
  const boundaryPage=await context.newPage();await assertWorkerNetworkBlocked(boundaryPage,boundary);await boundaryPage.close();
@@ -72,7 +72,7 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
  await context.route('https://graph-api.iris.to/**',route=>{legacyRequests++;return route.abort();});
  await context.route(/^https:\/\/cdn\.iris\.to\/[0-9a-f]{64}\.bin$/,async route=>{
   const hash=new URL(route.request().url()).pathname.slice(1,-4);
-  if(hash===directoryHash){http++;if(conflict||pendingCustom||mode==='pending-default')await bootstrapGate;}
+  if(hash===directoryHash){http++;if(conflict||pendingCustom||['pending-default','untouched-pending'].includes(mode))await bootstrapGate;}
   const block=await snapshot.readBlock(hash);if(!block)return route.abort();
   return route.fulfill({body:Buffer.from(block),contentType:'application/octet-stream',headers:{'access-control-allow-origin':'*'}});
  });
@@ -92,6 +92,16 @@ try{for(const mode of process.argv[3]?[process.argv[3]]:modes){
   await page.goto(origin,{waitUntil:'domcontentloaded'});
   if(conflict){await expect.poll(()=>http,{timeout:15000}).toBe(1);await retain(blocker,false,personalEvents);retained=await stored(blocker);releaseBootstrap();}
   await expect(ready()).toBeVisible({timeout:mode==='pending-default'?5000:30000});
+  if(mode==='untouched-pending'){
+   await expect.poll(()=>http,{timeout:5000}).toBe(1);
+   assert.equal((await stored(blocker))?.bytes??null,null,'Untouched bundle must not become a retained graph');
+   await page.reload({waitUntil:'domcontentloaded'});
+   await expect(ready()).toBeVisible({timeout:5000});
+   await expect.poll(()=>http,{timeout:5000}).toBe(2);
+   assert.equal((await stored(blocker))?.bytes??null,null,'Early reload must keep live bootstrap eligible');
+   console.log(`${app}: untouched-pending PASS; next visit retries signed discovery; no cached placeholder`);
+   continue;
+  }
   if(mode==='pending-default'){
    await expect.poll(()=>http,{timeout:5000}).toBe(1);
    await assertCached(page,newEvents);
