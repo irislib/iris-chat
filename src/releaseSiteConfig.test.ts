@@ -58,6 +58,7 @@ describe('release site config', () => {
       'e2e/private-contact-sync.spec.ts',
       'e2e/web-join.spec.ts',
       'e2e/direct-file-first.spec.ts',
+      'e2e/peer-attachments.spec.ts',
       'e2e/message-mutations.spec.ts',
       'e2e/link-device.spec.ts',
       'e2e/invite-roleplay.spec.ts',
