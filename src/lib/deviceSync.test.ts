@@ -7,24 +7,25 @@ import type { Writable } from 'svelte/store'
 import { Reconciliation } from 'nostr-pubsub-reconcile'
 import { historyRecordId } from './deviceHistorySync'
 import { bytesToHex } from '@noble/hashes/utils.js'
-import { AppKeys } from 'nostr-double-ratchet'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AppKeys, type KnownAppKeysSnapshot } from 'nostr-double-ratchet'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { ChatSession } from './chat'
 import type { DeviceState } from './devices'
+import type { DeviceSyncTcp } from './deviceSyncTcp'
 import type { Group } from './groups'
 
 const fips = vi.hoisted(() => ({
   transports: [] as Array<Record<string, unknown>>,
   configs: [] as Array<Record<string, unknown>>,
   nodes: [] as Array<{ emit: (event: string, value: unknown) => void; stop: ReturnType<typeof vi.fn> }>,
-  start: vi.fn(async () => undefined),
+  start: vi.fn(async (): Promise<void> => {}),
   sendDatagram: vi.fn(async () => undefined),
 }))
 const tcp = vi.hoisted(() => ({
   instances: [] as Array<{
     port: number
     send: ReturnType<typeof vi.fn>
-    sendFirst: ReturnType<typeof vi.fn>
+    sendFirst: Mock<DeviceSyncTcp['sendFirst']>
     setPeer: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
     onRecord: (source: string, payload: Uint8Array) => Promise<void>
@@ -40,7 +41,7 @@ const ndr = vi.hoisted(() => ({
     createdAt: number
     appKeys: { getAllDevices: () => Array<{ identityPubkey: string; createdAt: number }> }
   }>,
-  applyTrustedAppKeysSnapshot: vi.fn(async () => 'advanced'),
+  applyTrustedAppKeysSnapshot: vi.fn(async (_snapshot: KnownAppKeysSnapshot) => 'advanced'),
 }))
 
 vi.mock('./directFiles', () => ({
@@ -79,7 +80,7 @@ vi.mock('./deviceSyncTcp', async (importOriginal: <T>() => Promise<T>) => ({
   DeviceSyncTcp: class {
     port: number
     send = vi.fn(async () => undefined)
-    sendFirst = vi.fn(async () => undefined)
+    sendFirst = vi.fn<DeviceSyncTcp['sendFirst']>().mockResolvedValue(undefined)
     setPeer = vi.fn()
     dispose = vi.fn(async () => undefined)
     onRecord: (source: string, payload: Uint8Array) => Promise<void>
@@ -415,7 +416,7 @@ describe('device sync', () => {
       expect(connection.dispose).not.toHaveBeenCalled()
       connection.onConnected?.(`02${device}`)
       await vi.waitFor(() => expect(connection.sendFirst).toHaveBeenCalled())
-      const requests = connection.sendFirst.mock.calls.map(([, payload]: [string, Uint8Array]) =>
+      const requests = connection.sendFirst.mock.calls.map(([, payload]) =>
         JSON.parse(new TextDecoder().decode(payload)))
       expect(requests).toContainEqual(expect.objectContaining({ type: 'request', rosterAt: original.lastEventTimestamp + 30 }))
     } finally {

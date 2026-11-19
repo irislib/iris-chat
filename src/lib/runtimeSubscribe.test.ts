@@ -54,13 +54,13 @@ describe('createRuntimeSubscribe', () => {
   it('starts each real NostrClient subscription once after attaching its handlers', async () => {
     vi.useFakeTimers()
     // Keep NostrClient's real subscribe/autostart scheduling, without opening sockets.
-    const start = vi.spyOn(EventSubscription.prototype, 'start').mockReturnValue(null)
+    const start = vi.spyOn(EventSubscription.prototype, 'start').mockImplementation(() => {})
     const subscribe = createRuntimeSubscribe(new NostrClient())
     const stop = subscribe({ kinds: [1060], authors: [BOB] }, vi.fn())
     expect(start).toHaveBeenCalledTimes(2) // live + historical backfill
     const subscriptions = [...start.mock.contexts]
     await vi.advanceTimersByTimeAsync(1)
-    expect(start.mock.contexts.filter((subscription: EventSubscription) =>
+    expect(start.mock.contexts.filter(subscription =>
       subscriptions.includes(subscription)
     )).toHaveLength(2)
     stop()

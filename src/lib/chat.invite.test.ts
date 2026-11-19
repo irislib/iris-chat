@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => {
     getSessionManager: vi.fn(() => state.sessionManager),
     waitForSessionManager: vi.fn(() => Promise.resolve(state.sessionManager)),
     waitForSendReadySessionManager: vi.fn(() => Promise.resolve(state.sessionManager)),
-    waitForPeerSendReadySessionManager: vi.fn(() => Promise.resolve(state.sessionManager)),
+    waitForPeerSendReadySessionManager: vi.fn((_recipient: string) => Promise.resolve(state.sessionManager)),
     setSessionManager: (value: any | null) => {
       state.sessionManager = value
     },
@@ -41,8 +41,7 @@ vi.mock('./privateChats', () => ({
   getSessionManager: () => mocks.getSessionManager(),
   waitForSessionManager: () => mocks.waitForSessionManager(),
   waitForSendReadySessionManager: () => mocks.waitForSendReadySessionManager(),
-  waitForPeerSendReadySessionManager: (...args: any[]) =>
-    mocks.waitForPeerSendReadySessionManager(...args),
+  waitForPeerSendReadySessionManager: mocks.waitForPeerSendReadySessionManager,
   waitForNdrRuntime: async () => {
     await mocks.waitForSessionManager()
     return {
@@ -59,8 +58,8 @@ vi.mock('./privateChats', () => ({
       acceptInvite: (...args: any[]) => mocks.getSessionManager()?.acceptInvite?.(...args),
     }
   },
-  preparePeerNdrRuntime: async (...args: any[]) => {
-    await mocks.waitForPeerSendReadySessionManager(...args)
+  preparePeerNdrRuntime: async (recipient: string) => {
+    await mocks.waitForPeerSendReadySessionManager(recipient)
     return {
       setupUser: (...setupArgs: any[]) => mocks.getSessionManager()?.setupUser?.(...setupArgs),
     }

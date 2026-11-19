@@ -9,7 +9,6 @@
     "allowImportingTsExtensions": true,
     "allowJs": true,
     "checkJs": true,
-    "preserveSymlinks": true,
     "isolatedModules": true,
     "moduleDetection": "force",
     "noEmit": true

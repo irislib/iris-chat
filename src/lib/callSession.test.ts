@@ -86,7 +86,7 @@ describe('FIPS calls', () => {
       expect(get(a.state)?.peer).toBe('b')
     } finally { c.dispose() }
   })
-  it.each(['answer', 'ping'])('repeats a lost answered-elsewhere notice on sibling %s', (type: 'answer' | 'ping') => {
+  it.each(['answer', 'ping'] as const)('repeats a lost answered-elsewhere notice on sibling %s', (type: 'answer' | 'ping') => {
     a.dispose()
     const ec = new Endpoint('c'); ec.other = ea
     const c = new CallSession(ec, source => source === 'a' ? 'Alice' : undefined)

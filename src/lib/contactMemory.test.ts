@@ -49,7 +49,7 @@ it('scopes private favorites and names to each account and accepts metadata arri
 })
 
 it('keeps a synced nickname in notifications when a public name changes', () => {
-  vi.mocked(getPrivateContact).mockReturnValue({favorite: true, nickname: 'Private Alice', note: 'Private note'})
+  vi.mocked(getPrivateContact).mockReturnValue({favorite: true, muted: false, nickname: 'Private Alice', note: 'Private note'})
   observeContactProfile(account, person, 'Alice')
   rememberContact(account, person)
   observeContactProfile(account, person, 'Alicia')

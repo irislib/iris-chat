@@ -215,7 +215,7 @@ describe('NostrPubsubRuntime', () => {
     const cached = [carrier, lost, sharedGroup, tagged]
     for (const event of cached) await alice.events.store.put(event)
     const asked: string[][] = []
-    const received = vi.fn()
+    const received = vi.fn<(event: NostrEvent) => void>()
     try {
       // The durable outbox vouches by id; a recipient tag is refused even then.
       await alice.activate(network.node(PEER_A), PEER_A, () => [PEER_B], undefined, undefined, async ids => {
@@ -226,7 +226,7 @@ describe('NostrPubsubRuntime', () => {
       bob.subscribe({ kinds: [1060], authors: cached.map(event => event.pubkey) }, received)
       await settle([alice, bob], () => received.mock.calls.length === 1)
       await settle([alice, bob], () => true)
-      expect(received.mock.calls.map(([event]: [NostrEvent]) => event.id)).toEqual([carrier.id])
+      expect(received.mock.calls.map(([event]) => event.id)).toEqual([carrier.id])
       expect(asked.length).toBeGreaterThan(0)
       expect(new Set(asked.flat())).toEqual(new Set(cached.map(event => event.id)))
       const replayed = network.messages().filter(frame => frame.from === PEER_A && frame.message.type === 'event')

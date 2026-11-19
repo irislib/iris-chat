@@ -30,10 +30,10 @@ describe('portable build config', () => {
     const output = config.build?.rollupOptions?.output
     const manualChunks = !Array.isArray(output) ? output?.manualChunks : undefined
 
-    expect(manualChunks).toBeTypeOf('function')
-    expect(manualChunks?.('/repo/node_modules/@fips/core/dist/index.js', {} as never)).toBe('vendor')
-    expect(manualChunks?.('/repo/node_modules/nostr-pubsub/dist/index.js', {} as never)).toBe('vendor')
-    expect(manualChunks?.('/repo/node_modules/marked/lib/marked.esm.js', {} as never)).toBe('vendor')
+    if (typeof manualChunks !== 'function') throw new Error('Expected a manual chunk assignment function')
+    expect(manualChunks('/repo/node_modules/@fips/core/dist/index.js', {} as never)).toBe('vendor')
+    expect(manualChunks('/repo/node_modules/nostr-pubsub/dist/index.js', {} as never)).toBe('vendor')
+    expect(manualChunks('/repo/node_modules/marked/lib/marked.esm.js', {} as never)).toBe('vendor')
   })
 
   it('keeps the HTML entrypoint free of root-absolute asset refs', () => {

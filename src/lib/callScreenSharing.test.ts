@@ -33,7 +33,7 @@ class Encoder {
 let media: BrowserCallMedia
 let camera: Track, mic: Track, screen: Track
 let base: Stream, selected: Stream
-let callbacks: CallMediaCallbacks
+let callbacks: CallMediaCallbacks & Required<Pick<CallMediaCallbacks, 'screenSharing'>>
 let getDisplayMedia: ReturnType<typeof vi.fn>, getUserMedia: ReturnType<typeof vi.fn>, audioClose: ReturnType<typeof vi.fn>
 let contextCount: number
 beforeEach(async () => {

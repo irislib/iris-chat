@@ -65,7 +65,7 @@ const secret = new Uint8Array(32).fill(1)
 const siblingSecret = new Uint8Array(32).fill(2)
 const local = getPublicKey(secret)
 const sibling = getPublicKey(siblingSecret)
-const connect = vi.fn(async () => undefined)
+const connect = vi.fn(async (): Promise<void> => {})
 const chat = (): ChatSession => ({ id: state.owner, recipientPubkey: state.owner, mode: 'manager', messages: [] })
 function incomingOffer(): DirectFileOffer {
   return { id: '01'.repeat(16), token: '02'.repeat(32), owner: state.owner, recipient: state.owner,

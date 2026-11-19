@@ -16,7 +16,7 @@ const sessionState = vi.hoisted(() => ({
 
 const privateChatsMocks = vi.hoisted(() => ({
   ensureDeviceRegistered: vi.fn().mockResolvedValue(undefined),
-  waitForSessionManager: vi.fn(() => Promise.reject(new Error('manager unavailable in test'))),
+  waitForSessionManager: vi.fn<() => Promise<{ setupUser: (pubkey: string) => Promise<void> }>>(),
 }))
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -530,7 +530,7 @@ describe('handleManagerEvent', () => {
     const setupUser = vi.fn().mockResolvedValue(undefined)
     privateChatsMocks.waitForSessionManager.mockResolvedValue({
       setupUser,
-    } as never)
+    })
 
     const rumor = {
       id: 'msg-bootstrap-peer',

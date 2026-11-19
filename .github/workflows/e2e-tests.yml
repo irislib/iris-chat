@@ -168,7 +168,7 @@ jobs:
         run: pnpm test
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium webkit
+        run: pnpm exec playwright install --with-deps chromium webkit ${{ inputs.scope != 'layout' && 'firefox' || '' }}
 
       - name: Run E2E tests
         if: inputs.scope != 'layout'
