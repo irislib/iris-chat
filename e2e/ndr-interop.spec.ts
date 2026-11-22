@@ -307,16 +307,8 @@ async function expectChatBubbleVisible(page: Page, text: string): Promise<void> 
 
 async function openLinkThisDevice(page: Page): Promise<void> {
   await page.goto('/')
-  const linkButton = page.getByRole('button', { name: /link this device/i })
-  if (!(await linkButton.isVisible().catch(() => false))) {
-    await page.evaluate(() => {
-      localStorage.removeItem('iris-chat-identity')
-    })
-    await page.reload({ waitUntil: 'domcontentloaded' })
-  }
-
-  await expect(linkButton).toBeVisible({ timeout: 30000 })
-  await linkButton.click()
+  await page.getByRole('button', { name: 'Already have a profile?' }).click()
+  await page.getByRole('button', { name: 'Link this device', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Link this device' })).toBeVisible({
     timeout: 20000,
   })
