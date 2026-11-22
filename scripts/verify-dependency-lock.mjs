@@ -36,8 +36,8 @@ const releases = {
     "integrity": "sha512-9gPIe39QJoCUtVo8VhbDOX5bHAtGlJ2EZlQJqKh3l9++2CY1Njg2LINXQWBgKRqB0P2LBKoDpyYz1XIBoJ/SMw=="
   },
   "nostr-pubsub": {
-    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.40/nostr-pubsub-0.5.40.tgz",
-    "integrity": "sha512-nDvUCBEXacZRzM9lAEbK9Ofu03NQGAzuM4+IklXrUsvxJy8qv7vIwEDac9PbXxSjxwFuaXXwWJWYe6r4ltpO2g=="
+    "url": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.41/nostr-pubsub-0.5.41.tgz",
+    "integrity": "sha512-nNBicaF8OX/theZABn59InRqdFwOQd7skySfJrwcdONOmXzeXH/S88qkv4i9oWnx0jASqmtv91O5eh+LVX1dwg=="
   },
   "nostr-double-ratchet": {
     "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.187.tgz",
