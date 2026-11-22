@@ -5,6 +5,7 @@ vi.mock('./privateStateStore', () => ({ privateStateVersion: { subscribe: () => 
 import { get, writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
 import { Reconciliation } from 'nostr-pubsub-reconcile'
+import { deviceRecordVersion } from './deviceSyncRecordStore'
 import { historyRecordId } from './deviceHistorySync'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { AppKeys, type KnownAppKeysSnapshot } from 'nostr-double-ratchet'
@@ -398,6 +399,30 @@ describe('device sync', () => {
       await stopDeviceSync()
       create.mockRestore(); policy.mockRestore()
       ;(devices as unknown as Writable<DeviceState>).set(original)
+    }
+  })
+
+  it('announces private changes saved while the linked-device transport is starting', async () => {
+    let finishStart!: () => void
+    fips.start.mockImplementationOnce(() => new Promise<void>(resolve => { finishStart = resolve }))
+    vi.useFakeTimers()
+    startDeviceSync(owner, new Uint8Array(32))
+    try {
+      await vi.waitFor(() => expect(fips.start).toHaveBeenCalledOnce())
+      // A committed private setting signals the sync runtime through this store.
+      deviceRecordVersion.update(version => version + 1)
+      await vi.advanceTimersByTimeAsync(125)
+      const connection = tcp.instances[0]
+      expect(connection.send).not.toHaveBeenCalled()
+      finishStart()
+      await vi.waitFor(() => expect(connection.setPeer).toHaveBeenCalled())
+      await vi.advanceTimersByTimeAsync(125)
+      expect(connection.send.mock.calls.map(([peer, bytes]) => [peer, parseDeviceSyncPacket(bytes, owner).type]))
+        .toContainEqual([`02${device}`, 'pageEnd'])
+    } finally {
+      finishStart?.()
+      await stopDeviceSync()
+      vi.useRealTimers()
     }
   })
 
@@ -1000,7 +1025,6 @@ describe('device sync', () => {
       // Finish startup's debounced snapshot before changing a durable private head.
       await new Promise(resolve => setTimeout(resolve, 150))
       transport.send.mockClear()
-      const { deviceRecordVersion } = await import('./deviceSyncRecordStore')
       deviceRecordVersion.update(version => version + 1)
       await vi.waitFor(() => expect(transport.send.mock.calls.map((call: unknown[]) =>
         parseDeviceSyncPacket(call[1] as Uint8Array, owner))).toContainEqual(expect.objectContaining({

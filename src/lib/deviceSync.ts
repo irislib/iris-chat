@@ -1026,6 +1026,9 @@ async function updateRuntime(
     activeKey = key
     activeOwnerPubkey = ownerPubkey
     activePeers = peers
+    // Store changes can finish their debounce while the transport is starting.
+    // Queue the current snapshot once the authorized peers can receive it.
+    if (peers.size) scheduleSnapshotPush()
     await attachDirectFiles(node, ownerPubkey, secretKey, async device => {
       const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
       if (peer) await node.connect(peer.remoteAddr)
