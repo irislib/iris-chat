@@ -53,7 +53,8 @@ import {
 import { relayStore } from './relayStore'
 import { activateNostrPubsub, deactivateNostrPubsub } from './nostrPubsubRuntime'
 import { prepareAttachmentPeers, deactivateAttachmentPeers, updateAttachmentPeerPolicy } from './hashtree'
-import { DeviceSyncTcp, normalizeDeviceSyncPeer } from './deviceSyncTcp'
+import { DeviceSyncTcp } from './deviceSyncTcp'
+import { ConnectedDevicePeers, normalizeDeviceSyncPeer } from './fipsPeers'
 import { DeviceHistorySync } from './deviceHistorySync'
 import { closeRevokedDeviceHistoryPairs, deviceHistoryPair, deviceHistoryProgress, loadDeviceHistoryPairs, saveDeviceHistoryPair } from './deviceHistoryPolicy'
 import { attachCalls, detachCalls, callOwnerForPeer, knownCallDevices } from './calls'
@@ -907,7 +908,7 @@ async function updateRuntime(
     await closeRevokedDeviceHistoryPairs(ownerPubkey, state.identityPubkey!, get(devices).registeredDevices.map(device => device.identityPubkey))
     const node = new FipsNode({ identity, transports, strictClient: true, routingMode: 'reply_learned' })
     const peers = new Set<string>()
-    const callPeers = new Set<string>()
+    const callPeers = new ConnectedDevicePeers()
     let tcp: DeviceSyncTcp
     const allowsLegacy = (peer: string, since: number, until: number, linkId?: string) => {
       const pair = currentHistoryPair(ownerPubkey, peer)
@@ -967,13 +968,9 @@ async function updateRuntime(
       },
       onError: (error) => console.warn('[deviceSync] TCP error:', error),
     })
-    node.on('peer', (value) => {
-      const peer = value as PeerEvent
-      if (peer.state === 'disconnected') callPeers.delete(peer.remotePubkey)
-      else callPeers.add(peer.remotePubkey)
-    })
+    node.on('peer', value => callPeers.update(value as PeerEvent))
     node.on('error', (error) => console.warn('[deviceSync] FIPS error:', error))
-    attachCalls(node, () => Array.from(callPeers), async owner => {
+    attachCalls(node, () => callPeers.peers(), async owner => {
       await Promise.allSettled(knownCallDevices(owner).map(async device => {
         const peer = await transport.resolve(deriveNodeAddr(fromHex(device)))
         if (peer) await node.connect(peer.remoteAddr)
@@ -992,10 +989,10 @@ async function updateRuntime(
       () => get(devices).registeredDevices.map(device => `02${device.identityPubkey}`),
       peer => currentFiles() && isAuthorizedDeviceSyncSource(peer, get(devices)),
       { servers: seeds, ownPeer: toHex(identity.publicKey), peers: () => !currentFiles() ? [] : [...new Set([
-        ...callPeers,
+        ...callPeers.peers(),
         ...groupFileDevices(),
         ...Array.from(get(chats).values()).flatMap(chat => knownCallDevices(chat.recipientPubkey).map(device => `02${device}`)),
-      ])].filter(peer => peer !== toHex(identity.publicKey) && allowedFilePeer(peer)) })
+      ])].filter(peer => normalizeDeviceSyncPeer(peer) !== normalizeDeviceSyncPeer(toHex(identity.publicKey)) && allowedFilePeer(peer)) })
     try {
       await node.start()
     } catch (error) {

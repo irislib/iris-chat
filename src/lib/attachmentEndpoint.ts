@@ -1,5 +1,5 @@
 import type { FipsDatagramEndpoint } from '@fips/tcp'
-import { normalizeDeviceSyncPeer } from './deviceSyncTcp'
+import { normalizeDeviceSyncPeer, servicePeer } from './fipsPeers'
 
 /** Reliable blob TCP must not stall all providers behind one absent peer's route lookup. */
 export function attachmentEndpoint(node: FipsDatagramEndpoint, allow: (peer: string) => boolean = () => true) {
@@ -8,7 +8,7 @@ export function attachmentEndpoint(node: FipsDatagramEndpoint, allow: (peer: str
   const endpoint: FipsDatagramEndpoint = {
     registerService: (port, handler) => node.registerService(port, context => {
       // Noise may expose either compressed parity for the same authenticated device.
-      const src = normalizeDeviceSyncPeer(context.src)
+      const src = servicePeer(context)
       if (!closed && allow(src)) return handler({ ...context, src })
     }),
     async sendDatagram(args) {

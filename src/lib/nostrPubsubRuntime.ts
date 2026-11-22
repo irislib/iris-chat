@@ -2,7 +2,7 @@ import { FipsNostrPubsubClient, FipsNostrPubsubEventSource, SOURCE_PRIORITY_LOCA
   localIndexSource, verifyNostrEvent, selectStoredEvents, type NostrEventReader, type FipsPubsubClientNode, type NostrRuntime } from 'nostr-pubsub'
 
 import { canRetryWorkerPublication } from './workerPublicationPolicy'
-import { normalizeDeviceSyncPeer } from './deviceSyncTcp'
+import { normalizeDeviceSyncPeer } from './fipsPeers'
 
 const ALLOWED_RUNTIME_KINDS = [1059, 1060, 30078, 37368, 37195]
 type Runtime = Pick<NostrRuntime, 'addSource' | 'removeSource' | 'query'>
@@ -21,19 +21,7 @@ export class NostrPubsubRuntime {
     pairwiseCarriers: (ids: string[]) => Promise<ReadonlySet<string>> = async () => new Set()): Promise<void> {
     await this.deactivate()
     this.runtime = runtime
-    // Device authorization uses x-only keys. FIPS can authenticate either
-    // compressed-key parity, as on the account-history stream.
-    const canonicalNode: FipsPubsubClientNode = {
-      registerService: (port, handler) => node.registerService(port, context =>
-        handler({ ...context, src: normalizeDeviceSyncPeer(context.src) })),
-      sendDatagram: args => node.sendDatagram({ ...args, dst: normalizeDeviceSyncPeer(args.dst) }),
-      ...(node.on ? { on: (event, listener) => node.on!(event, value => {
-        if (value && typeof value === 'object' && 'remotePubkey' in value && typeof value.remotePubkey === 'string')
-          listener({ ...value, remotePubkey: normalizeDeviceSyncPeer(value.remotePubkey) })
-        else listener(value)
-      }) } : {}),
-    }
-    this.client = new FipsNostrPubsubClient({ node: canonicalNode,
+    this.client = new FipsNostrPubsubClient({ node,
       localPeerId: normalizeDeviceSyncPeer(localPeerId), peers: () => peers().map(normalizeDeviceSyncPeer),
       allowedKinds: ALLOWED_RUNTIME_KINDS,
       limits: { maxCachedEvents: 256, maxReplayEvents: 256, maxFiltersPerSubscription: 32 },

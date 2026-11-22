@@ -8,6 +8,10 @@ import {
   type FipsDatagramEndpoint,
 } from '@fips/tcp'
 
+import { normalizeDeviceSyncPeer, servicePeer } from './fipsPeers'
+
+export { normalizeDeviceSyncPeer } from './fipsPeers'
+
 const POLL_MS = 25
 const PASSIVE_DIAL_GRACE_MS = 2_000
 const MAX_PASSIVE_DIAL_DELAY_MS = 30_000
@@ -56,7 +60,7 @@ export class DeviceSyncTcp {
   constructor(private readonly options: DeviceSyncTcpOptions) {
     const endpoint: FipsDatagramEndpoint = {
       registerService: (port, handler) => options.endpoint.registerService(port, context =>
-        handler({ ...context, src: normalizeDeviceSyncPeer(context.src) })),
+        handler({ ...context, src: servicePeer(context) })),
       sendDatagram: args => options.endpoint.sendDatagram({ ...args, dst: normalizeDeviceSyncPeer(args.dst) }),
     }
     this.tcp = new FipsTcpEndpoint(endpoint, options.port, {
@@ -354,12 +358,6 @@ export class DeviceSyncTcp {
     if (remaining === 0) this.pendingBytesByPeer.delete(peer)
     else this.pendingBytesByPeer.set(peer, remaining)
   }
-}
-
-/** FIPS identifies a device by its x-only key; Noise can expose either parity. */
-export function normalizeDeviceSyncPeer(peer: string): string {
-  const normalized = peer.toLowerCase()
-  return /^(02|03)[0-9a-f]{64}$/.test(normalized) ? `02${normalized.slice(2)}` : peer
 }
 
 export class RecordReader {

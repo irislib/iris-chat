@@ -6,7 +6,7 @@ import { toHex } from '@hashtree/core'
 import { TcpBlobTransport } from '@hashtree/fips-transport'
 import { createFipsWorkerP2PProvider } from '@hashtree/fips-transport/worker'
 import { attachmentEndpoint } from './attachmentEndpoint'
-import { normalizeDeviceSyncPeer } from './deviceSyncTcp'
+import { ConnectedDevicePeers, normalizeDeviceSyncPeer } from './fipsPeers'
 
 export interface AttachmentProviders {
   servers: readonly string[]
@@ -87,24 +87,20 @@ export function createAttachmentTransport(options: {
       return !changingPolicy && !blocked.has(providerPeer(peer))
     }
     const endpoint = attachmentEndpoint(node, allowProvider)
-    const adjacent = new Set<string>()
-    node.on('peer', value => {
-      const event = value as PeerEvent, peer = normalizeDeviceSyncPeer(event.remotePubkey)
-      if (event.state === 'connected') adjacent.add(peer)
-      else if (event.state === 'disconnected') adjacent.delete(peer)
-    })
+    const adjacent = new ConnectedDevicePeers()
+    const stopTracking = node.on('peer', value => adjacent.update(value as PeerEvent))
     const makeProvider = () => createFipsWorkerP2PProvider({ node: endpoint.endpoint, localStore: noCache,
       allowIncomingPeer: () => false,
       // Existing configured peers remain local-only sources. Seeds must first
       // prove that they implement the blob service, using an anonymous probe.
       providerRoutes: () => closed ? [] : [...new Set(options.providers!.peers().map(normalizeDeviceSyncPeer))]
         .filter(allowProvider).map(peerId => ({ peerId, htl: 0 })),
-      candidatePeerIds: () => closed ? [] : [...adjacent].filter(allowProvider),
+      candidatePeerIds: () => closed ? [] : adjacent.peers().filter(allowProvider),
     })
     let provider = makeProvider()
     let stopping: Promise<void> | undefined
     const stop = () => stopping ??= (async () => {
-      endpoint.close(); adjacent.clear()
+      endpoint.close(); stopTracking()
       const tcpClosing = provider.transport.close()
       provider.close()
       await Promise.allSettled([tcpClosing, node.stop()])

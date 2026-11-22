@@ -2,6 +2,8 @@ import { writable, get } from 'svelte/store'
 import type { CallOutcome } from './callHistory'
 import type { CallSettings } from './callSettings'
 import { CALL_CODEC, CALL_PORT, CallMediaReceiver, encodeCallControl, encodeCallMedia, parseCallControl, type CallControl, type MediaFrame } from './callProtocol'
+import { normalizeDeviceSyncPeer, servicePeer } from './fipsPeers'
+
 export interface CallState {
   id: string; owner: string; peer?: string; peers: string[]; direction: 'incoming' | 'outgoing'
   status: 'ringing' | 'connecting' | 'active' | 'ended'; video: boolean; muted: boolean
@@ -10,11 +12,7 @@ export interface CallState {
 }
 export interface CallEndpoint {
   sendDatagram(args: { dst: string; srcPort: number; dstPort: number; payload: Uint8Array }): Promise<void>
-  registerService(port: number, handler: (ctx: { src: string; payload: Uint8Array }) => void): () => void
-}
-// FIPS addresses identify the full x-only key; Noise may reveal its actual parity.
-function canonicalCallPeer(peer: string) {
-  return /^(02|03)[0-9a-f]{64}$/.test(peer) ? `02${peer.slice(2)}` : peer
+  registerService(port: number, handler: (ctx: { peerId?: string; src: string; payload: Uint8Array }) => void): () => void
 }
 export class CallSession {
   readonly state = writable<CallState | null>(null)
@@ -39,7 +37,7 @@ export class CallSession {
     private settings: () => Pick<CallSettings, 'voice' | 'video'> = () => ({ voice: true, video: true }),
     private hasCallHistory: (owner: string, id: string) => boolean = () => false,
   ) {
-    this.unregister = endpoint.registerService(CALL_PORT, ({ src, payload }) => { this.receive(src, payload) })
+    this.unregister = endpoint.registerService(CALL_PORT, context => this.receive(servicePeer(context), context.payload))
     this.timer = setInterval(() => this.tick(), 1000)
     this.recoveryTimer = setInterval(() => {
       if (get(this.state)?.status === 'active') for (const missing of this.receiver.missing()) this.broadcast('nack', missing)
@@ -63,7 +61,7 @@ export class CallSession {
   }
   start(owner: string, peers: string[], video: boolean) {
     if (get(this.state)?.status !== 'ended' && get(this.state)) throw new Error('A call is already open')
-    peers = [...new Set(peers.map(canonicalCallPeer))]
+    peers = [...new Set(peers.map(normalizeDeviceSyncPeer))]
     if (!peers.length || peers.some(p => this.ownerForPeer(p) !== owner)) throw new Error('This person is not connected. Try again when they are nearby or online.')
     const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')
     this.resetMedia()
@@ -134,7 +132,6 @@ export class CallSession {
     this.state.update(s => s && s.status === 'active' ? { ...s, receivedAudio, receivedVideo: s.video ? receivedVideo : 0 } : s)
   }
   private receive(peer: string, payload: Uint8Array) {
-    peer = canonicalCallPeer(peer)
     const owner = this.ownerForPeer(peer)
     if (!owner) return
     let s = get(this.state)
