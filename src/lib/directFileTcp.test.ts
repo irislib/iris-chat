@@ -26,7 +26,7 @@ class MemoryEndpoint implements FipsDatagramEndpoint {
     if (this.dropped || remote?.dropped) return
     const handler = remote?.handlers.get(args.dstPort)
     if (!handler) return
-    queueMicrotask(() => void handler({ src: this.id, srcPort: args.srcPort ?? 0,
+    queueMicrotask(() => void handler({ src: this.id, peerId: this.id.slice(2), srcPort: args.srcPort ?? 0,
       dstPort: args.dstPort, payload: args.payload.slice() }))
   }
 }
@@ -36,8 +36,7 @@ const peers = ['a', 'b', 'c', 'd'].map(char => char.repeat(64))
 const instances: DirectFileTcp[] = []
 let network: Map<string, MemoryEndpoint>
 function device(index: number, extra: Partial<DirectFileTcpOptions> = {}) {
-  // Real FIPS datagrams expose either compressed parity after authentication,
-  // unlike x-only signed offers and canonical even-parity send destinations.
+  // Each service datagram carries the authenticated x-only ID alongside its compressed route.
   const endpoint = new MemoryEndpoint(`${index % 2 ? '03' : '02'}${peers[index]}`, network)
   const events: DirectFileEvent[] = []
   const tcp = new DirectFileTcp({ endpoint, localPeer: endpoint.id, onEvent: event => events.push(event),
