@@ -75,7 +75,7 @@
     "marked": "^15.0.12",
     "minidenticons": "^4.2.1",
     "nostr-double-ratchet": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.187.tgz",
-    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.32/nostr-pubsub-0.5.32.tgz",
+    "nostr-pubsub": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-ts-v0.5.38/nostr-pubsub-0.5.38.tgz",
     "nostr-pubsub-reconcile": "https://github.com/mmalmi/nostr-pubsub/releases/download/nostr-pubsub-reconcile-ts-v0.1.2/nostr-pubsub-reconcile-0.1.2.tgz",
     "nostr-social-graph": "https://github.com/mmalmi/nostr-social-graph/releases/download/v4.2.5/nostr-social-graph-4.2.5.tgz",
     "nostr-tools": "^2.25.2",
