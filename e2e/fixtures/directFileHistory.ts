@@ -75,11 +75,22 @@ export async function verifyDirectFileHistory(options: HistoryOptions) {
   await expect(card(failedId).getByRole('button', { name: /^Download / })).toHaveCount(0)
   await capture('failed-history-reopened')
 
-  // Losing a saved local file changes availability, never the historical outcome.
+  // A verified private copy remains downloadable if the exported file is removed.
   await page.evaluate(async filename => {
     const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('chosen-downloads')
     await directory.removeEntry(filename)
   }, payloads[1].filename)
+  await reopen()
+  await completedHistory()
+
+  // Removing the last local copy changes availability while preserving the history.
+  await page.evaluate(async ({ owner, device, transferId, index }) => {
+    let directory = await navigator.storage.getDirectory()
+    for (const name of ['iris-chat-direct-files', owner, device, transferId]) {
+      directory = await directory.getDirectoryHandle(name)
+    }
+    await directory.removeEntry(String(index))
+  }, { owner: webOwner, device: webDevice, transferId: receivedId, index: 1 })
   await reopen()
   await completedHistory(1)
   await expect(card(failedId).getByRole('status')).toHaveText('Transfer failed')

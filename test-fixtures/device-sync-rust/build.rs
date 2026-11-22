@@ -10,6 +10,7 @@ fn main() {
     let framing_path = core.join("src/core/device_sync_tcp/framing.rs");
     let body_path = core.join("src/core/device_sync/body.rs");
     let records_path = core.join("src/core/device_sync/records.rs");
+    let receipts_path = core.join("src/core/device_sync/receipts.rs");
     let mutations_path = core.join("src/core/message_mutations.rs");
     let model_path = core.join("src/core/model.rs");
     let mute_path = core.join("src/core/chat_mute_sync.rs");
@@ -71,12 +72,20 @@ fn main() {
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     let records = read(records_path);
     let record_types = derived_items(&records, "enum RecordScope", "struct DeviceSyncGroupSettings").replace("pub(super) ", "");
-    let methods = ["pub(super) fn id", "pub(super) fn timestamp", "pub(super) fn scope"].map(|name| {
-        let start = records.find(name).expect("native typed record method");
-        records[start..item_end(&records, start)].replace("pub(super) ", "")
-    }).join("\n");
+    let methods = ["pub(super) fn id", "pub(super) fn timestamp", "pub(super) fn scope"]
+        .map(|name| native_method(&records, name))
+        .join("\n");
+    let receipt_types = if record_types.contains("RecipientReceipt") {
+        println!("cargo:rerun-if-changed={}", receipts_path.display());
+        let receipts = read(receipts_path);
+        let declaration = derived_item(&receipts, "struct RecipientReceipt").replace("pub(in crate::core) ", "");
+        let id = native_method(&receipts, "pub(super) fn record_id");
+        format!("{declaration}\nimpl RecipientReceipt {{\n{id}\n}}")
+    } else {
+        String::new()
+    };
     let mutation_type = derived_item(&read(mutations_path), "struct MessageMutation").replace("pub(super) ", "");
-    fs::write(out.join("native_records.rs"), format!("{mutation_type}\n{record_types}\nimpl DeviceSyncRecord {{\n{methods}\n}}"))
+    fs::write(out.join("native_records.rs"), format!("{receipt_types}\n{mutation_type}\n{record_types}\nimpl DeviceSyncRecord {{\n{methods}\n}}"))
         .expect("write native typed record declarations");
     fs::write(out.join("native_contract.rs"), contract).expect("write contract");
     // Preserve the production wire declarations and aliases verbatim, without
@@ -118,6 +127,11 @@ fn main() {
 
 fn read(path: PathBuf) -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+fn native_method(source: &str, name: &str) -> String {
+    let start = source.find(name).unwrap_or_else(|| panic!("missing native {name}"));
+    source[start..item_end(source, start)].replace("pub(super) ", "")
 }
 
 fn derived_item<'a>(source: &'a str, name: &str) -> &'a str {

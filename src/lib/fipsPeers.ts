@@ -13,7 +13,7 @@ export function servicePeer(context: { peerId?: string; src: string }): string {
 export class ConnectedDevicePeers {
   private readonly paths = new Map<string, string>()
 
-  update(event: PeerEvent & { peerId?: string }) {
+  update(event: Omit<PeerEvent, 'peerId'> & { peerId?: string }) {
     const path = `${event.remoteAddr.transport}:${event.remoteAddr.addr}`
     const peer = event.peerId === undefined ? normalizeDeviceSyncPeer(event.remotePubkey) : `02${event.peerId}`
     if (event.state === 'connected') this.paths.set(path, peer)
