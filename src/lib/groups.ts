@@ -268,7 +268,8 @@ function getGroupRosterSignerPubkey(group: Group): string | null {
   return signerPubkey
 }
 
-async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
+async function prepareGroupRosterFactSnapshot(group: Group): Promise<VerifiedEvent | undefined> {
+  const owner = getPubkey()
   const client = get(nostrClient)
   const signer = client.signer || get(identity)?.signer
   const signerPubkey = getGroupRosterSignerPubkey(group)
@@ -286,27 +287,38 @@ async function publishGroupRosterFactSnapshot(group: Group): Promise<void> {
 
   const event = new AppEvent(client, unsigned)
   await event.sign(signer)
+  if (!owner || getPubkey() !== owner) throw new Error('Account changed')
   const signed = event.rawEvent() as VerifiedEvent
-  await saveAuthorizationEvent(getPubkey()!, signed)
-  rememberGroupRosterFact(group.id, {
-    eventId: signed.id,
-    revision: Number(unsigned.tags.find((tag) => tag[0] === 'revision')?.[1] || 0),
-    updatedAt: Number(unsigned.tags.find((tag) => tag[0] === 'updated_at')?.[1] || eventCreatedAt),
-    eventCreatedAt: signed.created_at,
-  })
+  if (signed.pubkey !== signerPubkey || signed.id !== getEventHash(unsigned)) {
+    throw new Error('The signer returned a different group roster. Try again.')
+  }
+  parseGroupRosterFactEvent(signed)
+  return signed
+}
+
+async function publishGroupRosterFactSnapshot(group: Group, prepared?: VerifiedEvent): Promise<void> {
+  const owner = getPubkey()
+  const signed = prepared ?? await prepareGroupRosterFactSnapshot(group)
+  if (!signed) return
+  if (!owner || getPubkey() !== owner || signed.pubkey !== owner) throw new Error('Account changed')
+  if (!await saveAuthorizationEvent(owner, signed, () => getPubkey() === owner)) {
+    throw new Error('Could not save the signed group roster')
+  }
+  rememberGroupRosterFact(group.id, parseGroupRosterFactEvent(signed))
   const current = get(groups).get(group.id)
   if (current) saveGroupState(current)
   // Signed membership proofs stay local and travel only through authenticated
   // private sessions, including the sender's other linked devices.
   const runtime = await waitForNdrRuntime()
+  if (getPubkey() !== owner) throw new Error('Account changed')
   await Promise.all(group.members.map(member =>
     runtime.sendEvent(member, { kind: signed.kind, content: signed.content, tags: signed.tags,
       pubkey: signed.pubkey, created_at: signed.created_at, id: signed.id },
-      undefined, { includeLocalSiblings: false })))
+      owner, { includeLocalSiblings: false })))
 }
 
-function publishGroupRosterFactSnapshotInBackground(group: Group): void {
-  void publishGroupRosterFactSnapshot(group).catch((error) => {
+function publishGroupRosterFactSnapshotInBackground(group: Group, prepared?: VerifiedEvent): void {
+  void publishGroupRosterFactSnapshot(group, prepared).catch((error) => {
     console.warn('[groups] Failed to publish group roster fact:', error)
   })
 }
@@ -587,17 +599,38 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
   const myPubkey = getPubkey()
   if (!myPubkey) throw new Error('Not logged in')
 
-  let group: Group = createGroupData(name, myPubkey, memberPubkeys)
+  const hasRosterSigner = !!(get(nostrClient).signer || get(identity)?.signer)
+  let group: Group = { ...createGroupData(name, myPubkey, memberPubkeys), protocol: 'sender_key_v1' }
+  // Signing can be declined or disappear with an extension. Prepare it before
+  // registering a group or reporting success, so retry cannot leave an orphan.
+  let preparedRoster: VerifiedEvent | undefined
+  if (hasRosterSigner) {
+    try {
+      preparedRoster = await prepareGroupRosterFactSnapshot(group)
+      if (!preparedRoster) throw new Error('Group signing is unavailable. Try again.')
+    } catch (error) {
+      reservedRosterRevisions.delete(group.id)
+      throw error
+    }
+  }
   try {
     await waitForSendReadyRuntime()
-    group = (
-      await getNdrRuntime().createGroup(name, memberPubkeys, {
+    if (getPubkey() !== myPubkey) throw new Error('Account changed')
+    if (preparedRoster) {
+      // The private delivery below owns this already-signed roster. Upsert does
+      // not fan out a second, unsigned metadata event.
+      await getNdrRuntime().upsertGroup(group, myPubkey)
+    } else {
+      // Linked devices without the owner's signer use their authenticated sessions.
+      group = (await getNdrRuntime().createGroup(name, memberPubkeys, {
         fanoutMetadata: isRuntimeSessionReady(),
-      })
-    ).group
+      })).group
+    }
   } catch (error) {
+    if (getPubkey() !== myPubkey) throw error
     console.warn('[groups] Falling back to local-only group creation:', error)
   }
+  if (getPubkey() !== myPubkey) throw new Error('Account changed')
   group.protocol = 'sender_key_v1'
 
   groups.update(g => {
@@ -611,7 +644,7 @@ export async function createGroup(name: string, memberPubkeys: string[]): Promis
 
   saveGroupState(group)
 
-  publishGroupRosterFactSnapshotInBackground(group)
+  if (preparedRoster) publishGroupRosterFactSnapshotInBackground(group, preparedRoster)
   syncNativeGroupTransport(group.id)
 
   return group

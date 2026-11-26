@@ -10,7 +10,7 @@ vi.mock('./deviceSyncRecordApply', async (importOriginal: <T>() => Promise<T>) =
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
 import type { Rumor } from 'nostr-double-ratchet'
-import { finalizeEvent, getPublicKey, type VerifiedEvent } from 'nostr-tools'
+import { finalizeEvent, getEventHash, getPublicKey, type VerifiedEvent } from 'nostr-tools'
 
 // --- Mocks ---
 
@@ -24,6 +24,9 @@ const ROSTER_ADMIN = getPublicKey(ROSTER_ADMIN_SECRET)
 const ROSTER_MEMBER_SECRET = new Uint8Array(32).fill(8)
 const ROSTER_MEMBER = getPublicKey(ROSTER_MEMBER_SECRET)
 const signedGroupRosterFacts: Array<{ kind: number; content: string; tags: string[][]; pubkey: string; id: string; sig: string; created_at: number }> = []
+
+let rosterSignFailure: Error | undefined
+let rosterSignWait: Promise<void> | undefined
 
 vi.mock('./nostrClient', () => ({
   AppEvent: class {
@@ -40,8 +43,10 @@ vi.mock('./nostrClient', () => ({
     }
 
     async sign(signer: { pubkey?: string }): Promise<string> {
+      if (rosterSignWait) await rosterSignWait
+      if (rosterSignFailure) throw rosterSignFailure
       this.event.pubkey = signer.pubkey || this.event.pubkey
-      this.event.id = `fact-${signedGroupRosterFacts.length + 1}`
+      this.event.id = getEventHash(this.event as Parameters<typeof getEventHash>[0])
       this.event.sig = 'sig'
       signedGroupRosterFacts.push({...this.event} as typeof signedGroupRosterFacts[number])
       return this.event.sig
@@ -78,6 +83,7 @@ vi.mock('./identity', () => {
 
 // Track sendEvent calls per recipient
 const sendEventCalls: Array<{ recipient: string, event: unknown, owner?: string, options?: { includeLocalSiblings?: boolean } }> = []
+const createGroupCalls: Array<{ name: string, memberPubkeys: string[], opts?: { fanoutMetadata?: boolean } }> = []
 const sessionManagerValues = new Map<string, unknown>()
 const runtimeGroups = new Map<string, {
   id: string
@@ -197,7 +203,8 @@ vi.mock('./privateChats', () => {
         secret: group.secret || `secret-${group.id}`,
       })
     },
-    createGroup: async (name: string, memberPubkeys: string[]) => {
+    createGroup: async (name: string, memberPubkeys: string[], opts?: { fanoutMetadata?: boolean }) => {
+      createGroupCalls.push({ name, memberPubkeys, opts })
       const members = Array.from(new Set([MY_PUBKEY, ...memberPubkeys]))
       const group = {
         id: `group-${Math.random().toString(36).slice(2, 10)}`,
@@ -357,6 +364,8 @@ describe('groups', () => {
     localStorage.removeItem(`iris-chat-message-request-decisions:${MY_PUBKEY}`)
     sendEventCalls.length = 0
     signedGroupRosterFacts.length = 0
+    rosterSignFailure = undefined
+    rosterSignWait = undefined
     sessionManagerValues.clear()
     runtimeGroups.clear()
     // Reset group stores between tests
@@ -387,6 +396,96 @@ describe('groups', () => {
       expect(stored!.admins).toEqual([MY_PUBKEY])
     })
 
+    it.each(['Signing extension unavailable', 'User rejected signing'])('does not create an undelivered group after %s and recovers with one private roster on retry', async reason => {
+      const { createGroup, groups, groupMessages } = await import('./groups')
+      rosterSignFailure = new Error(reason)
+      const { saveGroup } = await import('./storage')
+      const storedBefore = vi.mocked(saveGroup).mock.calls.length
+
+      await expect(createGroup('Recovered group', [MEMBER_B])).rejects.toThrow(reason)
+      expect(get(groups).size).toBe(0)
+      expect(get(groupMessages).size).toBe(0)
+      expect(runtimeGroups.size).toBe(0)
+      expect(vi.mocked(saveGroup).mock.calls).toHaveLength(storedBefore)
+      expect(sendEventCalls).toEqual([])
+
+      rosterSignFailure = undefined
+      const group = await createGroup('Recovered group', [MEMBER_B])
+      await waitForRecipients(MY_PUBKEY, MEMBER_B)
+      expect(get(groups).size).toBe(1)
+      expect(runtimeGroups.get(group.id)?.members).toEqual(group.members)
+      expect(signedGroupRosterFacts).toHaveLength(1)
+      expect(sendEventCalls.map(call => call.recipient).sort()).toEqual([MY_PUBKEY, MEMBER_B].sort())
+      expect(sendEventCalls.every(call => (call.event as Rumor).id === signedGroupRosterFacts[0]!.id)).toBe(true)
+    })
+
+    it('does not register or deliver a group after the account changes during signing', async () => {
+      const { createGroup, groups } = await import('./groups')
+      const identityModule = await import('./identity')
+      let release!: () => void
+      rosterSignWait = new Promise<void>(resolve => { release = resolve })
+      const pending = createGroup('Wrong account', [MEMBER_B])
+      const rejected = expect(pending).rejects.toThrow('Account changed')
+      const owner = vi.spyOn(identityModule, 'getPubkey').mockReturnValue(MEMBER_C)
+      try {
+        release()
+        await rejected
+        expect(get(groups).size).toBe(0)
+        expect(runtimeGroups.size).toBe(0)
+        expect(sendEventCalls).toEqual([])
+      } finally { owner.mockRestore(); release() }
+    })
+
+    it('uses the prepared roster even if signing becomes unavailable before private delivery', async () => {
+      const { createGroup } = await import('./groups')
+      const { waitForSendReadyRuntime } = await import('./privateChats')
+      vi.mocked(waitForSendReadyRuntime).mockImplementationOnce(async () => {
+        rosterSignFailure = new Error('Extension disconnected after preparation')
+        return {} as never
+      })
+
+      await createGroup('Prepared roster', [MEMBER_B])
+      await waitForRecipients(MY_PUBKEY, MEMBER_B)
+      expect(signedGroupRosterFacts).toHaveLength(1)
+      expect(sendEventCalls).toHaveLength(2)
+    })
+
+    it('keeps private runtime metadata delivery for linked devices without an owner signer', async () => {
+      const { identity, nostrClient } = await import('./identity')
+      const originalIdentity = get(identity)
+      const client = get(nostrClient)
+      const originalSigner = client.signer
+      try {
+        client.signer = undefined
+        identity.set({ ...originalIdentity!, signer: undefined, isLinkedDevice: true })
+        createGroupCalls.length = 0
+        const { createGroup } = await import('./groups')
+        const group = await createGroup('Linked device group', [MEMBER_B])
+        expect(createGroupCalls).toHaveLength(1)
+        expect(createGroupCalls[0]!.opts?.fanoutMetadata).toBe(true)
+        expect(runtimeGroups.get(group.id)?.members).toEqual(group.members)
+        expect(signedGroupRosterFacts).toHaveLength(0)
+      } finally {
+        client.signer = originalSigner
+        identity.set(originalIdentity)
+      }
+    })
+
+    it('prepares a verifiable roster from real generated group data without exposing its secret', async () => {
+      const actual = await vi.importActual<typeof import('nostr-double-ratchet')>('nostr-double-ratchet')
+      const group = actual.createGroupData('Real signed roster', ROSTER_ADMIN, [ROSTER_MEMBER])
+      const unsigned = actual.buildGroupRosterFactEvent(group, {
+        signerPubkey: ROSTER_ADMIN, revision: 1, createdBy: ROSTER_ADMIN,
+        updatedAt: Math.floor(Date.now() / 1000), eventCreatedAt: Math.floor(Date.now() / 1000),
+        protocol: 'sender_key_v1',
+      })
+      const signed = finalizeEvent(unsigned, ROSTER_ADMIN_SECRET)
+      const fact = actual.parseGroupRosterFactEvent(signed)
+      expect(fact.groupId).toBe(group.id)
+      expect(fact.group.members).toEqual(expect.arrayContaining([ROSTER_ADMIN, ROSTER_MEMBER]))
+      expect(signed.tags.some(tag => tag[0] === 'secret')).toBe(false)
+    })
+
     it('deduplicates creator from member list', async () => {
       const { createGroup } = await import('./groups')
       const group = await createGroup('Dedup Test', [MY_PUBKEY, MEMBER_B])
@@ -395,10 +494,12 @@ describe('groups', () => {
       expect(myCount).toBe(1)
     })
 
-    it('signs a private group roster and distributes it through sessions without a public publish', async () => {
+    it('signs a private group roster and distributes it through sessions without a public publish or duplicate unsigned fanout', async () => {
+      createGroupCalls.length = 0
       const { createGroup, GROUP_ROSTER_FACT_KIND, GROUP_ROSTER_FACT_TYPE } = await import('./groups')
       const group = await createGroup('Roster Fact Test', [MEMBER_B])
 
+      expect(createGroupCalls).toEqual([])
       await vi.waitFor(() => {
         expect(signedGroupRosterFacts.length).toBeGreaterThan(0)
       })

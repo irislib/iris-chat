@@ -14,6 +14,8 @@
   let step = $state<1 | 2>(1)
   let selectedMembers = $state<Set<string>>(new Set())
   let groupName = $state('')
+  let creating = $state(false)
+  let createError = $state('')
 
   let availableContacts = $derived(
     Array.from($chats.values()).sort((a, b) => {
@@ -41,10 +43,18 @@
 
   async function handleCreate() {
     const name = groupName.trim()
-    if (!name || selectedMembers.size === 0) return
+    if (creating || !name || selectedMembers.size === 0) return
 
-    const group = await createGroup(name, Array.from(selectedMembers))
-    onGroupCreated(group)
+    creating = true
+    createError = ''
+    try {
+      const group = await createGroup(name, Array.from(selectedMembers))
+      onGroupCreated(group)
+    } catch (error) {
+      createError = error instanceof Error ? error.message : 'Could not create group. Try again.'
+    } finally {
+      creating = false
+    }
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -150,13 +160,16 @@
 
     <!-- Create button -->
     <div class="p-4 border-t border-surface-lighter flex-shrink-0">
+      {#if createError}
+        <p role="alert" class="text-red-400 text-sm mb-3">{createError}</p>
+      {/if}
       <button
         class="btn-primary w-full"
-        disabled={!groupName.trim() || selectedMembers.size === 0}
+        disabled={creating || !groupName.trim() || selectedMembers.size === 0}
         onclick={handleCreate}
         data-testid="create-group-submit"
       >
-        Create Group
+        {creating ? 'Creating…' : createError ? 'Try again' : 'Create Group'}
       </button>
     </div>
   {/if}

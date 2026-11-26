@@ -1,15 +1,18 @@
 import { test, expect, useTestRelay } from './fixtures'
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
+import { isGroupRosterFactEvent } from 'nostr-double-ratchet'
 
 async function installNip07Mock(
   page: import('@playwright/test').Page,
-  privateKey: Uint8Array
+  privateKey: Uint8Array,
+  beforeSign?: (event: Parameters<typeof finalizeEvent>[0]) => void
 ): Promise<string> {
   const publicKey = getPublicKey(privateKey)
 
-  await page.exposeFunction('__irisNip07SignEvent', (event: Parameters<typeof finalizeEvent>[0]) =>
-    finalizeEvent({ ...event }, privateKey)
-  )
+  await page.exposeFunction('__irisNip07SignEvent', (event: Parameters<typeof finalizeEvent>[0]) => {
+    beforeSign?.(event)
+    return finalizeEvent({ ...event }, privateKey)
+  })
 
   await page.addInitScript(({ publicKey }) => {
     ;(window as Window & {
@@ -118,6 +121,90 @@ test.describe('NIP-07 Login', () => {
 
     await context1.close()
     await context2.close()
+  })
+
+  test('group creation recovers from rejected signing without an orphan or duplicate roster', async ({ browser, testRelayUrl, testRelay }, testInfo) => {
+    test.setTimeout(120_000)
+    const contexts = await Promise.all([browser.newContext(), browser.newContext()])
+    const errors: string[] = []
+    let rejectRoster = true
+    let rosterAttempts = 0
+    let signedRosters = 0
+    try {
+      await Promise.all(contexts.map(context => useTestRelay(context, testRelayUrl)))
+      const [alice, bob] = await Promise.all(contexts.map(context => context.newPage()))
+      for (const page of [alice, bob]) page.on('pageerror', error => errors.push(error.message))
+      await installNip07Mock(alice, generateSecretKey(), event => {
+        if (!isGroupRosterFactEvent(event)) return
+        rosterAttempts++
+        if (rejectRoster) throw new Error('Group signing declined. Try again.')
+        signedRosters++
+      })
+      await alice.goto('/')
+      await alice.getByRole('button', { name: 'Already have a profile?', exact: true }).click()
+      await alice.getByRole('button', { name: 'Login with Extension', exact: true }).click()
+      await alice.getByRole('button', { name: 'New Chat', exact: true }).click()
+      const copy = alice.locator('button[title*="#/nhash"]').first()
+      await expect(copy).toBeVisible()
+      const invite = (await copy.getAttribute('title'))!.replace('https://chat.iris.to', new URL(alice.url()).origin)
+      await bob.goto(invite)
+      await bob.getByLabel('Your name (optional)').fill('Roster recipient')
+      await bob.getByRole('button', { name: 'Join Chat', exact: true }).click()
+      const send = async (page: import('@playwright/test').Page, text: string) => {
+        await page.getByPlaceholder('Type a message...').fill(text)
+        await page.getByRole('button', { name: 'Send', exact: true }).click()
+      }
+      await send(bob, 'Ready for the group')
+      await expect(alice.getByTestId('sidebar-chat-list').getByText('Ready for the group', { exact: true })).toBeVisible()
+      await alice.getByRole('button', { name: 'New Chat', exact: true }).click()
+      await alice.getByRole('button', { name: 'Create Group', exact: true }).click()
+      await alice.getByTestId('create-group-member').first().click()
+      await alice.getByTestId('create-group-next').click()
+      await alice.getByPlaceholder('Enter group name...').fill('Recovered signing')
+      const submit = alice.getByTestId('create-group-submit')
+      await submit.click()
+      await expect(alice.getByRole('alert')).toContainText('Group signing declined. Try again.')
+      await expect(submit).toBeEnabled()
+      await expect(submit).toHaveText('Try again')
+      await expect(alice.getByPlaceholder('Enter group name...')).toHaveValue('Recovered signing')
+      const storedGroupCount = () => alice.evaluate(async () => {
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open('iris-chat')
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+        try {
+          return await new Promise<number>((resolve, reject) => {
+            const request = database.transaction('groups').objectStore('groups').count()
+            request.onsuccess = () => resolve(request.result)
+            request.onerror = () => reject(request.error)
+          })
+        } finally { database.close() }
+      })
+      expect(await storedGroupCount()).toBe(0)
+      expect(rosterAttempts).toBe(1)
+      await alice.screenshot({ path: testInfo.outputPath('signing-rejected.png') })
+
+      rejectRoster = false
+      await submit.click()
+      await expect(alice.getByTestId('create-group-view')).toBeHidden()
+      await expect.poll(storedGroupCount).toBe(1)
+      expect(rosterAttempts).toBe(2)
+      expect(signedRosters).toBe(1)
+      await send(alice, 'Created after signer recovery')
+      await bob.getByTestId('sidebar-chat-list').getByRole('button', { name: /Recovered signing/ }).click()
+      await bob.getByRole('button', { name: 'Accept', exact: true }).click()
+      await expect(bob.getByTestId('message-bubble-body').getByText('Created after signer recovery', { exact: true })).toBeVisible()
+      await send(bob, 'Recovered group reply')
+      await expect(alice.getByTestId('message-bubble-body').getByText('Recovered group reply', { exact: true })).toBeVisible()
+      await bob.reload()
+      await expect(bob.getByTestId('message-bubble-body').getByText('Created after signer recovery', { exact: true })).toBeVisible()
+      await send(bob, 'Reply after recovery and reload')
+      await expect(alice.getByTestId('message-bubble-body').getByText('Reply after recovery and reload', { exact: true })).toBeVisible()
+      expect(testRelay.publishedEvents.filter(isGroupRosterFactEvent)).toEqual([])
+      expect(errors).toEqual([])
+      await bob.screenshot({ path: testInfo.outputPath('signing-recovered.png') })
+    } finally { await Promise.all(contexts.map(context => context.close())) }
   })
 
   test('should show error when NIP-07 extension lacks nip44 support', async ({ page }) => {
