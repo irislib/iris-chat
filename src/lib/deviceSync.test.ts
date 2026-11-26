@@ -120,9 +120,12 @@ vi.mock('./groups', () => ({
   groups: writable(new Map()),
   groupMessages: writable(new Map()),
   getGroupRosterVersion: vi.fn((id: string) => groupRoster.get(id)),
-  rememberSyncedGroupRosterVersion: vi.fn((id: string, revision: number, updatedAt: number) =>
-    groupRoster.set(id, { revision, updatedAt })
-  ),
+  rememberSyncedGroupRosterVersion: vi.fn((id: string, revision: number, updatedAt: number) => {
+    const current = groupRoster.get(id)
+    if (!current || revision > current.revision || revision === current.revision && updatedAt > current.updatedAt) {
+      groupRoster.set(id, { revision, updatedAt })
+    }
+  }),
   syncNativeGroupTransport: vi.fn(),
 }))
 vi.mock('./notifications', () => ({ updateDMSubscription: vi.fn(async () => {}) }))
@@ -762,6 +765,43 @@ describe('device sync', () => {
     const { saveSession } = await import('./storage')
     expect(saveSession).toHaveBeenCalledTimes(1)
     expect(saveSession).toHaveBeenCalledWith(expect.objectContaining({ id: peerOwner }))
+  })
+
+  it('preserves a live conversation that arrives while snapshot contact storage is pending', async () => {
+    const { saveSession } = await import('./storage')
+    chats.set(new Map())
+    const live: ChatSession = {
+      id: peerOwner, recipientPubkey: peerOwner, mode: 'manager',
+      messages: [{ id: 'arrived-during-sync', content: 'Keep this live message', timestamp: 102000, isMine: false }],
+    }
+    vi.mocked(saveSession).mockImplementationOnce(async () => {
+      chats.update(all => new Map(all).set(peerOwner, live))
+    })
+
+    await applyDeviceSyncSnapshot({
+      ...snapshot([]), chats: [{ id: peerOwner, updatedAt: 101 }],
+    }, owner)
+
+    expect(get(chats).get(peerOwner)).toBe(live)
+    expect(get(chats).get(peerOwner)?.messages.map(message => message.id)).toEqual(['arrived-during-sync'])
+  })
+
+  it('preserves a newer live roster received while snapshot group storage is pending', async () => {
+    const { saveGroup } = await import('./storage')
+    const id = 'live-roster-during-sync'
+    const live: Group = { id, name: 'Newer live group', members: [owner], admins: [owner], createdAt: 80000 }
+    vi.mocked(saveGroup).mockImplementationOnce(async () => {
+      groups.update(all => new Map(all).set(id, live))
+      groupRoster.set(id, { revision: 3, updatedAt: 103 })
+    })
+
+    await applyDeviceSyncSnapshot({ ...snapshot([]), groups: [{
+      id, name: 'Older snapshot group', members: [owner, peerOwner], admins: [owner],
+      createdBy: owner, createdAt: 80, revision: 2, updatedAt: 102,
+    }] }, owner)
+
+    expect(get(groups).get(id)).toBe(live)
+    expect(groupRoster.get(id)).toEqual({ revision: 3, updatedAt: 103 })
   })
 
   it('applies only a newer group roster version and preserves its local secret', async () => {

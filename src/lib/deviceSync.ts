@@ -556,7 +556,9 @@ export async function applyDeviceSyncSnapshot(
   if (chatsToAdd.length > 0 && authorized()) {
     applyStoreUpdate(() => chats.update((all) => {
       const next = new Map(all)
-      for (const session of chatsToAdd) next.set(session.id, session)
+      // A live runtime event may have created this conversation while storage
+      // was pending. Metadata must not replace its messages or local state.
+      for (const session of chatsToAdd) if (!next.has(session.id)) next.set(session.id, session)
       return next
     }))
   }
@@ -594,7 +596,15 @@ export async function applyDeviceSyncSnapshot(
     applyStoreUpdate(() => {
       groups.update((all) => {
         const next = new Map(all)
-        for (const group of groupsToAdd) next.set(group.id, group)
+        for (const group of groupsToAdd) {
+          const latest = getGroupRosterVersion(group.id)
+          const incoming = group.rosterVersion!
+          // Private roster delivery can advance membership while the snapshot
+          // awaits storage. Its older projection must not restore removed members.
+          if (latest && (latest.revision > incoming.revision ||
+            latest.revision === incoming.revision && latest.updatedAt > incoming.updatedAt)) continue
+          next.set(group.id, group)
+        }
         return next
       })
       groupMessages.update((all) => {
