@@ -334,8 +334,12 @@ test('browser admin creates a mixed-device group; all members exchange messages 
       await page.screenshot({ path: `work/large-group-${memberCount}.png` })
       expect(devices.flatMap((device) => device.failures)).toEqual([])
       console.log(JSON.stringify({ ...timings, allDeviceDeliveries: expected.length * (devices.length + 1), peerStorageReads: devices.reduce((sum, device) => sum + device.storage.reads, 0), relayEvents: testRelay.publishedEvents.length }))
-      wire.assertPrivate([owner, ...devices.flatMap(device => [device.owner, device.getState().currentDevicePubkey!])],
-        devices.flatMap(device => [...device.groupAuthors]))
+      // Reload can render saved messages while a fresh relay connection is still
+      // answering AUTH. Keep every wire assertion and wait for that handshake.
+      await expect(() => wire.assertPrivate(
+        [owner, ...devices.flatMap(device => [device.owner, device.getState().currentDevicePubkey!])],
+        devices.flatMap(device => [...device.groupAuthors]),
+      )).toPass({ timeout: 10_000 })
       completed = true
     } finally {
       clearInterval(progress)
