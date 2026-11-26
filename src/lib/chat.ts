@@ -519,23 +519,19 @@ function syncRuntimeChats(): void {
   if (!userRecords || userRecords.size === 0) return
 
   const currentChats = get(chats)
-  let totalDevices = 0
-  let activeSessions = 0
+  const userState: Array<[string, Array<[string, boolean]>]> = []
   let anyNeedsSetup = false
   for (const [pubkey, record] of userRecords) {
     if (pubkey === myPubkey) continue
-    const devicesMap = record.devices
-    if (devicesMap) {
-      totalDevices += devicesMap.size
-      for (const device of devicesMap.values()) {
-        if (device.activeSession || (device.inactiveSessions?.length ?? 0) > 0) activeSessions += 1
-      }
-    }
+    userState.push([pubkey, Array.from(record.devices ?? [], ([deviceId, device]) =>
+      [deviceId, !!device.activeSession || (device.inactiveSessions?.length ?? 0) > 0])])
     if (needsManagerUserSetup(record)) anyNeedsSetup = true
   }
 
-  const acceptedCount = Object.keys(get(messageRequests).acceptedChats).length
-  const syncKey = `${myPubkey}:${currentChats.size}:${acceptedCount}:${userRecords.size}:${totalDevices}:${activeSessions}`
+  // Equal counts can hide a replaced device or a different accepted conversation.
+  const decisions = get(messageRequests)
+  const syncKey = JSON.stringify([myPubkey, [...currentChats.keys()],
+    decisions.acceptedChats, decisions.rejectedChats, userState])
   const stateChanged = syncKey !== lastRuntimeSyncKey
   if (!stateChanged && !anyNeedsSetup) return
   lastRuntimeSyncKey = syncKey
@@ -574,9 +570,11 @@ function syncRuntimeChats(): void {
     }
     if (!hasSession) continue
 
-    ensureManagerChat(pubkey).catch((e) =>
+    ensureManagerChat(pubkey).catch((e) => {
+      // A transient read failure must not suppress all later recovery attempts.
+      if (lastRuntimeSyncKey === syncKey) lastRuntimeSyncKey = ''
       console.error('[chat] Failed to sync manager chat:', e)
-    )
+    })
   }
 }
 

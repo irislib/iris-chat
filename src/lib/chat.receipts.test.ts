@@ -165,6 +165,7 @@ vi.mock('./receipts', () => ({
 }))
 
 import { chats, clearChatData, currentChat, handleManagerEvent, initNdrRuntimeEvents, invites, sendSeenReceipts, type ChatSession } from './chat'
+import { getMessagesForSession } from './storage'
 import { devices } from './devices'
 import { following } from './following'
 import { messageRequests } from './messageRequests'
@@ -500,6 +501,48 @@ describe('durable private control registration admission', () => {
       finishSave()
       await delivery
       expect(acknowledge).toHaveBeenCalledTimes(1)
+    } finally {
+      await clearChatData()
+      vi.useRealTimers()
+    }
+  })
+})
+
+
+describe('runtime chat reconciliation', () => {
+  const record = (device: string) => ({ devices: new Map([[device, { activeSession: {}, inactiveSessions: [] }]]) })
+
+  it('retries restoring an accepted conversation after a transient storage failure', async () => {
+    await clearChatData()
+    vi.useFakeTimers()
+    const read = vi.mocked(getMessagesForSession)
+    read.mockRejectedValueOnce(new Error('temporary storage failure')).mockResolvedValue([])
+    mocks.setUserRecords(new Map([[THEIR_PUBKEY, record('c'.repeat(64))]]))
+    messageRequests.set({ acceptedChats: { [THEIR_PUBKEY]: true }, rejectedChats: {} })
+    try {
+      await initNdrRuntimeEvents()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(get(chats).has(THEIR_PUBKEY)).toBe(true)
+    } finally {
+      read.mockReset().mockResolvedValue([])
+      await clearChatData()
+      vi.useRealTimers()
+    }
+  })
+
+  it('reconciles a replaced device identity even when roster and chat counts stay equal', async () => {
+    await clearChatData()
+    vi.useFakeTimers()
+    const alias = 'c'.repeat(64)
+    chats.set(new Map([[alias, { id: alias, recipientPubkey: alias, mode: 'manager', messages: [] }]]))
+    mocks.setUserRecords(new Map([[THEIR_PUBKEY, record('d'.repeat(64))]]))
+    try {
+      await initNdrRuntimeEvents()
+      expect(get(chats).has(alias)).toBe(true)
+      mocks.setUserRecords(new Map([[THEIR_PUBKEY, record(alias)]]))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(get(chats).has(alias)).toBe(false)
+      expect(get(chats).has(THEIR_PUBKEY)).toBe(true)
     } finally {
       await clearChatData()
       vi.useRealTimers()
