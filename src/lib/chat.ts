@@ -522,9 +522,9 @@ function syncRuntimeChats(): void {
   const userState: Array<[string, Array<[string, boolean]>]> = []
   let anyNeedsSetup = false
   for (const [pubkey, record] of userRecords) {
-    if (pubkey === myPubkey) continue
     userState.push([pubkey, Array.from(record.devices ?? [], ([deviceId, device]) =>
       [deviceId, !!device.activeSession || (device.inactiveSessions?.length ?? 0) > 0])])
+    if (pubkey === myPubkey) continue
     if (needsManagerUserSetup(record)) anyNeedsSetup = true
   }
 

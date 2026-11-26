@@ -530,19 +530,19 @@ describe('runtime chat reconciliation', () => {
     }
   })
 
-  it('reconciles a replaced device identity even when roster and chat counts stay equal', async () => {
+  it.each([THEIR_PUBKEY, MY_PUBKEY])('reconciles a replaced device identity without a count change (owner %s)', async (owner) => {
     await clearChatData()
     vi.useFakeTimers()
     const alias = 'c'.repeat(64)
     chats.set(new Map([[alias, { id: alias, recipientPubkey: alias, mode: 'manager', messages: [] }]]))
-    mocks.setUserRecords(new Map([[THEIR_PUBKEY, record('d'.repeat(64))]]))
+    mocks.setUserRecords(new Map([[owner, record('d'.repeat(64))]]))
     try {
       await initNdrRuntimeEvents()
       expect(get(chats).has(alias)).toBe(true)
-      mocks.setUserRecords(new Map([[THEIR_PUBKEY, record(alias)]]))
+      mocks.setUserRecords(new Map([[owner, record(alias)]]))
       await vi.advanceTimersByTimeAsync(500)
       expect(get(chats).has(alias)).toBe(false)
-      expect(get(chats).has(THEIR_PUBKEY)).toBe(true)
+      expect(get(chats).has(owner)).toBe(true)
     } finally {
       await clearChatData()
       vi.useRealTimers()
