@@ -500,6 +500,10 @@ export function cancelDirectPublications(owner: string, recipient: string): void
   if (runtimeOwnerPubkey === owner) runtimePublication?.cancelDirect(recipient)
 }
 
+void import('./privateStateStore').then(({ registerDirectPublicationCanceler }) => {
+  registerDirectPublicationCanceler?.(cancelDirectPublications)
+}).catch(() => {})
+
 export function cancelGroupPublications(groupId: string): void {
   runtimePublication?.cancelGroup(groupId)
 }

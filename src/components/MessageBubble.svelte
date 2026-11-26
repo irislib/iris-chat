@@ -5,7 +5,8 @@
   import { messageMentions, displayMentions } from '../lib/mentions'
   import { mentionNames } from '../lib/mentionNames'
   import type { ChatMessage } from '../lib/chat'
-  import { FILE_LINK_REGEX, parseFileLink } from '../lib/hashtree'
+  import { FILE_LINK_REGEX } from '../lib/hashtree'
+  import { formatMessageTime } from '../lib/utils'
   import { openMediaModal } from '../lib/mediaModal'
   import FileAttachment from './FileAttachment.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
@@ -169,15 +170,6 @@
 
   let showCombinedTextAndFiles = $derived(Boolean(htmlContent && fileLinks.length > 0))
 
-  // Check if content has any markdown formatting
-  let hasMarkdown = $derived.by(() => {
-    const content = textContent
-    // Check for common markdown patterns
-    return /[*_`#\[\]!\-]/.test(content) ||
-           /```/.test(content) ||
-           /\n/.test(content)
-  })
-
   async function handleReact(emoji: string) {
     showEmojiPicker = false
     showExtendedPicker = false
@@ -225,10 +217,6 @@
     document.addEventListener('mousedown', handleDocumentPointerDown)
     return () => document.removeEventListener('mousedown', handleDocumentPointerDown)
   })
-
-  function formatTime(timestamp: number): string {
-    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  }
 
   function getMarkdownImageName(src: string, alt: string | null): string {
     const trimmedAlt = alt?.trim()
@@ -289,6 +277,118 @@
   )
 </script>
 
+{#snippet menuAction()}
+  <div class="relative">
+    <button
+      class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+      bind:this={menuButton}
+      onclick={(e) => { checkDirection(e); showMenu = !showMenu }}
+      aria-label="Message menu"
+    >
+      <span class="i-carbon-overflow-menu-vertical text-sm"></span>
+    </button>
+    {#if showMenu}
+      <div
+        class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32"
+        bind:this={menuContent}
+      >
+        <button
+          class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+          onclick={handleInfo}
+        >
+          <span class="i-carbon-information text-base"></span>
+          Info
+        </button>
+        <button
+          class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
+          onclick={handleCopy}
+        >
+          <span class="i-carbon-copy text-base"></span>
+          Copy
+        </button>
+        {#if message.isMine && onedit && editableMessage(message)}
+          <button class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2" onclick={() => { changeMode = 'edit'; showMenu = false }}><span class="i-carbon-edit text-base"></span>Edit</button>
+        {/if}
+        {#if message.isMine && ondeleteeveryone && message.deletedAt === undefined && !message.call}
+          <button class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 whitespace-nowrap" onclick={() => { changeMode = 'delete'; showMenu = false }}><span class="i-carbon-trash-can text-base"></span>Delete for everyone</button>
+        {/if}
+        <button
+          class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
+          onclick={handleDelete}
+        >
+          <span class="i-carbon-trash-can text-base"></span>
+          Delete for me
+        </button>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet reactAction()}
+  {#if onreact && message.deletedAt === undefined}
+    <div class="relative" bind:this={emojiContainer}>
+      <button
+        class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+        onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker; showExtendedPicker = false }}
+        aria-label="Add reaction"
+      >
+        <span class="i-carbon-face-add text-sm"></span>
+      </button>
+      {#if showExtendedPicker}
+        <EmojiPicker
+          onselect={handleReact}
+          onclose={closePicker}
+          openUp={openUpward}
+          openLeft={openLeft}
+          offsetX={emojiPickerOffsetX}
+        />
+      {:else if showEmojiPicker}
+        <div
+          class="absolute {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl"
+          style={`left: ${emojiPickerOffsetX}px`}
+        >
+          {#each quickEmojis as emoji}
+            <button
+              class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
+              onclick={() => handleReact(emoji)}
+            >
+              {emoji}
+            </button>
+          {/each}
+          <button
+            class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+            onclick={() => showExtendedPicker = true}
+            aria-label="More emojis"
+          >
+            <span class="i-carbon-overflow-menu-horizontal text-sm"></span>
+          </button>
+        </div>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet actionBar(isOwn: boolean)}
+  <div class="{actionsVisible ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 transition-opacity flex items-center gap-0.5 flex-shrink-0">
+    {#if onreply && message.deletedAt === undefined}
+      <button
+        class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+        onclick={handleReply}
+        aria-label="Reply"
+      >
+        <span class="i-carbon-reply text-sm"></span>
+      </button>
+    {/if}
+    {#if isOwn}
+      {@render menuAction()}
+      {@render reactAction()}
+    {:else}
+      {@render reactAction()}
+      {@render menuAction()}
+    {/if}
+  </div>
+{/snippet}
+
 <div class="{styleFirst ? 'mt-3' : 'mt-0.5'} {actionsVisible ? 'relative z-50' : ''}" id="msg-{message.id}">
   {#if isFirst && showSenderName && (senderName || senderPubkey)}
     <div class="flex items-center gap-2 mb-1 {message.isMine ? 'justify-end' : ''}">
@@ -305,102 +405,7 @@
     <div class="flex items-center gap-1 max-w-[85%]">
       <!-- Action buttons - before message for own messages -->
       {#if message.isMine}
-        <div class="{actionsVisible ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 transition-opacity flex items-center gap-0.5 flex-shrink-0">
-          {#if onreply && message.deletedAt === undefined}
-            <button
-              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-              onclick={handleReply}
-              aria-label="Reply"
-            >
-              <span class="i-carbon-reply text-sm"></span>
-            </button>
-          {/if}
-          <div class="relative">
-            <button
-              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-              bind:this={menuButton}
-              onclick={(e) => { checkDirection(e); showMenu = !showMenu }}
-              aria-label="Message menu"
-            >
-              <span class="i-carbon-overflow-menu-vertical text-sm"></span>
-            </button>
-            {#if showMenu}
-              <div
-                class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32"
-                bind:this={menuContent}
-              >
-                <button
-                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
-                  onclick={handleInfo}
-                >
-                  <span class="i-carbon-information text-base"></span>
-                  Info
-                </button>
-                <button
-                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
-                  onclick={handleCopy}
-                >
-                  <span class="i-carbon-copy text-base"></span>
-                  Copy
-                </button>
-                {#if message.isMine && onedit && editableMessage(message)}
-                  <button class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2" onclick={() => { changeMode = 'edit'; showMenu = false }}><span class="i-carbon-edit text-base"></span>Edit</button>
-                {/if}
-                {#if message.isMine && ondeleteeveryone && message.deletedAt === undefined && !message.call}
-                  <button class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 whitespace-nowrap" onclick={() => { changeMode = 'delete'; showMenu = false }}><span class="i-carbon-trash-can text-base"></span>Delete for everyone</button>
-                {/if}
-                <button
-                  class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
-                  onclick={handleDelete}
-                >
-                  <span class="i-carbon-trash-can text-base"></span>
-                  Delete for me
-                </button>
-              </div>
-            {/if}
-          </div>
-          {#if onreact && message.deletedAt === undefined}
-            <div class="relative" bind:this={emojiContainer}>
-              <button
-                class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker; showExtendedPicker = false }}
-                aria-label="Add reaction"
-              >
-                <span class="i-carbon-face-add text-sm"></span>
-              </button>
-              {#if showExtendedPicker}
-                <EmojiPicker
-                  onselect={handleReact}
-                  onclose={closePicker}
-                  openUp={openUpward}
-                  openLeft={openLeft}
-                  offsetX={emojiPickerOffsetX}
-                />
-              {:else if showEmojiPicker}
-                <div
-                  class="absolute {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl"
-                  style={`left: ${emojiPickerOffsetX}px`}
-                >
-                  {#each quickEmojis as emoji}
-                    <button
-                      class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
-                      onclick={() => handleReact(emoji)}
-                    >
-                      {emoji}
-                    </button>
-                  {/each}
-                  <button
-                    class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                    onclick={() => showExtendedPicker = true}
-                    aria-label="More emojis"
-                  >
-                    <span class="i-carbon-overflow-menu-horizontal text-sm"></span>
-                  </button>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
+        {@render actionBar(true)}
       {/if}
 
       <!-- Message bubble -->
@@ -447,7 +452,7 @@
                     {#if message.editedAt !== undefined && message.deletedAt === undefined}
                       <button class="text-[10px] underline {message.isMine ? 'text-white/60' : 'text-gray-500'}" onclick={() => changeMode = 'history'} aria-label="Edit history">Edited</button>
                     {/if}
-                    <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
+                    <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatMessageTime(message.timestamp)}</span>
                     {#if message.isMine}
                       <StatusIndicator status={bubbleStatus} variant="bubble" />
                     {/if}
@@ -468,7 +473,7 @@
                     {#if message.editedAt !== undefined && message.deletedAt === undefined}
                       <button class="text-[10px] underline {message.isMine ? 'text-white/60' : 'text-gray-500'}" onclick={() => changeMode = 'history'} aria-label="Edit history">Edited</button>
                     {/if}
-                    <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatTime(message.timestamp)}</span>
+                    <span class="text-[10px] {message.isMine ? 'text-white/50' : 'text-gray-500'}">{formatMessageTime(message.timestamp)}</span>
                     {#if message.isMine}
                       <StatusIndicator status={bubbleStatus} variant="bubble" />
                     {/if}
@@ -489,7 +494,7 @@
         <!-- Time + status for file-only messages -->
         {#if !htmlContent && !replyToMessage && fileLinks.length > 0}
           <div class="flex items-center justify-end gap-1 mt-0.5 mr-1">
-            <span class="text-[10px] text-gray-500">{formatTime(message.timestamp)}</span>
+            <span class="text-[10px] text-gray-500">{formatMessageTime(message.timestamp)}</span>
             {#if message.isMine}
               <StatusIndicator status={bubbleStatus} />
             {/if}
@@ -515,96 +520,7 @@
 
       <!-- Action buttons - after message for their messages -->
       {#if !message.isMine}
-        <div class="{actionsVisible ? 'opacity-100' : 'opacity-0'} group-hover:opacity-100 transition-opacity flex items-center gap-0.5 flex-shrink-0">
-          {#if onreply && message.deletedAt === undefined}
-            <button
-              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-              onclick={handleReply}
-              aria-label="Reply"
-            >
-              <span class="i-carbon-reply text-sm"></span>
-            </button>
-          {/if}
-          {#if onreact && message.deletedAt === undefined}
-            <div class="relative" bind:this={emojiContainer}>
-              <button
-                class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                onclick={(e) => { checkDirection(e); showEmojiPicker = !showEmojiPicker; showExtendedPicker = false }}
-                aria-label="Add reaction"
-              >
-                <span class="i-carbon-face-add text-sm"></span>
-              </button>
-              {#if showExtendedPicker}
-                <EmojiPicker
-                  onselect={handleReact}
-                  onclose={closePicker}
-                  openUp={openUpward}
-                  openLeft={openLeft}
-                  offsetX={emojiPickerOffsetX}
-                />
-              {:else if showEmojiPicker}
-                <div
-                  class="absolute {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-full px-1.5 py-1 flex gap-0.5 shadow-xl"
-                  style={`left: ${emojiPickerOffsetX}px`}
-                >
-                  {#each quickEmojis as emoji}
-                    <button
-                      class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-lg transition-colors"
-                      onclick={() => handleReact(emoji)}
-                    >
-                      {emoji}
-                    </button>
-                  {/each}
-                  <button
-                    class="w-8 h-8 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                    onclick={() => showExtendedPicker = true}
-                    aria-label="More emojis"
-                  >
-                    <span class="i-carbon-overflow-menu-horizontal text-sm"></span>
-                  </button>
-                </div>
-              {/if}
-            </div>
-          {/if}
-          <div class="relative">
-            <button
-              class="w-7 h-7 rounded-full hover:bg-surface-light flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-              bind:this={menuButton}
-              onclick={(e) => { checkDirection(e); showMenu = !showMenu }}
-              aria-label="Message menu"
-            >
-              <span class="i-carbon-overflow-menu-vertical text-sm"></span>
-            </button>
-            {#if showMenu}
-              <div
-                class="absolute {openLeft ? 'right-0' : 'left-0'} {openUpward ? 'bottom-full mb-1' : 'top-full mt-1'} z-50 bg-surface border border-surface-lighter rounded-lg py-1 shadow-xl min-w-32"
-                bind:this={menuContent}
-              >
-                <button
-                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
-                  onclick={handleInfo}
-                >
-                  <span class="i-carbon-information text-base"></span>
-                  Info
-                </button>
-                <button
-                  class="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-surface-light flex items-center gap-2 transition-colors"
-                  onclick={handleCopy}
-                >
-                  <span class="i-carbon-copy text-base"></span>
-                  Copy
-                </button>
-                <button
-                  class="w-full px-3 py-1.5 text-left text-sm text-red-400 hover:bg-surface-light flex items-center gap-2 transition-colors"
-                  onclick={handleDelete}
-                >
-                  <span class="i-carbon-trash-can text-base"></span>
-                  Delete for me
-                </button>
-              </div>
-            {/if}
-          </div>
-        </div>
+        {@render actionBar(false)}
       {/if}
     </div>
   </div>

@@ -2,6 +2,8 @@ import { nip19 } from 'nostr-tools'
 
 export interface Mention { start: number; end: number; pubkey: string; label: string }
 const controls = /[\u0000-\u001f\u007f-\u009f]/u
+const MENTION_PATTERN = /\[@([^\]\[\\\u0000-\u001f\u007f-\u009f]{1,320})\]\(nostr:(npub1[023456789acdefghjklmnpqrstuvwxyz]{58})\)/gu
+const encoder = new TextEncoder()
 export function formatMention(pubkey: string, name: string): string {
   if (!/^[0-9a-f]{64}$/.test(pubkey)) return ''
   const npub = nip19.npubEncode(pubkey)
@@ -9,10 +11,11 @@ export function formatMention(pubkey: string, name: string): string {
   return `[@${label}](nostr:${npub})`
 }
 export function messageMentions(text: string): Mention[] {
+  if (!text.includes('](nostr:npub1')) return []
   const found: Mention[] = []
-  const pattern = /\[@([^\]\[\\\u0000-\u001f\u007f-\u009f]{1,320})\]\(nostr:(npub1[023456789acdefghjklmnpqrstuvwxyz]{58})\)/gu
-  for (const match of text.matchAll(pattern)) {
-    if (new TextEncoder().encode('@' + match[1]).length > 321) continue
+  MENTION_PATTERN.lastIndex = 0
+  for (const match of text.matchAll(MENTION_PATTERN)) {
+    if (encoder.encode('@' + match[1]).length > 321) continue
     try {
       const key = nip19.decode(match[2])
       if (key.type === 'npub' && nip19.npubEncode(key.data) === match[2]) found.push({ start: match.index!, end: match.index! + match[0].length, pubkey: key.data, label: '@' + match[1] })

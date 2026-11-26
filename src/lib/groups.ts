@@ -1,11 +1,20 @@
 import { parseSerializedGroupRuntimeRumor } from './groupWake'
 import { acceptChat, groupRequestAccepted, loadMessageRequestDecisions, messageRequests } from './messageRequests'
-import { restoreStoredRequestAcceptance, restoreOwnReactionAcceptance } from './requestActivity'
+import { restoreStoredRequestAcceptances, restoreOwnReactionAcceptance } from './requestActivity'
 import { saveAuthorizationEvent } from './authorizationSync'
 import { saveProcessedEvent } from './storage'
 import { sendOwnReadState, applyOwnReadTag } from './privateStateControl'
 import { privateHistoryAllowed } from './privateStateStore'
-import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
+import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage } from './messageMutations'
+import {
+  chatMessageToStoredMessage,
+  extractReplyToId,
+  findLastMessageIndex,
+  insertMessageOrdered,
+  mergeRelayPublishFields,
+  storedMessageToChatMessage,
+  withOptionalPrivateStateCache,
+} from './chatMessageHelpers'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
 import { captureReaction, controlClock, applyGroupSettingsRecord, persistMessageWithReactions, restoreGroupSettings } from './deviceSyncRecordApply'
@@ -56,19 +65,15 @@ import {
   deleteMessage as deleteMessageFromDb,
   deleteMessagesForSession,
   updateMessageStatus as updateMessageStatusInDb,
-  updateMessageSentToRelays as updateMessageSentToRelaysInDb,
   updateMessageRecipientStatuses as updateMessageRecipientStatusesInDb,
   updateMessageDeliveryTrace as updateMessageDeliveryTraceInDb,
   type StoredGroup,
-  type StoredMessage
 } from './storage'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { expirationStore } from './expirationStore'
 import {
   advanceRecipientStatus,
-  mergeUniqueStrings,
   onMessageRelayPublish,
-  relayChannelLabel,
   type RecipientDeliveryStatus,
 } from './messageRelayStatus'
 import { parseReceipt, shouldAdvanceStatus, type MessageStatus, type ReceiptPayload } from './receipts'
@@ -414,53 +419,41 @@ export function initGroupRosterFactSync(): () => void {
   return () => {}
 }
 
+function findGroupIdByMessageId(messageId: string): string | null {
+  for (const [groupId, messages] of get(groupMessages)) {
+    if (findLastMessageIndex(messages, messageId) !== -1) return groupId
+  }
+  return null
+}
+
 function markGroupMessageSentToRelays(messageId: string, relayUrls: string[]): void {
-  let relaysToPersist: string[] | null = null
-  let channelsToPersist: string[] | null = null
+  const targetGroupId = findGroupIdByMessageId(messageId)
+  if (!targetGroupId) return
 
+  let persisted: { sentToRelays: string[]; deliveryChannels: string[] } | null = null
   groupMessages.update((groupMap) => {
-    for (const [groupId, messages] of groupMap) {
-      const messageIndex = messages.findIndex((message) => message.id === messageId)
-      if (messageIndex === -1) continue
+    const messages = groupMap.get(targetGroupId)
+    if (!messages) return groupMap
 
-      const message = messages[messageIndex]
-      const sentToRelays = mergeUniqueStrings(message.sentToRelays, relayUrls)
-      const currentRelays = message.sentToRelays || []
-      const deliveryChannels = mergeUniqueStrings(
-        message.deliveryChannels,
-        relayUrls.map(relayChannelLabel)
-      )
-      const currentChannels = message.deliveryChannels || []
-      if (
-        sentToRelays.length === currentRelays.length &&
-        sentToRelays.every((url, index) => url === currentRelays[index]) &&
-        deliveryChannels.length === currentChannels.length &&
-        deliveryChannels.every((channel, index) => channel === currentChannels[index])
-      ) {
-        return groupMap
-      }
+    const messageIndex = findLastMessageIndex(messages, messageId)
+    if (messageIndex === -1) return groupMap
 
-      const updatedMessages = [...messages]
-      updatedMessages[messageIndex] = { ...message, sentToRelays, deliveryChannels }
-      relaysToPersist = sentToRelays
-      channelsToPersist = deliveryChannels
-      groupMap.set(groupId, updatedMessages)
-      return groupMap
-    }
+    const message = messages[messageIndex]
+    const merged = mergeRelayPublishFields(message, relayUrls)
+    if (!merged) return groupMap
 
+    const updatedMessages = [...messages]
+    updatedMessages[messageIndex] = { ...message, ...merged }
+    persisted = merged
+    groupMap.set(targetGroupId, updatedMessages)
     return groupMap
   })
 
-  if (!relaysToPersist) return
+  if (!persisted) return
 
-  void updateMessageSentToRelaysInDb(messageId, relaysToPersist).catch((error) => {
-    console.error('[groups] Failed to persist group relay publish status:', error)
+  void updateMessageDeliveryTraceInDb(messageId, persisted).catch((error) => {
+    console.error('[groups] Failed to persist group relay delivery trace:', error)
   })
-  if (channelsToPersist) {
-    void updateMessageDeliveryTraceInDb(messageId, { deliveryChannels: channelsToPersist }).catch((error) => {
-      console.error('[groups] Failed to persist group delivery channels:', error)
-    })
-  }
 }
 
 function reconcileLocalGroupMessageId(
@@ -929,11 +922,7 @@ async function handleGroupMessage(
     }
   }
 
-  const replyTag = rumor.tags?.find(
-    (tag: string[]) => tag[0] === 'e' && tag[3] === 'reply'
-  )?.[1] || rumor.tags?.find(
-    (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
-  )?.[1]
+  const replyTag = extractReplyToId(rumor.tags)
 
   const expiresAt = getExpirationTimestampSeconds(rumor)
   const group = get(groups).get(groupId)
@@ -966,7 +955,7 @@ async function handleGroupMessage(
     const msgs = gm.get(groupId) || []
     if (msgs.some(m => m.id === message.id)) return gm
     inserted = true
-    gm.set(groupId, [...msgs, message].sort((a, b) => a.timestamp - b.timestamp))
+    gm.set(groupId, insertMessageOrdered(msgs, message))
     return gm
   })
 
@@ -1073,28 +1062,7 @@ function sendGroupReceipt(groupId: string, type: MessageStatus, messageIds: stri
 
 async function saveGroupMessageToStorage(groupId: string, message: GroupMessage, throwOnError = false): Promise<void> {
   try {
-    const reactions = message.reactions
-      ? JSON.parse(JSON.stringify(message.reactions))
-      : undefined
-
-    const storedMessage: StoredMessage = {
-      id: message.id,
-      sessionId: `group:${groupId}`,
-      content: message.content,
-      ...messageMutationFields(message),
-      timestamp: message.timestamp,
-      isMine: message.isMine,
-      ...(message.replyTo && { replyTo: message.replyTo }),
-      reactions,
-      status: message.status,
-      ...(message.sentToRelays && { sentToRelays: message.sentToRelays }),
-      ...(message.recipientStatuses && { recipientStatuses: message.recipientStatuses }),
-      ...(message.deliveryChannels && { deliveryChannels: message.deliveryChannels }),
-      ...(message.outerEventIds && { outerEventIds: message.outerEventIds }),
-      ...(message.pendingRelayEventIds && { pendingRelayEventIds: message.pendingRelayEventIds }),
-      senderPubkey: message.senderPubkey,
-      ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
-    }
+    const storedMessage = chatMessageToStoredMessage(`group:${groupId}`, message)
     const owner = getPubkey()
     if (owner) await persistMessageWithReactions(owner, storedMessage)
     else await saveMessageToDb(storedMessage)
@@ -1109,64 +1077,63 @@ export async function loadGroupsFromStorage(): Promise<void> {
   if (owner) loadMessageRequestDecisions(owner)
   startRequestProjection()
   try {
-    const storedGroups = await getAllGroups()
+    await withOptionalPrivateStateCache(owner, async () => {
+      const storedGroups = await getAllGroups()
 
-    for (const stored of storedGroups) {
-      const group: Group = {
-        id: stored.id,
-        name: stored.name,
-        description: stored.description,
-        picture: stored.picture,
-        members: stored.members,
-        admins: stored.admins || [],
-        createdAt: stored.createdAt,
-        secret: stored.secret,
-        protocol: stored.protocol,
-        accepted: owner ? groupRequestAccepted(owner, stored.id, stored.accepted) : stored.accepted,
-        rosterVersion: stored.rosterVersion,
+      const loaded = await Promise.all(
+        storedGroups.map(async (stored) => {
+          const group: Group = {
+            id: stored.id,
+            name: stored.name,
+            description: stored.description,
+            picture: stored.picture,
+            members: stored.members,
+            admins: stored.admins || [],
+            createdAt: stored.createdAt,
+            secret: stored.secret,
+            protocol: stored.protocol,
+            accepted: owner ? groupRequestAccepted(owner, stored.id, stored.accepted) : stored.accepted,
+            rosterVersion: stored.rosterVersion,
+          }
+          if (stored.rosterVersion) rememberGroupRosterFact(group.id, stored.rosterVersion)
+
+          const [storedMessages] = await Promise.all([
+            getMessagesForSession(`group:${group.id}`),
+            owner ? restoreGroupSettings(owner, group.id) : Promise.resolve(),
+          ])
+          const messages: GroupMessage[] = storedMessages
+            .map((m) => storedMessageToChatMessage(m))
+            .sort((a, b) => a.timestamp - b.timestamp)
+          return { group, messages, storedMessages }
+        })
+      )
+
+      if (owner) {
+        const allStoredMessages = loaded.flatMap((entry) => entry.storedMessages)
+        if (allStoredMessages.length > 0) {
+          await restoreStoredRequestAcceptances(owner, allStoredMessages)
+        }
       }
-      if (stored.rosterVersion) rememberGroupRosterFact(group.id, stored.rosterVersion)
 
-      groups.update(g => {
-        g.set(group.id, group)
-        return g
-      })
+      if (loaded.length > 0) {
+        groups.update(g => {
+          for (const { group } of loaded) g.set(group.id, group)
+          return g
+        })
+        groupMessages.update(gm => {
+          for (const { group, messages } of loaded) gm.set(group.id, messages)
+          return gm
+        })
+        syncNativeGroupTransport(loaded[0].group.id)
+        for (const { group } of loaded) {
+          // Flush any events that arrived before this group was loaded
+          flushPendingEvents(group.id)
+        }
+      }
 
-      const storedMessages = await getMessagesForSession(`group:${group.id}`)
-      if (owner) for (const message of storedMessages) await restoreStoredRequestAcceptance(owner, message)
-      const messages: GroupMessage[] = storedMessages
-        .map(m => ({
-          id: m.id,
-          content: m.content,
-          ...messageMutationFields(m),
-          timestamp: m.timestamp,
-          isMine: m.isMine,
-          senderPubkey: m.senderPubkey,
-          ...(m.replyTo && { replyTo: m.replyTo }),
-          reactions: m.reactions,
-          status: m.status,
-          ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
-          ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
-          ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),
-          ...(m.outerEventIds && { outerEventIds: m.outerEventIds }),
-          ...(m.pendingRelayEventIds && { pendingRelayEventIds: m.pendingRelayEventIds }),
-          ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
-        }))
-        .sort((a, b) => a.timestamp - b.timestamp)
-
-      groupMessages.update(gm => {
-        gm.set(group.id, messages)
-        return gm
-      })
-
-      if (owner) await restoreGroupSettings(owner, group.id)
-      syncNativeGroupTransport(group.id)
-
-      // Flush any events that arrived before this group was loaded
-      flushPendingEvents(group.id)
-    }
-    if (owner) await restoreOwnReactionAcceptance(owner)
-    initGroupRosterFactSync()
+      if (owner) await restoreOwnReactionAcceptance(owner)
+      initGroupRosterFactSync()
+    })
   } catch (e) {
     console.error('[groups] Failed to load groups from storage:', e)
   }

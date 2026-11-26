@@ -1,8 +1,8 @@
-import { restoreStoredRequestAcceptance, restoreOwnReactionAcceptance } from './requestActivity'
-import { loadMessageRequestDecisions } from './messageRequests'
+import { restoreStoredRequestAcceptances, restoreOwnReactionAcceptance } from './requestActivity'
+import { acceptChat, clearChat, loadMessageRequestDecisions, messageRequests } from './messageRequests'
 import { receivePrivateStateControl, sendOwnReadState, applyOwnReadTag } from './privateStateControl'
 import { privateHistoryAllowed, isPrivatelyBlocked } from './privateStateStore'
-import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage, messageMutationFields } from './messageMutations'
+import { MESSAGE_EDIT_KIND, MESSAGE_DELETE_KIND, buildMessageMutation, captureMessageMutation, sendMessageMutation, editableMessage } from './messageMutations'
 import type { MessageRevision } from './messageMutations'
 import { withDeviceControlClock } from './deviceSyncRecordStore'
 import { reactionControl } from './deviceSyncRecords'
@@ -16,8 +16,17 @@ import { PRIVATE_CONTACT_CONTROL_KIND, receivePrivateContactControl } from './pr
 import { receiveChatPinControl } from './chatPinControl'
 import { CHAT_MUTE_KIND } from './chatMuteSync'
 import { receiveChatMuteControl } from './chatMuteControl'
-import { callHistoryLabel, restoredCallHistory, type CallHistory } from './callHistory'
-import { directFileMessageFields, directFilePreview } from './directFileProtocol'
+import { callHistoryLabel, type CallHistory } from './callHistory'
+import { directFileMessageFields } from './directFileProtocol'
+import {
+  chatMessageToStoredMessage,
+  extractReplyToId,
+  findLastMessageIndex,
+  insertMessageOrdered,
+  mergeRelayPublishFields,
+  storedMessageToChatMessage,
+  withOptionalPrivateStateCache,
+} from './chatMessageHelpers'
 import { messagingDeviceList, type MessagingSupportEvent } from './messagingPeople'
 import { writable, get } from 'svelte/store'
 import {
@@ -66,15 +75,12 @@ import {
   deleteInvite as deleteInviteFromDb,
   updateInviteLabel as updateInviteLabelInDb,
   updateMessageStatus as updateMessageStatusInDb,
-  updateMessageSentToRelays as updateMessageSentToRelaysInDb,
   updateMessageRecipientStatuses as updateMessageRecipientStatusesInDb,
   updateMessageDeliveryTrace as updateMessageDeliveryTraceInDb,
   saveProcessedEvent,
   getPendingPushEvents,
   deletePendingPushEvent,
-  db,
   type StoredSession,
-  type StoredMessage,
   type StoredInvite
 } from './storage'
 import { updateDMSubscription } from './notifications'
@@ -85,14 +91,11 @@ import { typingSettings } from './typingSettings'
 import { setRemoteTyping, clearRemoteTyping } from './typingState'
 import { expirationStore } from './expirationStore'
 import { parseChatSettingsContent } from './chatSettings'
-import { acceptChat, clearChat } from './messageRequests'
 import { getMessageRequestPolicyContext, isChatAccepted, shouldIgnoreIncomingEvent } from './messageRequestPolicy'
 import { asVerifiedPushNostrEvent } from './pushEvents'
 import {
   advanceRecipientStatus,
-  mergeUniqueStrings,
   onMessageRelayPublish,
-  relayChannelLabel,
   type RecipientDeliveryStatus,
 } from './messageRelayStatus'
 
@@ -154,6 +157,11 @@ export const closeInviteOnAccept = writable(true)
 let isInitialized = false
 let invitesInitialized = false
 let runtimePoller: ReturnType<typeof setInterval> | null = null
+let runtimeStateCleanup: (() => void) | null = null
+let lastRuntimeSyncKey = ''
+const setupUserInFlight = new Set<string>()
+const setupUserLastAttempt = new Map<string, number>()
+const SETUP_USER_RETRY_COOLDOWN_MS = 1500
 
 let runtimeSessionSubscribed = false
 let runtimeSubscriptionPromise: Promise<void> | null = null
@@ -280,9 +288,12 @@ function canonicalizeKnownManagerChats(
   myPubkey?: string,
   authenticatedRemoteOwner?: string
 ): void {
-  const currentChats = Array.from(get(chats).keys())
-  for (const chatId of currentChats) {
-    const canonicalId = resolveSessionPubkeyToOwner(chatId)
+  const chatMap = get(chats)
+  if (chatMap.size === 0) return
+  const userRecords = getNdrRuntime().getSessionUserRecords() as SessionUserRecordsLike | undefined
+  if (!userRecords || userRecords.size === 0) return
+  for (const chatId of Array.from(chatMap.keys())) {
+    const canonicalId = resolveSessionPubkeyToOwnerFromRecords(userRecords, chatId)
     if (shouldSkipSelfCanonicalization(chatId, canonicalId, myPubkey, authenticatedRemoteOwner)) {
       continue
     }
@@ -330,7 +341,7 @@ function updateChatSession(
 
 function findChatSessionIdByMessageId(messageId: string): string | null {
   for (const [sessionId, chatSession] of get(chats)) {
-    if (chatSession.messages.some((message) => message.id === messageId)) {
+    if (findLastMessageIndex(chatSession.messages, messageId) !== -1) {
       return sessionId
     }
   }
@@ -341,46 +352,24 @@ function markMessageSentToRelays(messageId: string, relayUrls: string[]): void {
   const sessionId = findChatSessionIdByMessageId(messageId)
   if (!sessionId) return
 
-  let sentToRelays: string[] | null = null
-  let deliveryChannels: string[] | null = null
+  let persisted: { sentToRelays: string[]; deliveryChannels: string[] } | null = null
   const updatedSession = updateChatSession(sessionId, (latestSession) => {
-    const messageIndex = latestSession.messages.findIndex((message) => message.id === messageId)
+    const messageIndex = findLastMessageIndex(latestSession.messages, messageId)
     if (messageIndex === -1) return null
 
     const message = latestSession.messages[messageIndex]
-    const mergedRelays = mergeUniqueStrings(message.sentToRelays, relayUrls)
-    const currentRelays = message.sentToRelays || []
-    const mergedChannels = mergeUniqueStrings(
-      message.deliveryChannels,
-      relayUrls.map(relayChannelLabel)
-    )
-    const currentChannels = message.deliveryChannels || []
-    if (
-      mergedRelays.length === currentRelays.length &&
-      mergedRelays.every((url, index) => url === currentRelays[index]) &&
-      mergedChannels.length === currentChannels.length &&
-      mergedChannels.every((channel, index) => channel === currentChannels[index])
-    ) {
-      return null
-    }
+    const merged = mergeRelayPublishFields(message, relayUrls)
+    if (!merged) return null
 
     const updatedMessages = [...latestSession.messages]
-    updatedMessages[messageIndex] = {
-      ...message,
-      sentToRelays: mergedRelays,
-      deliveryChannels: mergedChannels,
-    }
-    sentToRelays = mergedRelays
-    deliveryChannels = mergedChannels
+    updatedMessages[messageIndex] = { ...message, ...merged }
+    persisted = merged
     return { ...latestSession, messages: updatedMessages }
   })
-  if (!updatedSession || !sentToRelays || !deliveryChannels) return
+  if (!updatedSession || !persisted) return
 
-  void updateMessageSentToRelaysInDb(messageId, sentToRelays).catch((error) => {
-    console.error('[chat] Failed to persist message relay publish status:', error)
-  })
-  void updateMessageDeliveryTraceInDb(messageId, { deliveryChannels }).catch((error) => {
-    console.error('[chat] Failed to persist message delivery channels:', error)
+  void updateMessageDeliveryTraceInDb(messageId, persisted).catch((error) => {
+    console.error('[chat] Failed to persist message relay delivery trace:', error)
   })
 }
 
@@ -419,6 +408,12 @@ function subscribeToNdrRuntimeEvents(): void {
 }
 
 function startNdrRuntimePoller(): void {
+  if (!runtimeStateCleanup) {
+    const runtime = getNdrRuntime()
+    if (typeof runtime.onStateChange === 'function') {
+      runtimeStateCleanup = runtime.onStateChange(() => syncRuntimeChats())
+    }
+  }
   if (!runtimePoller) {
     runtimePoller = setInterval(() => syncRuntimeChats(), 500)
     syncRuntimeChats()
@@ -519,27 +514,64 @@ function syncRuntimeChats(): void {
   const myPubkey = getPubkey()
   if (!myPubkey) return
 
-  canonicalizeKnownManagerChats()
-
-  const policyCtx = getMessageRequestPolicyContext()
+  const runtime = getNdrRuntime()
+  const userRecords = runtime.getSessionUserRecords()
+  if (!userRecords || userRecords.size === 0) return
 
   const currentChats = get(chats)
-  const runtime = getNdrRuntime()
-  for (const [pubkey, record] of runtime.getSessionUserRecords()) {
+  let totalDevices = 0
+  let activeSessions = 0
+  let anyNeedsSetup = false
+  for (const [pubkey, record] of userRecords) {
     if (pubkey === myPubkey) continue
-    if (needsManagerUserSetup(record)) {
-      void runtime.setupUser(pubkey).catch((e) =>
-        console.error('[chat] Failed to refresh runtime user setup:', e)
-      )
+    const devicesMap = record.devices
+    if (devicesMap) {
+      totalDevices += devicesMap.size
+      for (const device of devicesMap.values()) {
+        if (device.activeSession || (device.inactiveSessions?.length ?? 0) > 0) activeSessions += 1
+      }
     }
-    if (currentChats.has(pubkey)) continue
+    if (needsManagerUserSetup(record)) anyNeedsSetup = true
+  }
+
+  const acceptedCount = Object.keys(get(messageRequests).acceptedChats).length
+  const syncKey = `${myPubkey}:${currentChats.size}:${acceptedCount}:${userRecords.size}:${totalDevices}:${activeSessions}`
+  const stateChanged = syncKey !== lastRuntimeSyncKey
+  if (!stateChanged && !anyNeedsSetup) return
+  lastRuntimeSyncKey = syncKey
+
+  if (stateChanged) {
+    canonicalizeKnownManagerChats()
+  }
+
+  const policyCtx = getMessageRequestPolicyContext()
+  const latestChats = get(chats)
+  const now = Date.now()
+  for (const [pubkey, record] of userRecords) {
+    if (pubkey === myPubkey) continue
+    if (
+      needsManagerUserSetup(record) &&
+      !setupUserInFlight.has(pubkey) &&
+      now - (setupUserLastAttempt.get(pubkey) ?? 0) >= SETUP_USER_RETRY_COOLDOWN_MS
+    ) {
+      setupUserInFlight.add(pubkey)
+      setupUserLastAttempt.set(pubkey, now)
+      void runtime.setupUser(pubkey)
+        .catch((e) => console.error('[chat] Failed to refresh runtime user setup:', e))
+        .finally(() => { setupUserInFlight.delete(pubkey) })
+    }
+    if (latestChats.has(pubkey)) continue
     // Group transport setup also creates pairwise sessions. A session alone
     // is not an instruction to put a new conversation in the inbox.
     if (!policyCtx.acceptedChats?.[pubkey]) continue
     if (policyCtx.rejectedChats?.[pubkey]) continue
-    const hasSession = Array.from(record.devices?.values() ?? []).some((device) =>
-      Boolean(device.activeSession) || (device.inactiveSessions?.length ?? 0) > 0
-    )
+    let hasSession = false
+    for (const device of record.devices?.values() ?? []) {
+      if (device.activeSession || (device.inactiveSessions?.length ?? 0) > 0) {
+        hasSession = true
+        break
+      }
+    }
     if (!hasSession) continue
 
     ensureManagerChat(pubkey).catch((e) =>
@@ -910,6 +942,7 @@ export async function loadAndMonitorInvites(): Promise<void> {
 
   try {
     const storedInvites = await getAllInvites()
+    const restored: ActiveInvite[] = []
 
     for (const stored of storedInvites) {
       try {
@@ -918,25 +951,24 @@ export async function loadAndMonitorInvites(): Promise<void> {
           await deleteInviteFromDb(stored.id)
           continue
         }
-        const unsubscribe = () => {}
-
-        const activeInvite: ActiveInvite = {
+        restored.push({
           id: stored.id,
           invite,
           label: stored.label,
           createdAt: stored.createdAt,
           usedBy: stored.usedBy || [],
-          unsubscribe
-        }
-
-        // Add to invites store
-        invites.update(i => {
-          i.set(stored.id, activeInvite)
-          return i
+          unsubscribe: () => {},
         })
       } catch (e) {
         console.error('[chat] Failed to restore invite:', stored.id, e)
       }
+    }
+
+    if (restored.length > 0) {
+      invites.update(i => {
+        for (const activeInvite of restored) i.set(activeInvite.id, activeInvite)
+        return i
+      })
     }
 
     invitesInitialized = true
@@ -1016,24 +1048,7 @@ async function ensureManagerChat(
   const storedMessages = await getMessagesForSession(recipientPubkey)
   const messages: ChatMessage[] = storedMessages
     .filter(message => !!message.content.trim() || message.deletedAt !== undefined || !!message.call)
-    .map((m) => ({
-      id: m.id,
-      content: m.content,
-      ...messageMutationFields(m),
-      timestamp: m.timestamp,
-      isMine: m.isMine,
-      ...(m.replyTo && { replyTo: m.replyTo }),
-      reactions: m.reactions,
-      status: m.status,
-      ...restoredCallHistory(m.call),
-      ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
-      ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
-      ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),
-      ...(m.outerEventIds && { outerEventIds: m.outerEventIds }),
-      ...(m.pendingRelayEventIds && { pendingRelayEventIds: m.pendingRelayEventIds }),
-      senderPubkey: m.senderPubkey,
-      ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
-    }))
+    .map((m) => storedMessageToChatMessage(m, { directFile: true, callHistory: true }))
     .sort((a, b) => a.timestamp - b.timestamp)
 
   const chatSession: ChatSession = {
@@ -1489,11 +1504,7 @@ async function handleIncomingRumor(
   }
 
   // Extract reply tag if present
-  const replyTag = rumor.tags?.find(
-    (tag: string[]) => tag[0] === 'e' && tag[3] === 'reply'
-  )?.[1] || rumor.tags?.find(
-    (tag: string[]) => tag[0] === 'e' && !rumor.tags?.some((t: string[]) => t[0] === 'e' && t[3] === 'root')
-  )?.[1]
+  const replyTag = extractReplyToId(rumor.tags)
 
   // Message requests:
   // - if requests are disabled (or sender rejected), ignore all incoming events for unaccepted chats.
@@ -1534,10 +1545,10 @@ async function handleIncomingRumor(
       return null
     }
 
-    const updatedMessages = [...latestSession.messages, message].sort(
-      (a, b) => a.timestamp - b.timestamp
-    )
-    return { ...latestSession, messages: updatedMessages }
+    return {
+      ...latestSession,
+      messages: insertMessageOrdered(latestSession.messages, message),
+    }
   })
   if (!updatedSession) return
   void import('./foregroundMessageNotifications').then(({notifyForegroundMessage}) => notifyForegroundMessage(myPubkey,committed)).catch(()=>{})
@@ -1684,21 +1695,20 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
   const currentSession = currentChats.get(chatSession.id)
   if (!currentSession) return
 
+  const messageById = new Map(currentSession.messages.map((m) => [m.id, m]))
   // Filter to only messages we haven't already acked as seen
-  const toAck = messageIds.filter(id => {
-    const msg = currentSession.messages.find(m => m.id === id)
+  const toAck = messageIds.filter((id) => {
+    const msg = messageById.get(id)
     return msg && msg.status !== 'seen'
   })
   if (toAck.length === 0) return
 
+  const toAckSet = new Set(toAck)
   const updatedSession = updateChatSession(chatSession.id, (latestSession) => ({
     ...latestSession,
-    messages: latestSession.messages.map((m) => {
-      if (toAck.includes(m.id)) {
-        return { ...m, status: 'seen' as const }
-      }
-      return m
-    }),
+    messages: latestSession.messages.map((m) => (
+      toAckSet.has(m.id) ? { ...m, status: 'seen' as const } : m
+    )),
   }))
   if (!updatedSession) return
 
@@ -1707,8 +1717,8 @@ export function sendSeenReceipts(chatSession: ChatSession, messageIds: string[])
     .then(() => owner ? sendOwnReadState(owner, chatSession.id, toAck) : undefined).catch(() => {})
   const policyCtx = getMessageRequestPolicyContext()
   if (get(receiptSettings).sendReadReceipts && isChatAccepted(updatedSession, policyCtx)) {
-    const messageIds = toAck.filter(id => !updatedSession.messages.find(m => m.id === id)?.call)
-    if (messageIds.length) sendReceipt(updatedSession, 'seen', messageIds)
+    const nonCallIds = toAck.filter((id) => !messageById.get(id)?.call)
+    if (nonCallIds.length) sendReceipt(updatedSession, 'seen', nonCallIds)
   }
 }
 
@@ -1882,30 +1892,7 @@ export async function saveSessionToStorage(chatSession: ChatSession): Promise<vo
 
 async function saveMessageToStorage(sessionId: string, message: ChatMessage): Promise<void> {
   try {
-    // Deep clone reactions to make it IndexedDB-safe
-    const reactions = message.reactions
-      ? JSON.parse(JSON.stringify(message.reactions))
-      : undefined
-
-    const storedMessage: StoredMessage = {
-      id: message.id,
-      sessionId,
-      content: message.content,
-      ...messageMutationFields(message),
-      timestamp: message.timestamp,
-      isMine: message.isMine,
-      ...(message.replyTo && { replyTo: message.replyTo }),
-      reactions,
-      status: message.status,
-      ...(message.call && { call: message.call }),
-      ...(message.sentToRelays && { sentToRelays: message.sentToRelays }),
-      ...(message.recipientStatuses && { recipientStatuses: message.recipientStatuses }),
-      ...(message.deliveryChannels && { deliveryChannels: message.deliveryChannels }),
-      ...(message.outerEventIds && { outerEventIds: message.outerEventIds }),
-      ...(message.pendingRelayEventIds && { pendingRelayEventIds: message.pendingRelayEventIds }),
-      ...(message.senderPubkey && { senderPubkey: message.senderPubkey }),
-      ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
-    }
+    const storedMessage = chatMessageToStoredMessage(sessionId, message)
     const owner = getPubkey()
     if (owner) await persistMessageWithReactions(owner, storedMessage)
     else await saveMessageToDb(storedMessage)
@@ -1921,59 +1908,59 @@ export async function loadChatsFromStorage(): Promise<void> {
   if (isInitialized) return
 
   try {
-    const storedSessions = await getAllSessions()
-    initNdrRuntimeEvents()
+    await withOptionalPrivateStateCache(owner, async () => {
+      const storedSessions = await getAllSessions()
+      initNdrRuntimeEvents()
 
-    for (const stored of storedSessions) {
-      try {
-        const storedMessages = await getMessagesForSession(stored.id)
-        if (owner) for (const message of storedMessages) await restoreStoredRequestAcceptance(owner, message)
-        const messages: ChatMessage[] = storedMessages
-    .filter(message => !!message.content.trim() || message.deletedAt !== undefined || !!message.call)
-          .map(m => ({
-            id: m.id,
-            content: m.content,
-            ...messageMutationFields(m),
-            ...directFileMessageFields(m.content),
-            timestamp: m.timestamp,
-            isMine: m.isMine,
-            ...(m.replyTo && { replyTo: m.replyTo }),
-            reactions: m.reactions,
-            status: m.status,
-            ...restoredCallHistory(m.call),
-            ...(m.sentToRelays && { sentToRelays: m.sentToRelays }),
-            ...(m.recipientStatuses && { recipientStatuses: m.recipientStatuses }),
-            ...(m.deliveryChannels && { deliveryChannels: m.deliveryChannels }),
-            ...(m.outerEventIds && { outerEventIds: m.outerEventIds }),
-            ...(m.pendingRelayEventIds && { pendingRelayEventIds: m.pendingRelayEventIds }),
-            senderPubkey: m.senderPubkey,
-            ...(m.expiresAt !== undefined && { expiresAt: m.expiresAt }),
-          }))
-          .sort((a, b) => a.timestamp - b.timestamp)
+      const loaded = await Promise.all(
+        storedSessions.map(async (stored) => {
+          try {
+            const storedMessages = await getMessagesForSession(stored.id)
+            const messages: ChatMessage[] = storedMessages
+              .filter(message => !!message.content.trim() || message.deletedAt !== undefined || !!message.call)
+              .map(m => storedMessageToChatMessage(m, { directFile: true, callHistory: true }))
+              .sort((a, b) => a.timestamp - b.timestamp)
 
-        const chatSession: ChatSession = {
-          id: stored.id,
-          recipientPubkey: stored.recipientPubkey,
-          mode: 'manager',
-          messages,
-          inviteId: stored.inviteId,
-          inviteLabel: stored.inviteLabel,
-          bootstrapOnly: stored.bootstrapOnly,
-        }
+            const chatSession: ChatSession = {
+              id: stored.id,
+              recipientPubkey: stored.recipientPubkey,
+              mode: 'manager',
+              messages,
+              inviteId: stored.inviteId,
+              inviteLabel: stored.inviteLabel,
+              bootstrapOnly: stored.bootstrapOnly,
+            }
+            return { chatSession, storedMessages }
+          } catch (e) {
+            console.error('Failed to restore session:', stored.id, e)
+            return null
+          }
+        })
+      )
 
-        // Add to chats store
+      const sessions: ChatSession[] = []
+      const allStoredMessages = []
+      for (const entry of loaded) {
+        if (!entry) continue
+        sessions.push(entry.chatSession)
+        if (owner) allStoredMessages.push(...entry.storedMessages)
+      }
+
+      if (owner && allStoredMessages.length > 0) {
+        await restoreStoredRequestAcceptances(owner, allStoredMessages)
+      }
+
+      if (sessions.length > 0) {
         chats.update(c => {
-          c.set(chatSession.id, chatSession)
+          for (const chatSession of sessions) c.set(chatSession.id, chatSession)
           return c
         })
-      } catch (e) {
-        console.error('Failed to restore session:', stored.id, e)
       }
-    }
 
-    canonicalizeKnownManagerChats()
-    if (owner) await restoreOwnReactionAcceptance(owner)
-    isInitialized = true
+      canonicalizeKnownManagerChats()
+      if (owner) await restoreOwnReactionAcceptance(owner)
+      isInitialized = true
+    })
   } catch (e) {
     console.error('Failed to load chats from storage:', e)
   }
@@ -2020,6 +2007,11 @@ export async function clearChatData(): Promise<void> {
       clearInterval(runtimePoller)
       runtimePoller = null
     }
+    runtimeStateCleanup?.()
+    runtimeStateCleanup = null
+    lastRuntimeSyncKey = ''
+    setupUserInFlight.clear()
+    setupUserLastAttempt.clear()
     pendingAutoOpenChats.clear()
     autoOpenedChats.clear()
     groupInviteConnections.clear()

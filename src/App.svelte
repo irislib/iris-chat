@@ -371,48 +371,12 @@
     const isLoggedIn = await autoLogin()
 
     if (isLoggedIn) {
-      const currentIdentity = get(identity)
-      let multiDeviceReady: Promise<void> | null = null
-      if (currentIdentity?.pubkey) {
-        // Subscribe ASAP so we don't miss early incoming manager events.
-        initNdrRuntimeEvents()
-        multiDeviceReady = initMultiDevice(currentIdentity.pubkey)
-      }
-
-      // Load groups FIRST so group events have somewhere to land
-      // (chat sessions subscribe to relays on load — group messages arriving
-      //  before the groups store is populated are silently dropped)
-      await loadGroupsFromStorage()
-
-      // Load saved chats from IndexedDB (creates relay subscriptions)
-      await loadChatsFromStorage()
-
-      if (currentIdentity?.pubkey && multiDeviceReady) {
-        void multiDeviceReady
-          .then(() => deviceSyncLifecycle?.start(currentIdentity.pubkey))
-          .catch((e) => console.error('[app] initMultiDevice failed:', e))
-      }
-
-      // Set callback for invite acceptance (works for both loaded and new invites)
-      setInviteAcceptedCallback(handleInviteAccepted)
-
-      // Load and monitor saved invites
-      await loadAndMonitorInvites()
-
-      // Start message expiration cleanup and sync settings
-      startMessageExpirationCleanup()
-      syncDisappearingMessagesToNdrRuntime().catch(() => {})
-      void drainPendingPushNostrEvents()
-
-      loggedIn = true
-      void flushDeviceRemovalLogout()
+      await hydrateLoggedInSession(false)
 
       // If there's an invite in URL, show main view to handle it
       if (hashInvite) {
         mobileView = 'main'
       }
-
-
     }
 
     initializing = false
@@ -446,9 +410,7 @@
     }
   })
 
-  async function handleLogin() {
-    sessionStopping = false
-    deviceRemovalNotice = false
+  async function hydrateLoggedInSession(markLoggedInEarly = false): Promise<void> {
     const currentIdentity = get(identity)
     let multiDeviceReady: Promise<void> | null = null
     if (currentIdentity?.pubkey) {
@@ -457,10 +419,14 @@
       multiDeviceReady = initMultiDevice(currentIdentity.pubkey)
     }
 
-    loggedIn = true
-    void flushDeviceRemovalLogout()
+    if (markLoggedInEarly) {
+      loggedIn = true
+      void flushDeviceRemovalLogout()
+    }
 
-    // Load groups FIRST (same reason as onMount — avoid race condition)
+    // Load groups FIRST so group events have somewhere to land
+    // (chat sessions subscribe to relays on load — group messages arriving
+    //  before the groups store is populated are silently dropped)
     await loadGroupsFromStorage()
 
     // Load saved chats from IndexedDB (creates relay subscriptions)
@@ -482,6 +448,17 @@
     startMessageExpirationCleanup()
     syncDisappearingMessagesToNdrRuntime().catch(() => {})
     void drainPendingPushNostrEvents()
+
+    if (!markLoggedInEarly) {
+      loggedIn = true
+      void flushDeviceRemovalLogout()
+    }
+  }
+
+  async function handleLogin() {
+    sessionStopping = false
+    deviceRemovalNotice = false
+    await hydrateLoggedInSession(true)
   }
 
   function handleSelectGroup(groupId: string) {

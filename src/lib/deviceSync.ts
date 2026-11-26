@@ -34,6 +34,7 @@ import { WebSocketTransport } from '@fips/transport-websocket'
 import { callConnectionSettings } from './callConnectionSettings'
 import { AppKeys } from 'nostr-double-ratchet'
 import { chats, currentChat, type ChatMessage, type ChatSession } from './chat'
+import { insertMessageOrdered, optionalModuleExport } from './chatMessageHelpers'
 import { devices, type DeviceState } from './devices'
 import { getPubkey, nostrClient } from './identity'
 import { AppEvent } from './nostrClient'
@@ -198,29 +199,51 @@ function hasSnapshotData(packet: DeviceSyncSnapshot): boolean {
   return (packet.deletedChats?.length ?? 0) + (packet.privateDeviceLabelsV2?.length ?? 0) + (packet.privateContactsV2?.length ?? 0) + (packet.chatPins?.length ?? 0) + (packet.chatMutes?.length ?? 0) + packet.appKeys.length + packet.chats.length + packet.groups.length + packet.messages.length > 0
 }
 
+type SnapshotArrayKey =
+  | 'appKeys'
+  | 'chats'
+  | 'groups'
+  | 'messages'
+  | 'chatMutes'
+  | 'chatPins'
+  | 'privateContactsV2'
+  | 'privateDeviceLabelsV2'
+
+const ALWAYS_PRESENT_SNAPSHOT_KEYS = new Set<SnapshotArrayKey>(['appKeys', 'chats', 'groups', 'messages'])
+
 function chunkSnapshot(
   rosterAt: number,
-  items: Pick<DeviceSyncSnapshot, 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContactsV2' | 'privateDeviceLabelsV2'>,
+  items: Pick<DeviceSyncSnapshot, SnapshotArrayKey>,
   maxBytes: number,
 ): DeviceSyncSnapshot[] {
   const packets: DeviceSyncSnapshot[] = []
+  const baseBytes = deviceSyncPacketByteLength(emptySnapshot(rosterAt))
   let packet = emptySnapshot(rosterAt)
+  let packetBytes = baseBytes
 
-  const append = <K extends 'appKeys' | 'chats' | 'groups' | 'messages' | 'chatMutes' | 'chatPins' | 'privateContactsV2' | 'privateDeviceLabelsV2'>(
+  const append = <K extends SnapshotArrayKey>(
     key: K,
     value: NonNullable<DeviceSyncSnapshot[K]>[number],
   ) => {
-    const candidate = { ...packet, [key]: [...(packet[key] ?? []), value] } as DeviceSyncSnapshot
-    if (deviceSyncPacketByteLength(candidate) <= maxBytes) {
-      packet = candidate
+    const single = { ...emptySnapshot(rosterAt), [key]: [value] } as DeviceSyncSnapshot
+    const singleBytes = deviceSyncPacketByteLength(single)
+    if (singleBytes > maxBytes) {
+      throw new DeviceSyncProtocolError(`snapshot ${key} entry exceeds the packet limit`)
+    }
+    const existing = packet[key] as Array<NonNullable<DeviceSyncSnapshot[K]>[number]> | undefined
+    const firstDelta = singleBytes - baseBytes
+    const delta = existing && existing.length > 0
+      ? (ALWAYS_PRESENT_SNAPSHOT_KEYS.has(key) ? firstDelta : firstDelta - (key.length + 6)) + 1
+      : firstDelta
+    if (packetBytes + delta <= maxBytes) {
+      if (existing) existing.push(value)
+      else (packet as unknown as Record<string, unknown[]>)[key] = [value]
+      packetBytes += delta
       return
     }
     if (hasSnapshotData(packet)) packets.push(packet)
-    const single = { ...emptySnapshot(rosterAt), [key]: [value] } as DeviceSyncSnapshot
-    if (deviceSyncPacketByteLength(single) > maxBytes) {
-      throw new DeviceSyncProtocolError(`snapshot ${key} entry exceeds the packet limit`)
-    }
     packet = single
+    packetBytes = singleBytes
   }
 
   for (const label of items.privateDeviceLabelsV2 ?? []) append('privateDeviceLabelsV2', label)
@@ -508,6 +531,8 @@ export async function applyDeviceSyncSnapshot(
 
   if (packet.privateDeviceLabelsV2?.length) await mergePrivateDeviceLabels(ownerPubkey, packet.privateDeviceLabelsV2)
 
+  const chatsToAdd: ChatSession[] = []
+  const chatsCreated = new Set<string>()
   for (const chat of additions.chats) {
     if (!authorized()) return imported
     // Native includes group read-state rows here; groups have their own store.
@@ -519,7 +544,8 @@ export async function applyDeviceSyncSnapshot(
       mode: 'manager',
       messages: [],
     }
-    applyStoreUpdate(() => chats.update((all) => new Map(all).set(chat.id, session)))
+    chatsToAdd.push(session)
+    chatsCreated.add(chat.id)
     await saveSession({
       id: chat.id,
       recipientPubkey: chat.id,
@@ -527,7 +553,15 @@ export async function applyDeviceSyncSnapshot(
       mode: 'manager',
     })
   }
+  if (chatsToAdd.length > 0 && authorized()) {
+    applyStoreUpdate(() => chats.update((all) => {
+      const next = new Map(all)
+      for (const session of chatsToAdd) next.set(session.id, session)
+      return next
+    }))
+  }
 
+  const groupsToAdd: Group[] = []
   for (const group of additions.groups) {
     if (!authorized()) return imported
     if (await isHistoryChatDeleted(`group:${group.id}`, group.updatedAt)) continue
@@ -546,10 +580,7 @@ export async function applyDeviceSyncSnapshot(
       ...(existing?.secret && { secret: existing.secret }),
       accepted: groupRequestAccepted(ownerPubkey, group.id, group.accepted ?? existing?.accepted),
     }
-    applyStoreUpdate(() => {
-      groups.update((all) => new Map(all).set(group.id, local))
-      groupMessages.update((all) => all.has(group.id) ? all : new Map(all).set(group.id, []))
-    })
+    groupsToAdd.push(local)
     if (!local.members.includes(ownerPubkey)) cancelGroupPublications(group.id)
     const stored: StoredGroup = { ...local }
     await saveGroup(stored)
@@ -559,24 +590,80 @@ export async function applyDeviceSyncSnapshot(
     }
     rememberSyncedGroupRosterVersion(group.id, group.revision, group.updatedAt)
   }
+  if (groupsToAdd.length > 0 && authorized()) {
+    applyStoreUpdate(() => {
+      groups.update((all) => {
+        const next = new Map(all)
+        for (const group of groupsToAdd) next.set(group.id, group)
+        return next
+      })
+      groupMessages.update((all) => {
+        let next: Map<string, GroupMessage[]> | null = null
+        for (const group of groupsToAdd) {
+          if (!all.has(group.id)) {
+            if (!next) next = new Map(all)
+            next.set(group.id, [])
+          }
+        }
+        return next ?? all
+      })
+    })
+  }
   if (additions.groups[0]) syncNativeGroupTransport(additions.groups[0].id)
 
+  const eligibleMessages: Array<{
+    message: DeviceSyncMessage
+    isMine: boolean
+    isGroup: boolean
+    input: { message: StoredMessage; legacyReactions?: Array<{ author: string; emoji: string }>; allowedAuthors: Set<string> }
+  }> = []
   for (const message of additions.messages) {
     if (!authorized()) return imported
     const isMine = message.author.toLowerCase() === ownerPubkey.toLowerCase()
-    if (message.chatId.startsWith('group:')) {
-      const group = get(groups).get(message.chatId.slice(6))
+    const isGroup = message.chatId.startsWith('group:')
+    const group = isGroup ? get(groups).get(message.chatId.slice(6)) : undefined
+    if (isGroup) {
       if (!group?.members.includes(ownerPubkey) || !group.members.includes(message.author)) continue
     } else if (message.author !== ownerPubkey && message.author !== message.chatId) continue
-    const allowedAuthors = new Set(message.chatId.startsWith('group:') ? get(groups).get(message.chatId.slice(6))?.members : [ownerPubkey, message.chatId])
-    const stored = await admitRecordMessage(ownerPubkey, storedMessage(message, isMine), message.legacyReactions, allowLegacyReactions, allowedAuthors, authorized)
+    const allowedAuthors = new Set(isGroup ? group?.members : [ownerPubkey, message.chatId])
+    eligibleMessages.push({
+      message,
+      isMine,
+      isGroup,
+      input: {
+        message: storedMessage(message, isMine),
+        legacyReactions: message.legacyReactions,
+        allowedAuthors,
+      },
+    })
+  }
+
+  const recordApplyMod = await import('./deviceSyncRecordApply')
+  const batchAdmit = optionalModuleExport<typeof recordApplyMod.admitRecordMessages>(recordApplyMod, 'admitRecordMessages')
+  const admittedRows: Array<StoredMessage | undefined> =
+    typeof batchAdmit === 'function' && eligibleMessages.length > 1
+      ? await batchAdmit(ownerPubkey, eligibleMessages.map(item => item.input), allowLegacyReactions, authorized)
+      : await (async () => {
+          const rows: Array<StoredMessage | undefined> = []
+          for (const item of eligibleMessages) {
+            if (!authorized()) break
+            rows.push(await admitRecordMessage(ownerPubkey, item.input.message, item.input.legacyReactions, allowLegacyReactions, item.input.allowedAuthors, authorized))
+          }
+          return rows
+        })()
+
+  const addedGroupMessages = new Map<string, ChatMessage[]>()
+  const addedChatMessages = new Map<string, { messages: ChatMessage[]; latestCreatedAt: number }>()
+  for (let i = 0; i < admittedRows.length; i++) {
+    const stored = admittedRows[i]
     if (!stored) continue
-    if (!authorized()) return imported
+    if (!authorized()) break
+    const { message, isMine, isGroup } = eligibleMessages[i]
     imported += 1
     const local: ChatMessage = {
       id: message.id,
       content: stored.content,
-      ...(!message.chatId.startsWith('group:') ? directFileMessageFields(message.body) : {}),
+      ...(!isGroup ? directFileMessageFields(message.body) : {}),
       timestamp: message.createdAt * 1000,
       isMine,
       senderPubkey: message.author,
@@ -584,39 +671,63 @@ export async function applyDeviceSyncSnapshot(
       ...messageMutationFields(stored),
       ...(message.expiresAt !== undefined && { expiresAt: message.expiresAt }),
     }
-    if (message.chatId.startsWith('group:')) {
+    if (isGroup) {
       const groupId = message.chatId.slice(6)
-      applyStoreUpdate(() => groupMessages.update((all) => {
-        const next = new Map(all)
-        next.set(
-          groupId,
-          [...(next.get(groupId) || []), local].sort((a, b) => a.timestamp - b.timestamp),
-        )
-        return next
-      }))
+      const list = addedGroupMessages.get(groupId)
+      if (list) list.push(local)
+      else addedGroupMessages.set(groupId, [local])
     } else {
-      let updated: ChatSession | null = null
-      applyStoreUpdate(() => chats.update((all) => {
-        const next = new Map(all)
-        const session = next.get(message.chatId) || {
-          id: message.chatId,
-          recipientPubkey: message.chatId,
+      const entry = addedChatMessages.get(message.chatId)
+      if (entry) {
+        entry.messages.push(local)
+        entry.latestCreatedAt = Math.max(entry.latestCreatedAt, message.createdAt)
+      } else {
+        addedChatMessages.set(message.chatId, { messages: [local], latestCreatedAt: message.createdAt })
+      }
+    }
+  }
+  if (addedGroupMessages.size > 0 && authorized()) {
+    applyStoreUpdate(() => groupMessages.update((all) => {
+      const next = new Map(all)
+      for (const [groupId, incoming] of addedGroupMessages) {
+        const existing = next.get(groupId) || []
+        const merged = incoming.length === 1
+          ? insertMessageOrdered(existing, incoming[0])
+          : [...existing, ...incoming].sort((a, b) => a.timestamp - b.timestamp)
+        next.set(groupId, merged)
+      }
+      return next
+    }))
+  }
+  if (addedChatMessages.size > 0 && authorized()) {
+    let updatedCurrent: ChatSession | null = null
+    const activeChatId = get(currentChat)?.id
+    applyStoreUpdate(() => chats.update((all) => {
+      const next = new Map(all)
+      for (const [chatId, { messages: incoming }] of addedChatMessages) {
+        const session = next.get(chatId) || {
+          id: chatId,
+          recipientPubkey: chatId,
           mode: 'manager' as const,
           messages: [],
         }
-        updated = {
-          ...session,
-          messages: [...session.messages, local].sort((a, b) => a.timestamp - b.timestamp),
-        }
-        next.set(message.chatId, updated)
-        return next
-      }))
-      if (updated && get(currentChat)?.id === message.chatId) currentChat.set(updated)
-      if (!additions.chats.some((chat) => chat.id === message.chatId)) {
+        const merged = incoming.length === 1
+          ? insertMessageOrdered(session.messages, incoming[0])
+          : [...session.messages, ...incoming].sort((a, b) => a.timestamp - b.timestamp)
+        const updated: ChatSession = { ...session, messages: merged }
+        next.set(chatId, updated)
+        if (activeChatId === chatId) updatedCurrent = updated
+      }
+      return next
+    }))
+    if (updatedCurrent) currentChat.set(updatedCurrent)
+    for (const [chatId, { latestCreatedAt }] of addedChatMessages) {
+      if (!authorized()) return imported
+      if (!chatsCreated.has(chatId)) {
         await saveSession({
-          id: message.chatId,
-          recipientPubkey: message.chatId,
-          createdAt: message.createdAt * 1000,
+          id: chatId,
+          recipientPubkey: chatId,
+          createdAt: latestCreatedAt * 1000,
           mode: 'manager',
         })
       }
@@ -722,8 +833,10 @@ function historyRequest(_owner: string, page?: DeviceSyncPage): DeviceSyncReques
 function inventoryMessages(owner: string, since: number, until: number): DeviceSyncMessage[] {
   const source = snapshotSource(since, owner)
   source.groups = source.groups.filter(group => group.members.includes(owner))
-  return collectDeviceSyncMessages(source, since).filter(message => message.createdAt <= until &&
-    deviceSyncPacketByteLength({ v: 1, type: 'historyRecords', session: '0'.repeat(32), requested: [], records: [{ type: 'message', message }] }) <= DEVICE_SYNC_MAX_PACKET_BYTES)
+  return collectDeviceSyncMessages(source, since).filter(message => message.createdAt <= until && (
+    message.body.length <= 12000 ||
+    deviceSyncPacketByteLength({ v: 1, type: 'historyRecords', session: '0'.repeat(32), requested: [], records: [{ type: 'message', message }] }) <= DEVICE_SYNC_MAX_PACKET_BYTES
+  ))
 }
 
 async function handlePacket(

@@ -58,10 +58,27 @@ export function requestDecision(owner: string, chatId: string): RequestDecision 
 }
 /** Authenticated own activity keeps its original clock, never its arrival time. */
 export function acceptChatFromActivity(owner: string, chatId: string, updatedAtMs: number): boolean {
-  const value: RequestDecision = { chatId, decision: 'accepted', updatedAtMs }
-  if (activeOwner !== owner || blockedContacts(owner).has(chatId) || !validRequestDecision(value) || !newer(value, versions[chatId])) return false
-  mergeRequestDecision(owner, value)
-  return true
+  return acceptChatsFromActivity(owner, [[chatId, updatedAtMs]]) > 0
+}
+export function acceptChatsFromActivity(owner: string, entries: Iterable<[string, number]>): number {
+  if (activeOwner !== owner) return 0
+  const blocked = blockedContacts(owner)
+  let next: Record<string, RequestDecision> | null = null
+  let applied = 0
+  for (const [chatId, updatedAtMs] of entries) {
+    const value: RequestDecision = { chatId, decision: 'accepted', updatedAtMs }
+    const current = next ? next[chatId] : versions[chatId]
+    if (blocked.has(chatId) || !validRequestDecision(value) || !newer(value, current)) continue
+    next ??= { ...versions }
+    next[chatId] = value
+    applied++
+  }
+  if (!next) return 0
+  localStorage.setItem(stateKey(owner), JSON.stringify(Object.values(next)))
+  versions = next
+  messageRequests.set(projection())
+  deviceRecordVersion.update(n => n + 1)
+  return applied
 }
 export function groupRequestAccepted(owner: string, groupId: string, fallback: boolean | undefined): boolean | undefined {
   const decision = requestDecision(owner, `group:${groupId}`)

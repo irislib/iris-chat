@@ -4,7 +4,7 @@ import type { MessageRevision } from './messageMutations'
 import type { CallHistory } from './callHistory'
 import Dexie, { type Table } from 'dexie'
 import { mergeUniqueStrings } from './messageRelayStatus'
-import { clearDirectFileStorage } from './directFileStorage'
+import { deviceRecordVersion } from './deviceRecordVersion'
 
 // Re-export serialization functions from nostr-double-ratchet
 export { serializeSessionState, deserializeSessionState } from 'nostr-double-ratchet'
@@ -177,11 +177,17 @@ export async function saveMessage(message: StoredMessage): Promise<void> {
 
 export async function getMessagesForSession(sessionId: string): Promise<StoredMessage[]> {
   const rows = await db.messages.where('sessionId').equals(sessionId).toArray()
-  const owner = (await db.sessionManager.get('v1/device-manager/owner-pubkey'))?.value
+  if (!rows.length) return rows
+  const store = await import('./privateStateStore')
+  let cachedOwner: string | undefined
+  let projectSession: typeof store.projectSessionMessages | undefined
+  try { cachedOwner = store.cachedPrivateStateOwner?.() } catch { /* partial test mock */ }
+  try { projectSession = store.projectSessionMessages } catch { /* partial test mock */ }
+  const owner = cachedOwner ?? (await db.sessionManager.get('v1/device-manager/owner-pubkey'))?.value
   if (typeof owner !== 'string') return rows
-  const { privateHistoryAllowed, projectMessageRead } = await import('./privateStateStore')
+  if (typeof projectSession === 'function') return projectSession(owner, sessionId, rows)
   const filtered: StoredMessage[] = []
-  for (const row of rows) if (await privateHistoryAllowed(owner, row.isMine ? owner : row.senderPubkey ?? sessionId, Math.floor(row.timestamp / 1000))) filtered.push(await projectMessageRead(owner, row))
+  for (const row of rows) if (await store.privateHistoryAllowed(owner, row.isMine ? owner : row.senderPubkey ?? sessionId, Math.floor(row.timestamp / 1000))) filtered.push(await store.projectMessageRead(owner, row))
   return filtered
 }
 
@@ -206,7 +212,10 @@ export async function applyHistoryChatDeletion(sessionId: string, deletedAt: num
       await db.messages.delete(message.id)
     }
     const removed = new Set(messages.filter(message => Math.floor(message.timestamp / 1000) <= cutoff).map(message => message.id))
-    await purgeMessageMutationRecords(value => value.chatId === sessionId && (removed.has(value.messageId) || (value.createdAt ?? 0) <= cutoff))
+    await purgeMessageMutationRecords(
+      value => value.chatId === sessionId && (removed.has(value.messageId) || (value.createdAt ?? 0) <= cutoff),
+      chatId => chatId === sessionId,
+    )
     if (!messages.some(message => Math.floor(message.timestamp / 1000) > cutoff)) {
       const session = await db.sessions.get(sessionId)
       if (session && Math.floor(session.createdAt / 1000) <= cutoff) await db.sessions.delete(sessionId)
@@ -217,7 +226,7 @@ export async function applyHistoryChatDeletion(sessionId: string, deletedAt: num
     }
     return cutoff > (previous ?? 0)
   })
-  if (changed) (await import('./deviceSyncRecordStore')).deviceRecordVersion.update(n => n + 1)
+  if (changed) deviceRecordVersion.update(n => n + 1)
 }
 
 export async function deleteMessagesForSession(sessionId: string): Promise<void> {
@@ -236,24 +245,66 @@ export async function deleteMessage(id: string): Promise<void> {
     await db.sessionManager.put({ key: `history-deleted-message:${id}`, value: message
       ? { chatId: message.sessionId, id, createdAt: Math.floor(message.timestamp / 1000) } : null })
     await db.messages.delete(id)
-    await purgeMessageMutationRecords(value => value.messageId === id)
+    await purgeMessageMutationRecords(value => value.messageId === id, (_chatId, messageId) => messageId === id)
   })
 }
 
 /** Purge edit plaintext together with message/chat removal and expiry. */
-async function purgeMessageMutationRecords(matches: (value: { chatId: string; messageId: string; createdAt?: number; expiresAt?: number }) => boolean): Promise<void> {
-  const rows = await db.sessionManager.where('key').startsWith('device-record-v1:')
-    .filter(row => row.key.includes(':messageMutation:') && !!row.value && matches(row.value as { chatId: string; messageId: string })).toArray()
-  await db.sessionManager.bulkDelete(rows.map(row => row.key))
-  for (const row of rows) {
-    const value = row.value as { chatId: string; messageId: string; id: string }
-    const owner = row.key.slice('device-record-v1:'.length).split(':')[0]
-    const indexKey = `message-mutation-target:${owner}:${JSON.stringify([value.chatId, value.messageId])}`
-    const index = (await db.sessionManager.get(indexKey))?.value as string[] | undefined
-    const remaining = index?.filter(id => id !== value.id) ?? []
-    if (remaining.length) await db.sessionManager.put({ key: indexKey, value: remaining })
-    else await db.sessionManager.delete(indexKey)
+async function purgeMessageMutationRecords(
+  matches: (value: { chatId: string; messageId: string; createdAt?: number; expiresAt?: number }) => boolean,
+  targetFilter?: (chatId: string, messageId: string) => boolean,
+): Promise<void> {
+  const indexPrefix = 'message-mutation-target:'
+  const targets = await db.sessionManager.where('key').startsWith(indexPrefix).toArray()
+  if (!targets.length) return
+
+  const lookups: Array<{ mutationKey: string; indexKey: string; mutationId: string; allIds: string[] }> = []
+  for (const row of targets) {
+    const ids = row.value as string[] | undefined
+    if (!ids?.length) continue
+    const rest = row.key.slice(indexPrefix.length)
+    const sep = rest.indexOf(':')
+    if (sep <= 0) continue
+    const owner = rest.slice(0, sep)
+    let parsed: [string, string]
+    try { parsed = JSON.parse(rest.slice(sep + 1)) } catch { continue }
+    const [chatId, messageId] = parsed
+    if (targetFilter && !targetFilter(chatId, messageId)) continue
+    for (const mutationId of ids) {
+      lookups.push({
+        mutationKey: `device-record-v1:${owner}:messageMutation:${JSON.stringify([chatId, mutationId])}`,
+        indexKey: row.key,
+        mutationId,
+        allIds: ids,
+      })
+    }
   }
+  if (!lookups.length) return
+
+  const mutationRows = await db.sessionManager.bulkGet(lookups.map(item => item.mutationKey))
+  const keysToDelete: string[] = []
+  const removedByIndex = new Map<string, { allIds: string[]; removed: Set<string> }>()
+  for (let i = 0; i < lookups.length; i++) {
+    const record = mutationRows[i]?.value as { chatId: string; messageId: string; createdAt?: number; expiresAt?: number } | undefined
+    if (!record || !matches(record)) continue
+    const item = lookups[i]
+    keysToDelete.push(item.mutationKey)
+    let entry = removedByIndex.get(item.indexKey)
+    if (!entry) { entry = { allIds: item.allIds, removed: new Set() }; removedByIndex.set(item.indexKey, entry) }
+    entry.removed.add(item.mutationId)
+  }
+  if (!keysToDelete.length) return
+
+  await db.sessionManager.bulkDelete(keysToDelete)
+  const indexUpdates: Array<{ key: string; value: string[] }> = []
+  const indexDeletes: string[] = []
+  for (const [indexKey, { allIds, removed }] of removedByIndex) {
+    const remaining = allIds.filter(id => !removed.has(id))
+    if (remaining.length) indexUpdates.push({ key: indexKey, value: remaining })
+    else indexDeletes.push(indexKey)
+  }
+  if (indexUpdates.length) await db.sessionManager.bulkPut(indexUpdates)
+  if (indexDeletes.length) await db.sessionManager.bulkDelete(indexDeletes)
 }
 export async function purgeExpiredMessageMutations(nowSeconds: number): Promise<void> {
   await db.transaction('rw', db.sessionManager, () => purgeMessageMutationRecords(value => value.expiresAt !== undefined && value.expiresAt <= nowSeconds))
@@ -339,6 +390,7 @@ export async function updateMessageRecipientStatuses(
 export async function updateMessageDeliveryTrace(
   id: string,
   trace: {
+    sentToRelays?: string[]
     deliveryChannels?: string[]
     outerEventIds?: string[]
     pendingRelayEventIds?: string[]
@@ -346,6 +398,10 @@ export async function updateMessageDeliveryTrace(
 ): Promise<void> {
   const existing = await db.messages.get(id)
   const updates: Partial<StoredMessage> = {}
+  if (trace.sentToRelays) {
+    const merged = mergeUniqueStrings(existing?.sentToRelays, trace.sentToRelays)
+    if (merged.length > 0) updates.sentToRelays = merged
+  }
   if (trace.deliveryChannels) {
     updates.deliveryChannels = mergeUniqueStrings(existing?.deliveryChannels, trace.deliveryChannels)
   }
@@ -404,11 +460,15 @@ export async function addInviteUsedBy(id: string, pubkey: string): Promise<void>
 }
 
 // Processed event operations (for SW notification suppression)
+let lastProcessedPruneAt = 0
 export async function saveProcessedEvent(event: ProcessedEvent): Promise<void> {
   await db.processedEvents.put(event)
-  // Prune old entries (keep last 24h)
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000
-  await db.processedEvents.where('timestamp').below(cutoff).delete()
+  // Prune old entries (keep last 24h) at most once per minute
+  const now = Date.now()
+  if (now - lastProcessedPruneAt >= 60_000) {
+    lastProcessedPruneAt = now
+    await db.processedEvents.where('timestamp').below(now - 24 * 60 * 60 * 1000).delete()
+  }
 }
 
 export async function getProcessedEvent(id: string): Promise<ProcessedEvent | undefined> {
@@ -445,6 +505,7 @@ export async function deleteGroupFromDb(id: string): Promise<void> {
 
 // Clear all data (for logout)
 export async function clearAllData(): Promise<void> {
+  const { clearDirectFileStorage } = await import('./directFileStorage')
   await Promise.all([
     clearDirectFileStorage(),
     db.sessions.clear(),

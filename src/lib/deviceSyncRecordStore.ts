@@ -1,9 +1,9 @@
-import { writable } from 'svelte/store'
 import type { Event } from 'nostr-tools'
 import { db, isHistoryChatDeleted, type StoredMessage } from './storage'
 import { compareControlHead, verifiedProfileEvent, type DeviceSyncReaction, type DeviceSyncGroupSettings } from './deviceSyncRecords'
+import { deviceRecordVersion } from './deviceRecordVersion'
 
-export const deviceRecordVersion = writable(0)
+export { deviceRecordVersion }
 const prefix = (owner: string, type = '') => `device-record-v1:${owner}:${type}`
 const reactionKey = (owner: string, r: DeviceSyncReaction) => prefix(owner, `reaction:${JSON.stringify([r.chatId, r.messageId, r.author])}`)
 const changed = () => deviceRecordVersion.update(value => value + 1)

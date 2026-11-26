@@ -11,6 +11,7 @@
   import Name from './Name.svelte'
   import StatusIndicator from './StatusIndicator.svelte'
   import { identity } from '../lib/identity'
+  import { formatChatListTime } from '../lib/utils'
 
   interface Props {
     chat: ChatSession
@@ -26,17 +27,6 @@
   let names = $derived(mentionNames(messageMentions(lastMessage?.content ?? '').map(m => m.pubkey),false))
   let unseenCount = $derived(countUnseenMessages(chat.messages))
   let unseenCountLabel = $derived(formatUnseenCount(unseenCount))
-
-  function formatTime(timestamp: number): string {
-    const date = new Date(timestamp)
-    const now = new Date()
-    const isToday = date.toDateString() === now.toDateString()
-
-    if (isToday) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-  }
 </script>
 
 <div data-testid="chat-list-row" class="w-full p-3 hover:bg-surface-light flex items-center gap-3 transition-colors">
@@ -61,7 +51,7 @@
                   {unseenCountLabel}
                 </span>
               {/if}
-              <span class="text-xs text-gray-500">{formatTime(lastMessage.timestamp)}</span>
+              <span class="text-xs text-gray-500">{formatChatListTime(lastMessage.timestamp)}</span>
             </div>
             {#if lastMessage.isMine && !lastMessage.call}
               <StatusIndicator status={lastMessage.status} />

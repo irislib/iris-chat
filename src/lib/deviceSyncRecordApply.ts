@@ -1,11 +1,12 @@
-import { acceptChatFromActivity } from './messageRequests'
+import { acceptChatFromActivity, acceptChatsFromActivity } from './messageRequests'
 import { acceptFromStoredActivity, restoreStoredRequestAcceptance } from './requestActivity'
+import { validMessageRead } from './privateStateProtocol'
 import { projectMessageRead } from './privateStateStore'
 import { messageWithMutations, refreshMessageMutationView } from './messageMutations'
 import { get } from 'svelte/store'
 import { getEventHash, type Event } from 'nostr-tools'
 import type { Rumor } from 'nostr-double-ratchet'
-import { db, admitHistoryMessage, type StoredMessage } from './storage'
+import { db, type StoredMessage } from './storage'
 import { saveReactionHead, saveGroupSettingsHead, saveSignedProfileHead, messageWithReactionHeads, projectReactionHeads, groupSettingsHead, hasReactionHead } from './deviceSyncRecordStore'
 import type { DeviceSyncReaction, DeviceSyncGroupSettings } from './deviceSyncRecords'
 
@@ -121,26 +122,128 @@ export async function restoreGroupSettings(owner: string, groupId: string): Prom
   expirationStore.setExpiration(groupId, head.messageTtlSeconds)
 }
 
+export interface AdmitRecordMessageInput {
+  message: StoredMessage
+  legacyReactions?: Array<{ author: string; emoji: string }>
+  allowedAuthors: Set<string>
+}
+
+export async function admitRecordMessages(
+  owner: string,
+  entries: AdmitRecordMessageInput[],
+  allowLegacy: boolean,
+  authorized: () => boolean,
+): Promise<Array<StoredMessage | undefined>> {
+  if (entries.length === 0) return []
+
+  const results: Array<StoredMessage | undefined> = new Array(entries.length).fill(undefined)
+  const admittedEntries: Array<{ stored: StoredMessage; hadOwnLegacyReaction: boolean }> = []
+
+  await db.transaction('rw', db.messages, db.sessionManager, async () => {
+    if (!authorized()) return
+    const uniqueChatIds = [...new Set(entries.map(e => e.message.sessionId))]
+    const [existingMessages, deletedMessageRows, deletedChatRows, mutationTargetRows, readRows] = await Promise.all([
+      db.messages.bulkGet(entries.map(e => e.message.id)),
+      db.sessionManager.bulkGet(entries.map(e => `history-deleted-message:${e.message.id}`)),
+      db.sessionManager.bulkGet(uniqueChatIds.map(chatId => `history-deleted-chat:${chatId}`)),
+      db.sessionManager.bulkGet(entries.map(e => `message-mutation-target:${owner}:${JSON.stringify([e.message.sessionId, e.message.id])}`)),
+      db.sessionManager.bulkGet(entries.map(e => (!e.message.isMine && !e.message.call && e.message.status !== 'seen')
+        ? `private-state-v1:${owner}:read:${JSON.stringify([e.message.sessionId, e.message.id])}`
+        : '')),
+    ])
+
+    const deletedChatCutoff = new Map<string, number>()
+    for (let i = 0; i < uniqueChatIds.length; i++) {
+      const value = deletedChatRows[i]?.value
+      if (typeof value === 'number') deletedChatCutoff.set(uniqueChatIds[i], value)
+    }
+
+    const seenBatchIds = new Set<string>()
+    const candidates: Array<{
+      index: number
+      entry: AdmitRecordMessageInput
+      hasMutationTarget: boolean
+      pendingRead: unknown
+    }> = []
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
+      const msg = entry.message
+      if (existingMessages[i] || deletedMessageRows[i] || seenBatchIds.has(msg.id)) continue
+      const cutoff = deletedChatCutoff.get(msg.sessionId)
+      if (cutoff !== undefined && Math.floor(msg.timestamp / 1000) <= cutoff) continue
+      seenBatchIds.add(msg.id)
+      candidates.push({
+        index: i,
+        entry,
+        hasMutationTarget: Boolean((mutationTargetRows[i]?.value as string[] | undefined)?.length),
+        pendingRead: readRows[i]?.value,
+      })
+    }
+    if (!candidates.length || !authorized()) return
+
+    const reactionProjected = await Promise.all(
+      candidates.map(async ({ entry }) => {
+        const incoming = { ...entry.message }
+        if (allowLegacy && entry.legacyReactions) {
+          const reactions: Record<string, string[]> = {}
+          for (const reaction of entry.legacyReactions) {
+            if (!entry.allowedAuthors.has(reaction.author) || await hasReactionHead(owner, incoming.sessionId, incoming.id, reaction.author)) continue
+            for (const emoji of Object.keys(reactions)) reactions[emoji] = reactions[emoji].filter(author => author !== reaction.author)
+            ;(reactions[reaction.emoji] ??= []).push(reaction.author)
+          }
+          incoming.reactions = Object.fromEntries(Object.entries(reactions).filter(([, authors]) => authors.length))
+        }
+        return messageWithReactionHeads(owner, incoming)
+      }),
+    )
+
+    const toPut: StoredMessage[] = []
+    const nowSecs = Date.now() / 1000
+    for (let i = 0; i < candidates.length; i++) {
+      const { index, entry, hasMutationTarget, pendingRead } = candidates[i]
+      let projected = reactionProjected[i]
+      if (hasMutationTarget) projected = await messageWithMutations(owner, projected)
+      if (!projected.isMine && !projected.call && projected.status !== 'seen' && validMessageRead(pendingRead)) {
+        if (
+          (pendingRead.expiresAtSecs === undefined || pendingRead.expiresAtSecs > nowSecs) &&
+          pendingRead.createdAtSecs === Math.floor(projected.timestamp / 1000)
+        ) {
+          projected = { ...projected, status: 'seen' }
+        }
+      }
+      results[index] = projected
+      toPut.push(projected)
+      admittedEntries.push({
+        stored: projected,
+        hadOwnLegacyReaction: Boolean(allowLegacy && entry.legacyReactions?.some(r => r.author === owner)),
+      })
+    }
+
+    if (!authorized()) {
+      results.fill(undefined)
+      admittedEntries.length = 0
+      return
+    }
+    await db.messages.bulkPut(toPut)
+  })
+
+  if (admittedEntries.length > 0 && authorized()) {
+    const ownActivity = new Map<string, number>()
+    for (const { stored, hadOwnLegacyReaction } of admittedEntries) {
+      if (stored.isMine) {
+        const previous = ownActivity.get(stored.sessionId)
+        if (previous === undefined || stored.timestamp > previous) ownActivity.set(stored.sessionId, stored.timestamp)
+      }
+      if (hadOwnLegacyReaction) await restoreStoredRequestAcceptance(owner, stored)
+    }
+    if (ownActivity.size > 0) acceptChatsFromActivity(owner, ownActivity)
+  }
+
+  return results
+}
+
 export async function admitRecordMessage(owner: string, message: StoredMessage,
   legacyReactions: Array<{ author: string; emoji: string }> | undefined, allowLegacy: boolean,
   allowedAuthors: Set<string>, authorized: () => boolean): Promise<StoredMessage | undefined> {
-  const admitted = await db.transaction('rw', db.messages, db.sessionManager, async () => {
-    const incoming = { ...message }
-    if (allowLegacy && legacyReactions) {
-      const reactions: Record<string, string[]> = {}
-      for (const reaction of legacyReactions) {
-        if (!allowedAuthors.has(reaction.author) || await hasReactionHead(owner, message.sessionId, message.id, reaction.author)) continue
-        for (const emoji of Object.keys(reactions)) reactions[emoji] = reactions[emoji].filter(author => author !== reaction.author)
-        ;(reactions[reaction.emoji] ??= []).push(reaction.author)
-      }
-      incoming.reactions = Object.fromEntries(Object.entries(reactions).filter(([, authors]) => authors.length))
-    }
-    const projected = await projectMessageRead(owner, await messageWithMutations(owner, await messageWithReactionHeads(owner, incoming)))
-    return await admitHistoryMessage(projected, authorized) ? projected : undefined
-  })
-  if (admitted && authorized()) {
-    acceptFromStoredActivity(owner, admitted)
-    if (allowLegacy && legacyReactions?.some(reaction => reaction.author === owner)) await restoreStoredRequestAcceptance(owner, admitted)
-  }
-  return admitted
+  return (await admitRecordMessages(owner, [{ message, legacyReactions, allowedAuthors }], allowLegacy, authorized))[0]
 }

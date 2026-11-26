@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.72 - 2026-11-26
+
+- Faster app startup and reload by batching local chat, group, block, and read-state loading into single store updates and fewer IndexedDB reads.
+- Smoother chat opening and switching with cached Markdown rendering, a zero-parse fast path for plain text messages, cached timestamp formatting, and fewer redundant mention/timeline re-renders.
+- Faster message deletion, disappearing-message cleanup, and linked-device history sync with indexed mutation purges, linear-time snapshot chunking, and batched message admission.
+- Lower idle background overhead and a leaner service worker bundle that no longer pulls unused app runtime code.
+
 ## 2.6.66 - 2026-11-13
 
 - When a group message needs a missing sender key, Iris Chat requests it from the device that wrote the message if its identity is verified. This reduces repeat deliveries to other linked devices during recovery.

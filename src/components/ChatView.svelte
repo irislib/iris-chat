@@ -422,13 +422,18 @@
   })
 
   type TimelineMessage = ChatMessage & { nameChange?: AcceptedNameChange }
-  let messages: TimelineMessage[] = $derived([
-    ...($currentChat?.messages || chat.messages),
-    ...(memory?.name_changes ?? []).map((change, index) => ({
-      id: `local-name-change-${index}`, content: '', timestamp: change.accepted_at_secs * 1000,
-      isMine: true, nameChange: change,
-    })),
-  ].sort((a, b) => a.timestamp - b.timestamp))
+  let messages: TimelineMessage[] = $derived.by(() => {
+    const base = $currentChat?.messages || chat.messages
+    const changes = memory?.name_changes
+    if (!changes?.length) return base
+    return [
+      ...base,
+      ...changes.map((change, index) => ({
+        id: `local-name-change-${index}`, content: '', timestamp: change.accepted_at_secs * 1000,
+        isMine: true, nameChange: change,
+      })),
+    ].sort((a, b) => a.timestamp - b.timestamp)
+  })
   // Build a map for quick reply lookups
   let messageMap = $derived(new Map(messages.map(m => [m.id, m])))
 

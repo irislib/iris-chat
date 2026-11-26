@@ -250,7 +250,8 @@ async function getSessionManagerStates(): Promise<SessionManagerStateEntry[]> {
   const states: SessionManagerStateEntry[] = []
   try {
     const records = await db.sessionManager
-      .filter((record) => record.key.startsWith('v1/user/'))
+      .where('key')
+      .startsWith('v1/user/')
       .toArray()
     for (const record of records) {
       const chatId = parseSessionManagerUserKey(record.key) || undefined

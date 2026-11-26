@@ -4,12 +4,38 @@ import { writable } from 'svelte/store'
 import { parsePrivateEvent, type PrivateEvent } from 'nostr-social-graph/privateEvents'
 import { db, isHistoryChatDeleted, type StoredMessage } from './storage'
 import { privateEventState, comparePrivateEvents, blockedIntervals, validMessageRead, type NameApproval, type BlockState, type MessageReadState } from './privateStateProtocol'
-import { deviceRecordVersion } from './deviceSyncRecordStore'
+import { deviceRecordVersion } from './deviceRecordVersion'
 import type { DeviceSyncRecord } from './deviceSyncRecords'
 const base = (owner: string) => `private-state-v1:${owner}:`
 const readKey = (owner: string, chat: string, id: string) => `${base(owner)}read:${JSON.stringify([chat, id])}`
 export const privateStateVersion = writable(0)
-const changed = () => { privateStateVersion.update(n => n + 1); deviceRecordVersion.update(n => n + 1) }
+let directPublicationCanceler: ((owner: string, target: string) => void) | undefined
+export function registerDirectPublicationCanceler(fn: (owner: string, target: string) => void): void {
+  directPublicationCanceler = fn
+}
+interface PrivateStateReadCache {
+  owner: string
+  refs: number
+  blocks?: Promise<Map<string, Array<[number, number | null]>>>
+  reads?: Promise<Map<string, Map<string, MessageReadState>>>
+}
+let readCache: PrivateStateReadCache | undefined
+const invalidateReadCache = (owner?: string) => {
+  if (readCache && (!owner || readCache.owner === owner)) { readCache.blocks = undefined; readCache.reads = undefined }
+}
+export async function withPrivateStateReadCache<T>(owner: string | null | undefined, fn: () => Promise<T>): Promise<T> {
+  if (!owner) return fn()
+  const existing = readCache?.owner === owner ? readCache : undefined
+  const active = existing ?? { owner, refs: 0 }
+  active.refs++
+  if (!existing) readCache = active
+  try { return await fn() } finally {
+    active.refs--
+    if (readCache === active && active.refs <= 0) readCache = undefined
+  }
+}
+export function cachedPrivateStateOwner(): string | undefined { return readCache?.owner }
+const changed = (owner?: string) => { invalidateReadCache(owner); privateStateVersion.update(n => n + 1); deviceRecordVersion.update(n => n + 1) }
 export async function* privateStateEvents(owner: string): AsyncGenerator<PrivateEvent> {
   const prefix = `${base(owner)}event:`
   let after: string | undefined
@@ -47,11 +73,10 @@ export async function savePrivateStateEvent(owner: string, event: PrivateEvent, 
     if (await isPrivatelyBlocked(owner, target)) next.add(target); else next.delete(target)
     if (authorized()) {
       replaceBlockedContacts(owner, next)
-      const { cancelDirectPublications } = await import('./privateChats')
-      cancelDirectPublications(owner, target)
+      directPublicationCanceler?.(owner, target)
     }
   }
-  if (inserted) changed()
+  if (inserted) changed(owner)
   return inserted
 }
 export async function projectNameApproval(owner: string, contact: string): Promise<void> {
@@ -81,8 +106,60 @@ export async function privateDirectPublicationPolicy(owner: string, target: stri
   if (cutoff > 0 && createdAt <= cutoff) return false
   return events.length && (privateEventState(events.at(-1)!) as BlockState).blocked ? 'hold' : true
 }
+export function isTimestampBlocked(intervals: Array<[number, number | null]> | undefined, created: number): boolean {
+  return !!intervals?.some(([since, until]) => created >= since && (until === null || created < until))
+}
+export async function loadBlockedIntervalsMap(owner: string): Promise<Map<string, Array<[number, number | null]>>> {
+  if (readCache?.owner === owner) return readCache.blocks ??= fetchBlockedIntervalsMap(owner)
+  return fetchBlockedIntervalsMap(owner)
+}
+async function fetchBlockedIntervalsMap(owner: string): Promise<Map<string, Array<[number, number | null]>>> {
+  const rows = await db.sessionManager.where('key').startsWith(`${base(owner)}event:10454:`).toArray()
+  const byTarget = new Map<string, PrivateEvent[]>()
+  for (const row of rows) {
+    let event: PrivateEvent
+    try { event = parsePrivateEvent(row.value, true) } catch { continue }
+    const state = privateEventState(event)
+    if (state?.owner !== owner || !('target' in state)) continue
+    let list = byTarget.get(state.target)
+    if (!list) { list = []; byTarget.set(state.target, list) }
+    list.push(event)
+  }
+  const intervals = new Map<string, Array<[number, number | null]>>()
+  for (const [target, events] of byTarget) intervals.set(target, blockedIntervals(events))
+  return intervals
+}
+export async function loadPendingReadsMap(owner: string, sessionId?: string): Promise<Map<string, Map<string, MessageReadState>>> {
+  if (!sessionId && readCache?.owner === owner) return readCache.reads ??= fetchPendingReadsMap(owner)
+  if (sessionId && readCache?.owner === owner) {
+    const all = await (readCache.reads ??= fetchPendingReadsMap(owner))
+    const single = all.get(sessionId)
+    return single ? new Map([[sessionId, single]]) : new Map()
+  }
+  return fetchPendingReadsMap(owner, sessionId)
+}
+async function fetchPendingReadsMap(owner: string, sessionId?: string): Promise<Map<string, Map<string, MessageReadState>>> {
+  const readPrefix = `${base(owner)}read:`
+  const scanPrefix = sessionId ? `${readPrefix}${JSON.stringify([sessionId]).slice(0, -1)},` : readPrefix
+  const rows = await db.sessionManager.where('key').startsWith(scanPrefix).toArray()
+  const nowSecs = Date.now() / 1000
+  const byChat = new Map<string, Map<string, MessageReadState>>()
+  for (const row of rows) {
+    const read = row.value as MessageReadState | undefined
+    if (!validMessageRead(read) || (read.expiresAtSecs !== undefined && read.expiresAtSecs <= nowSecs)) continue
+    let parsed: [string, string]
+    try { parsed = JSON.parse(row.key.slice(readPrefix.length)) } catch { continue }
+    const [chatId, messageId] = parsed
+    let map = byChat.get(chatId)
+    if (!map) { map = new Map(); byChat.set(chatId, map) }
+    map.set(messageId, read)
+  }
+  return byChat
+}
 export async function privateHistoryAllowed(owner: string, author: string, created: number): Promise<boolean> {
-  return !blockedIntervals(await contactPrivateEvents(owner, author, 10454)).some(([since, until]) => created >= since && (until === null || created < until))
+  if (author === owner) return true
+  if (readCache?.owner === owner) return !isTimestampBlocked((await loadBlockedIntervalsMap(owner)).get(author), created)
+  return !isTimestampBlocked(blockedIntervals(await contactPrivateEvents(owner, author, 10454)), created)
 }
 export async function readState(owner: string, chatId: string, messageId: string): Promise<MessageReadState | undefined> {
   const message = await db.messages.get(messageId)
@@ -115,14 +192,38 @@ export async function applyMessageRead(owner: string, chatId: string, messageId:
     }
     return false
   })
-  if (updated) changed()
+  if (updated) changed(owner)
   // Also dismiss on replay; a browser enqueue may have raced the first read.
   if (authorized() && (await readState(owner,chatId,messageId))?.createdAtSecs === read.createdAtSecs)
     await dismissReadNotification({ownerPubkey:owner,chatId,messageId,createdAtSecs:read.createdAtSecs})
 }
 export async function projectMessageRead(owner: string, message: StoredMessage): Promise<StoredMessage> {
+  if (message.isMine || message.call || message.status === 'seen') return message
   const read = await readState(owner, message.sessionId, message.id)
-  return !message.isMine && !message.call && read?.createdAtSecs === Math.floor(message.timestamp / 1000) ? { ...message, status: 'seen' } : message
+  return read?.createdAtSecs === Math.floor(message.timestamp / 1000) ? { ...message, status: 'seen' } : message
+}
+export async function projectSessionMessages(owner: string, sessionId: string, rows: StoredMessage[]): Promise<StoredMessage[]> {
+  if (!rows.length) return rows
+  const needsReadLookup = rows.some(row => !row.isMine && !row.call && row.status !== 'seen')
+  const [intervalsByAuthor, readsByChat] = await Promise.all([
+    loadBlockedIntervalsMap(owner),
+    needsReadLookup ? loadPendingReadsMap(owner, sessionId) : Promise.resolve(new Map<string, Map<string, MessageReadState>>()),
+  ])
+  const pendingReads = readsByChat.get(sessionId)
+  const filtered: StoredMessage[] = []
+  for (const row of rows) {
+    const createdSecs = Math.floor(row.timestamp / 1000)
+    if (!row.isMine) {
+      const author = row.senderPubkey ?? sessionId
+      if (author !== owner && isTimestampBlocked(intervalsByAuthor.get(author), createdSecs)) continue
+    }
+    if (!row.isMine && !row.call && row.status !== 'seen' && pendingReads?.get(row.id)?.createdAtSecs === createdSecs) {
+      filtered.push({ ...row, status: 'seen' })
+    } else {
+      filtered.push(row)
+    }
+  }
+  return filtered
 }
 export async function* privateStateRecords(owner: string): AsyncGenerator<DeviceSyncRecord> {
   for await (const event of privateStateEvents(owner)) yield { type: event.kind === 10454 ? 'privateBlock' : 'privateNameApproval', event }

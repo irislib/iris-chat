@@ -33,6 +33,7 @@ export function startMessageExpirationCleanup(): void {
     for (const [sessionId, chatSession] of currentChats) {
       const expiredIds: string[] = []
       for (const msg of chatSession.messages) {
+        if (msg.expiresAt === undefined) continue
         const event = messageToTaggedEvent(msg)
         const exp = getExpirationTimestampSeconds(event)
         if (exp === undefined) continue
@@ -70,6 +71,7 @@ export function startMessageExpirationCleanup(): void {
     for (const [groupId, msgs] of currentGroupMessages) {
       const expiredIds: string[] = []
       for (const msg of msgs) {
+        if (msg.expiresAt === undefined) continue
         const event = messageToTaggedEvent(msg)
         const exp = getExpirationTimestampSeconds(event)
         if (exp === undefined) continue
