@@ -57,7 +57,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.23.5
           cache: pnpm
           cache-dependency-path: iris-chat/pnpm-lock.yaml
 
@@ -153,7 +153,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.23.5
           cache: pnpm
 
       - name: Install dependencies
@@ -211,12 +211,20 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.23.5
           cache: pnpm
       - name: Install locked dependencies and build
         run: |
           pnpm install --frozen-lockfile
           pnpm build
+      - name: Verify installed runtime archives and portable production flows
+        run: |
+          python3 scripts/verify-installed-runtime.py
+          pnpm exec playwright install --with-deps chromium
+          pnpm run smoke:portable
+          node scripts/smoke-negentropy-graph.mjs chat
+          node scripts/smoke-public-private-relays.mjs
+
       - name: Record exact source and every output
         run: |
           python3 - <<'PY'
@@ -244,5 +252,6 @@ jobs:
           path: |
             dist/
             production-build.json
+            test-results/runtime-closure.json
           if-no-files-found: error
           retention-days: 30
