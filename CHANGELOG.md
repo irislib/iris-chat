@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.6.73 - 2026-11-26
+
+- Update the shared messaging runtime to nostr-pubsub 0.5.42 across the app and nested Hashtree dependencies, with indexed event-cache reads, less repeated signature verification, more efficient relay requests, and improved authenticated relay recovery.
+
 ## 2.6.72 - 2026-11-26
 
 - Faster app startup and reload by batching local chat, group, block, and read-state loading into single store updates and fewer IndexedDB reads.

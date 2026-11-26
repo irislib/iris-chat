@@ -1,12 +1,53 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto'
 import { expect, it, vi } from 'vitest'
-import { generateSecretKey, getPublicKey } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
 import { Session, buildMessageAuthorSubscriptionFilters } from 'nostr-double-ratchet'
 import { TestRelay } from '../../e2e/test-relay'
 import { createNostrWorkerRuntime } from './nostrWorkerRuntime'
 import NostrClient from './nostrClient'
 import { createRuntimeSubscribe } from './runtimeSubscribe'
+
+it('receives encrypted replies after an authenticated relay reconnects without reopening the chat', async () => {
+  const relay = new TestRelay()
+  relay.authRequired = true
+  // Relays may reuse their challenge; authentication is still per connection.
+  relay.authChallenge = 'encrypted-chat-reconnect'
+  let liveRequests = 0
+  relay.observeRequest = filters => {
+    if (filters.some(filter => filter.kinds?.includes(1060) && filter.limit === undefined)) liveRequests++
+  }
+  await relay.start()
+  const receiver = createNostrWorkerRuntime('authenticated-reconnect-receiver',
+    async (_relay, template) => finalizeEvent(template, generateSecretKey()))
+  const sender = createNostrWorkerRuntime('authenticated-reconnect-sender')
+  const received: string[] = []
+  let stop: (() => void) | undefined
+  try {
+    receiver.setRelays([relay.url]); sender.setRelays([relay.url])
+    const session = Session.init(getPublicKey(generateSecretKey()), generateSecretKey(), true, generateSecretKey())
+    const author = session.state.ourCurrentNostrKey!.publicKey
+    const client = Object.assign(Object.create(NostrClient.prototype), {
+      runtime: receiver, pool: { connectedRelays: () => [{ url: relay.url }] },
+    }) as NostrClient
+    stop = createRuntimeSubscribe(client)({ kinds: [1060], authors: [author] }, event => received.push(event.id))
+    await expect.poll(() => liveRequests, { timeout: 3000 }).toBeGreaterThan(0)
+    const before = session.sendEvent({ kind: 14, content: 'before relay reconnect' }).event
+    await sender.publish(before, { requireAck: true, carrier: 'pairwise' })
+    await expect.poll(() => received, { timeout: 3000 }).toContain(before.id)
+    const requestsBeforeDisconnect = liveRequests
+    relay.disconnectClients()
+    await expect.poll(() => liveRequests, { timeout: 5000 }).toBeGreaterThan(requestsBeforeDisconnect)
+    const after = session.sendEvent({ kind: 14, content: 'after relay reconnect' }).event
+    await sender.publish(after, { requireAck: true, carrier: 'pairwise' })
+    await expect.poll(() => received, { timeout: 3000 }).toContain(after.id)
+    expect(received).toEqual([before.id, after.id])
+  } finally {
+    stop?.()
+    await Promise.all([receiver.close(), sender.close()])
+    await relay.stop()
+  }
+}, 20_000)
 
 it('keeps live message interests on the configured relays after connection changes', async () => {
   const first = new TestRelay(), second = new TestRelay()

@@ -66,6 +66,7 @@ export class TestRelay {
   public observeRequest?: (filters: Filter[], browser: boolean) => void
   public observeWire?: (message: unknown[], connection: number) => void
   public authRequired = false
+  public authChallenge?: string
   public deliveredEvents = 0
   public replayedEvents = 0
   public liveEvents = 0
@@ -86,7 +87,7 @@ export class TestRelay {
       if (request.headers['user-agent']?.includes('Mozilla/')) this.browsers.add(ws)
       this.subscriptions.set(ws, new Map())
       if (this.authRequired) {
-        const challenge = `test-relay-${connection}`
+        const challenge = this.authChallenge ?? `test-relay-${connection}`
         this.challenges.set(ws, challenge)
         ws.send(JSON.stringify(['AUTH', challenge]))
       }
@@ -312,6 +313,10 @@ export class TestRelay {
 
   async stop(): Promise<void> {
     await closeRelay(this.server, this.wss, this.sockets)
+  }
+
+  disconnectClients(): void {
+    for (const client of this.wss.clients) client.close(1012, 'Test relay reconnect')
   }
 
   get url(): string {
