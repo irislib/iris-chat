@@ -32,6 +32,7 @@
   import { setAttachmentAccount } from './lib/hashtree'
   import { startDeviceSync, stopDeviceSync } from './lib/deviceSync'
   import { createDeviceSyncLifecycle } from './lib/deviceSyncLifecycle'
+  import { claimForegroundOwnership } from './lib/foregroundOwner'
   import { deviceHistoryProgress } from './lib/deviceHistoryPolicy'
   import { onCurrentDeviceRemovedFromRoster } from './lib/devices'
   import { PUSH_NOSTR_EVENT_MESSAGE } from './lib/pushEvents'
@@ -97,6 +98,7 @@
   // Mobile: which panel to show - 'sidebar' or 'main'
   let mobileView = $state<'sidebar' | 'main'>('sidebar')
   let duplicateTab = $state(false)
+  let ownershipUnavailable = $state(false)
   let pendingNotification = $state<NotificationTarget | null>(notificationFromHash(window.location.hash))
 
   // Consume links at the router, including hash-only navigation from an open
@@ -272,28 +274,45 @@
 
     // Run async initialization
     ;(async () => {
-    // Prevent multiple tabs - encryption state can't sync between them
-    // Use sessionStorage to persist tab identity across hot reloads
-    let tabId = sessionStorage.getItem('iris-tab-id')
-    if (!tabId) {
-      tabId = Math.random().toString(36).slice(2)
-      sessionStorage.setItem('iris-tab-id', tabId)
+    // Acquire before auto-login can start any shared private runtime writes.
+    let releaseUnstartedOwnership: (() => void) | null
+    try {
+      releaseUnstartedOwnership = await claimForegroundOwnership()
+      if (!releaseUnstartedOwnership) {
+        duplicateTab = true
+        initializing = false
+        return
+      }
+    } catch {
+      ownershipUnavailable = true
+      initializing = false
+      return
     }
+
+    // Compatibility with already-open releases that predate the browser lock.
+    // This probe is not the ownership authority between updated tabs. Never use
+    // sessionStorage for document identity: duplicate tabs inherit its contents.
+    const tabId = crypto.randomUUID()
     const channel = new BroadcastChannel('iris-chat-tab')
-    channel.postMessage({ type: 'ping', tabId })
+    let legacyProbeFinished = false
     channel.onmessage = (e) => {
       if (e.data?.tabId === tabId) return // Ignore own messages
       if (e.data?.type === 'ping' && !duplicateTab) {
         channel.postMessage({ type: 'pong', tabId })
       } else if (e.data?.type === 'pong') {
+        // A delayed legacy reply must terminate this document's runtime, not
+        // merely hide its UI while it continues writing in the background.
+        if (legacyProbeFinished) { window.location.reload(); return }
         duplicateTab = true
         initializing = false
       }
     }
+    channel.postMessage({ type: 'ping', tabId })
 
-    // Small delay to detect existing tabs
+    // Retained only for migration from the legacy BroadcastChannel guard.
     await new Promise(r => setTimeout(r, 100))
-    if (duplicateTab) return
+    if (duplicateTab) { releaseUnstartedOwnership(); return }
+    legacyProbeFinished = true
 
     // Check for invite in URL hash (invite hashes start with #invite-)
     const hashInvite = parseInviteFromHash()
@@ -671,6 +690,11 @@
         <div class="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
         <p class="text-gray-400">Loading...</p>
       </div>
+    </div>
+  {:else if ownershipUnavailable}
+    <div class="h-full flex flex-col items-center justify-center p-4 text-center">
+      <h1 class="text-2xl font-bold text-gray-400 mb-4">Could not safely open chat</h1>
+      <p class="text-gray-500 max-w-sm">Please reload or use an up-to-date browser to keep your encrypted messages in sync.</p>
     </div>
   {:else if duplicateTab}
     <div class="h-full flex flex-col items-center justify-center p-4">
