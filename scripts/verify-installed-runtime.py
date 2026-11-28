@@ -14,6 +14,14 @@ parser.add_argument('--output', type=Path, default=Path('test-results/runtime-cl
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 pins = json.loads((root / 'scripts/runtime-cohort.json').read_text())['packages']
+# The app's ratchet is released independently of the shared transport cohort.
+# Audit every installed path into its immutable archive at the same build gate.
+pins['nostr-double-ratchet'] = {
+    'version': '0.0.189',
+    'url': 'https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.189.tgz',
+    'sha256': 'fc1cc2fd6ecd97ca0956c8a5ac08912513bf62ee808130a9953b494139d7e950',
+    'integrity': 'sha512-FNDz6KvHBYIQQrMW02Pyw/1gYFrijX8lnpITCdA+X+A/nRMjUUilzWTAsD1IeRTDbeBEJ4rxQ284bIpPXzR9kw==',
+}
 nodes, missing = {}, []
 
 
@@ -73,7 +81,7 @@ for target, node in nodes.items():
                 for name, dependency in parent['edges'].items() if dependency == target]
     verified.append({'name': node['name'], 'version': node['version'], 'installedPath': target,
                      'archiveSHA256': pin['sha256'], 'files': files, 'incomingPaths': incoming})
-for name in ('@fips/core', '@fips/tcp', 'nostr-pubsub', 'nostr-social-graph'):
+for name in ('@fips/core', '@fips/tcp', 'nostr-pubsub', 'nostr-social-graph', 'nostr-double-ratchet'):
     assert sum(item['name'] == name for item in verified) == 1, name
 report = {'source': root.name, 'lockSHA256': hashlib.sha256((root / 'pnpm-lock.yaml').read_bytes()).hexdigest(),
           'packagesInspected': len(nodes), 'verified': verified, 'uninstalledOptionalOrPeer': missing}
