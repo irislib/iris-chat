@@ -89,7 +89,7 @@ export async function installDirectFileDiagnostics(context: BrowserContext) {
                   if (/^v2\/direct-files\/.*\/sources\//.test(key) && Array.isArray(value)) rows.push({
                     type: 'sources', sizes: value.slice(0, 32).map(blob => blob instanceof Blob ? blob.size : null),
                   })
-                  cursor.continue()
+                  row.continue()
                 }
               }
             })

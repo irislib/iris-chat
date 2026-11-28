@@ -372,7 +372,9 @@ export async function acceptDirectFiles(id: string): Promise<void> {
       { version: record.offer.protocol_version ?? 1, expires: record.offer.expires_at_secs * 1000 })
   } catch (error) {
     const current = records.get(id)
-    if (active === runtime && current && isActive(current.status)) publish({ ...current, status: 'failed',
+    // The engine may already have retained the prefix and emitted a resumable
+    // pause. Only classify errors that left this opening attempt unresolved.
+    if (active === runtime && current?.status === 'connecting') publish({ ...current, status: 'failed',
       error: transferError(error) })
     throw new Error(transferError(error))
   }

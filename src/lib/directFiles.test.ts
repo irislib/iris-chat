@@ -282,6 +282,20 @@ describe('direct-file app consent and device roles', () => {
       [expect.objectContaining({ filename: 'notes.txt', sizeBytes: 5 })], { version: 2, expires: expect.any(Number) })
   })
 
+  it('preserves the engine resumable state when opening a file connection rejects', async () => {
+    const id = await receiveOffer({ ...incomingOffer(), protocol_version: 2 })
+    const tcp = state.transports[0]!
+    tcp.receive.mockImplementationOnce(async () => {
+      tcp.options.onEvent({ type: 'paused', transferId: id, peer: sibling,
+        error: 'File connection closed' })
+      throw new Error('File connection closed')
+    })
+    await expect(acceptDirectFiles(id)).rejects.toThrow('Couldn’t reach the other device')
+    expect(get(directFileTransfers).get(id)?.status).toBe('paused')
+    await acceptDirectFiles(id)
+    expect(tcp.receive).toHaveBeenCalledTimes(2)
+  })
+
   it('restores send sources and asks for matching originals if browser storage was cleared', async () => {
     const selected = [new File(['hello'], 'notes.txt')] as unknown as globalThis.File[]
     await sendDirectFiles(chat(), selected)

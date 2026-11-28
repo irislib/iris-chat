@@ -6,6 +6,8 @@
 - Keep group drafts available for retry when signing is declined or unavailable.
 - Preserve live messages and newer group membership while linked-device metadata is being saved.
 - Keep duplicated or parallel tabs from writing the same encrypted message state.
+- Update encrypted messaging to nostr-double-ratchet 0.0.189 and finish durable cleanup before completing group deletion or sign-out.
+- Keep interrupted direct-file connection attempts resumable.
 
 ## 2.6.73 - 2026-11-26
 
