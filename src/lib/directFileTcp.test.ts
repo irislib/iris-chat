@@ -4,13 +4,14 @@ import type { FipsDatagramEndpoint, FipsServiceContext } from '@fips/tcp'
 import { sha256 } from '@noble/hashes/sha2.js'
 import {
   DIRECT_FILE_CHUNK_BYTES, DirectFileReader, DirectFileTcp, directFileFrame,
-  type DirectFileEvent, type DirectFileSink, type DirectFileSource, type DirectFileTcpOptions,
+  type DirectFileClaim, type DirectFileEvent, type DirectFileSink, type DirectFileSource, type DirectFileTcpOptions,
 } from './directFileTcp'
 
 type Handler = (context: FipsServiceContext) => Promise<void> | void
 class MemoryEndpoint implements FipsDatagramEndpoint {
   readonly handlers = new Map<number, Handler>()
   dropped = false
+  sendError?: Error
   sent = 0
   constructor(readonly id: string, private readonly network: Map<string, MemoryEndpoint>) {
     network.set(id.slice(2), this)
@@ -21,6 +22,7 @@ class MemoryEndpoint implements FipsDatagramEndpoint {
   }
   async sendDatagram(args: { dst: string; srcPort?: number; dstPort: number; payload: Uint8Array }): Promise<void> {
     this.sent += 1
+    if (this.sendError) { const error = this.sendError; this.sendError = undefined; throw error }
     expect(args.dst).toMatch(/^02[0-9a-f]{64}$/)
     const remote = this.network.get(args.dst.slice(2))
     if (this.dropped || remote?.dropped) return
@@ -104,6 +106,47 @@ describe('DirectFileTcp native wire protocol', () => {
     expect(a.events.filter(event => event.type === 'accepted')).toHaveLength(1)
     expect(last(a.events, 'failed')).toBeUndefined()
     expect(last(b.events, 'failed')).toBeUndefined()
+  })
+
+  it('retains a v2 claim and prefix when a route fails once during transmission', async () => {
+    function store() {
+      const values = new Map<string, DirectFileClaim>()
+      return { values, load: async (key: string) => values.get(key),
+        save: async (key: string, value: DirectFileClaim) => { values.set(key, structuredClone(value)) } }
+    }
+    const senderStore = store(), receiverStore = store()
+    const a = device(0, { store: senderStore })
+    const parts: BlobPart[] = []
+    let injected = false
+    const abort = vi.fn(async () => { parts.length = 0 })
+    const createReceiveFile = async (): Promise<DirectFileSink> => ({
+      retained: new Blob(parts),
+      write: async chunk => {
+        parts.push(chunk.slice().buffer)
+        if (!injected) { injected = true; a.endpoint.sendError = new Error('no route to the recipient') }
+      },
+      finish: async () => undefined,
+      suspend: async () => undefined,
+      commit: async () => new Blob(parts),
+      abort,
+    })
+    const b = device(1, { store: receiverStore, createReceiveFile })
+    const files = [source('resume.bin', Uint8Array.from({ length: 1024 * 1024 }, (_, i) => i % 251))]
+    a.tcp.registerOffer('route-recovery', token, [peers[1]], files, { version: 2 })
+    await b.tcp.receive('route-recovery', token, peers[0], files, { version: 2 })
+    await until(() => !!last(a.events, 'paused') || !!last(a.events, 'failed'))
+    expect(last(a.events, 'failed')).toBeUndefined()
+    expect(senderStore.values.get('send/route-recovery')?.status).toBe('claimed')
+    await until(() => !!last(b.events, 'paused'))
+    expect(new Blob(parts).size).toBeGreaterThan(0)
+    expect(abort).not.toHaveBeenCalled()
+    await b.tcp.dispose()
+    const reopened = device(1, { store: receiverStore, createReceiveFile })
+    await reopened.tcp.receive('route-recovery', token, peers[0], files, { version: 2 })
+    await until(() => !!last(a.events, 'completed') && !!last(reopened.events, 'completed'))
+    expect(new Uint8Array(await last(reopened.events, 'completed')!.files![0].blob!.arrayBuffer()))
+      .toEqual(new Uint8Array(await files[0].blob.arrayBuffer()))
+    expect(abort).not.toHaveBeenCalled()
   })
 
   it('rejects unauthorized devices and invalid capabilities without consuming the offer', async () => {

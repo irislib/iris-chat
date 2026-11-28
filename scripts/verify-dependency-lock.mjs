@@ -74,12 +74,8 @@ if (manifest.scripts?.test?.startsWith('pnpm verify:dependency-lock') !== true) 
 
 
 // The vendor path is stable; its contents are the qualified shared SDK release.
-const fileTransfer = {
-  specifier: 'file:vendor/fips-file-transfer-0.1.0.tgz',
-  version: '0.1.1',
-  sha256: 'fd40ec68ea586d2adf460859ce86794c33b39af5b8f44cfec7d03d851bafc9ef',
-  integrity: 'sha512-M4+KerF8mCx8MjAjnCyJKt1kq0d5Dvq/Ac20TJd0uRgyc3mxriBMYH37HOqnBQ5ehGqiGd9bY7wzrCdqOq8LTw==',
-}
+const fileTransfer = JSON.parse(await readFile(new URL('scripts/file-transfer-release.json', root), 'utf8'))
+
 if (manifest.dependencies?.['@fips/file-transfer'] !== fileTransfer.specifier) {
   throw new Error('File transfers must use the verified shared SDK vendor archive')
 }

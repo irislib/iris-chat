@@ -22,6 +22,7 @@ pins['nostr-double-ratchet'] = {
     'sha256': 'fc1cc2fd6ecd97ca0956c8a5ac08912513bf62ee808130a9953b494139d7e950',
     'integrity': 'sha512-FNDz6KvHBYIQQrMW02Pyw/1gYFrijX8lnpITCdA+X+A/nRMjUUilzWTAsD1IeRTDbeBEJ4rxQ284bIpPXzR9kw==',
 }
+pins['@fips/file-transfer'] = json.loads((root / 'scripts/file-transfer-release.json').read_text())
 nodes, missing = {}, []
 
 
@@ -60,9 +61,12 @@ for target, node in nodes.items():
     if pin is None:
         continue
     assert node['version'] == pin['version'], node
-    archive = args.archives / pin['url'].rsplit('/', 1)[-1]
-    if not archive.exists():
-        archive.write_bytes(urllib.request.urlopen(pin['url'], timeout=60).read())
+    if pin.get('specifier', '').startswith('file:'):
+        archive = root / pin['specifier'][5:]
+    else:
+        archive = args.archives / pin['url'].rsplit('/', 1)[-1]
+        if not archive.exists():
+            archive.write_bytes(urllib.request.urlopen(pin['url'], timeout=60).read())
     raw = archive.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == pin['sha256'], archive
     assert 'sha512-' + base64.b64encode(hashlib.sha512(raw).digest()).decode() == pin['integrity'], archive
@@ -81,7 +85,7 @@ for target, node in nodes.items():
                 for name, dependency in parent['edges'].items() if dependency == target]
     verified.append({'name': node['name'], 'version': node['version'], 'installedPath': target,
                      'archiveSHA256': pin['sha256'], 'files': files, 'incomingPaths': incoming})
-for name in ('@fips/core', '@fips/tcp', 'nostr-pubsub', 'nostr-social-graph', 'nostr-double-ratchet'):
+for name in ('@fips/core', '@fips/tcp', '@fips/file-transfer', 'nostr-pubsub', 'nostr-social-graph', 'nostr-double-ratchet'):
     assert sum(item['name'] == name for item in verified) == 1, name
 report = {'source': root.name, 'lockSHA256': hashlib.sha256((root / 'pnpm-lock.yaml').read_bytes()).hexdigest(),
           'packagesInspected': len(nodes), 'verified': verified, 'uninstalledOptionalOrPeer': missing}

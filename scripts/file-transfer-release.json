@@ -1,0 +1,9 @@
+{
+  "version": "0.1.2",
+  "source": "828986deb9d5e4108a3b407a156acba662bc6f1c",
+  "sourceRef": "refs/tags/haps-source/828986deb9d5e4108a3b407a156acba662bc6f1c",
+  "bytes": 24180,
+  "sha256": "41bdf4cd1f717a29fa2889136a8d0e38e1fc55d4779ef3595f2febf8ee33f14e",
+  "integrity": "sha512-MgwLMH705YyAc/XefIZyGgs/3GJ4v2+1DtG5eoZMP0QhP3s6OaAoohjKdCFH5vlS4r+6itIF03qgNcZ9T4LPyg==",
+  "specifier": "file:vendor/fips-file-transfer-0.1.0.tgz"
+}
