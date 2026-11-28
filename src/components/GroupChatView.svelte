@@ -128,9 +128,18 @@
   })
 
 
-  function handleDelete() {
-    deleteGroup(group.id)
-    onleave()
+  let deleting = $state(false)
+  let deleteError = $state('')
+  async function handleDelete() {
+    if (deleting) return
+    deleting = true
+    deleteError = ''
+    try {
+      await deleteGroup(group.id)
+      onleave()
+    } catch {
+      deleteError = 'Could not delete this group. Try again.'
+    } finally { deleting = false }
   }
 
   async function handleSend() {
@@ -429,14 +438,16 @@
           <button
             class="btn-ghost w-full text-left text-red-400 flex items-center gap-2"
             onclick={handleDelete}
+            disabled={deleting}
           >
             <span class="i-carbon-trash-can"></span>
-            Delete group
+            {deleting ? 'Deleting…' : 'Delete group'}
           </button>
         </div>
       {/if}
     </div>
   </header>
+  {#if deleteError}<p role="alert" class="px-4 py-2 text-sm text-red-400">{deleteError}</p>{/if}
 
   {#if disappearingNotice}
     <div class="px-4 py-2 border-b border-surface-lighter bg-surface text-sm text-primary">

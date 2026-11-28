@@ -27,6 +27,8 @@ const signedGroupRosterFacts: Array<{ kind: number; content: string; tags: strin
 
 let rosterSignFailure: Error | undefined
 let rosterSignWait: Promise<void> | undefined
+let removalWait: Promise<void> | undefined
+let removalFailure: Error | undefined
 
 vi.mock('./nostrClient', () => ({
   AppEvent: class {
@@ -251,7 +253,9 @@ vi.mock('./privateChats', () => {
         },
       }
     },
-    removeGroup: (groupId: string) => {
+    removeGroup: async (groupId: string) => {
+      if (removalWait) await removalWait
+      if (removalFailure) throw removalFailure
       runtimeGroups.delete(groupId)
     },
   }),
@@ -366,6 +370,8 @@ describe('groups', () => {
     signedGroupRosterFacts.length = 0
     rosterSignFailure = undefined
     rosterSignWait = undefined
+    removalWait = undefined
+    removalFailure = undefined
     sessionManagerValues.clear()
     runtimeGroups.clear()
     // Reset group stores between tests
@@ -1317,6 +1323,32 @@ describe('groups', () => {
   })
 
   describe('deleteGroup', () => {
+    it('waits for private replay cleanup before reporting deletion', async () => {
+      const { createGroup, deleteGroup, groups } = await import('./groups')
+      const group = await createGroup('Erase replay state', [MEMBER_B])
+      let finish!: () => void
+      removalWait = new Promise<void>(resolve => { finish = resolve })
+      let deleted = false
+      const removing = deleteGroup(group.id).then(() => { deleted = true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(deleted).toBe(false)
+      expect(get(groups).has(group.id)).toBe(true)
+      finish()
+      await removing
+      expect(get(groups).has(group.id)).toBe(false)
+    })
+
+    it('keeps deletion retryable when private replay cleanup fails', async () => {
+      const { createGroup, deleteGroup, groups } = await import('./groups')
+      const group = await createGroup('Retry erasure', [MEMBER_B])
+      removalFailure = new Error('Storage unavailable')
+      await expect(deleteGroup(group.id)).rejects.toThrow('Storage unavailable')
+      expect(get(groups).has(group.id)).toBe(true)
+      removalFailure = undefined
+      await deleteGroup(group.id)
+      expect(get(groups).has(group.id)).toBe(false)
+    })
+
     it('removes group from store', async () => {
       const { createGroup, deleteGroup, groups, groupMessages } = await import('./groups')
       const group = await createGroup('Delete Test', [MEMBER_B])

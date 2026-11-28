@@ -8,6 +8,7 @@ import {
 
 export class DexieStorageAdapter implements StorageAdapter {
   private closed = false
+  private readonly writes = new Set<Promise<void>>()
   constructor(private readonly owner?: string) {}
 
   // Retire legacy own-device copies before queue replay or inbox persistence.
@@ -30,15 +31,26 @@ export class DexieStorageAdapter implements StorageAdapter {
     return value
   }
 
-  close(): void { this.closed = true }
+  async close(): Promise<void> {
+    this.closed = true
+    // Fence new callbacks immediately, then drain writes that already entered
+    // IndexedDB before the caller erases this account's durable namespace.
+    await Promise.allSettled([...this.writes])
+  }
+
+  private write(pending: Promise<void>): Promise<void> {
+    this.writes.add(pending)
+    void pending.then(() => this.writes.delete(pending), () => this.writes.delete(pending))
+    return pending
+  }
 
   async get<T = unknown>(key: string): Promise<T | undefined> {
     if (this.closed) return undefined
     const stored = await getSessionManagerValue<T>(key)
     const value = await this.filterOwnMutations(key, stored)
     if (!this.closed && value !== stored) {
-      if (value === undefined) await deleteSessionManagerValue(key)
-      else await putSessionManagerValue(key, value)
+      if (value === undefined) await this.write(deleteSessionManagerValue(key))
+      else await this.write(putSessionManagerValue(key, value))
     }
     return this.closed ? undefined : value
   }
@@ -47,13 +59,13 @@ export class DexieStorageAdapter implements StorageAdapter {
     if (this.closed) return
     const filtered = await this.filterOwnMutations(key, value)
     if (this.closed) return
-    if (filtered === undefined) await deleteSessionManagerValue(key)
-    else await putSessionManagerValue(key, filtered)
+    if (filtered === undefined) await this.write(deleteSessionManagerValue(key))
+    else await this.write(putSessionManagerValue(key, filtered))
   }
 
   async del(key: string): Promise<void> {
     if (this.closed) return
-    await deleteSessionManagerValue(key)
+    await this.write(deleteSessionManagerValue(key))
   }
 
   async list(prefix = ''): Promise<string[]> {

@@ -930,10 +930,10 @@ export const stopAppKeysSubscription = (): void => {
   runtime?.stopAppKeysSubscription()
 }
 
-export const resetManagers = (): void => {
+export const resetManagers = async (): Promise<void> => {
   // In-flight roster callbacks can finish after the database is cleared.
   // Retire their storage before shutting down subscriptions and clearing data.
-  runtimeStorage?.close()
+  const storageClosing = runtimeStorage?.close()
   runtimeStorage = null
   if (linkedInviteRepublishTimer) {
     clearTimeout(linkedInviteRepublishTimer)
@@ -952,6 +952,7 @@ export const resetManagers = (): void => {
   devices.reset()
   readyDeviceRegistrations.clear()
   activeDeviceRegistration = null
+  await storageClosing
 }
 
 export const republishInvite = async (): Promise<void> => {

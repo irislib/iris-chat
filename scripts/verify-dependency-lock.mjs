@@ -18,8 +18,8 @@ const releases = {
     "integrity": "sha512-w2N8AE2bL5h7H0tOuTONOTprHS4/SVCP93lyipA/mekk+RogF3fZFh+s2lxLEDvW5tSjIJcBdX1lguX7wD5+2g=="
   },
   "nostr-double-ratchet": {
-    "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.187.tgz",
-    "integrity": "sha512-4/PMo+4ppVe1Qc67iMazqnsEQNq2n35mxb+iTSkxcwHJgkX3Fv2v7vI3aa6Xc5MVh+E49ISFukj6PTvekBuFfg=="
+    "url": "https://registry.npmjs.org/nostr-double-ratchet/-/nostr-double-ratchet-0.0.189.tgz",
+    "integrity": "sha512-FNDz6KvHBYIQQrMW02Pyw/1gYFrijX8lnpITCdA+X+A/nRMjUUilzWTAsD1IeRTDbeBEJ4rxQ284bIpPXzR9kw=="
   },
   "@iris/identity": {
     "url": "https://github.com/mmalmi/iris-kit/releases/download/runtime-v0.2.9/iris-identity-0.4.0.tgz",

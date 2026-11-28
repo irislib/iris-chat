@@ -33,6 +33,8 @@
   let editNameValue = $state('')
   let showAddMember = $state(false)
   let confirmingDelete = $state(false)
+  let deleting = $state(false)
+  let deleteError = $state('')
   let uploadingPicture = $state(false)
   let uploadProgress = $state(0)
   let pictureError = $state('')
@@ -77,9 +79,16 @@
       })
   )
 
-  function handleDelete() {
-    deleteGroup(group.id)
-    onDeleted()
+  async function handleDelete() {
+    if (deleting) return
+    deleting = true
+    deleteError = ''
+    try {
+      await deleteGroup(group.id)
+      onDeleted()
+    } catch {
+      deleteError = 'Could not delete this group. Try again.'
+    } finally { deleting = false }
   }
 
   function startEditName() {
@@ -347,20 +356,23 @@
 
     <!-- Delete button -->
     <div class="p-4 border-t border-surface-lighter">
+      {#if deleteError}<p role="alert" class="text-sm text-red-400 mb-2">{deleteError}</p>{/if}
       {#if confirmingDelete}
         <p class="text-sm text-gray-400 text-center mb-3">Are you sure you want to delete this group?</p>
         <div class="flex gap-2">
           <button
             class="flex-1 py-3 text-gray-400 hover:bg-surface-light rounded-lg transition-colors"
             onclick={() => confirmingDelete = false}
+            disabled={deleting}
           >
             Cancel
           </button>
           <button
             class="flex-1 py-3 text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
             onclick={handleDelete}
+            disabled={deleting}
           >
-            Delete
+            {deleting ? 'Deleting…' : 'Delete'}
           </button>
         </div>
       {:else}

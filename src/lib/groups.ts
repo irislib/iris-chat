@@ -1207,11 +1207,9 @@ export function markGroupMessagesSeen(groupId: string, messageIds: string[]): vo
 }
 
 export async function deleteGroup(groupId: string): Promise<void> {
-  try {
-    getNdrRuntime().removeGroup(groupId)
-  } catch {
-    // Ignore best-effort runtime cleanup failures.
-  }
+  // Deletion succeeds only after the private replay cache has been erased.
+  // Leave the visible group available for retry if durable cleanup fails.
+  await getNdrRuntime().removeGroup(groupId)
 
   groups.update(g => {
     g.delete(groupId)

@@ -626,7 +626,7 @@
     await deviceClosing
     leaveChat()
     clearGroupData()
-    resetManagers()
+    await resetManagers()
     logout()
     await clearChatData()
     clearDrafts()
