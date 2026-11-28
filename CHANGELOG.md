@@ -1,10 +1,11 @@
 # Changelog
 
-## 2.6.74 - 2026-11-26
+## 2.6.74 - 2026-11-28
 
-- Update to the accepted Hashtree runtime53, FIPS runtime66, and social graph 4.2.6 releases.
+- Update to the accepted Hashtree runtime54, FIPS runtime67, and social graph 4.2.6 releases.
 - Keep group drafts available for retry when signing is declined or unavailable.
 - Preserve live messages and newer group membership while linked-device metadata is being saved.
+- Keep duplicated or parallel tabs from writing the same encrypted message state.
 
 ## 2.6.73 - 2026-11-26
 
